@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Phase 1 implementation plan (`docs/superpowers/plans/2026-06-17-conductor-phase1.md`)
+- GitHub repository: https://github.com/vaultcompasshq/conductor
 - Brainstorming session and design documentation (2026-06-17)
 - Intent Contract JSON Schema v1.0.0
 - Competitive analysis and repo strategy

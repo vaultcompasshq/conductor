@@ -16,9 +16,9 @@ User conversation (messy)
 
 ## Status
 
-**Phase:** Brainstorming & design (June 2026)  
-**Repository:** `github.com/vaultcompasshq/conductor` (public, MIT)  
-**Relationship:** Feeder into [AI Venture Studio](https://github.com/MelroySaldanha/ai-venture-studio) — not a competitor
+**Phase:** Phase 1 implementation (schema + core) — June 2026  
+**Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
+**Relationship:** Feeder into AI Venture Studio — not a competitor
 
 ## Start here
 
@@ -28,6 +28,7 @@ User conversation (messy)
 | [docs/repo-strategy.md](./docs/repo-strategy.md) | Public vs private, licensing, org placement |
 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved design spec (review gate) |
 | [docs/phases/implementation-roadmap.md](./docs/phases/implementation-roadmap.md) | 14-week build plan |
+| [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./docs/superpowers/plans/2026-06-17-conductor-phase1.md) | **Active** Phase 1 plan |
 
 ## What Conductor is / isn't
 
