@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+.DS_Store
+.conductor/drift-log.jsonl
+
+# IDE
+.idea/
+.vscode/
+
+# Test artifacts
+coverage/
