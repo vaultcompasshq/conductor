@@ -16,9 +16,11 @@ User conversation (messy)
 
 ## Status
 
-**Phase:** Phase 1 implementation (schema + core) — June 2026  
+**Phase:** Phase 1 complete (schema + core) — June 2026  
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
+
+**Packages:** `packages/schema` · `packages/core` · **14 tests passing**
 
 ## Start here
 
@@ -28,7 +30,7 @@ User conversation (messy)
 | [docs/repo-strategy.md](./docs/repo-strategy.md) | Public vs private, licensing, org placement |
 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved design spec (review gate) |
 | [docs/phases/implementation-roadmap.md](./docs/phases/implementation-roadmap.md) | 14-week build plan |
-| [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./docs/superpowers/plans/2026-06-17-conductor-phase1.md) | **Active** Phase 1 plan |
+| [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./docs/superpowers/plans/2026-06-17-conductor-phase1.md) | Phase 1 plan (complete) |
 
 ## What Conductor is / isn't
 
@@ -39,20 +41,29 @@ User conversation (messy)
 | User prompt coaching | Replacement for Superpowers or Venture Studio |
 | Multi-model (Claude, Codex, Gemini) | Cursor-only or single-vendor lock-in |
 
-## Planned packages (not built yet)
+## Packages
 
 ```
 conductor/
 ├── packages/
-│   ├── schema/          # Intent Contract JSON Schema
-│   ├── skill/           # Superpowers-compatible skills
-│   ├── cli/             # conductor contract | drift | coach
-│   └── memory/          # Project constraint index (RAG-lite)
+│   ├── schema/          # @vaultcompasshq/conductor-schema ✅
+│   ├── core/            # @vaultcompasshq/conductor-core ✅
+│   ├── skill/           # Superpowers-compatible skills (Phase 2+)
+│   ├── cli/             # conductor contract | drift | coach (Phase 4)
+│   └── memory/          # Project constraint index (Phase 3)
 ├── integrations/
 │   ├── superpowers/
 │   ├── cursor/
 │   └── ai-venture-studio/
 └── docs/
+```
+
+## Development
+
+```bash
+pnpm install
+pnpm test
+pnpm build
 ```
 
 ## Origin
