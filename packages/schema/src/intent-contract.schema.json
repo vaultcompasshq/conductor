@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vaultcompasshq.github.io/conductor/schemas/intent-contract/v1.json",
+  "title": "Intent Contract",
+  "description": "Frozen intent artifact for AI-assisted development sessions. Conductor schema v1.",
+  "type": "object",
+  "required": [
+    "contract_id",
+    "version",
+    "original_ask",
+    "in_scope",
+    "out_of_scope",
+    "constraints",
+    "acceptance_criteria",
+    "frozen_at",
+    "pivot_log"
+  ],
+  "properties": {
+    "contract_id": {
+      "type": "string",
+      "pattern": "^ic-[0-9]{8}-[a-z0-9]{6}$",
+      "description": "Unique ID: ic-YYYYMMDD-random6"
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "original_ask": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 500,
+      "description": "One-sentence summary of what the user asked for"
+    },
+    "in_scope": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "string",
+        "minLength": 5,
+        "maxLength": 200
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "items": {
+        "type": "string",
+        "minLength": 5,
+        "maxLength": 200
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "rule", "priority"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "AGENTS.md",
+              "CLAUDE.md",
+              "GEMINI.md",
+              "cursor-rules",
+              "user-stated",
+              "superpowers-spec",
+              "project-spec"
+            ]
+          },
+          "rule": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 300
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "line_ref": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "testable"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ac-[0-9]+$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 300
+          },
+          "testable": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "frozen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "frozen_by": {
+      "type": "string",
+      "enum": ["user", "conductor", "agent"]
+    },
+    "prompt_quality": {
+      "type": "object",
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "product_stack",
+              "comparative_overload",
+              "scope_adverb",
+              "implicit_pivot",
+              "authority_without_spec",
+              "constraint_conflict",
+              "vague_ask",
+              "missing_acceptance_criteria"
+            ]
+          }
+        },
+        "coaching_shown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pivot_log": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["timestamp", "change", "acknowledged_by"],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "change": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "acknowledged_by": {
+            "type": "string",
+            "enum": ["user", "pending"]
+          },
+          "updates": {
+            "type": "object",
+            "properties": {
+              "in_scope_added": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "in_scope_removed": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "out_of_scope_added": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string" },
+        "repo_path": { "type": "string" },
+        "session_id": { "type": "string" },
+        "parent_contract_id": { "type": "string" },
+        "superpowers_spec_path": { "type": "string" },
+        "venture_linear_id": { "type": "string" }
+      }
+    }
+  }
+}
