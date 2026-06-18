@@ -21,6 +21,8 @@ export interface DriftScore {
 
 const API_PATH = /\/api\/|api\//i;
 const WEBSOCKET_PATH = /websocket|useWebSocket|ws\./i;
+const NOTIFICATION_PATH = /notification/i;
+const SAFETY_SCORE_PATH = /safety_score/i;
 
 export function scoreDrift(
   contract: IntentContract,
@@ -44,6 +46,17 @@ export function scoreDrift(
       findings.push(`WebSocket change conflicts with out_of_scope: ${item}`);
       return true;
     }
+    if (
+      (key.includes("stub") || key.includes("println")) &&
+      paths.some((p) => NOTIFICATION_PATH.test(p))
+    ) {
+      findings.push(`Stub notification implementation conflicts with out_of_scope: ${item}`);
+      return true;
+    }
+    if (key.includes("hardcoded") && paths.some((p) => SAFETY_SCORE_PATH.test(p))) {
+      findings.push(`Hardcoded safety score conflicts with out_of_scope: ${item}`);
+      return true;
+    }
     return false;
   });
   if (outOfScopeHits.length > 0) scopeCreep = Math.min(100, outOfScopeHits.length * 40);
@@ -59,6 +72,25 @@ export function scoreDrift(
 
   if (input.signals?.includes("websocket_added")) {
     scopeCreep = Math.max(scopeCreep, 80);
+  }
+
+  if (input.signals?.includes("stub_println_notification")) {
+    scopeCreep = Math.min(100, scopeCreep + 40);
+    findings.push("Stub println notification signal conflicts with contract scope");
+    const criticalNoStub = contract.constraints.some(
+      (c) => c.priority === "critical" && /not stubbed|functional/i.test(c.rule),
+    );
+    if (criticalNoStub) {
+      constraintViolation = Math.max(constraintViolation, 90);
+      findings.push("Critical constraint violated: features must be functional, not stubbed");
+    }
+  }
+
+  if (input.signals?.includes("hardcoded_safety_score")) {
+    scopeCreep = Math.min(100, scopeCreep + 40);
+    findings.push("Hardcoded safety score signal conflicts with contract scope");
+    acDivergence = Math.max(acDivergence, 80);
+    findings.push("Hardcoded safety score diverges from acceptance criteria");
   }
 
   if (input.signals?.includes("new_api_route")) {
