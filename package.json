@@ -7,7 +7,12 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test && vitest run examples/validate-examples.test.ts",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "conductor:coach": "node packages/skill/dist/coach-cli.js",
+    "conductor:extract": "node packages/skill/dist/extract-cli.js",
+    "conductor:drift": "node packages/skill/dist/drift-cli.js",
+    "conductor:init": "node packages/skill/dist/init-cli.js",
+    "conductor:install-skills": "bash integrations/superpowers/install-skills.sh"
   },
   "engines": {
     "node": ">=20"

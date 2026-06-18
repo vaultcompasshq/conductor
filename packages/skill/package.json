@@ -1,0 +1,34 @@
+{
+  "name": "@vaultcompasshq/conductor-skill",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Superpowers-compatible Conductor skills and helper CLIs",
+  "bin": {
+    "conductor-coach": "./dist/coach-cli.js",
+    "conductor-drift": "./dist/drift-cli.js",
+    "conductor-extract": "./dist/extract-cli.js",
+    "conductor-init": "./dist/init-cli.js"
+  },
+  "files": [
+    "dist",
+    "intent-contract",
+    "prompt-coach",
+    "drift-guard"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@vaultcompasshq/conductor-core": "workspace:*",
+    "@vaultcompasshq/conductor-schema": "workspace:*",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

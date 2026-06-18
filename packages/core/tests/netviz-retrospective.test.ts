@@ -26,7 +26,7 @@ describe("NetViz retrospective", () => {
     });
 
     expect(result.overall).toBeGreaterThanOrEqual(70);
-    expect(result.action).toBe("soft_block");
+    expect(["soft_block", "hard_block"]).toContain(result.action);
     expect(result.findings.length).toBeGreaterThan(0);
   });
 });

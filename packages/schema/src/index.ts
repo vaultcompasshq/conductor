@@ -1,6 +1,8 @@
 export type {
   IntentContract,
   Constraint,
+  ConstraintSource,
+  ConstraintPriority,
   AcceptanceCriterion,
   PivotLogEntry,
   ValidationResult,

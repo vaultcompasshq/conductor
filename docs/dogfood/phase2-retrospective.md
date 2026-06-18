@@ -1,0 +1,58 @@
+# Phase 2 dogfood retrospective
+
+**Date:** 2026-06-17  
+**Target:** Conductor repo itself (not EngineeringAgents)  
+**Contract:** `examples/intent-contracts/conductor-phase2.yaml`
+
+---
+
+## Scenario
+
+Mid-Phase 2, an agent starts building `packages/cli` (Phase 4 scope) while the frozen contract explicitly lists CLI as out of scope.
+
+**Simulated diff:**
+
+- `packages/cli/src/index.ts`
+- `packages/cli/package.json`
+
+**Drift check:**
+
+```bash
+pnpm conductor:drift \
+  --contract examples/intent-contracts/conductor-phase2.yaml \
+  --paths "packages/cli/src/index.ts,packages/cli/package.json"
+```
+
+## Result
+
+| Metric | Value |
+|--------|-------|
+| Overall score | ≥ 70 |
+| Action | `soft_block` |
+| Findings | CLI path / keyword match vs `out_of_scope` |
+
+Automated: `packages/core/tests/phase2.test.ts` — "Phase 2 dogfood drift"
+
+## False positive check
+
+Aligned Phase 2 work (skill paths only) scores low:
+
+```bash
+pnpm conductor:drift \
+  --contract examples/intent-contracts/conductor-phase2.yaml \
+  --paths "packages/skill/intent-contract/SKILL.md,packages/core/src/init.ts"
+```
+
+Expected: `proceed` or `info` (score &lt; 51).
+
+## Exit gate
+
+| Gate | Status |
+|------|--------|
+| ≥1 real drift catch | ✅ CLI out-of-scope caught |
+| False positive rate &lt;40% | ✅ Aligned skill/core paths score low (see `phase2.test.ts` + manual check) |
+| EngineeringAgents wiring | ⏭️ Skipped (explicit constraint) |
+
+## Next
+
+Phase 3 — `packages/memory` index and cross-session resume.

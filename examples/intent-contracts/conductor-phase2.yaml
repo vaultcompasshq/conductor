@@ -1,0 +1,44 @@
+contract_id: ic-20260617-ph2dog
+version: "1.0.0"
+
+original_ask: "Ship Phase 2 Conductor runtime with Superpowers skills and helper CLIs."
+
+in_scope:
+  - "packages/skill with intent-contract, prompt-coach, drift-guard skills"
+  - "Helper CLIs: coach, extract, drift, init"
+  - "Constraint loading from AGENTS.md and cursor rules"
+  - ".conductor config and init scaffolding"
+
+out_of_scope:
+  - "packages/cli full binary (Phase 4)"
+  - "packages/memory index (Phase 3)"
+  - "EngineeringAgents repo changes"
+  - "Vault & Compass LLC workspace changes"
+
+constraints:
+  - source: AGENTS.md
+    rule: "Minimize scope — simplest correct diff"
+    priority: high
+  - source: user-stated
+    rule: "Do not touch EngineeringAgents or LLC workspaces"
+    priority: critical
+
+acceptance_criteria:
+  - id: ac-1
+    description: "Three SKILL.md files installable via cp to ~/.cursor/skills"
+    testable: true
+  - id: ac-2
+    description: "pnpm test passes with Phase 2 coverage"
+    testable: true
+  - id: ac-3
+    description: "Drift guard catches out-of-scope CLI work in dogfood scenario"
+    testable: true
+
+frozen_at: "2026-06-17T23:00:00Z"
+frozen_by: user
+
+pivot_log: []
+
+metadata:
+  project: conductor
+  phase: "2"

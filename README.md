@@ -16,16 +16,18 @@ User conversation (messy)
 
 ## Status
 
-**Phase:** Phase 1 complete (schema + core) — June 2026  
+**Phase:** Phase 2 complete — June 2026  
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · **14 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **29 tests passing**
 
 ## Start here
 
 | Doc | Purpose |
 |-----|---------|
+| [AGENTS.md](./AGENTS.md) | Agent rules, phase status, verification |
+| [docs/NEXT.md](./docs/NEXT.md) | Phase 2 handoff — current task work |
 | [BRAINSTORMING.md](./BRAINSTORMING.md) | Session index — read this first |
 | [docs/repo-strategy.md](./docs/repo-strategy.md) | Public vs private, licensing, org placement |
 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved design spec (review gate) |
@@ -48,7 +50,7 @@ conductor/
 ├── packages/
 │   ├── schema/          # @vaultcompasshq/conductor-schema ✅
 │   ├── core/            # @vaultcompasshq/conductor-core ✅
-│   ├── skill/           # Superpowers-compatible skills (Phase 2+)
+│   ├── skill/           # Superpowers skills + CLIs (Phase 2) ✅ draft
 │   ├── cli/             # conductor contract | drift | coach (Phase 4)
 │   └── memory/          # Project constraint index (Phase 3)
 ├── integrations/
@@ -62,8 +64,9 @@ conductor/
 
 ```bash
 pnpm install
-pnpm test
+pnpm test      # 29 tests
 pnpm build
+pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 ```
 
 ## Origin

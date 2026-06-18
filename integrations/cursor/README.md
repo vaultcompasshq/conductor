@@ -8,7 +8,17 @@
 
 ### 1. Install Conductor skills
 
-Copy from `packages/skill/` to `~/.cursor/skills-cursor/` when available.
+Copy from `packages/skill/` to `~/.cursor/skills/`:
+
+```bash
+pnpm conductor:install-skills
+```
+
+Or from another project after cloning conductor:
+
+```bash
+bash /path/to/conductor/integrations/superpowers/install-skills.sh
+```
 
 ### 2. User rule (recommended)
 
@@ -30,8 +40,8 @@ Constraint files to respect (priority order):
 ### 3. Project skeleton
 
 ```bash
-conductor init   # when CLI available
-# creates .conductor/config.yaml, index.md
+pnpm conductor:init
+# creates .conductor/config.yaml, index.md, contracts/
 ```
 
 Add to `.gitignore` (optional):

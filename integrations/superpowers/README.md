@@ -1,6 +1,6 @@
 # Superpowers Integration
 
-**Status:** Design — skills not implemented yet
+**Status:** Phase 2 draft — skills + CLIs in `packages/skill/`
 
 ---
 
@@ -8,14 +8,16 @@
 
 Conductor extends Superpowers; it does not replace any existing skill.
 
-**Install path (planned v0.3):**
+**Install path (v0.2):**
 
 ```bash
-# Option A: Copy skills from conductor repo
-cp -r packages/skill/* ~/.cursor/skills-cursor/
-
-# Option B: Superpowers plugin declares conductor as dependency (future)
+# From conductor repo root
+pnpm conductor:install-skills
+# or:
+bash integrations/superpowers/install-skills.sh ~/.cursor/skills
 ```
+
+**Option B:** Superpowers plugin declares conductor as dependency (future)
 
 ---
 

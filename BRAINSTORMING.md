@@ -67,8 +67,9 @@ Design an installable governance layer that:
 
 - ✅ Spec approved (2026-06-17)
 - ✅ Repo live: https://github.com/vaultcompasshq/conductor
-- ✅ Phase 1 complete: `@vaultcompasshq/conductor-schema`, `@vaultcompasshq/conductor-core`, 5 example contracts, 14 tests passing
+- ✅ Phase 1 complete: `@vaultcompasshq/conductor-schema`, `@vaultcompasshq/conductor-core`, 5 example contracts
+- ✅ Phase 2 complete: `@vaultcompasshq/conductor-skill`, runtime CLIs, 29 tests passing
 
 ## Next step
 
-Phase 2 — Conductor runtime + Venture Studio hooks (weeks 3–6 per roadmap).
+Phase 3 — Memory index (weeks 7–10 per roadmap). See [docs/NEXT.md](./docs/NEXT.md).

@@ -6,6 +6,6 @@
 | `core/` | `@vaultcompasshq/conductor-core` | ✅ Phase 1 | Prompt coach (pattern detection, scoring, narrowing) and drift engine (weighted rubric, exit gates) |
 | `memory/` | — | Phase 3 | Project constraint index (RAG-lite) |
 | `cli/` | — | Phase 4 | `conductor contract \| drift \| coach` binary |
-| `skill/` | — | Phase 2–4 | Superpowers-compatible SKILL.md files |
+| `skill/` | `@vaultcompasshq/conductor-skill` | ✅ Phase 2 | Superpowers skills + `conductor-coach`, `conductor-drift`, `conductor-extract`, `conductor-init` |
 
 See [implementation roadmap](../docs/phases/implementation-roadmap.md) for the full 14-week plan.
