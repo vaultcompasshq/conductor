@@ -6,10 +6,15 @@
   "license": "MIT",
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm -r test && vitest run examples/validate-examples.test.ts",
     "typecheck": "pnpm -r typecheck"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@vaultcompasshq/conductor-schema": "workspace:*",
+    "vitest": "^3.0.5",
+    "yaml": "^2.8.0"
   }
 }

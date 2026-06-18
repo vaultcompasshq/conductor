@@ -1,0 +1,20 @@
+contract_id: ic-20260601-auth01
+version: "1.0.0"
+original_ask: "Add email and password login with persistent sessions."
+in_scope:
+  - "Login form on the /login route"
+  - "Session cookie persists across browser restarts"
+out_of_scope:
+  - "OAuth or social login providers"
+  - "Multi-factor authentication"
+constraints:
+  - source: user-stated
+    rule: "Use the existing auth library only"
+    priority: high
+acceptance_criteria:
+  - id: ac-1
+    description: "Valid credentials redirect the user to the dashboard"
+    testable: true
+frozen_at: "2026-06-01T10:00:00Z"
+frozen_by: user
+pivot_log: []

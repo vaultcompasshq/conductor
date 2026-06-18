@@ -1,0 +1,30 @@
+contract_id: ic-20260315-nviz01
+version: "1.0.0"
+original_ask: "Build Wi-Fi network visualization with real notifications and safety scores."
+in_scope:
+  - "3D network map visualization"
+  - "Real system notifications for alerts"
+  - "Safety scores calculated from device metrics"
+  - "Persistent user preferences"
+out_of_scope:
+  - "Stub implementations with println only"
+  - "Hardcoded safety score values"
+constraints:
+  - source: user-stated
+    rule: "All features must be functional, not stubbed"
+    priority: critical
+acceptance_criteria:
+  - id: ac-1
+    description: "Notifications use OS/Tauri notification API"
+    testable: true
+  - id: ac-2
+    description: "Safety scores derived from live metrics, not constants"
+    testable: true
+  - id: ac-3
+    description: "Preferences persist across app restarts"
+    testable: true
+frozen_at: "2026-03-15T10:00:00Z"
+frozen_by: user
+pivot_log: []
+metadata:
+  project: netviz

@@ -1,0 +1,20 @@
+contract_id: ic-20260602-ref001
+version: "1.0.0"
+original_ask: "Refactor top navigation into a collapsible sidebar layout."
+in_scope:
+  - "Replace horizontal nav with sidebar component"
+  - "Preserve all existing route links and labels"
+out_of_scope:
+  - "New pages or routes beyond existing nav items"
+  - "Visual redesign of page content areas"
+constraints:
+  - source: AGENTS.md
+    rule: "Minimize scope — navigation refactor only"
+    priority: high
+acceptance_criteria:
+  - id: ac-1
+    description: "Every former nav link remains reachable from the sidebar"
+    testable: true
+frozen_at: "2026-06-02T14:00:00Z"
+frozen_by: user
+pivot_log: []
