@@ -70,10 +70,12 @@ packages/
 
 ```bash
 pnpm install
-pnpm test      # 14 tests — schema (3) + core (6) + examples (5)
+pnpm test      # 39 tests — schema (3) + core (22) + skill (8) + examples (6)
 pnpm build
 pnpm typecheck
 ```
+
+`pnpm test` builds first (the skill CLI tests spawn the compiled `dist/`).
 
 Paste actual test output before claiming tests pass.
 

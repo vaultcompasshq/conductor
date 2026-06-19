@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# Conductor pre-commit gate — a REAL enforcement point, not a markdown
+# instruction an agent can ignore. Blocks the commit when no frozen Intent
+# Contract exists or when staged changes drift past a blocking threshold.
+#
+# Install:
+#   cp integrations/git-hooks/pre-commit.sample .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Bypass for a single commit (e.g. an acknowledged pivot you log separately):
+#   git commit --no-verify
+#
+# Requires conductor-check on PATH, or adjust CONDUCTOR_CHECK below.
+
+set -euo pipefail
+
+CONDUCTOR_CHECK="${CONDUCTOR_CHECK:-conductor-check}"
+
+if ! command -v "$CONDUCTOR_CHECK" >/dev/null 2>&1; then
+  echo "conductor-check not found on PATH; skipping Conductor gate." >&2
+  echo "Set CONDUCTOR_CHECK to the binary path to enforce." >&2
+  exit 0
+fi
+
+# --staged auto-collects staged paths via 'git diff --cached --name-only'.
+exec "$CONDUCTOR_CHECK" --project . --staged

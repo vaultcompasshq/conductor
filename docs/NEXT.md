@@ -1,7 +1,7 @@
 # Next: Phase 3 — Memory index
 
 **Updated:** 2026-06-17  
-**Prerequisite:** Phase 2 complete (`v0.2.0-beta`, 29 tests passing)  
+**Prerequisite:** Phase 2 complete (`v0.2.0-beta`, 39 tests passing)  
 **Roadmap:** [implementation-roadmap.md](./phases/implementation-roadmap.md) weeks 7–10
 
 ---
