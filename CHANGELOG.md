@@ -6,6 +6,37 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- `conductor-check` CLI + `checkGate()` — a real enforcement gate that exits
+  non-zero when no frozen contract exists or staged changes drift past a
+  blocking threshold (vs. advisory SKILL.md). Sample git pre-commit hook in
+  `integrations/git-hooks/pre-commit.sample`.
+- `packages/core/src/tokenize.ts` — generic, domain-agnostic token matching.
+- `packages/skill/tests/cli.test.ts` — integration tests for all five CLIs
+  (previously zero coverage on the skill package).
+- Drift generality tests (`packages/core/tests/drift-generality.test.ts`) on a
+  novel contract the scorer was never tuned against.
+- GitHub Actions CI (`.github/workflows/ci.yml`): typecheck + build + test.
+
+### Changed
+
+- **Drift scorer rebuilt** to be project-independent. Removed the five
+  fixture-specific path regexes and four hardcoded signal strings that only
+  fired on the NetViz example. Matching now derives entirely from the
+  contract's own `in_scope` / `out_of_scope` / `constraints` text, with
+  in-scope-token subtraction to suppress false positives and a severity floor
+  so a single out-of-scope or critical-constraint hit can block. `--signals`
+  is now documented as open-vocabulary free text.
+- Root `pnpm test` now builds first (skill CLI tests run the compiled `dist/`).
+
+### Fixed
+
+- Corrected test-count claims across README / NEXT / AGENTS (was "29"/"14",
+  actual is 39: schema 3 + core 22 + skill 8 + examples 6).
+- Tightened README multi-model / Venture Studio language to reflect that those
+  integrations are design-stage, not shipped.
+
 ## [0.2.0-beta] - 2026-06-17
 
 ### Added

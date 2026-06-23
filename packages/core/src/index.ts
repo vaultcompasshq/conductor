@@ -53,3 +53,15 @@ export {
   type DriftSignals,
   type ScoreDriftOptions,
 } from "./drift.js";
+export {
+  tokenize,
+  tokensMatch,
+  intersectingTokens,
+  discriminatingTokens,
+} from "./tokenize.js";
+export {
+  checkGate,
+  type GateResult,
+  type GateStatus,
+  type CheckGateOptions,
+} from "./gate.js";

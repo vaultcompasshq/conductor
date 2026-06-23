@@ -6,6 +6,12 @@
 
 ---
 
+> **Honesty caveat:** this is a *simulated* diff fed into the scorer, encoded as
+> `packages/core/tests/phase2.test.ts` — not a live session that Conductor gated
+> in real time. No real session has yet been blocked by the gate. The
+> `conductor-check` enforcement point (added post-Phase-2) is the mechanism that
+> would make a real catch possible; a genuine dogfood run is still outstanding.
+
 ## Scenario
 
 Mid-Phase 2, an agent starts building `packages/cli` (Phase 4 scope) while the frozen contract explicitly lists CLI as out of scope.

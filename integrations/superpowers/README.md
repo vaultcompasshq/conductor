@@ -21,6 +21,27 @@ bash integrations/superpowers/install-skills.sh ~/.cursor/skills
 
 ---
 
+## Quickstart: the enforcement gate
+
+SKILL.md files are advisory — an agent can ignore them. `conductor-check` is the
+gate that can't be ignored: it returns a non-zero exit code when no frozen
+contract exists or staged changes drift past a blocking threshold.
+
+```bash
+# 1. Freeze intent for the task
+conductor-extract --project . --text "…the ask…" --freeze
+
+# 2. Check staged work before committing (used by the pre-commit hook)
+conductor-check --project . --staged
+#   exit 0 → ok    exit 1 → blocked (missing/unfrozen contract or drift)
+```
+
+Wire it as a pre-commit hook via
+[`integrations/git-hooks/pre-commit.sample`](../git-hooks/pre-commit.sample) or a
+CI step so the gate runs outside the agent's control.
+
+---
+
 ## Skill: `intent-contract`
 
 **Runs:** Before `brainstorming` (creative work) or `writing-plans` (if no brainstorm)

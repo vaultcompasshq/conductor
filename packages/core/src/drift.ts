@@ -4,10 +4,22 @@ import {
   driftActionForScore,
   type DriftThresholds,
 } from "./config-types.js";
+import {
+  discriminatingTokens,
+  intersectingTokens,
+  tokenize,
+} from "./tokenize.js";
 
 export interface DriftSignals {
+  /** Changed file paths since the last check (from git diff or session). */
   changedPaths?: string[];
+  /**
+   * Open-vocabulary signal phrases describing what the work did, e.g.
+   * "new api route", "stubbed notification", "added websocket client".
+   * Any descriptive text works — it is tokenized and matched, not enumerated.
+   */
   signals?: string[];
+  /** Latest user message, used to detect undocumented pivots. */
   userMessage?: string;
 }
 
@@ -28,80 +40,41 @@ export interface DriftScore {
   findings: string[];
 }
 
-const API_PATH = /\/api\/|api\//i;
-const WEBSOCKET_PATH = /websocket|useWebSocket|ws\./i;
-const NOTIFICATION_PATH = /notification/i;
-const SAFETY_SCORE_PATH = /safety_score/i;
-const CLI_PATH = /packages\/cli|\/cli\//i;
+const DEFAULT_THRESHOLDS: DriftThresholds = {
+  info: 26,
+  warn: 51,
+  soft_block: 71,
+  hard_block: 86,
+};
 
-function significantTokens(text: string): string[] {
-  const blocklist = new Set([
-    "packages",
-    "phase",
-    "index",
-    "full",
-    "binary",
-    "changes",
-    "workspace",
-    "repos",
-  ]);
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length >= 5 && !blocklist.has(w));
-}
+const PRIORITY_SEVERITY: Record<string, number> = {
+  critical: 90,
+  high: 60,
+  medium: 35,
+  low: 15,
+};
 
-function pathMatchesTokens(path: string, tokens: string[]): boolean {
-  const lower = path.toLowerCase();
-  return tokens.some((t) => lower.includes(t));
-}
+const PIVOT_PHRASES = /\b(actually|also|while we're at it|and another thing)\b/i;
 
-function matchOutOfScopeToPaths(
-  outOfScope: string[],
-  paths: string[],
-  findings: string[],
-): number {
-  let hits = 0;
-
-  for (const item of outOfScope) {
-    const key = item.toLowerCase();
-    let matched = false;
-
-    if (key.includes("api") && paths.some((p) => API_PATH.test(p))) {
-      findings.push(`New API path conflicts with out_of_scope: ${item}`);
-      matched = true;
-    }
-    if (key.includes("websocket") && paths.some((p) => WEBSOCKET_PATH.test(p))) {
-      findings.push(`WebSocket change conflicts with out_of_scope: ${item}`);
-      matched = true;
-    }
-    if (
-      (key.includes("stub") || key.includes("println")) &&
-      paths.some((p) => NOTIFICATION_PATH.test(p))
-    ) {
-      findings.push(`Stub notification implementation conflicts with out_of_scope: ${item}`);
-      matched = true;
-    }
-    if (key.includes("hardcoded") && paths.some((p) => SAFETY_SCORE_PATH.test(p))) {
-      findings.push(`Hardcoded safety score conflicts with out_of_scope: ${item}`);
-      matched = true;
-    }
-    if (key.includes("cli") && paths.some((p) => CLI_PATH.test(p))) {
-      findings.push(`CLI path conflicts with out_of_scope: ${item}`);
-      matched = true;
-    }
-
-    const tokens = significantTokens(item);
-    if (!matched && tokens.length > 0 && paths.some((p) => pathMatchesTokens(p, tokens))) {
-      findings.push(`Changed path matches out_of_scope keyword: ${item}`);
-      matched = true;
-    }
-
-    if (matched) hits += 1;
+/** Union of tokens describing what the work touched (paths + signals). */
+function targetTokens(input: DriftSignals): Set<string> {
+  const all = new Set<string>();
+  for (const path of input.changedPaths ?? []) {
+    for (const t of tokenize(path)) all.add(t);
   }
+  for (const signal of input.signals ?? []) {
+    for (const t of tokenize(signal)) all.add(t);
+  }
+  return all;
+}
 
-  return hits;
+/** Tokens describing the agreed work — used to subtract non-discriminating tokens. */
+function scopeTokens(contract: IntentContract): Set<string> {
+  const all = new Set<string>();
+  for (const item of [...contract.in_scope, contract.original_ask]) {
+    for (const t of tokenize(item)) all.add(t);
+  }
+  return all;
 }
 
 export function scoreDrift(
@@ -110,77 +83,70 @@ export function scoreDrift(
   options: ScoreDriftOptions = {},
 ): DriftScore {
   const findings: string[] = [];
-  const paths = input.changedPaths ?? [];
-  const thresholds = options.thresholds;
+  const thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
   const hardBlockCritical = options.hard_block_on_critical_constraints ?? true;
 
-  let scopeCreep = 0;
+  const target = targetTokens(input);
+  const scope = scopeTokens(contract);
+
+  // ── Scope creep: work touching explicitly out-of-scope territory ──────────
+  let scopeHits = 0;
+  let touchedAcWhileOutOfScope = 0;
+  const acTokenSets = contract.acceptance_criteria.map((ac) =>
+    tokenize(ac.description),
+  );
+
+  for (const item of contract.out_of_scope) {
+    const discriminating = discriminatingTokens(item, scope);
+    if (discriminating.size === 0) continue;
+    const matched = intersectingTokens(discriminating, target);
+    if (matched.length > 0) {
+      scopeHits += 1;
+      findings.push(
+        `Out-of-scope touched: "${item}" (matched: ${matched.join(", ")})`,
+      );
+      // If the out-of-scope work also overlaps an acceptance criterion, the
+      // delivered behavior is diverging from what "done" was defined to mean.
+      if (
+        acTokenSets.some((ac) => intersectingTokens(discriminating, ac).length > 0)
+      ) {
+        touchedAcWhileOutOfScope += 1;
+      }
+    }
+  }
+  const scopeCreep = Math.min(100, scopeHits * 40);
+
+  // ── Constraint violations: prohibitive rules whose subject was touched ────
   let constraintViolation = 0;
-  let acDivergence = 0;
-  let undocumentedPivot = 0;
-
-  const outOfScopeHits = matchOutOfScopeToPaths(
-    contract.out_of_scope,
-    paths,
-    findings,
-  );
-  if (outOfScopeHits > 0) scopeCreep = Math.min(100, outOfScopeHits * 40);
-
-  const cliConflict =
-    paths.some((p) => CLI_PATH.test(p)) &&
-    contract.out_of_scope.some((item) => /cli/i.test(item));
-  if (cliConflict) {
-    scopeCreep = Math.max(scopeCreep, 100);
-    acDivergence = Math.max(acDivergence, 80);
-    if (!findings.some((f) => /CLI/i.test(f))) {
-      findings.push("CLI work conflicts with contract out_of_scope");
-    }
-  }
-
-  const hasApi = paths.some((p) => API_PATH.test(p));
-  const criticalNoApi = contract.constraints.some(
-    (c) => c.priority === "critical" && /no new api/i.test(c.rule),
-  );
-  if (hasApi && criticalNoApi) {
-    constraintViolation = 90;
-    findings.push("Critical constraint violated: no new API endpoints");
-  }
-
-  if (input.signals?.includes("websocket_added")) {
-    scopeCreep = Math.max(scopeCreep, 80);
-  }
-
-  if (input.signals?.includes("stub_println_notification")) {
-    scopeCreep = Math.min(100, scopeCreep + 40);
-    findings.push("Stub println notification signal conflicts with contract scope");
-    const criticalNoStub = contract.constraints.some(
-      (c) => c.priority === "critical" && /not stubbed|functional/i.test(c.rule),
+  let criticalViolated = false;
+  for (const c of contract.constraints) {
+    const discriminating = discriminatingTokens(c.rule, scope);
+    if (discriminating.size === 0) continue;
+    const matched = intersectingTokens(discriminating, target);
+    if (matched.length === 0) continue;
+    const severity = PRIORITY_SEVERITY[c.priority] ?? PRIORITY_SEVERITY.low;
+    if (severity > constraintViolation) constraintViolation = severity;
+    if (c.priority === "critical") criticalViolated = true;
+    findings.push(
+      `${c.priority} constraint at risk: "${c.rule}" (matched: ${matched.join(", ")})`,
     );
-    if (criticalNoStub) {
-      constraintViolation = Math.max(constraintViolation, 90);
-      findings.push("Critical constraint violated: features must be functional, not stubbed");
-    }
   }
 
-  if (input.signals?.includes("hardcoded_safety_score")) {
-    scopeCreep = Math.min(100, scopeCreep + 40);
-    findings.push("Hardcoded safety score signal conflicts with contract scope");
-    acDivergence = Math.max(acDivergence, 80);
-    findings.push("Hardcoded safety score diverges from acceptance criteria");
+  // ── Acceptance-criteria divergence ────────────────────────────────────────
+  const acDivergence = Math.min(100, touchedAcWhileOutOfScope * 80);
+  if (acDivergence > 0) {
+    findings.push("Out-of-scope change overlaps defined acceptance criteria");
   }
 
-  if (input.signals?.includes("new_api_route")) {
-    acDivergence = Math.max(acDivergence, 80);
-    findings.push("New API route signal diverges from contract acceptance criteria");
-  }
-
+  // ── Undocumented pivot: user signalled a scope change, not logged ─────────
+  let undocumentedPivot = 0;
   if (
     input.userMessage &&
-    /\b(actually|also|while we're at it)\b/i.test(input.userMessage) &&
+    PIVOT_PHRASES.test(input.userMessage) &&
     contract.pivot_log.every((p) => p.acknowledged_by !== "user")
   ) {
     undocumentedPivot = 70;
-    findings.push("User message suggests pivot without pivot_log entry");
+    findings.push("User message suggests a pivot with no acknowledged pivot_log entry");
   }
 
   const categories = {
@@ -190,39 +156,30 @@ export function scoreDrift(
     undocumented_pivot: undocumentedPivot,
   };
 
-  const overall = Math.round(
+  const weighted = Math.round(
     categories.scope_creep * DRIFT_WEIGHTS.scope_creep +
       categories.constraint_violation * DRIFT_WEIGHTS.constraint_violation +
       categories.ac_divergence * DRIFT_WEIGHTS.ac_divergence +
       categories.undocumented_pivot * DRIFT_WEIGHTS.undocumented_pivot,
   );
 
-  const bumpedOverall =
-    cliConflict
-      ? Math.max(overall, thresholds?.soft_block ?? 71)
-      : overall;
+  // A weighted average dilutes a single severe signal below any block
+  // threshold. Floor the score so that touching out-of-scope territory or a
+  // high/critical constraint is enough to pause on its own.
+  let floor = 0;
+  if (scopeHits >= 1) floor = Math.max(floor, thresholds.soft_block);
+  if (constraintViolation >= PRIORITY_SEVERITY.critical) {
+    floor = Math.max(floor, thresholds.soft_block);
+  } else if (constraintViolation >= PRIORITY_SEVERITY.high) {
+    floor = Math.max(floor, thresholds.warn);
+  }
 
-  let action: DriftAction = thresholds
-    ? driftActionForScore(bumpedOverall, thresholds)
-    : driftActionForScore(bumpedOverall, {
-        info: 26,
-        warn: 51,
-        soft_block: 71,
-        hard_block: 86,
-      });
+  const overall = Math.min(100, Math.max(weighted, floor));
+  let action = driftActionForScore(overall, thresholds);
 
-  if (
-    hardBlockCritical &&
-    constraintViolation >= 90 &&
-    bumpedOverall >= (thresholds?.hard_block ?? 86)
-  ) {
+  if (hardBlockCritical && criticalViolated && overall >= thresholds.hard_block) {
     action = "hard_block";
   }
 
-  return {
-    overall: bumpedOverall,
-    action,
-    categories,
-    findings,
-  };
+  return { overall, action, categories, findings };
 }

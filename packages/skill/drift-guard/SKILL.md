@@ -48,6 +48,15 @@ JSON output:
 
 `--log` appends to `.conductor/drift-log.jsonl`.
 
+### Signals are open-vocabulary
+
+`--signals` takes free-text phrases describing what the change *did* — e.g.
+`"added a new api route"`, `"stubbed the notification handler"`,
+`"sends telemetry to analytics"`. They are tokenized and matched against the
+contract's `out_of_scope` and `constraints`; there is no fixed enum. Describe
+the change in plain words. The scorer subtracts tokens that also appear in
+`in_scope`, so naming the change honestly is enough.
+
 ## Actions by score (default thresholds)
 
 | Score | Action |
@@ -83,6 +92,22 @@ pivot_log:
 
 Do not mutate frozen fields without a `pivot_log` entry.
 
+## Hard enforcement (outside the agent)
+
+A SKILL.md is advisory — an agent can ignore it. For a gate that *cannot* be
+ignored, use `conductor-check`, which exits non-zero when no frozen contract
+exists or staged changes drift past a blocking threshold:
+
+```bash
+conductor-check --project . --staged
+```
+
+Wire it as a git pre-commit hook
+(`integrations/git-hooks/pre-commit.sample`) or a CI step.
+
 ## Implementation
 
-Rule-based scorer: `packages/core/src/drift.ts` — no LLM required for v1.
+Generic token-matching scorer: `packages/core/src/drift.ts` +
+`packages/core/src/tokenize.ts`. No project-specific rules and no LLM required —
+matching is driven entirely by the contract's own `in_scope`, `out_of_scope`,
+and `constraints` text.

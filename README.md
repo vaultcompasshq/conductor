@@ -1,8 +1,10 @@
 # Conductor
 
-**Intent fidelity for AI-assisted development** — across Claude, Codex, Gemini, and Cursor.
+**Intent fidelity for AI-assisted development.**
 
 Conductor sits *above* foundation models and *below* your product code. It turns messy conversation into a frozen **Intent Contract**, coaches users when prompts cause scope explosion, and detects drift before bad code ships.
+
+The Intent Contract is a plain YAML file, so any model that can read a file (Claude, Codex, Gemini) can consume it. Today the enforcement surfaces that ship are the `conductor-check` gate (pre-commit / CI) and the Cursor/Claude skills; deeper Codex, Gemini, and Venture Studio wiring is **design-stage** — see [integrations/](./integrations).
 
 ```
 User conversation (messy)
@@ -20,7 +22,7 @@ User conversation (messy)
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **29 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **39 tests passing**
 
 ## Start here
 
@@ -50,23 +52,31 @@ conductor/
 ├── packages/
 │   ├── schema/          # @vaultcompasshq/conductor-schema ✅
 │   ├── core/            # @vaultcompasshq/conductor-core ✅
-│   ├── skill/           # Superpowers skills + CLIs (Phase 2) ✅ draft
-│   ├── cli/             # conductor contract | drift | coach (Phase 4)
-│   └── memory/          # Project constraint index (Phase 3)
+│   ├── skill/           # Superpowers skills + CLIs incl. conductor-check ✅
+│   ├── cli/             # unified conductor binary (Phase 4 — not built)
+│   └── memory/          # project constraint index (Phase 3 — not built)
 ├── integrations/
-│   ├── superpowers/
-│   ├── cursor/
-│   └── ai-venture-studio/
+│   ├── superpowers/     # skills + install script ✅
+│   ├── git-hooks/       # pre-commit gate sample ✅
+│   ├── cursor/          # design notes
+│   └── ai-venture-studio/  # design notes
 └── docs/
 ```
+
+The enforcement gate (`conductor-check`) returns a non-zero exit code when no
+frozen contract exists or staged changes drift past a blocking threshold — the
+one place Conductor *enforces* rather than *suggests*. Wire it via
+[integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
+or a CI step.
 
 ## Development
 
 ```bash
 pnpm install
-pnpm test      # 29 tests
+pnpm test      # 39 tests (builds first, then schema + core + skill + examples)
 pnpm build
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
+pnpm conductor:check -- --project . --staged   # enforcement gate
 ```
 
 ## Origin
