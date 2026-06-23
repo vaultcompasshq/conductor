@@ -34,13 +34,14 @@ roadmap's Phase 2 exit gate asked for, on a real diff rather than a fixture.
 
 ## Findings from the run (issues to fix)
 
-1. **Constraint loader is too noisy.** `loadConstraintFiles` scraped ~12
-   "constraints" out of `AGENTS.md` markdown bullets that are not rules at all
-   (e.g. `"Tag: v0.1.0-alpha"`, `"Goal: Superpowers skills wired to
+1. **Constraint loader is too noisy.** ✅ *Fixed.* `loadConstraintFiles` scraped
+   ~12 "constraints" out of `AGENTS.md` markdown bullets that are not rules at
+   all (e.g. `"Tag: v0.1.0-alpha"`, `"Goal: Superpowers skills wired to
    packages/core"`). Two of these produced spurious `low constraint at risk`
-   findings in the run by matching the token `core`. The markdown heuristic
-   needs a much tighter filter (imperative/`MUST`/`NEVER` lines only) or an
-   explicit constraints block.
+   findings in the run by matching the token `core`. `extractConstraintsFromMarkdown`
+   now requires normative language / leading prohibitions / rules-section
+   bullets and skips tables, links, and code fences — the same AGENTS.md now
+   yields 4 real boundary rules instead of 12.
 2. **`--freeze` sets `frozen_by: user` with no actual user approval.** The
    "hard gate requires explicit user approval" claim is currently just a CLI
    flag. Freezing should be a distinct, attributable step.

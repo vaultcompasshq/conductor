@@ -28,6 +28,37 @@ function cleanRule(line: string): string {
     .trim();
 }
 
+// Normative language that marks a line as an actual rule, not prose/metadata.
+const NORMATIVE =
+  /\b(must not|must|never|do not|don't|dont|shall not|shall|always|required?|avoid|prefer|cannot|can't|should not|should|minimi[sz]e)\b/i;
+// A leading prohibition like "No new API endpoints".
+const LEADING_PROHIBITION = /^no\s+\w+/i;
+// Headings under which bullet items are rules even without a keyword.
+const RULE_HEADING =
+  /\b(constraint|rule|boundar|guardrail|do not|must|principle|requirement|polic|invariant)/i;
+
+const BULLET = /^([-*]\s+|\d+\.\s+)/;
+
+function isRuleLine(
+  rule: string,
+  wasBullet: boolean,
+  underRuleHeading: boolean,
+): boolean {
+  if (NORMATIVE.test(rule)) return true;
+  if (LEADING_PROHIBITION.test(rule)) return true;
+  if (underRuleHeading && wasBullet) return true;
+  return false;
+}
+
+/**
+ * Extract genuine rules from a markdown constraint file.
+ *
+ * Precision over recall: a line qualifies only if it uses normative language
+ * (MUST/NEVER/should/avoid/prefer…), is a leading prohibition ("No new …"), or
+ * is a bullet under a rules-style heading. This filters out doc prose, metadata
+ * (tags, links, goals) and tables that the previous "any bullet line" heuristic
+ * scraped as bogus constraints — see docs/dogfood/phase2-live-run.md finding #1.
+ */
 export function extractConstraintsFromMarkdown(
   content: string,
   source: ConstraintSource,
@@ -36,14 +67,32 @@ export function extractConstraintsFromMarkdown(
   const constraints: Constraint[] = [];
   const lines = content.split("\n");
 
+  let inFence = false;
+  let underRuleHeading = false;
+
   for (const raw of lines) {
     const line = raw.trim();
-    if (line.length < 10 || line.length > 300) continue;
-    if (line.startsWith("#")) continue;
-    if (!/^[-*]|\d+\.|MUST|NEVER|IMPORTANT|CRITICAL/i.test(line)) continue;
 
+    if (line.startsWith("```") || line.startsWith("~~~")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    if (line.startsWith("#")) {
+      underRuleHeading = RULE_HEADING.test(line);
+      continue;
+    }
+
+    if (line.length < 10 || line.length > 300) continue;
+    if (line.startsWith("|")) continue; // table row
+    if (line.startsWith(">")) continue; // blockquote
+    if (/\bhttps?:\/\//i.test(line)) continue; // link/url-bearing prose
+
+    const wasBullet = BULLET.test(line);
     const rule = cleanRule(line);
     if (rule.length < 10) continue;
+    if (!isRuleLine(rule, wasBullet, underRuleHeading)) continue;
 
     constraints.push({
       source,
@@ -53,7 +102,7 @@ export function extractConstraintsFromMarkdown(
     });
   }
 
-  return constraints.slice(0, 12);
+  return constraints.slice(0, 15);
 }
 
 export function loadCursorRules(projectRoot: string): LoadedConstraints {
