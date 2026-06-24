@@ -5,6 +5,7 @@ export type {
   ConstraintPriority,
   AcceptanceCriterion,
   PivotLogEntry,
+  CorrectionLogEntry,
   ValidationResult,
 } from "./types.js";
 export { validateIntentContract, assertValidIntentContract } from "./validate.js";

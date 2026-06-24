@@ -13,6 +13,8 @@
     "conductor:drift": "node packages/skill/dist/drift-cli.js",
     "conductor:init": "node packages/skill/dist/init-cli.js",
     "conductor:check": "node packages/skill/dist/check-cli.js",
+    "conductor:correct": "node packages/skill/dist/correct-cli.js",
+    "conductor:brief": "node packages/skill/dist/brief-cli.js",
     "conductor:install-skills": "bash integrations/superpowers/install-skills.sh"
   },
   "engines": {

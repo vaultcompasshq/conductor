@@ -7,7 +7,7 @@ DEST="${1:-$HOME/.cursor/skills}"
 
 mkdir -p "$DEST"
 
-for skill in intent-contract prompt-coach drift-guard; do
+for skill in intent-contract prompt-coach drift-guard capture-correction; do
   rm -rf "$DEST/$skill"
   cp -r "$SKILLS_SRC/$skill" "$DEST/$skill"
   echo "Installed $skill -> $DEST/$skill"

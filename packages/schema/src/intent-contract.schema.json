@@ -65,6 +65,7 @@
               "GEMINI.md",
               "cursor-rules",
               "user-stated",
+              "user-correction",
               "superpowers-spec",
               "project-spec"
             ]
@@ -185,6 +186,49 @@
                 "items": { "type": "string" }
               }
             }
+          }
+        }
+      }
+    },
+    "correction_log": {
+      "type": "array",
+      "description": "Distilled corrections: agent mistakes the user corrected, kept as durable rules so they survive context compaction.",
+      "items": {
+        "type": "object",
+        "required": ["id", "timestamp", "wrong", "right", "rule", "acknowledged_by"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cl-[0-9]+$"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "wrong": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "The approach the agent took that was wrong"
+          },
+          "right": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "The corrected approach to use instead"
+          },
+          "rule": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 300,
+            "description": "Normalized negative constraint capturing the lesson"
+          },
+          "acknowledged_by": {
+            "type": "string",
+            "enum": ["user", "pending"]
+          },
+          "promoted_to_constraint": {
+            "type": "boolean"
           }
         }
       }

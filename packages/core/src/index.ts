@@ -65,3 +65,13 @@ export {
   type GateStatus,
   type CheckGateOptions,
 } from "./gate.js";
+export {
+  addCorrection,
+  acknowledgedCorrections,
+  type AddCorrectionInput,
+} from "./correction.js";
+export {
+  buildBrief,
+  renderBriefMarkdown,
+  type SessionBrief,
+} from "./brief.js";

@@ -4,6 +4,7 @@ export type ConstraintSource =
   | "GEMINI.md"
   | "cursor-rules"
   | "user-stated"
+  | "user-correction"
   | "superpowers-spec"
   | "project-spec";
 
@@ -35,6 +36,16 @@ export interface PivotLogEntry {
   };
 }
 
+export interface CorrectionLogEntry {
+  id: string;
+  timestamp: string;
+  wrong: string;
+  right: string;
+  rule: string;
+  acknowledged_by: "user" | "pending";
+  promoted_to_constraint?: boolean;
+}
+
 export interface IntentContract {
   contract_id: string;
   version: "1.0.0";
@@ -51,6 +62,7 @@ export interface IntentContract {
     coaching_shown?: boolean;
   };
   pivot_log: PivotLogEntry[];
+  correction_log?: CorrectionLogEntry[];
   metadata?: Record<string, string>;
 }
 

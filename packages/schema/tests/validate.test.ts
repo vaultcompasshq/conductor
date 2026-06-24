@@ -46,4 +46,43 @@ describe("validateIntentContract", () => {
     });
     expect(result.valid).toBe(false);
   });
+
+  it("accepts an optional correction_log and user-correction source", () => {
+    const result = validateIntentContract({
+      ...validContract,
+      constraints: [
+        { source: "user-correction", rule: "Never fetch in components", priority: "high" },
+      ],
+      correction_log: [
+        {
+          id: "cl-1",
+          timestamp: "2026-06-24T10:00:00Z",
+          wrong: "fetched in component",
+          right: "use a hook",
+          rule: "Never fetch in components; use a hook",
+          acknowledged_by: "user",
+          promoted_to_constraint: true,
+        },
+      ],
+    });
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("rejects a malformed correction_log id", () => {
+    const result = validateIntentContract({
+      ...validContract,
+      correction_log: [
+        {
+          id: "bad",
+          timestamp: "2026-06-24T10:00:00Z",
+          wrong: "x",
+          right: "y",
+          rule: "some rule here",
+          acknowledged_by: "user",
+        },
+      ],
+    });
+    expect(result.valid).toBe(false);
+  });
 });
