@@ -9,13 +9,16 @@
     "conductor-drift": "./dist/drift-cli.js",
     "conductor-extract": "./dist/extract-cli.js",
     "conductor-init": "./dist/init-cli.js",
-    "conductor-check": "./dist/check-cli.js"
+    "conductor-check": "./dist/check-cli.js",
+    "conductor-correct": "./dist/correct-cli.js",
+    "conductor-brief": "./dist/brief-cli.js"
   },
   "files": [
     "dist",
     "intent-contract",
     "prompt-coach",
-    "drift-guard"
+    "drift-guard",
+    "capture-correction"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

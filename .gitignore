@@ -12,3 +12,7 @@ dist/
 
 # Test artifacts
 coverage/
+
+# Local dogfood/session artifacts (per AGENTS.md, contracts live in app repos)
+.conductor/intent-contract.yaml
+.conductor/drift-log.jsonl

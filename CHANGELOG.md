@@ -8,6 +8,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Phase 3a — Correction Log + Session Brief.** `correction_log` on the Intent
+  Contract (schema + types) captures agent mistakes the user corrected as
+  durable rules. `conductor-correct` records them (pending by default;
+  `--acknowledge` to confirm, `--promote` to mirror into `constraints[]` as a
+  `user-correction` rule the drift scorer enforces — off by default).
+  `conductor-brief` emits the minimal correct-methodology context (intent,
+  scope, AC, constraints, acknowledged corrections, no failed code) to
+  re-inject after a context reset. New `capture-correction` skill. Conservative
+  defaults per the design spec: no auto-promote, separate from `pivot_log`,
+  append-only. See `docs/superpowers/specs/2026-06-20-correction-log-and-brief.md`.
+- Constraint-loader precision fix: `extractConstraintsFromMarkdown` now requires
+  normative language / leading prohibitions / rules-section bullets and skips
+  tables, links, and code fences (real AGENTS.md: 12 bogus rules → 4 real ones).
+  Resolves dogfood finding #1.
+
 - `conductor-check` CLI + `checkGate()` — a real enforcement gate that exits
   non-zero when no frozen contract exists or staged changes drift past a
   blocking threshold (vs. advisory SKILL.md). Sample git pre-commit hook in

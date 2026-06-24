@@ -1,7 +1,7 @@
 # Design spec: Correction Log + Session Brief
 
 **Date:** 2026-06-20
-**Status:** Draft — design pass, not approved for build
+**Status:** Phase 3a implemented — no-auto-promote, separate from `pivot_log`, append-only. Q2 (decay) and Q3 (LLM rule-normalization) deferred to 3b.
 **Author:** Conductor team
 **Related:** [2026-06-17-conductor-design.md](./2026-06-17-conductor-design.md) · roadmap Phase 3 (memory index)
 

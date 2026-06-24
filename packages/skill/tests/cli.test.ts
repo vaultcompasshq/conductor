@@ -145,3 +145,73 @@ describe("conductor-check (enforcement gate)", () => {
     expect(out.status).toBe("ok");
   });
 });
+
+function frozenProject(): string {
+  const dir = tmpProject();
+  run("extract-cli.js", [
+    "--project", dir,
+    "--text", "Add a theme toggle to the settings page. Verify it persists across reloads.",
+    "--freeze",
+  ]);
+  return dir;
+}
+
+describe("conductor-correct + conductor-brief", () => {
+  it("records a pending correction without promoting", () => {
+    const dir = frozenProject();
+    const res = run("correct-cli.js", [
+      "--project", dir,
+      "--wrong", "fetched data in the component",
+      "--right", "use a useThemePreference hook",
+      "--rule", "Never fetch in components; use a hook",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.pending).toBe(true);
+    expect(out.promoted).toBe(false);
+    expect(out.correction.id).toBe("cl-1");
+  });
+
+  it("promotes an acknowledged correction into the contract", () => {
+    const dir = frozenProject();
+    const res = run("correct-cli.js", [
+      "--project", dir,
+      "--wrong", "fetched in the component", "--right", "used a hook",
+      "--rule", "Never fetch in components; use a hook",
+      "--acknowledge", "--promote",
+    ]);
+    const out = JSON.parse(res.stdout);
+    expect(out.promoted).toBe(true);
+    expect(out.pending).toBe(false);
+  });
+
+  it("brief includes acknowledged corrections and intent, as JSON", () => {
+    const dir = frozenProject();
+    run("correct-cli.js", [
+      "--project", dir,
+      "--wrong", "did the wrong thing", "--right", "did the right thing",
+      "--rule", "Acknowledged lesson here",
+      "--acknowledge",
+    ]);
+    run("correct-cli.js", [
+      "--project", dir,
+      "--wrong", "another wrong thing", "--right", "another right thing",
+      "--rule", "Pending lesson here",
+    ]);
+    const res = run("brief-cli.js", ["--project", dir, "--json"]);
+    expect(res.code).toBe(0);
+    const brief = JSON.parse(res.stdout);
+    expect(brief.intent).toMatch(/theme toggle/i);
+    expect(brief.corrections.map((c: { rule: string }) => c.rule)).toEqual([
+      "Acknowledged lesson here",
+    ]);
+  });
+
+  it("brief renders markdown by default", () => {
+    const dir = frozenProject();
+    const res = run("brief-cli.js", ["--project", dir]);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("# Session brief —");
+    expect(res.stdout).toContain("## Intent");
+  });
+});
