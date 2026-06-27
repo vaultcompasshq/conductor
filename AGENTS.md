@@ -12,11 +12,12 @@ Conductor is the **intent fidelity layer** for AI-assisted development: Intent C
 
 | # | File | Purpose |
 |---|------|---------|
-| 1 | [README.md](./README.md) | What Conductor is, package layout, dev commands |
-| 2 | [BRAINSTORMING.md](./BRAINSTORMING.md) | Session index, key decisions |
-| 3 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved product spec |
-| 4 | [docs/phases/implementation-roadmap.md](./docs/phases/implementation-roadmap.md) | 14-week plan |
-| 5 | [docs/NEXT.md](./docs/NEXT.md) | Current phase handoff — **start here for task work** |
+| 1 | [docs/NEXT.md](./docs/NEXT.md) | **Cold-start handoff — start here.** Current state + what's next |
+| 2 | [docs/TODO.md](./docs/TODO.md) | File-level task backlog |
+| 3 | [docs/cli-reference.md](./docs/cli-reference.md) | Every CLI and its flags |
+| 4 | [README.md](./README.md) | What Conductor is, package layout, dev commands |
+| 5 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved product spec |
+| 6 | [docs/phases/implementation-roadmap.md](./docs/phases/implementation-roadmap.md) | 14-week plan |
 
 Phase 1 reference (complete): [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./docs/superpowers/plans/2026-06-17-conductor-phase1.md)
 
@@ -28,8 +29,14 @@ Phase 1 reference (complete): [docs/superpowers/plans/2026-06-17-conductor-phase
 |-------|-------|--------|
 | 1 — Schema + core | 1–2 | ✅ Complete |
 | 2 — Runtime + skills | 3–6 | ✅ Complete (`packages/skill`, CLIs, config, init) |
-| 3 — Memory index | 7–10 | 🔜 Next |
-| 4 — CLI + public release | 11–14 | Planned |
+| 3a — Correction log + brief | — | ✅ Complete (PR #4) |
+| Hardening — generic scorer, gate, approval | — | ✅ Complete (PRs #1, #3, #5) |
+| 3 — Memory-index persistence | 7–10 | 🔜 Next (see [docs/TODO.md](./docs/TODO.md) §1) |
+| 3b — decay/dedup, LLM normalization | — | Deferred |
+| 4 — Unified CLI + public release | 11–14 | Planned |
+
+**Resuming work? Read [docs/NEXT.md](./docs/NEXT.md) (cold-start handoff) and
+[docs/TODO.md](./docs/TODO.md) first.**
 
 ---
 
@@ -38,31 +45,29 @@ Phase 1 reference (complete): [docs/superpowers/plans/2026-06-17-conductor-phase
 ```
 packages/
 ├── schema/     # @vaultcompasshq/conductor-schema — AJV validator + types ✅
-├── core/       # @vaultcompasshq/conductor-core — coach, drift, rubric ✅
-├── skill/      # Superpowers-compatible skills (Phase 2) — not started
-├── cli/        # conductor CLI (Phase 4)
-└── memory/     # Project constraint index (Phase 3)
+├── core/       # @vaultcompasshq/conductor-core — coach, drift, gate, correction, brief ✅
+├── skill/      # Superpowers skills + 8 CLIs (coach/extract/freeze/check/drift/correct/brief/init) ✅
+├── cli/        # unified conductor binary (Phase 4 — not built)
+└── memory/     # cross-session persistence (Phase 3 — not built)
 ```
+
+CLIs are documented in [docs/cli-reference.md](./docs/cli-reference.md).
+Lifecycle: coach → extract (draft) → **freeze (approve)** → check (gate) →
+correct → brief.
 
 ---
 
-## Phase 2 scope (current work)
+## Current work
 
-**Goal:** Superpowers skills wired to `packages/core` and `packages/schema`.
+The next major build is **memory-index persistence** (roadmap Phase 3 core).
+See [docs/TODO.md](./docs/TODO.md) §1 for the file-level checklist and
+[docs/NEXT.md](./docs/NEXT.md) for full context.
 
-| Skill | Package path | Integration doc |
-|-------|--------------|-----------------|
-| `intent-contract` | `packages/skill/intent-contract/SKILL.md` | [integrations/superpowers/README.md](./integrations/superpowers/README.md) |
-| `prompt-coach` | `packages/skill/prompt-coach/SKILL.md` | same |
-| `drift-guard` | `packages/skill/drift-guard/SKILL.md` | same |
+**Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`,
+`capture-correction` (`packages/skill/*/SKILL.md`).
 
-**Also Phase 2 (later weeks):**
-
-- `packages/core/extract.ts` — draft contract from text + constraint files
-- Constraint loader (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`)
-- EngineeringAgents wiring — [integrations/ai-venture-studio/README.md](./integrations/ai-venture-studio/README.md) (separate repo PR)
-
-**Process:** Use Superpowers `writing-plans` to produce a Phase 2 plan (like Phase 1) before implementing.
+**Process:** Use Superpowers `writing-plans` before implementing a multi-step
+task. All work lands on `main` via PR (never push to main); CI must be green.
 
 ---
 
@@ -70,7 +75,7 @@ packages/
 
 ```bash
 pnpm install
-pnpm test      # 39 tests — schema (3) + core (22) + skill (8) + examples (6)
+pnpm test      # 63 tests — schema (7) + core (34) + skill (16) + examples (6)
 pnpm build
 pnpm typecheck
 ```
