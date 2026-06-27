@@ -40,6 +40,14 @@ beforeAll(() => {
   }
 });
 
+// Extract a draft and approve it, returning the project dir.
+function frozenProjectWith(text: string): string {
+  const dir = tmpProject();
+  run("extract-cli.js", ["--project", dir, "--text", text]);
+  run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+  return dir;
+}
+
 describe("conductor-init", () => {
   it("creates the .conductor skeleton", () => {
     const dir = tmpProject();
@@ -76,18 +84,54 @@ describe("conductor-extract", () => {
     expect(existsSync(join(dir, ".conductor", "intent-contract.yaml"))).toBe(false);
   });
 
-  it("--freeze writes a frozen contract", () => {
+  it("writes an UNFROZEN draft (no approval)", () => {
     const dir = tmpProject();
     const res = run("extract-cli.js", [
       "--project", dir,
       "--text", "Add a CSV export button. No new API endpoints. Verify file downloads.",
-      "--freeze",
     ]);
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.written_path).toContain("intent-contract.yaml");
+    expect(out.frozen).toBe(false);
     const written = readFileSync(out.written_path, "utf8");
+    expect(written).not.toContain("frozen_by: user");
+    expect(written).not.toContain("approval:");
+  });
+});
+
+describe("conductor-freeze (approval gate)", () => {
+  it("refuses to freeze non-interactively without an approver", () => {
+    const dir = tmpProject();
+    run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
+    const res = run("freeze-cli.js", ["--project", dir, "--json"]);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/approval requires --approved-by/i);
+  });
+
+  it("freezes with an explicit approver and records the approval", () => {
+    const dir = tmpProject();
+    run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
+    const res = run("freeze-cli.js", ["--project", dir, "--approved-by", "alice", "--json"]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.frozen).toBe(true);
+    expect(out.approved_by).toBe("alice");
+    expect(out.method).toBe("explicit-flag");
+    const written = readFileSync(join(dir, ".conductor", "intent-contract.yaml"), "utf8");
     expect(written).toContain("frozen_by: user");
+    expect(written).toContain("approved_by: alice");
+  });
+
+  it("is idempotent on an already-frozen contract", () => {
+    const dir = tmpProject();
+    run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
+    run("freeze-cli.js", ["--project", dir, "--approved-by", "alice"]);
+    const res = run("freeze-cli.js", ["--project", dir, "--approved-by", "bob", "--json"]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.already_frozen).toBe(true);
+    expect(out.approved_by).toBe("alice");
   });
 });
 
@@ -101,13 +145,24 @@ describe("conductor-check (enforcement gate)", () => {
     expect(out.contractFound).toBe(false);
   });
 
-  it("passes with exit 0 when frozen and work is aligned", () => {
+  it("blocks with exit 1 when a draft exists but is not approved", () => {
     const dir = tmpProject();
     run("extract-cli.js", [
       "--project", dir,
-      "--text", "Add a CSV export button to the report table. No new API endpoints. Verify file downloads.",
-      "--freeze",
+      "--text", "Add a CSV export button to the report table. Verify file downloads.",
     ]);
+    const res = run("check-cli.js", ["--project", dir, "--json"]);
+    expect(res.code).toBe(1);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("blocked");
+    expect(out.contractFound).toBe(true);
+    expect(out.contractFrozen).toBe(false);
+  });
+
+  it("passes with exit 0 when frozen and work is aligned", () => {
+    const dir = frozenProjectWith(
+      "Add a CSV export button to the report table. No new API endpoints. Verify file downloads.",
+    );
     const res = run("check-cli.js", [
       "--project", dir,
       "--paths", "src/ReportTable.tsx",
@@ -119,12 +174,9 @@ describe("conductor-check (enforcement gate)", () => {
   });
 
   it("blocks with exit 1 on out-of-scope drift", () => {
-    const dir = tmpProject();
-    run("extract-cli.js", [
-      "--project", dir,
-      "--text", "Add a CSV export button to the report table. No new API endpoints. Verify file downloads.",
-      "--freeze",
-    ]);
+    const dir = frozenProjectWith(
+      "Add a CSV export button to the report table. No new API endpoints. Verify file downloads.",
+    );
     const res = run("check-cli.js", [
       "--project", dir,
       "--paths", "src/app/api/export/route.ts",
@@ -147,13 +199,9 @@ describe("conductor-check (enforcement gate)", () => {
 });
 
 function frozenProject(): string {
-  const dir = tmpProject();
-  run("extract-cli.js", [
-    "--project", dir,
-    "--text", "Add a theme toggle to the settings page. Verify it persists across reloads.",
-    "--freeze",
-  ]);
-  return dir;
+  return frozenProjectWith(
+    "Add a theme toggle to the settings page. Verify it persists across reloads.",
+  );
 }
 
 describe("conductor-correct + conductor-brief", () => {

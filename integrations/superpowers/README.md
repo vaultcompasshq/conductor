@@ -28,12 +28,16 @@ gate that can't be ignored: it returns a non-zero exit code when no frozen
 contract exists or staged changes drift past a blocking threshold.
 
 ```bash
-# 1. Freeze intent for the task
-conductor-extract --project . --text "…the ask…" --freeze
+# 1. Draft intent for the task (writes an UNFROZEN draft)
+conductor-extract --project . --text "…the ask…"
 
-# 2. Check staged work before committing (used by the pre-commit hook)
+# 2. Approve it — a deliberate step; an agent must not self-approve
+conductor-freeze --project .                  # interactive confirm, or:
+conductor-freeze --project . --approved-by "alice"
+
+# 3. Check staged work before committing (used by the pre-commit hook)
 conductor-check --project . --staged
-#   exit 0 → ok    exit 1 → blocked (missing/unfrozen contract or drift)
+#   exit 0 → ok    exit 1 → blocked (missing/unapproved contract or drift)
 ```
 
 Wire it as a pre-commit hook via

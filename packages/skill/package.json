@@ -8,6 +8,7 @@
     "conductor-coach": "./dist/coach-cli.js",
     "conductor-drift": "./dist/drift-cli.js",
     "conductor-extract": "./dist/extract-cli.js",
+    "conductor-freeze": "./dist/freeze-cli.js",
     "conductor-init": "./dist/init-cli.js",
     "conductor-check": "./dist/check-cli.js",
     "conductor-correct": "./dist/correct-cli.js",

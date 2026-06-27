@@ -70,18 +70,30 @@ Show:
 
 Ask **one question at a time** for gaps. Update the draft mentally before writing.
 
-### 6. Write and freeze
-
-After explicit user approval:
+### 6. Write the draft
 
 ```bash
 pnpm --filter @vaultcompasshq/conductor-skill exec conductor-extract \
   --project /path/to/target-project \
-  --text "FINAL APPROVED ASK" \
-  --freeze
+  --text "FINAL ASK"
 ```
 
-Confirm `written_path` is `.conductor/intent-contract.yaml`.
+This writes an **unfrozen draft**. The gate still blocks until it is approved.
+
+### 7. Freeze (explicit user approval)
+
+Freezing is a separate, deliberate step — the agent must **not** self-approve.
+
+```bash
+pnpm --filter @vaultcompasshq/conductor-skill exec conductor-freeze \
+  --project /path/to/target-project
+# Interactive TTY → shows a summary and asks to confirm.
+# Non-interactive → requires --approved-by "<name>".
+```
+
+The approver and timestamp are recorded in the contract's `approval` block;
+the gate (`conductor-check`) only treats the contract as frozen once that
+record exists. Confirm `written_path` is `.conductor/intent-contract.yaml`.
 
 Set `metadata.superpowers_spec_path` when a design spec will follow (e.g. `docs/superpowers/specs/YYYY-MM-DD-topic-design.md`).
 

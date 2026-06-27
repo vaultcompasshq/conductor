@@ -119,6 +119,26 @@
       "type": "string",
       "enum": ["user", "conductor", "agent"]
     },
+    "approval": {
+      "type": "object",
+      "description": "Record of an explicit, attributable approval. Required for the contract to count as user-frozen by the gate.",
+      "required": ["approved_by", "approved_at"],
+      "properties": {
+        "approved_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "approved_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["interactive", "explicit-flag", "forced"]
+        }
+      }
+    },
     "prompt_quality": {
       "type": "object",
       "properties": {
