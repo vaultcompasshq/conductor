@@ -4,7 +4,6 @@ import { stringify } from "yaml";
 import {
   coachMessage,
   draftContract,
-  freezeContract,
   loadAllConstraints,
   loadConfig,
   scorePrompt,
@@ -15,7 +14,6 @@ import { validateIntentContract } from "@vaultcompasshq/conductor-schema";
 function parseArgs(argv: string[]) {
   let projectRoot = ".";
   let userText = "";
-  let freeze = false;
   let dryRun = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -24,20 +22,18 @@ function parseArgs(argv: string[]) {
       projectRoot = argv[++i];
     } else if (arg === "--text" && argv[i + 1]) {
       userText = argv[++i];
-    } else if (arg === "--freeze") {
-      freeze = true;
     } else if (arg === "--dry-run") {
       dryRun = true;
     }
   }
 
-  return { projectRoot, userText, freeze, dryRun };
+  return { projectRoot, userText, dryRun };
 }
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.userText) {
   console.error(
-    "Usage: conductor-extract --text <user ask> [--project <root>] [--freeze] [--dry-run]",
+    "Usage: conductor-extract --text <user ask> [--project <root>] [--dry-run]",
   );
   process.exit(1);
 }
@@ -53,7 +49,9 @@ const scored = scorePrompt(args.userText, {
   hasAcceptanceCriteria: /\b(verify|test|should|must|done)\b/i.test(args.userText),
 });
 const coaching = coachMessage(scored, args.userText);
-const contract = args.freeze ? freezeContract(draft, "user") : draft;
+// extract only ever writes an UNFROZEN draft. Approval is a separate,
+// deliberate step: conductor-freeze.
+const contract = draft;
 const validation = validateIntentContract(contract);
 const needsCoaching =
   scored.score < config.coach.show_when_score_below || scored.issues.length > 0;
@@ -68,6 +66,8 @@ console.log(
     valid: validation.valid,
     errors: validation.errors,
     written_path: writtenPath,
+    frozen: false,
+    next_step: "Review the draft, then approve with: conductor-freeze --project <root> [--approved-by <name>]",
     loaded_constraint_files: loaded.loadedFiles,
     prompt_score: scored.score,
     needs_coaching: needsCoaching,

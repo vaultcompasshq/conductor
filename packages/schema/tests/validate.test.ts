@@ -69,6 +69,28 @@ describe("validateIntentContract", () => {
     expect(result.errors).toEqual([]);
   });
 
+  it("accepts an optional approval record", () => {
+    const result = validateIntentContract({
+      ...validContract,
+      frozen_by: "user",
+      approval: {
+        approved_by: "alice",
+        approved_at: "2026-06-27T10:00:00Z",
+        method: "interactive",
+      },
+    });
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("rejects an approval missing approved_by", () => {
+    const result = validateIntentContract({
+      ...validContract,
+      approval: { approved_at: "2026-06-27T10:00:00Z" },
+    });
+    expect(result.valid).toBe(false);
+  });
+
   it("rejects a malformed correction_log id", () => {
     const result = validateIntentContract({
       ...validContract,

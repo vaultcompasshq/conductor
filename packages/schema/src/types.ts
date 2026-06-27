@@ -36,6 +36,12 @@ export interface PivotLogEntry {
   };
 }
 
+export interface Approval {
+  approved_by: string;
+  approved_at: string;
+  method?: "interactive" | "explicit-flag" | "forced";
+}
+
 export interface CorrectionLogEntry {
   id: string;
   timestamp: string;
@@ -56,6 +62,7 @@ export interface IntentContract {
   acceptance_criteria: AcceptanceCriterion[];
   frozen_at: string;
   frozen_by?: "user" | "conductor" | "agent";
+  approval?: Approval;
   prompt_quality?: {
     score: number;
     issues: string[];

@@ -42,9 +42,13 @@ roadmap's Phase 2 exit gate asked for, on a real diff rather than a fixture.
    now requires normative language / leading prohibitions / rules-section
    bullets and skips tables, links, and code fences — the same AGENTS.md now
    yields 4 real boundary rules instead of 12.
-2. **`--freeze` sets `frozen_by: user` with no actual user approval.** The
-   "hard gate requires explicit user approval" claim is currently just a CLI
-   flag. Freezing should be a distinct, attributable step.
+2. **`--freeze` sets `frozen_by: user` with no actual user approval.** ✅ *Fixed.*
+   The "hard gate requires explicit user approval" claim was just a CLI flag.
+   Freezing is now a separate `conductor-freeze` step that records an
+   attributable `approval` block (who/when/how); in a non-interactive run it
+   refuses unless `--approved-by` is given, so an agent cannot self-approve.
+   `isContractFrozen` now requires that approval record. `conductor-extract`
+   only writes unfrozen drafts.
 3. **Auto-extracted `in_scope`/`acceptance_criteria` are thin** — one generic
    bullet each from a one-paragraph ask. Good enough to gate on, but the
    contract is only as sharp as the extractor, which argues for a human (or

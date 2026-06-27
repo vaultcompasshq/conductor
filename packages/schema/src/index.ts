@@ -6,6 +6,7 @@ export type {
   AcceptanceCriterion,
   PivotLogEntry,
   CorrectionLogEntry,
+  Approval,
   ValidationResult,
 } from "./types.js";
 export { validateIntentContract, assertValidIntentContract } from "./validate.js";

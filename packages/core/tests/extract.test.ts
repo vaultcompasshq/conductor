@@ -68,12 +68,14 @@ describe("contract store", () => {
   it("writes and reads a frozen contract", () => {
     const dir = mkdtempSync(join(tmpdir(), "conductor-"));
     const draft = draftContract({ userText: "Add export button on dashboard." });
-    const frozen = freezeContract(draft, "user");
+    expect(isContractFrozen(draft)).toBe(false);
+    const frozen = freezeContract(draft, { approvedBy: "tester" });
     const path = writeContract(dir, frozen);
     expect(path).toContain(".conductor/intent-contract.yaml");
     const loaded = readContract(dir);
     expect(loaded?.contract_id).toBe(frozen.contract_id);
     expect(isContractFrozen(loaded!)).toBe(true);
+    expect(loaded!.approval?.approved_by).toBe("tester");
   });
 });
 

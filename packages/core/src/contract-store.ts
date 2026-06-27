@@ -43,17 +43,40 @@ export function writeContract(
   return path;
 }
 
+export interface FreezeApproval {
+  /** Identity of the approver — required, so approval is attributable. */
+  approvedBy: string;
+  method?: "interactive" | "explicit-flag" | "forced";
+}
+
+/**
+ * Freeze a contract under an explicit, attributable approval. Approval is no
+ * longer a bare flag: an `approval` record (who/when/how) is always written, and
+ * the gate requires it (see isContractFrozen). Software can't prove a human
+ * approved in a headless run, but it can require a deliberate, recorded act
+ * rather than a default of the drafting step.
+ */
 export function freezeContract(
   contract: IntentContract,
-  by: IntentContract["frozen_by"] = "user",
+  approval: FreezeApproval,
 ): IntentContract {
+  const now = new Date().toISOString();
   return {
     ...contract,
-    frozen_at: new Date().toISOString(),
-    frozen_by: by,
+    frozen_at: now,
+    frozen_by: "user",
+    approval: {
+      approved_by: approval.approvedBy,
+      approved_at: now,
+      method: approval.method ?? "explicit-flag",
+    },
   };
 }
 
+/**
+ * A contract is frozen only when a user approved it with an approval record.
+ * `frozen_by: "user"` alone (e.g. hand-set in YAML) is not enough.
+ */
 export function isContractFrozen(contract: IntentContract): boolean {
-  return contract.frozen_by === "user" || contract.frozen_by === "conductor";
+  return contract.frozen_by === "user" && contract.approval != null;
 }

@@ -8,6 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Real freeze/approval step (dogfood finding #2).** `conductor-extract` now
+  writes an unfrozen draft only; approval is a separate `conductor-freeze`
+  command that records an attributable `approval` block (approved_by /
+  approved_at / method). On a TTY it shows a summary and asks to confirm;
+  non-interactively it refuses unless `--approved-by <name>` is given, so an
+  agent cannot self-approve. `isContractFrozen` now requires the approval
+  record (not just `frozen_by: user`), closing the "hard gate" loophole.
+
 - **Phase 3a — Correction Log + Session Brief.** `correction_log` on the Intent
   Contract (schema + types) captures agent mistakes the user corrected as
   durable rules. `conductor-correct` records them (pending by default;
