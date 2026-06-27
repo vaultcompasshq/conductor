@@ -18,11 +18,13 @@ User conversation (messy)
 
 ## Status
 
-**Phase:** Phase 2 complete — June 2026  
+**Phase:** Phase 2 + 3a complete; freeze/approval + gate shipped — June 2026  
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **39 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **63 tests passing**
+
+**Resuming?** See [docs/NEXT.md](./docs/NEXT.md) (handoff) · [docs/TODO.md](./docs/TODO.md) (backlog) · [docs/cli-reference.md](./docs/cli-reference.md) (commands)
 
 ## Start here
 
@@ -73,11 +75,25 @@ or a CI step.
 
 ```bash
 pnpm install
-pnpm test      # 39 tests (builds first, then schema + core + skill + examples)
+pnpm test      # 63 tests (builds first, then schema + core + skill + examples)
 pnpm build
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
-pnpm conductor:check -- --project . --staged   # enforcement gate
 ```
+
+### Session lifecycle (CLIs)
+
+```bash
+pnpm conductor:extract -- --project . --text "the ask"   # 1. draft (unfrozen)
+pnpm conductor:freeze  -- --project . --approved-by me    # 2. approve
+pnpm conductor:check   -- --project . --staged            # 3. gate (exit 1 = blocked)
+pnpm conductor:correct -- --project . --wrong … --right … --rule … --acknowledge
+pnpm conductor:brief   -- --project .                     # clean re-injectable context
+```
+
+Full flags: [docs/cli-reference.md](./docs/cli-reference.md). The gate
+(`conductor-check`) is the one place Conductor *enforces* rather than *suggests* —
+wire it via [integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
+or a CI step.
 
 ## Origin
 
