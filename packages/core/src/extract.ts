@@ -38,18 +38,87 @@ function bulletItems(text: string): string[] {
   return [];
 }
 
+const ACTION_VERBS = [
+  "add",
+  "archive",
+  "block",
+  "build",
+  "compare",
+  "create",
+  "detect",
+  "display",
+  "enable",
+  "enforce",
+  "export",
+  "fix",
+  "generate",
+  "hide",
+  "implement",
+  "include",
+  "load",
+  "persist",
+  "preserve",
+  "record",
+  "regenerate",
+  "render",
+  "show",
+  "support",
+  "update",
+  "use",
+  "validate",
+  "wire",
+];
+
+const ACTION_RE = new RegExp(`\\b(${ACTION_VERBS.join("|")})\\b`, "i");
+const ACTION_START_RE = new RegExp(
+  `\\b(?:and|then|also|plus)?\\s*(${ACTION_VERBS.join("|")})\\b`,
+  "i",
+);
+
+function normalizeItem(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/^[-*]\s+/, "")
+    .replace(/^(and|then|also|plus)\s+/i, "")
+    .trim()
+    .replace(/[,:;.\s]+$/, "");
+}
+
+function uniqueItems(items: string[], max: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of items) {
+    const item = normalizeItem(raw);
+    const key = item.toLowerCase();
+    if (item.length < 5 || item.length > 200 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function textClauses(text: string): string[] {
+  return text
+    .split(/\n+|[.!?;]+/)
+    .flatMap((segment) =>
+      segment.split(
+        new RegExp(
+          `\\s+(?:and|then|also|plus)\\s+(?=(?:${ACTION_VERBS.join("|")})\\b)`,
+          "i",
+        ),
+      ),
+    )
+    .map(normalizeItem)
+    .filter(Boolean);
+}
+
 function extractInScope(text: string): string[] {
   const bullets = bulletItems(text);
-  if (bullets.length > 0) return bullets;
+  if (bullets.length > 0) return uniqueItems(bullets, 12);
 
-  const clauses = text
-    .split(/[.!?]+/)
-    .map((c) => c.trim())
-    .filter((c) => c.length >= 5 && c.length <= 200)
-    .filter((c) =>
-      /\b(add|export|implement|build|create|fix|update|show|enable)\b/i.test(c),
-    );
-  if (clauses.length > 0) return clauses.slice(0, 6);
+  const clauses = textClauses(text).filter((c) => ACTION_RE.test(c));
+  if (clauses.length > 0) return uniqueItems(clauses, 6);
 
   const fallback = oneSentence(text, 200);
   return fallback.length >= 5 ? [fallback] : ["Describe the requested change"];
@@ -76,14 +145,16 @@ function extractAcceptanceCriteria(
   inScope: string[],
 ): AcceptanceCriterion[] {
   const criteria: AcceptanceCriterion[] = [];
-  const lines = text.split("\n").map((l) => l.trim());
+  const clauses = textClauses(text);
 
-  for (const line of lines) {
+  for (const clause of clauses) {
     if (
-      /\b(verify|test|should|must|when|done when|acceptance)\b/i.test(line) &&
-      line.length >= 10
+      /\b(verify|test|should|must|when|done when|acceptance)\b/i.test(clause) &&
+      clause.length >= 10
     ) {
-      const description = line.replace(/^[-*]\s+/, "").trim();
+      const description = normalizeItem(
+        clause.replace(/^done when\s+/i, "").replace(/^acceptance:\s*/i, ""),
+      );
       if (description.length <= 200) {
         criteria.push({
           id: `ac-${criteria.length + 1}`,
@@ -96,9 +167,11 @@ function extractAcceptanceCriteria(
 
   if (criteria.length > 0) return criteria.slice(0, 15);
 
-  const defaults = inScope.slice(0, 2).map((item, i) => ({
+  const defaults = inScope.slice(0, 4).map((item, i) => ({
     id: `ac-${i + 1}`,
-    description: `Verify: ${item}`,
+    description: ACTION_START_RE.test(item)
+      ? `Verify ${item}`
+      : `Verify: ${item}`,
     testable: true,
   }));
 
