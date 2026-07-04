@@ -22,7 +22,7 @@ User conversation (messy)
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **63 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **65 tests passing**
 
 **Resuming?** See [docs/NEXT.md](./docs/NEXT.md) (handoff) · [docs/TODO.md](./docs/TODO.md) (backlog) · [docs/cli-reference.md](./docs/cli-reference.md) (commands)
 
@@ -75,7 +75,7 @@ or a CI step.
 
 ```bash
 pnpm install
-pnpm test      # 63 tests (builds first, then schema + core + skill + examples)
+pnpm test      # 65 tests (builds first, then schema + core + skill + examples)
 pnpm build
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 ```

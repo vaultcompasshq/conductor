@@ -49,12 +49,15 @@ roadmap's Phase 2 exit gate asked for, on a real diff rather than a fixture.
    refuses unless `--approved-by` is given, so an agent cannot self-approve.
    `isContractFrozen` now requires that approval record. `conductor-extract`
    only writes unfrozen drafts.
-3. **Auto-extracted `in_scope`/`acceptance_criteria` are thin** — one generic
-   bullet each from a one-paragraph ask. Good enough to gate on, but the
-   contract is only as sharp as the extractor, which argues for a human (or
-   LLM) review pass before freeze.
+3. **Auto-extracted `in_scope`/`acceptance_criteria` are thin.** ✅ *Fixed.*
+   The extractor now splits multi-sentence asks and obvious conjunction clauses
+   into multiple scope items, recognizes a broader implementation verb set, and
+   derives up to four acceptance criteria from the resulting scope when the user
+   did not state explicit AC. Explicit `verify` / `test` clauses are kept as
+   separate acceptance criteria. This is still rule-based; human review before
+   freeze remains the intended approval step.
 
 ## Next
 
-Fix finding #1 (constraint-loader signal-to-noise) before relying on constraint
-violations in the score; scope creep matching held up well.
+Continue Phase 3 memory-index persistence and dogfood resumed sessions; scope
+creep matching held up well in this run.

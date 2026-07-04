@@ -1,6 +1,6 @@
 # Next — cold-start handoff
 
-**Updated:** 2026-06-27
+**Updated:** 2026-07-04
 **Read this first if you are an agent resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 63 passing — schema 7 · core 34 · skill 16 · examples 6.
+- **Tests:** 65 passing — schema 7 · core 36 · skill 16 · examples 6.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test, Node 22.
 
@@ -43,12 +43,9 @@ of truth for "where are we and what's next." For granular tasks see
    Archive frozen contracts to `.conductor/contracts/`, regenerate `index.md`
    from real data, session resume, cross-session drift. Foundation is ready now
    that approval means something (#2) and corrections accumulate (#4).
-2. **Dogfood finding #3** — auto-extracted `in_scope`/`acceptance_criteria` are
-   thin (one generic bullet from a paragraph). Improve `extract.ts` or lean on a
-   review pass. Lower priority.
-3. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-4. **Phase 4** — unified `packages/cli` binary, public-release polish.
+3. **Phase 4** — unified `packages/cli` binary, public-release polish.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -56,8 +53,8 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
 
 ## Open findings / known limits
 
-- **Finding #3 (open):** thin auto-extracted scope/AC. See
-  [dogfood/phase2-live-run.md](./dogfood/phase2-live-run.md).
+- **Extraction is still rule-based:** multi-sentence scope/AC extraction is
+  sharper now, but human review before `conductor-freeze` remains required.
 - **Approval is best-effort headless:** `conductor-freeze` requires an explicit
   `--approved-by` in non-interactive runs, but software can't *prove* a human
   approved. Documented limitation, not a bug.
@@ -75,5 +72,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md (memory-index persistence) unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test  (63 passing baseline).
+Verify: pnpm install && pnpm test  (65 passing baseline).
 ```
