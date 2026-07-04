@@ -31,7 +31,7 @@ Phase 1 reference (complete): [docs/superpowers/plans/2026-06-17-conductor-phase
 | 2 — Runtime + skills | 3–6 | ✅ Complete (`packages/skill`, CLIs, config, init) |
 | 3a — Correction log + brief | — | ✅ Complete (PR #4) |
 | Hardening — generic scorer, gate, approval | — | ✅ Complete (PRs #1, #3, #5) |
-| 3 — Memory-index persistence | 7–10 | 🔜 Next (see [docs/TODO.md](./docs/TODO.md) §1) |
+| 3 — Memory-index persistence | 7–10 | ✅ Core complete (`history`, generated index, resume, pivot, cross-session drift) |
 | 3b — decay/dedup, LLM normalization | — | Deferred |
 | 4 — Unified CLI + public release | 11–14 | Planned |
 
@@ -45,23 +45,24 @@ Phase 1 reference (complete): [docs/superpowers/plans/2026-06-17-conductor-phase
 ```
 packages/
 ├── schema/     # @vaultcompasshq/conductor-schema — AJV validator + types ✅
-├── core/       # @vaultcompasshq/conductor-core — coach, drift, gate, correction, brief ✅
-├── skill/      # Superpowers skills + 8 CLIs (coach/extract/freeze/check/drift/correct/brief/init) ✅
+├── core/       # @vaultcompasshq/conductor-core — coach, drift, gate, correction, brief, history ✅
+├── skill/      # Superpowers skills + 11 CLIs (coach/extract/freeze/check/drift/correct/brief/init/index/pivot/resume) ✅
 ├── cli/        # unified conductor binary (Phase 4 — not built)
-└── memory/     # cross-session persistence (Phase 3 — not built)
+└── memory/     # separate package deferred; file memory lives in core
 ```
 
 CLIs are documented in [docs/cli-reference.md](./docs/cli-reference.md).
 Lifecycle: coach → extract (draft) → **freeze (approve)** → check (gate) →
-correct → brief.
+pivot/correct → brief/resume.
 
 ---
 
 ## Current work
 
-The next major build is **memory-index persistence** (roadmap Phase 3 core).
-See [docs/TODO.md](./docs/TODO.md) §1 for the file-level checklist and
-[docs/NEXT.md](./docs/NEXT.md) for full context.
+The Phase 3 core build is complete: frozen contracts archive to
+`.conductor/contracts/`, `index.md` is generated from real data, resume emits a
+Session Brief, pivots are logged, and `conductor-check` can surface prior-contract
+drift. Next work is dogfood/tuning, extraction quality, and integration hooks.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`,
 `capture-correction` (`packages/skill/*/SKILL.md`).
@@ -75,7 +76,7 @@ task. All work lands on `main` via PR (never push to main); CI must be green.
 
 ```bash
 pnpm install
-pnpm test      # 65 tests — schema (7) + core (36) + skill (16) + examples (6)
+pnpm test      # 74 tests — schema (7) + core (41) + skill (20) + examples (6)
 pnpm build
 pnpm typecheck
 ```

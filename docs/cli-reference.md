@@ -11,7 +11,7 @@ conductor-check --project . --staged
 ```
 
 The session lifecycle: **coach → extract (draft) → freeze (approve) → check
-(gate) → correct → brief**.
+(gate) → pivot/correct → brief/resume**.
 
 ---
 
@@ -61,10 +61,13 @@ a blocking threshold. Used by the pre-commit hook / CI.
 | `--paths a,b` | explicit changed paths |
 | `--signals "x,y"` | free-text descriptions of what changed (open vocabulary) |
 | `--message "<text>"` | latest user message (pivot detection) |
+| `--previous-contract <id>` | score current changes against an archived prior contract; informational only |
 | `--no-require-frozen` | allow a missing contract (still scores drift) |
 | `--json` / `--log` | JSON output / append to `drift-log.jsonl` |
 
 Exit 0 = ok, 1 = blocked.
+When `--previous-contract` is provided, JSON includes `crossSessionDrift`;
+this does not change the gate exit code.
 
 ## conductor-drift
 
@@ -91,6 +94,23 @@ Record a user correction as a durable lesson on the contract.
 | `--acknowledge` | user-confirmed (authoritative); else `pending` |
 | `--promote` | also add to `constraints[]` (requires `--acknowledge`) so drift-guard enforces it |
 
+## conductor-pivot
+
+Record an intentional scope change and update the active contract through the
+append-only `pivot_log`.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--change "<text>"` | pivot summary (required) |
+| `--reason "<text>"` | why the pivot happened |
+| `--add-scope "<text>"` | add an in-scope item; repeatable |
+| `--remove-scope "<text>"` | remove an in-scope item; repeatable |
+| `--add-out-of-scope "<text>"` | add an out-of-scope item; repeatable |
+| `--acknowledge` | user-confirmed; else `pending` |
+
+JSON: `written_path`, `index_path`, `pivot`, `pending`.
+
 ## conductor-brief
 
 Emit the minimal correct-methodology context (intent, scope, AC, critical/high
@@ -101,6 +121,27 @@ context reset instead of replaying the transcript.
 |------|---------|
 | `--project <root>` | target project |
 | `--json` | machine-readable (default is markdown) |
+
+## conductor-resume
+
+Emit the current Session Brief plus recent prior contracts. Use at the start of
+a resumed agent session after context compaction or a new day.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--json` | machine-readable (`resume_markdown`) |
+
+## conductor-index
+
+Render or regenerate `.conductor/index.md` from real contract history, pivots,
+constraints, and acknowledged corrections.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--write` | write `.conductor/index.md`; default prints markdown |
+| `--json` | machine-readable output |
 
 ## conductor-init
 

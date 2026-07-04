@@ -57,7 +57,7 @@ export function checkGate(
   if (!contractFound) {
     if (requireFrozen) {
       reasons.push(
-        "No .conductor/intent-contract.yaml found. Freeze intent before implementing (conductor-extract --freeze).",
+        "No .conductor/intent-contract.yaml found. Draft intent with conductor-extract, then approve with conductor-freeze before implementing.",
       );
     }
     return {

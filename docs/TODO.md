@@ -2,38 +2,39 @@
 
 **Updated:** 2026-07-04 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 65 tests passing.
+before merge. Baseline: 74 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
 ---
 
-## 1. Memory-index persistence (roadmap Phase 3 core) — NEXT MAJOR
+## 1. Memory-index persistence (roadmap Phase 3 core) — CORE COMPLETE
 
 Goal: contracts and lessons survive across sessions; a resumed session inherits
 the right context.
 
-- [ ] **Contract history.** On `freezeContract`/`writeContract`, also archive a
+- [x] **Contract history.** On `freezeContract`/`writeContract`, also archive a
       copy to `.conductor/contracts/<contract_id>.yaml`. New module
       `packages/core/src/history.ts` (`archiveContract`, `listContracts`,
       `readArchivedContract`). Tests: archive on freeze, list ordering.
-- [ ] **Live index.** Replace the static `.conductor/index.md` template
+- [x] **Live index.** Replace the static `.conductor/index.md` template
       (`init.ts` INDEX_TEMPLATE) with a generated view: active contract,
       recent contracts, recent pivots, acknowledged corrections. New
       `renderIndex(projectRoot)` + `conductor-index` CLI (or fold into existing
       CLIs). Regenerate on freeze/correct.
-- [ ] **Session resume.** On `conductor-init` (or a new `conductor-resume`),
+- [x] **Session resume.** On `conductor-init` (or a new `conductor-resume`),
       detect an existing active contract and print its Session Brief
       (`renderBriefMarkdown`) so a new session inherits intent + corrections.
-- [ ] **Cross-session drift.** Compare current changed paths/signals against a
+- [x] **Cross-session drift.** Compare current changed paths/signals against a
       *prior* archived contract ("Tuesday scope vs Friday diff"). Extend
       `drift.ts` or add `crossSessionDrift(prevContract, current, signals)`.
       Decide: surface as info or as a gate input.
-- [ ] **Decide `packages/memory` vs `packages/core` module.** Roadmap names a
+- [x] **Decide `packages/memory` vs `packages/core` module.** Roadmap names a
       `packages/memory` package; simplest is a core module unless isolation is
       wanted. Pick and record in the roadmap.
-- [ ] Tests + docs + a real dogfood run (resume on "day 5+" references prior
-      contract — the roadmap Phase 3 exit gate).
+- [~] Tests + docs + a real dogfood run (resume on "day 5+" references prior
+      contract — the roadmap Phase 3 exit gate). Tests/docs done; real dogfood
+      run remains.
 
 ## 2. Dogfood finding #3 — thin auto-extracted scope/AC — FIXED
 

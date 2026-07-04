@@ -2,18 +2,7 @@ import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { conductorDir } from "./contract-store.js";
 import { defaultConfigYaml, configPath } from "./config.js";
-
-const INDEX_TEMPLATE = `# Conductor Index
-
-## Active
-- No frozen contract yet — run intent-contract skill or conductor-extract --freeze
-
-## Constraints
-- Loaded from AGENTS.md, CLAUDE.md, GEMINI.md, .cursor/rules when present
-
-## Recent pivots
-- none
-`;
+import { renderIndex } from "./memory-index.js";
 
 export interface InitResult {
   conductor_dir: string;
@@ -37,7 +26,7 @@ export function initConductor(projectRoot: string): InitResult {
 
   const indexPath = join(dir, "index.md");
   if (!existsSync(indexPath)) {
-    writeFileSync(indexPath, INDEX_TEMPLATE, "utf8");
+    writeFileSync(indexPath, renderIndex(projectRoot), "utf8");
     created.push(".conductor/index.md");
   } else {
     skipped.push(".conductor/index.md");

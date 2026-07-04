@@ -49,7 +49,9 @@ export { formatDriftMessage } from "./format-drift.js";
 export { initConductor, type InitResult } from "./init.js";
 export { DRIFT_WEIGHTS, DRIFT_THRESHOLDS, driftAction } from "./rubric.js";
 export {
+  crossSessionDrift,
   scoreDrift,
+  type CrossSessionDriftScore,
   type DriftScore,
   type DriftSignals,
   type ScoreDriftOptions,
@@ -66,6 +68,24 @@ export {
   type GateStatus,
   type CheckGateOptions,
 } from "./gate.js";
+export {
+  archiveContract,
+  archivedContractPath,
+  contractsDir,
+  listContracts,
+  readArchivedContract,
+  type ArchivedContractSummary,
+} from "./history.js";
+export {
+  INDEX_FILE,
+  renderIndex,
+  renderResume,
+  writeIndex,
+} from "./memory-index.js";
+export {
+  addPivot,
+  type AddPivotInput,
+} from "./pivot.js";
 export {
   addCorrection,
   acknowledgedCorrections,

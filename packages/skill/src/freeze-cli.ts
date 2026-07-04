@@ -7,6 +7,7 @@ import {
   isContractFrozen,
   readContract,
   writeContract,
+  writeIndex,
 } from "@vaultcompasshq/conductor-core";
 
 function parseArgs(argv: string[]) {
@@ -93,9 +94,11 @@ async function main() {
 
   const frozen = freezeContract(contract, { approvedBy, method });
   const writtenPath = writeContract(args.projectRoot, frozen);
+  const indexPath = writeIndex(args.projectRoot);
   const out = {
     frozen: true,
     written_path: writtenPath,
+    index_path: indexPath,
     approved_by: approvedBy,
     method,
   };

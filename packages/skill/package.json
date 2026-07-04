@@ -10,9 +10,12 @@
     "conductor-extract": "./dist/extract-cli.js",
     "conductor-freeze": "./dist/freeze-cli.js",
     "conductor-init": "./dist/init-cli.js",
+    "conductor-index": "./dist/index-cli.js",
     "conductor-check": "./dist/check-cli.js",
     "conductor-correct": "./dist/correct-cli.js",
-    "conductor-brief": "./dist/brief-cli.js"
+    "conductor-brief": "./dist/brief-cli.js",
+    "conductor-pivot": "./dist/pivot-cli.js",
+    "conductor-resume": "./dist/resume-cli.js"
   },
   "files": [
     "dist",

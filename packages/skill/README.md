@@ -23,6 +23,9 @@ pnpm --filter @vaultcompasshq/conductor-skill build
 | `conductor-coach "<text>"` | Prompt quality score + coaching |
 | `conductor-extract --text "..." --project <root>` | Draft/write intent contract |
 | `conductor-drift --contract <path> --paths a,b` | Drift score + optional log |
+| `conductor-index --project <root> [--write]` | Render/regenerate `.conductor/index.md` |
+| `conductor-pivot --change "..." --acknowledge` | Log an intentional scope pivot |
+| `conductor-resume --project <root>` | Print the current Session Brief + recent history |
 
 Run via pnpm from repo root:
 
