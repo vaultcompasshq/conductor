@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)/integrations/hooks/conductor-session-start.sh\"",
+            "timeout": 30,
+            "statusMessage": "Loading Conductor session brief"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)/integrations/hooks/conductor-stop-check.sh\"",
+            "timeout": 60,
+            "statusMessage": "Checking Conductor intent drift"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -8,8 +8,8 @@
 > (project-independent) drift scorer, the `conductor-check` enforcement gate, a
 > real freeze/**approval** step, Phase **3a** (correction log + session brief),
 > and Phase **3 core** (history, generated index, resume, pivot, cross-session
-> drift), plus sharper paragraph extraction. 74 tests passing. **Next:** Phase 3
-> dogfood/tuning and hook adapters.
+> drift), sharper paragraph extraction, and hook adapter samples. 77 tests
+> passing. **Next:** Phase 3 dogfood/tuning and unified CLI polish.
 > Live status: [../NEXT.md](../NEXT.md) · backlog: [../TODO.md](../TODO.md).
 
 ---

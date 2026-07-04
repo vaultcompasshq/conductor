@@ -1,10 +1,10 @@
 # Cursor Integration
 
-**Status:** Design — manual setup v1, hooks v2
+**Status:** Project rule + git hook enforcement
 
 ---
 
-## v1: Manual setup (no extension)
+## Manual setup (no extension)
 
 ### 1. Install Conductor skills
 
@@ -22,13 +22,21 @@ bash /path/to/conductor/integrations/superpowers/install-skills.sh
 
 ### 2. User rule (recommended)
 
-Add to Cursor user rules or project `.cursor/rules/conductor.mdc`:
+Add the committed sample rule to your project:
+
+```bash
+mkdir -p .cursor/rules
+cp integrations/cursor/conductor.mdc .cursor/rules/conductor.mdc
+```
+
+Or paste this into Cursor user rules:
 
 ```markdown
 Before any implementation work:
-1. Invoke intent-contract skill
-2. Ensure .conductor/intent-contract.yaml is frozen
-3. Run drift-guard at handoff boundaries
+1. Ensure .conductor/intent-contract.yaml exists
+2. Ensure it is frozen with conductor-freeze
+3. Run conductor-resume at resumed session start
+4. Run conductor-check before completion or commit
 
 Constraint files to respect (priority order):
 - AGENTS.md
@@ -51,6 +59,16 @@ Add to `.gitignore` (optional):
 ```
 
 Commit `intent-contract.yaml` for team visibility (recommended).
+
+### 4. Mechanical gate
+
+Cursor project rules are instructions, not lifecycle hooks. For enforcement,
+install the Git pre-commit hook:
+
+```bash
+cp integrations/git-hooks/pre-commit.sample .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
 
 ---
 
@@ -82,9 +100,8 @@ Same `intent-contract.yaml` — any model reads it.
 
 ---
 
-## v2 (out of scope v1)
+## Future
 
-- Cursor hook on save → `conductor drift`
 - Native MCP server for contract status
 - Glass panel showing active contract + drift score
 
