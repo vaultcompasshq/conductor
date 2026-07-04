@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-04 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 75 tests passing.
+before merge. Baseline: 77 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -36,14 +36,14 @@ the right context.
       contract — the roadmap Phase 3 exit gate). Tests/docs done; real dogfood
       run remains.
 
-## 2. Dogfood finding #3 — thin auto-extracted scope/AC
+## 2. Dogfood finding #3 — thin auto-extracted scope/AC — FIXED
 
-- [ ] `packages/core/src/extract.ts`: `extractInScope` / `extractAcceptanceCriteria`
+- [x] `packages/core/src/extract.ts`: `extractInScope` / `extractAcceptanceCriteria`
       produce one generic bullet from a paragraph ask. Improve heuristics
       (split on sentences/conjunctions; derive AC from imperative clauses) OR
       formally rely on the human review pass before freeze and document it.
-- [ ] Add tests with multi-sentence asks asserting >1 scope item / AC.
-- [ ] Update [dogfood/phase2-live-run.md](./dogfood/phase2-live-run.md) finding #3.
+- [x] Add tests with multi-sentence asks asserting >1 scope item / AC.
+- [x] Update [dogfood/phase2-live-run.md](./dogfood/phase2-live-run.md) finding #3.
 
 ## 3. Phase 3b — deferred from the correction-log spec
 
@@ -94,3 +94,5 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Constraint-loader precision (dogfood finding #1) (#3).
 - [x] Phase 3a: `correction_log` + `conductor-correct` + `conductor-brief` (#4).
 - [x] Real freeze/approval step (dogfood finding #2) (#5).
+- [x] Better paragraph extraction for scope/AC (dogfood finding #3).
+- [x] Codex/Claude Code hook adapter samples and Cursor project rule (#9).

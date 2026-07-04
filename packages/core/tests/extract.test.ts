@@ -57,6 +57,45 @@ describe("draftContract", () => {
     expect(contract.prompt_quality?.score).toBeGreaterThan(50);
   });
 
+  it("extracts multiple scope items from a multi-sentence paragraph ask", () => {
+    const contract = draftContract({
+      userText:
+        "Build a resume flow. Archive frozen contracts to .conductor/contracts. Regenerate index.md from the active contract and recent pivots. Show acknowledged corrections in the brief.",
+    });
+
+    expect(contract.in_scope.length).toBeGreaterThanOrEqual(4);
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/resume flow/i),
+        expect.stringMatching(/archive frozen contracts/i),
+        expect.stringMatching(/regenerate index/i),
+        expect.stringMatching(/acknowledged corrections/i),
+      ]),
+    );
+    expect(contract.acceptance_criteria.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("splits obvious action clauses and explicit acceptance criteria", () => {
+    const contract = draftContract({
+      userText:
+        "Add CSV export to the report table and include current filters. Verify downloaded CSV has visible headers. Test that no API route is created.",
+    });
+
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/csv export/i),
+        expect.stringMatching(/include current filters/i),
+      ]),
+    );
+    expect(contract.acceptance_criteria.map((ac) => ac.description)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/downloaded CSV has visible headers/i),
+        expect.stringMatching(/no API route is created/i),
+      ]),
+    );
+    expect(contract.acceptance_criteria.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("generateContractId matches schema pattern", () => {
     expect(generateContractId(new Date("2026-06-17T12:00:00Z"))).toMatch(
       /^ic-20260617-[a-z0-9]{6}$/,

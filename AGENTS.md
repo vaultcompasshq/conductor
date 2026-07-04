@@ -62,7 +62,7 @@ pivot/correct → brief/resume.
 The Phase 3 core build is complete: frozen contracts archive to
 `.conductor/contracts/`, `index.md` is generated from real data, resume emits a
 Session Brief, pivots are logged, and `conductor-check` can surface prior-contract
-drift. Next work is dogfood/tuning, extraction quality, and integration hooks.
+drift. Next work is dogfood/tuning, Phase 3b, and unified CLI polish.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`,
 `capture-correction` (`packages/skill/*/SKILL.md`).
@@ -76,7 +76,7 @@ task. All work lands on `main` via PR (never push to main); CI must be green.
 
 ```bash
 pnpm install
-pnpm test      # 75 tests — schema (7) + core (39) + skill (20) + examples/integrations (9)
+pnpm test      # 77 tests — schema (7) + core (41) + skill (20) + examples/integrations (9)
 pnpm build
 pnpm typecheck
 ```
