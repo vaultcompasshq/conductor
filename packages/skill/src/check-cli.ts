@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { appendDriftEvent, checkGate, formatDriftMessage } from "@vaultcompasshq/conductor-core";
+import {
+  appendDriftEvent,
+  checkGate,
+  crossSessionDrift,
+  formatDriftMessage,
+  readArchivedContract,
+  readContract,
+} from "@vaultcompasshq/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";
@@ -11,6 +18,7 @@ function parseArgs(argv: string[]) {
   let requireFrozen = true;
   let json = false;
   let log = false;
+  let previousContract = "";
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -30,10 +38,22 @@ function parseArgs(argv: string[]) {
       json = true;
     } else if (arg === "--log") {
       log = true;
+    } else if (arg === "--previous-contract" && argv[i + 1]) {
+      previousContract = argv[++i];
     }
   }
 
-  return { projectRoot, paths, signals, userMessage, staged, requireFrozen, json, log };
+  return {
+    projectRoot,
+    paths,
+    signals,
+    userMessage,
+    staged,
+    requireFrozen,
+    json,
+    log,
+    previousContract,
+  };
 }
 
 function stagedPaths(projectRoot: string): string[] {
@@ -62,6 +82,23 @@ const result = checkGate(args.projectRoot, {
   },
 });
 
+const crossSession =
+  args.previousContract
+    ? (() => {
+        const previous = readArchivedContract(
+          args.projectRoot,
+          args.previousContract,
+        );
+        const current = readContract(args.projectRoot);
+        if (!previous || !current) return null;
+        return crossSessionDrift(previous, current, {
+          changedPaths,
+          signals: args.signals,
+          userMessage: args.userMessage || undefined,
+        });
+      })()
+    : null;
+
 if (args.log && result.drift) {
   appendDriftEvent(args.projectRoot, {
     contract_id: "gate-check",
@@ -74,7 +111,7 @@ if (args.log && result.drift) {
 }
 
 if (args.json) {
-  console.log(JSON.stringify(result));
+  console.log(JSON.stringify({ ...result, crossSessionDrift: crossSession }));
 } else if (result.status === "blocked") {
   console.error("✖ Conductor gate: BLOCKED");
   for (const reason of result.reasons) console.error(`  - ${reason}`);
@@ -86,6 +123,11 @@ if (args.json) {
   console.log("✓ Conductor gate: ok");
   if (result.drift && result.drift.action !== "proceed") {
     console.log(`  drift: ${result.drift.action} (${result.drift.overall}/100)`);
+  }
+  if (crossSession && crossSession.previous.action !== "proceed") {
+    console.log(
+      `  prior-contract drift: ${crossSession.previous.action} (${crossSession.previous.overall}/100 vs ${crossSession.previous_contract_id})`,
+    );
   }
 }
 

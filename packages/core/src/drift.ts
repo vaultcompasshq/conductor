@@ -40,6 +40,14 @@ export interface DriftScore {
   findings: string[];
 }
 
+export interface CrossSessionDriftScore {
+  previous_contract_id: string;
+  current_contract_id: string;
+  previous: DriftScore;
+  current: DriftScore;
+  findings: string[];
+}
+
 const DEFAULT_THRESHOLDS: DriftThresholds = {
   info: 26,
   warn: 51,
@@ -182,4 +190,32 @@ export function scoreDrift(
   }
 
   return { overall, action, categories, findings };
+}
+
+export function crossSessionDrift(
+  previousContract: IntentContract,
+  currentContract: IntentContract,
+  input: DriftSignals,
+  options: ScoreDriftOptions = {},
+): CrossSessionDriftScore {
+  const previous = scoreDrift(previousContract, input, options);
+  const current = scoreDrift(currentContract, input, options);
+  const findings = previous.findings.map(
+    (finding) =>
+      `Prior contract ${previousContract.contract_id}: ${finding}`,
+  );
+
+  if (previous.overall > current.overall) {
+    findings.push(
+      `Current contract ${currentContract.contract_id} is more aligned (${current.overall}/100) than prior contract ${previousContract.contract_id} (${previous.overall}/100).`,
+    );
+  }
+
+  return {
+    previous_contract_id: previousContract.contract_id,
+    current_contract_id: currentContract.contract_id,
+    previous,
+    current,
+    findings,
+  };
 }

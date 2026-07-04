@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-import { addCorrection, readContract, writeContract } from "@vaultcompasshq/conductor-core";
+import {
+  addCorrection,
+  readContract,
+  writeContract,
+  writeIndex,
+} from "@vaultcompasshq/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";
@@ -44,11 +49,13 @@ const updated = addCorrection(contract, {
   promote: args.promote,
 });
 const writtenPath = writeContract(args.projectRoot, updated);
+const indexPath = writeIndex(args.projectRoot);
 const entry = updated.correction_log![updated.correction_log!.length - 1];
 
 console.log(
   JSON.stringify({
     written_path: writtenPath,
+    index_path: indexPath,
     correction: entry,
     promoted: entry.promoted_to_constraint === true,
     pending: entry.acknowledged_by === "pending",

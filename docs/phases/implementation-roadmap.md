@@ -6,8 +6,9 @@
 
 > **Status:** Phases 1 & 2 complete. Plus, beyond the original plan: a generic
 > (project-independent) drift scorer, the `conductor-check` enforcement gate, a
-> real freeze/**approval** step, and Phase **3a** (correction log + session
-> brief). 63 tests passing. **Next:** memory-index persistence (Phase 3 core).
+> real freeze/**approval** step, Phase **3a** (correction log + session brief),
+> and Phase **3 core** (history, generated index, resume, pivot, cross-session
+> drift). 72 tests passing. **Next:** Phase 3 dogfood/tuning and hook adapters.
 > Live status: [../NEXT.md](../NEXT.md) · backlog: [../TODO.md](../TODO.md).
 
 ---
