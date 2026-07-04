@@ -5,6 +5,7 @@ import {
   assertValidIntentContract,
   type IntentContract,
 } from "@vaultcompasshq/conductor-schema";
+import { archiveContract } from "./history.js";
 
 export const CONDUCTOR_DIR = ".conductor";
 export const DEFAULT_CONTRACT_FILE = "intent-contract.yaml";
@@ -40,6 +41,13 @@ export function writeContract(
   mkdirSync(dir, { recursive: true });
   const path = join(dir, filename);
   writeFileSync(path, stringify(contract), "utf8");
+  if (
+    filename === DEFAULT_CONTRACT_FILE &&
+    contract.frozen_by === "user" &&
+    contract.approval != null
+  ) {
+    archiveContract(projectRoot, contract);
+  }
   return path;
 }
 

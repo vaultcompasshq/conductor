@@ -18,11 +18,11 @@ User conversation (messy)
 
 ## Status
 
-**Phase:** Phase 2 + 3a complete; freeze/approval + gate shipped — June 2026  
+**Phase:** Phase 3 core complete; freeze/approval, gate, history, resume shipped — July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **63 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **72 tests passing**
 
 **Resuming?** See [docs/NEXT.md](./docs/NEXT.md) (handoff) · [docs/TODO.md](./docs/TODO.md) (backlog) · [docs/cli-reference.md](./docs/cli-reference.md) (commands)
 
@@ -53,10 +53,10 @@ User conversation (messy)
 conductor/
 ├── packages/
 │   ├── schema/          # @vaultcompasshq/conductor-schema ✅
-│   ├── core/            # @vaultcompasshq/conductor-core ✅
-│   ├── skill/           # Superpowers skills + CLIs incl. conductor-check ✅
+│   ├── core/            # @vaultcompasshq/conductor-core incl. history/index ✅
+│   ├── skill/           # Superpowers skills + CLIs incl. conductor-check/resume ✅
 │   ├── cli/             # unified conductor binary (Phase 4 — not built)
-│   └── memory/          # project constraint index (Phase 3 — not built)
+│   └── memory/          # separate package deferred; file memory lives in core
 ├── integrations/
 │   ├── superpowers/     # skills + install script ✅
 │   ├── git-hooks/       # pre-commit gate sample ✅
@@ -75,7 +75,7 @@ or a CI step.
 
 ```bash
 pnpm install
-pnpm test      # 63 tests (builds first, then schema + core + skill + examples)
+pnpm test      # 72 tests (builds first, then schema + core + skill + examples)
 pnpm build
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 ```
@@ -86,8 +86,10 @@ pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 pnpm conductor:extract -- --project . --text "the ask"   # 1. draft (unfrozen)
 pnpm conductor:freeze  -- --project . --approved-by me    # 2. approve
 pnpm conductor:check   -- --project . --staged            # 3. gate (exit 1 = blocked)
+pnpm conductor:pivot   -- --project . --change "..." --acknowledge
 pnpm conductor:correct -- --project . --wrong … --right … --rule … --acknowledge
 pnpm conductor:brief   -- --project .                     # clean re-injectable context
+pnpm conductor:resume  -- --project .                     # brief + recent history
 ```
 
 Full flags: [docs/cli-reference.md](./docs/cli-reference.md). The gate

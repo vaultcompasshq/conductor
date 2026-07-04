@@ -119,8 +119,11 @@ describe("conductor-freeze (approval gate)", () => {
     expect(out.approved_by).toBe("alice");
     expect(out.method).toBe("explicit-flag");
     const written = readFileSync(join(dir, ".conductor", "intent-contract.yaml"), "utf8");
+    const contractId = written.match(/contract_id: (ic-[a-z0-9-]+)/)?.[1];
     expect(written).toContain("frozen_by: user");
     expect(written).toContain("approved_by: alice");
+    expect(existsSync(join(dir, ".conductor", "index.md"))).toBe(true);
+    expect(existsSync(join(dir, ".conductor", "contracts", `${contractId}.yaml`))).toBe(true);
   });
 
   it("is idempotent on an already-frozen contract", () => {
@@ -196,6 +199,35 @@ describe("conductor-check (enforcement gate)", () => {
     const out = JSON.parse(res.stdout);
     expect(out.status).toBe("ok");
   });
+
+  it("surfaces previous-contract drift as informational JSON", () => {
+    const dir = tmpProject();
+    run("extract-cli.js", [
+      "--project", dir,
+      "--text", "Add a CSV export button. No new API endpoints. Verify file downloads.",
+    ]);
+    run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+    const first = readFileSync(join(dir, ".conductor", "intent-contract.yaml"), "utf8");
+    const firstId = first.match(/contract_id: (ic-[a-z0-9-]+)/)?.[1]!;
+
+    run("extract-cli.js", [
+      "--project", dir,
+      "--text", "Add CSV export through a new API endpoint. Verify file downloads.",
+    ]);
+    run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+
+    const res = run("check-cli.js", [
+      "--project", dir,
+      "--paths", "src/app/api/export/route.ts",
+      "--signals", "added new api endpoint for export",
+      "--previous-contract", firstId,
+      "--json",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("ok");
+    expect(out.crossSessionDrift.previous.action).toBe("soft_block");
+  });
 });
 
 function frozenProject(): string {
@@ -261,5 +293,48 @@ describe("conductor-correct + conductor-brief", () => {
     expect(res.code).toBe(0);
     expect(res.stdout).toContain("# Session brief —");
     expect(res.stdout).toContain("## Intent");
+  });
+});
+
+describe("conductor-index, conductor-resume, conductor-pivot", () => {
+  it("renders and writes the generated index", () => {
+    const dir = frozenProject();
+    const render = run("index-cli.js", ["--project", dir, "--json"]);
+    expect(render.code).toBe(0);
+    const out = JSON.parse(render.stdout);
+    expect(out.index_markdown).toContain("## Active");
+
+    const write = run("index-cli.js", ["--project", dir, "--write", "--json"]);
+    expect(write.code).toBe(0);
+    expect(JSON.parse(write.stdout).written_path).toContain(".conductor/index.md");
+  });
+
+  it("prints a resume brief for the active contract", () => {
+    const dir = frozenProject();
+    const res = run("resume-cli.js", ["--project", dir]);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("# Session brief");
+    expect(res.stdout).toContain("theme toggle");
+  });
+
+  it("records a pivot and regenerates the index", () => {
+    const dir = frozenProject();
+    const res = run("pivot-cli.js", [
+      "--project", dir,
+      "--change", "Also support keyboard shortcut",
+      "--reason", "User clarified accessibility requirement",
+      "--add-scope", "Keyboard shortcut toggles theme",
+      "--add-out-of-scope", "Theme marketplace",
+      "--acknowledge",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.pending).toBe(false);
+    expect(out.pivot.acknowledged_by).toBe("user");
+    const written = readFileSync(join(dir, ".conductor", "intent-contract.yaml"), "utf8");
+    expect(written).toContain("Keyboard shortcut toggles theme");
+    expect(readFileSync(join(dir, ".conductor", "index.md"), "utf8")).toContain(
+      "Also support keyboard shortcut",
+    );
   });
 });
