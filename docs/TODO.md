@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-04 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 72 tests passing.
+before merge. Baseline: 75 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -67,9 +67,11 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 
 ## 5. Integrations (design-stage → real, if/when prioritized)
 
-- [ ] Cursor: on-save hook → `conductor-check` (currently design notes only).
-- [ ] Codex / Gemini: confirm the contract YAML is consumed; no runtime wiring
-      exists beyond reading `GEMINI.md` as a constraint file.
+- [x] Codex / Claude Code hook adapter samples and Cursor project rule.
+- [ ] Gemini: confirm the contract YAML is consumed; no runtime wiring exists
+      beyond reading `GEMINI.md` as a constraint file.
+- [ ] Cursor: native extension/MCP status panel, if prioritized. Current
+      enforcement is project rule + Git pre-commit hook.
 - [ ] AI Venture Studio / EngineeringAgents wiring — separate-repo PR; explicitly
       out of scope for this repo (see AGENTS.md boundaries).
 

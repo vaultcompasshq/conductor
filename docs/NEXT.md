@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 72 passing — schema 7 · core 39 · skill 20 · examples 6.
+- **Tests:** 75 passing — schema 7 · core 39 · skill 20 · examples/integrations 9.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test, Node 22.
 
@@ -50,11 +50,9 @@ of truth for "where are we and what's next." For granular tasks see
 2. **Dogfood finding #3** — auto-extracted `in_scope`/`acceptance_criteria` are
    thin (one generic bullet from a paragraph). Improve `extract.ts` or lean on a
    review pass. Lower priority.
-3. **Hook adapters** — Codex/Claude/Cursor lifecycle hooks that call
-   `conductor-check`, `conductor-resume`, and prompt coaching.
-4. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+3. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-5. **Phase 4** — unified `packages/cli` binary, public-release polish.
+4. **Phase 4** — unified `packages/cli` binary, public-release polish.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -69,8 +67,9 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
   approved. Documented limitation, not a bug.
 - **Drift scorer is rule-based:** good signal, but vocabulary-overlap false
   positives remain possible; LLM-assisted classification is a deferred option.
-- **Hook integrations are design-stage:** Cursor/Codex/Claude lifecycle hooks and
-  Venture Studio wiring are docs only — no runtime hook adapters shipped.
+- **Hook integrations are samples:** Codex and Claude Code hook configs plus a
+  Cursor project rule ship as integration examples; Venture Studio wiring is
+  still docs only.
 
 ---
 
@@ -81,5 +80,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test  (72 passing baseline).
+Verify: pnpm install && pnpm test  (75 passing baseline).
 ```

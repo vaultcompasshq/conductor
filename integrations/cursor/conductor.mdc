@@ -1,0 +1,20 @@
+---
+description: Require Conductor intent contracts during implementation work
+alwaysApply: true
+---
+
+Before implementation work:
+
+1. If `.conductor/intent-contract.yaml` is missing, draft one with
+   `conductor-extract --project . --text "<user ask>"`.
+2. Do not treat a draft as approved. Ask the user to review it, then run
+   `conductor-freeze --project . --approved-by "<name>"`.
+3. At the start of a resumed session, run `conductor-resume --project .` and
+   use the Session Brief as the authoritative intent context.
+4. Before claiming completion or committing, run
+   `conductor-check --project . --staged`.
+5. If the user intentionally changes scope, record it with
+   `conductor-pivot --project . --change "<summary>" --acknowledge`.
+
+Cursor has project rules and AGENTS.md support, but this rule is not a lifecycle
+hook. Use `integrations/git-hooks/pre-commit.sample` for mechanical enforcement.
