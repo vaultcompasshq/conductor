@@ -28,8 +28,8 @@ Most AI coding disasters follow the same arc:
 | **CodeRabbit / PR review** | Diff quality, security | Session-level intent drift |
 | **Cursor rules** | Static preferences | Dynamic scope creep mid-session |
 | **Superpowers brainstorming** | Design before code | In-session enforcement after approval |
-| **Agent #4f idea-alignment** | Spec vs repo (post-hoc) | Upstream contract at session start |
-| **Agent #0 Conductor (today)** | Venture go/no-go | Per-feature / per-session governance |
+| **alignment review idea-alignment** | Spec vs repo (post-hoc) | Upstream contract at session start |
+| **session governance Conductor (today)** | Product go/no-go | Per-feature / per-session governance |
 
 The gap is **continuous intent fidelity** — not a one-time spec, not a post-merge audit.
 
@@ -46,20 +46,20 @@ The gap is **continuous intent fidelity** — not a one-time spec, not a post-me
 3. **Deterministic coaching** — templated feedback for known bad prompt patterns
 4. **Deterministic audit trail** — `pivot_log[]` with timestamps and acknowledgments
 
-Think **Return Replay** (from your portfolio): recalculate "what we agreed" vs "what we built."
+Think **Return Replay** (from your product portfolio): recalculate "what we agreed" vs "what we built."
 
 ---
 
 ## Existing assets to build on
 
-### EngineeringAgents (`~/Projects/Engineering/EngineeringAgents`)
+### Existing Downstream Automation
 
 | Asset | Path | Reuse |
 |-------|------|-------|
-| Agent #0 Conductor | `agents/agent-00-conductor/` | Evolve from venture gate → session governance |
+| session governance Conductor | `agents/session-governance-conductor/` | Evolve from product gate → session governance |
 | Drift-resistant template | `docs/plans/2026-03-10-drift-resistant-agent-template-design.md` | Guardrails + validation layers |
-| Agent #0 audit system | `docs/plans/2026-03-15-agent-audit-system-design.md` | Gold standards (phase 2+) |
-| Agent #4f idea-alignment | `tools/venture-board-manager/polling/agent-4f-idea-alignment-poller.js` | Downstream drift consumer |
+| session governance audit system | `docs/plans/2026-03-15-agent-audit-system-design.md` | Gold standards (phase 2+) |
+| alignment review idea-alignment | `tools/product-board-manager/polling/alignment-review-idea-alignment-poller.js` | Downstream drift consumer |
 | Multi-model audit | `COMPREHENSIVE_AUDIT_FRAMEWORK.md` | Post-implementation validation |
 | Memory system design | `docs/plans/2026-04-13-agent-memory-context-system-design.md` | RAG-lite index |
 | CLAUDE.md integration | Agent prompts + memory design | Constraint loading |
@@ -93,7 +93,7 @@ Think **Return Replay** (from your portfolio): recalculate "what we agreed" vs "
 
 | Pattern | Example | Why it causes chaos |
 |---------|---------|---------------------|
-| **Product stack** | "Notion + Figma + Linear in one" | Model invents architecture |
+| **Product stack** | "Notion + Figma + issue tracker in one" | Model invents architecture |
 | **Comparative overload** | "Like X but also Y and Z" | Conflicting reference frames |
 | **Scope adverb** | "Just quickly add..." | Model skips constraints |
 | **Implicit pivot** | "Actually let's also..." | Undocumented scope expansion |
@@ -113,13 +113,13 @@ Think **Return Replay** (from your portfolio): recalculate "what we agreed" vs "
 
 ### Persona A: Solo founder (Melroy)
 
-- 32 ventures, context switching
-- Needs: cross-session memory, venture-agnostic install
+- multiple products, context switching
+- Needs: cross-session memory, product-agnostic install
 - Pain: rework when agent "goes crazy" on vague ask
 
 ### Persona B: External developer
 
-- Uses Cursor + Claude, no Venture Studio
+- Uses Cursor + Claude, no downstream pipeline
 - Needs: install skill, zero config start
 - Pain: rules files ignored mid-session
 
@@ -133,7 +133,7 @@ Think **Return Replay** (from your portfolio): recalculate "what we agreed" vs "
 
 ## Problem metrics (baseline to beat)
 
-From EngineeringAgents audit docs:
+From downstream automation audit docs:
 
 | Metric | Current (estimated) | Target with Conductor |
 |--------|---------------------|----------------------|
@@ -141,7 +141,7 @@ From EngineeringAgents audit docs:
 | "That's not what I meant" turns | ~2–3 per session | < 1 |
 | Spec-less sessions | ~70% | < 20% |
 | Undocumented pivots | Common | Logged in `pivot_log` |
-| Agent #4f alignment score | Variable | +10–15 pts with upstream contract |
+| alignment review alignment score | Variable | +10–15 pts with upstream contract |
 
 ---
 

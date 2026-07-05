@@ -1,4 +1,4 @@
-# Repository Strategy — vaultcompasshq/conductor
+# Repository Strategy - vaultcompasshq/conductor
 
 **Date:** 2026-06-17  
 **Decision:** Public open-source repository under the VaultCompass GitHub org
@@ -7,12 +7,12 @@
 
 ## Should this be public?
 
-**Yes.** Conductor is infrastructure other developers can adopt without exposing Vault & Compass venture IP.
+**Yes.** Conductor is infrastructure other developers can adopt without exposing Vault & Compass product IP.
 
-| Public (this repo) | Private (Venture Studio / internal) |
+| Public (this repo) | Downstream / private repos |
 |--------------------|-------------------------------------|
-| Intent Contract schema | Venture-specific gold-standard tests |
-| Superpowers skills | Linear API keys, portfolio data |
+| Intent Contract schema | Product-specific gold-standard tests |
+| Superpowers skills | Issue-tracker API keys, product portfolio data |
 | CLI (`conductor contract`, `drift`, `coach`) | Proprietary scoring rubrics for ideation |
 | Drift detection algorithms | Customer-specific audit thresholds |
 | Integration guides | Internal agent prompt versions |
@@ -30,7 +30,7 @@ github.com/vaultcompasshq/
 ├── prismfolio            (product)
 ├── capitalcanvas         (product)
 ├── conductor             (OSS tooling)  ← this repo
-└── ai-venture-studio     (private or public pipeline — separate)
+└── downstream-pipeline     (private or public pipeline — separate)
 ```
 
 **Why `vaultcompasshq` not personal:**
@@ -39,30 +39,17 @@ github.com/vaultcompasshq/
 - Signals credibility for B2D / developer adoption
 - Separates personal experiments from company-backed OSS
 
-**Why not inside `vaultcompasshq` meta-repo:**
+**Why a standalone repo:**
 
-The existing `/Projects/vaultcompasshq` folder is an HQ ops placeholder. Conductor deserves its own repo with own issues, releases, and semver.
+Conductor has its own package graph, issues, releases, and semver. Keeping it separate makes installation, contribution, and release management clearer.
 
 ---
 
 ## License
 
-**MIT** — maximizes adoption for skills and CLI. Venture Studio can depend on it without license friction.
+**MIT** — maximizes adoption for skills and CLI. Downstream products can depend on it without license friction.
 
 Contributions from Superpowers community possible if skills are contributed upstream separately (Superpowers uses its own license — check before PR).
-
----
-
-## Local path
-
-```
-/Users/melroysaldanha/Projects/conductor/
-```
-
-Sibling to `Vault & Compass LLC/`, `Engineering/`, `vaultcompasshq/`.  
-Intended remote: `git@github.com:vaultcompasshq/conductor.git`
-
----
 
 ## Monorepo structure (planned)
 
@@ -76,7 +63,7 @@ conductor/
 ├── integrations/
 │   ├── superpowers/
 │   ├── cursor/
-│   └── ai-venture-studio/
+│   └── downstream-pipeline/
 ├── docs/
 ├── examples/
 │   └── intent-contracts/       # synthetic only in public repo
@@ -87,28 +74,22 @@ Publish to npm eventually as `@vaultcompasshq/conductor-cli` (optional, phase 4)
 
 ---
 
-## Relationship to AI Venture Studio
+## Relationship to Downstream Products
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  vaultcompasshq/conductor (PUBLIC)                      │
 │  Schema, skills, CLI, drift engine, docs                │
 └───────────────────────────┬─────────────────────────────┘
-                            │ npm / git submodule / path dep
+                            │ npm / git submodule / path dependency
                             ▼
 ┌─────────────────────────────────────────────────────────┐
-│  ai-venture-studio (PRIVATE or public pipeline repo)    │
-│  Agent #0–#8, pollers, Linear, gold standards         │
+│  downstream product or internal automation repo         │
+│  host runtime wiring, product data, private thresholds  │
 └─────────────────────────────────────────────────────────┘
 ```
 
-Conductor **feeds** Venture Studio:
-
-- Agent #0 evolves from venture go/no-go → **session + intent governance**
-- Agent #4f idea-alignment consumes Intent Contracts as input
-- Drift-resistant template imports guardrails from Conductor schema
-
-Venture Studio does **not** compete with Conductor — it consumes it.
+Conductor should expose stable packages and integration samples. Product-specific runtime wiring, private scoring thresholds, and customer data belong in downstream repos.
 
 ---
 
@@ -129,9 +110,9 @@ Pre-1.0: schema may change. Document breaking changes in `CHANGELOG.md`.
 
 **Never commit:**
 
-- `.env`, API keys, Linear tokens
+- `.env`, API keys, issue tracker tokens
 - Real customer project specs
-- Internal venture portfolio data
+- Internal product portfolio data
 
 **CI (when implemented):**
 
@@ -146,4 +127,4 @@ Pre-1.0: schema may change. Document breaking changes in `CHANGELOG.md`.
 
 **Tags:** `ai-agents`, `cursor`, `claude`, `intent-alignment`, `drift-detection`, `superpowers`
 
-**Not marketed as:** autonomous coding agent, venture studio replacement, or model provider.
+**Not marketed as:** autonomous coding agent, product studio replacement, or model provider.

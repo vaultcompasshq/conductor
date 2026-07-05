@@ -57,7 +57,7 @@ function isRuleLine(
  * (MUST/NEVER/should/avoid/prefer…), is a leading prohibition ("No new …"), or
  * is a bullet under a rules-style heading. This filters out doc prose, metadata
  * (tags, links, goals) and tables that the previous "any bullet line" heuristic
- * scraped as bogus constraints — see docs/dogfood/phase2-live-run.md finding #1.
+ * scraped as bogus constraints; see docs/validation/phase2-live-run.md finding #1.
  */
 export function extractConstraintsFromMarkdown(
   content: string,

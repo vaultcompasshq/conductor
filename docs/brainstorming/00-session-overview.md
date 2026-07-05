@@ -17,10 +17,10 @@ AI coding assistants produce unreliable output not because models are weak, but 
 
 | Incident / asset | Lesson |
 |------------------|--------|
-| **NetViz audit** | Code compiled, Agent #4 review passed, production had stubbed features |
+| **NetViz audit** | Code compiled, review passed, production had stubbed features |
 | **Drift-resistant template** | 80% of agent failures are constraint/skipping/assumption issues — preventable |
-| **Agent #4f idea-alignment** | Spec vs implementation drift is recurring; needs better upstream contract |
-| **Agent #0 Conductor (today)** | Go/no-go for ventures only — does not govern in-session intent |
+| **alignment review idea-alignment** | Spec vs implementation drift is recurring; needs better upstream contract |
+| **session governance Conductor (today)** | Go/no-go for products only — does not govern in-session intent |
 | **Superpowers** | Process discipline exists; no intent contract or user prompt coaching |
 
 ---
@@ -34,14 +34,14 @@ AI coding assistants produce unreliable output not because models are weak, but 
 - [ ] User coaching messages for vague / explosive prompts
 - [ ] Reads `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` when present
 - [ ] Superpowers skill install path
-- [ ] Integration doc for AI Venture Studio
+- [ ] Integration doc for downstream pipeline
 
 ### Should have (v1.x)
 
 - [ ] CLI: `conductor contract`, `conductor drift`, `conductor coach`
 - [ ] Session memory across days (RAG-lite index)
 - [ ] Pivot log with stakeholder acknowledgment
-- [ ] Hooks for Agent #4f aggregator
+- [ ] Hooks for alignment review aggregator
 
 ### Nice to have (v2)
 
@@ -56,11 +56,11 @@ AI coding assistants produce unreliable output not because models are weak, but 
 
 | Stakeholder | Interest |
 |-------------|----------|
-| **Melroy (solo dev)** | 32-venture pipeline, Tier 0 launches, less rework |
+| **Melroy (solo dev)** | multi-product pipeline, Tier 0 launches, less rework |
 | **Vault & Compass** | Brand credibility via OSS tooling under vaultcompasshq |
-| **External devs** | Installable skill, no Venture Studio required |
+| **External devs** | Installable skill, no downstream pipeline required |
 | **Superpowers community** | Upstream skill contribution |
-| **AI Venture Studio** | Upstream governance for Agent #0–#8 |
+| **downstream pipeline** | Upstream governance for session governance–#8 |
 
 ---
 
@@ -68,8 +68,8 @@ AI coding assistants produce unreliable output not because models are weak, but 
 
 - Must work **on top of** existing models (no custom model)
 - Must not duplicate Superpowers brainstorming — **extend** it
-- Must not replace Venture Studio agents — **feed** them
-- Public repo — no venture IP or secrets
+- Must not replace downstream pipeline agents — **feed** them
+- Public repo — no product IP or secrets
 - Prefer file-based, local-first (no mandatory cloud)
 
 ---
@@ -80,7 +80,7 @@ AI coding assistants produce unreliable output not because models are weak, but 
 - Full IDE fork
 - Autonomous multi-hour coding runs
 - Replacing CodeRabbit / Bugbot for security review
-- Venture ideation scoring (stays in Agent #1)
+- Product ideation scoring (stays in downstream product pipeline)
 
 ---
 
@@ -114,7 +114,7 @@ flowchart TB
 
     subgraph downstream [Downstream]
         SP[Superpowers Skills]
-        VS[AI Venture Studio Agents]
+        VS[downstream pipeline Agents]
         A4[Agent 4a-4f Audits]
     end
 

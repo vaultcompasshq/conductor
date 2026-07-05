@@ -25,7 +25,7 @@ describe("extractConstraintsFromMarkdown precision", () => {
     expect(rules.map((r) => r.rule)).toContain("No new API endpoints in this change");
   });
 
-  it("rejects metadata, links, goals, and table rows (the dogfood noise)", () => {
+  it("rejects metadata, links, goals, and table rows from validation notes", () => {
     const md = [
       "# Conductor",
       "**Tag:** `v0.1.0-alpha`",
@@ -63,7 +63,9 @@ describe("extractConstraintsFromMarkdown precision", () => {
     // Previously scraped ~12 lines incl. tags/goals/links. Tightened filter
     // should yield only real boundary rules.
     expect(rules.length).toBeLessThanOrEqual(8);
-    expect(rules.some((r) => /do not add conductor code/i.test(r.rule))).toBe(true);
+    expect(rules.some((r) => /do not commit local per-project/i.test(r.rule))).toBe(
+      true,
+    );
     expect(rules.every((r) => !/^tag:/i.test(r.rule))).toBe(true);
     expect(rules.every((r) => !/v0\.1\.0-alpha/i.test(r.rule))).toBe(true);
   });

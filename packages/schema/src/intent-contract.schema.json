@@ -261,7 +261,7 @@
         "session_id": { "type": "string" },
         "parent_contract_id": { "type": "string" },
         "superpowers_spec_path": { "type": "string" },
-        "venture_linear_id": { "type": "string" }
+        "external_issue_id": { "type": "string" }
       }
     }
   }

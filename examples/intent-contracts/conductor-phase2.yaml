@@ -12,15 +12,15 @@ in_scope:
 out_of_scope:
   - "packages/cli full binary (Phase 4)"
   - "packages/memory index (Phase 3)"
-  - "EngineeringAgents repo changes"
-  - "Vault & Compass LLC workspace changes"
+  - "Downstream automation repo changes"
+  - "Product workspace changes"
 
 constraints:
   - source: AGENTS.md
     rule: "Minimize scope — simplest correct diff"
     priority: high
   - source: user-stated
-    rule: "Do not touch EngineeringAgents or LLC workspaces"
+    rule: "Do not touch downstream automation or product workspaces"
     priority: critical
 
 acceptance_criteria:
@@ -31,7 +31,7 @@ acceptance_criteria:
     description: "pnpm test passes with Phase 2 coverage"
     testable: true
   - id: ac-3
-    description: "Drift guard catches out-of-scope CLI work in dogfood scenario"
+    description: "Drift guard catches out-of-scope CLI work in validation scenario"
     testable: true
 
 frozen_at: "2026-06-17T23:00:00Z"

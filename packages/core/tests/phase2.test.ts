@@ -53,7 +53,7 @@ describe("loadCursorRules", () => {
   });
 });
 
-describe("Phase 2 dogfood drift", () => {
+describe("Phase 2 validation drift", () => {
   it("soft-blocks adding packages/cli during Phase 2 contract", () => {
     const contract = parse(
       readFileSync(
