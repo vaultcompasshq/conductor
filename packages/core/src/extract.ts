@@ -74,6 +74,8 @@ const ACTION_START_RE = new RegExp(
   `\\b(?:and|then|also|plus)?\\s*(${ACTION_VERBS.join("|")})\\b`,
   "i",
 );
+const PROHIBITION_RE =
+  /\b(do not|don't|must not|should not|cannot|can't|never|avoid|no|not|without)\b/i;
 
 function normalizeItem(text: string): string {
   return text
@@ -113,11 +115,22 @@ function textClauses(text: string): string[] {
     .filter(Boolean);
 }
 
+function isProhibitionClause(text: string): boolean {
+  return PROHIBITION_RE.test(text);
+}
+
 function extractInScope(text: string): string[] {
   const bullets = bulletItems(text);
-  if (bullets.length > 0) return uniqueItems(bullets, 12);
+  if (bullets.length > 0) {
+    return uniqueItems(
+      bullets.filter((item) => !isProhibitionClause(item)),
+      12,
+    );
+  }
 
-  const clauses = textClauses(text).filter((c) => ACTION_RE.test(c));
+  const clauses = textClauses(text).filter(
+    (c) => ACTION_RE.test(c) && !isProhibitionClause(c),
+  );
   if (clauses.length > 0) return uniqueItems(clauses, 6);
 
   const fallback = oneSentence(text, 200);
@@ -126,6 +139,13 @@ function extractInScope(text: string): string[] {
 
 function extractOutOfScope(text: string): string[] {
   const patterns = [
+    /\bdo\s+not\s+([a-z][\w\s-]{3,80})/gi,
+    /\bmust\s+not\s+([a-z][\w\s-]{3,80})/gi,
+    /\bshould\s+not\s+([a-z][\w\s-]{3,80})/gi,
+    /\bcannot\s+([a-z][\w\s-]{3,80})/gi,
+    /\bcan't\s+([a-z][\w\s-]{3,80})/gi,
+    /\bnever\s+([a-z][\w\s-]{3,80})/gi,
+    /\bavoid\s+([a-z][\w\s-]{3,80})/gi,
     /\bno\s+([a-z][\w\s-]{3,80})/gi,
     /\bnot\s+([a-z][\w\s-]{3,80})/gi,
     /\bwithout\s+([a-z][\w\s-]{3,80})/gi,
@@ -137,7 +157,15 @@ function extractOutOfScope(text: string): string[] {
       if (item.length >= 5 && item.length <= 200) items.push(item);
     }
   }
-  return items.slice(0, 8);
+  const unique = uniqueItems(items, 12);
+  return unique
+    .filter((item, index) => {
+      const key = item.toLowerCase();
+      return !unique
+        .slice(0, index)
+        .some((previous) => previous.toLowerCase().includes(key));
+    })
+    .slice(0, 8);
 }
 
 function extractAcceptanceCriteria(

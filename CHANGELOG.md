@@ -8,6 +8,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Unified CLI beta package.** Added `@vaultcompasshq/conductor-cli` with the
+  public `conductor <subcommand>` binary wrapping the existing command surface:
+  `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`, `brief`,
+  `resume`, `index`, and `pivot`. Added top-level `--help` and `--version`.
+- **CI drift mode.** `conductor drift --ci` now exits `1` when the drift JSON has
+  `block: true`, making lower-level drift scoring usable in GitHub Actions and
+  other CI jobs.
+- **Release smoke checks.** Added `pnpm release:smoke`, which packs schema,
+  core, skill, and CLI tarballs locally and verifies required files plus packed
+  dependency ranges.
+- **Dependency audit cleanup.** Added a pnpm override for patched `esbuild` so
+  `pnpm audit --audit-level low` is clean.
+- **Production-readiness dogfood.** Added
+  `docs/dogfood/production-readiness-2026-07-04.md`, covering unified CLI,
+  resume, correction, pivot, archive, prior-contract drift, and `drift --ci`.
+
 - **Real freeze/approval step (dogfood finding #2).** `conductor-extract` now
   writes an unfrozen draft only; approval is a separate `conductor-freeze`
   command that records an attributable `approval` block (approved_by /
@@ -55,6 +71,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Prohibition clauses such as "Do not add new API endpoints" no longer leak
+  into `in_scope`, and overlapping prohibition matches are deduped in
+  `out_of_scope`. This fixes a dogfood case where prior-contract drift was
+  masked by in-scope token subtraction.
 - Corrected test-count claims across README / NEXT / AGENTS (was "29"/"14",
   actual is 39: schema 3 + core 22 + skill 8 + examples 6).
 - Tightened README multi-model / Venture Studio language to reflect that those

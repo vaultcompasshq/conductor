@@ -4,7 +4,7 @@
 
 Conductor sits *above* foundation models and *below* your product code. It turns messy conversation into a frozen **Intent Contract**, coaches users when prompts cause scope explosion, and detects drift before bad code ships.
 
-The Intent Contract is a plain YAML file, so any model that can read a file (Claude, Codex, Gemini) can consume it. Today the enforcement surfaces that ship are the `conductor-check` gate (pre-commit / CI) and the Cursor/Claude skills; deeper Codex, Gemini, and Venture Studio wiring is **design-stage** — see [integrations/](./integrations).
+The Intent Contract is a plain YAML file, so any model that can read a file (Claude, Codex, Gemini) can consume it. Today the enforcement surfaces that ship are the unified `conductor` CLI, the legacy `conductor-check` gate (pre-commit / CI), Cursor/Claude skills, and hook samples; deeper Gemini and Venture Studio wiring is **design-stage** — see [integrations/](./integrations).
 
 ```
 User conversation (messy)
@@ -18,11 +18,11 @@ User conversation (messy)
 
 ## Status
 
-**Phase:** Phase 3 core complete; freeze/approval, gate, history, resume shipped — July 2026
+**Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, resume shipped — July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · **77 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **84 tests passing**
 
 **Resuming?** See [docs/NEXT.md](./docs/NEXT.md) (handoff) · [docs/TODO.md](./docs/TODO.md) (backlog) · [docs/cli-reference.md](./docs/cli-reference.md) (commands)
 
@@ -55,7 +55,7 @@ conductor/
 │   ├── schema/          # @vaultcompasshq/conductor-schema ✅
 │   ├── core/            # @vaultcompasshq/conductor-core incl. history/index ✅
 │   ├── skill/           # Superpowers skills + CLIs incl. conductor-check/resume ✅
-│   ├── cli/             # unified conductor binary (Phase 4 — not built)
+│   ├── cli/             # unified conductor binary ✅
 │   └── memory/          # separate package deferred; file memory lives in core
 ├── integrations/
 │   ├── superpowers/     # skills + install script ✅
@@ -68,35 +68,48 @@ conductor/
 └── docs/
 ```
 
-The enforcement gate (`conductor-check`) returns a non-zero exit code when no
+The enforcement gate (`conductor check`, legacy `conductor-check`) returns a non-zero exit code when no
 frozen contract exists or staged changes drift past a blocking threshold — the
 one place Conductor *enforces* rather than *suggests*. Wire it via
 [integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
 or a CI step.
 
+## Quickstart
+
+```bash
+pnpm install
+pnpm build
+pnpm conductor -- init --project .
+pnpm conductor -- extract --project . --text "Add CSV export. Do not add new API endpoints. Verify the file downloads."
+pnpm conductor -- freeze --project . --approved-by "<name>"
+pnpm conductor -- check --project . --staged
+```
+
 ## Development
 
 ```bash
 pnpm install
-pnpm test      # 77 tests (builds first, then schema + core + skill + examples/integrations)
+pnpm test      # 84 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
+pnpm release:smoke
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 ```
 
 ### Session lifecycle (CLIs)
 
 ```bash
-pnpm conductor:extract -- --project . --text "the ask"   # 1. draft (unfrozen)
-pnpm conductor:freeze  -- --project . --approved-by me    # 2. approve
-pnpm conductor:check   -- --project . --staged            # 3. gate (exit 1 = blocked)
-pnpm conductor:pivot   -- --project . --change "..." --acknowledge
-pnpm conductor:correct -- --project . --wrong … --right … --rule … --acknowledge
-pnpm conductor:brief   -- --project .                     # clean re-injectable context
-pnpm conductor:resume  -- --project .                     # brief + recent history
+pnpm conductor -- extract --project . --text "the ask"   # 1. draft (unfrozen)
+pnpm conductor -- freeze  --project . --approved-by me    # 2. approve
+pnpm conductor -- check   --project . --staged            # 3. gate (exit 1 = blocked)
+pnpm conductor -- pivot   --project . --change "..." --acknowledge
+pnpm conductor -- correct --project . --wrong "..." --right "..." --rule "..." --acknowledge
+pnpm conductor -- brief   --project .                     # clean re-injectable context
+pnpm conductor -- resume  --project .                     # brief + recent history
 ```
 
 Full flags: [docs/cli-reference.md](./docs/cli-reference.md). The gate
-(`conductor-check`) is the one place Conductor *enforces* rather than *suggests* —
+(`conductor check`, legacy `conductor-check`) is the one place Conductor
+*enforces* rather than *suggests* —
 wire it via [integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
 or a CI step.
 

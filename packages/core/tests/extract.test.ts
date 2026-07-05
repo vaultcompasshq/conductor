@@ -16,6 +16,7 @@ import {
   freezeContract,
   isContractFrozen,
 } from "../src/contract-store.js";
+import { scoreDrift } from "../src/drift.js";
 import { appendDriftEvent, driftLogPath } from "../src/drift-log.js";
 
 describe("extractConstraintsFromMarkdown", () => {
@@ -94,6 +95,30 @@ describe("draftContract", () => {
       ]),
     );
     expect(contract.acceptance_criteria.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps prohibition clauses out of scope so drift can block them", () => {
+    const contract = draftContract({
+      userText:
+        "Add a client-side CSV export button to the report table. Do not add new API endpoints. Verify downloaded CSV has visible headers.",
+    });
+
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([expect.stringMatching(/client-side CSV export/i)]),
+    );
+    expect(contract.in_scope).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/do not|not add|api endpoints/i)]),
+    );
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([expect.stringMatching(/do not add new API endpoints/i)]),
+    );
+    expect(contract.out_of_scope).toHaveLength(1);
+
+    const drift = scoreDrift(contract, {
+      changedPaths: ["src/app/api/export/route.ts"],
+      signals: ["added new api endpoint for export"],
+    });
+    expect(drift.action === "soft_block" || drift.action === "hard_block").toBe(true);
   });
 
   it("generateContractId matches schema pattern", () => {
