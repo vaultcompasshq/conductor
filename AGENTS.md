@@ -77,7 +77,7 @@ task. All work lands on `main` via PR (never push to main); CI must be green.
 
 ```bash
 pnpm install
-pnpm test      # 84 tests — schema (7) + core (42) + skill (20) + cli (6) + examples/integrations (9)
+pnpm test      # 85 tests — schema (7) + core (42) + skill (20) + cli (6) + examples/integrations (10)
 pnpm build
 pnpm typecheck
 pnpm release:smoke

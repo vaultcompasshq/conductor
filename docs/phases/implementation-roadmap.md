@@ -9,7 +9,7 @@
 > real freeze/**approval** step, Phase **3a** (correction log + session brief),
 > and Phase **3 core** (history, generated index, resume, pivot, cross-session
 > drift), sharper paragraph/prohibition extraction, hook adapter samples, and
-> the unified CLI with release smoke. 84 tests passing. **Next:** publish/tag
+> the unified CLI with release smoke. 85 tests passing. **Next:** publish/tag
 > cleanup, Phase 3b, and integration hardening.
 > Live status: [../NEXT.md](../NEXT.md) · backlog: [../TODO.md](../TODO.md).
 
@@ -124,10 +124,10 @@
 
 | Task | Output |
 |------|--------|
-| Tag `v0.3.0-beta` | Pending |
+| Tag `v0.3.0-beta` | Pending after merge |
 | Dogfood report doc | [../dogfood/production-readiness-2026-07-04.md](../dogfood/production-readiness-2026-07-04.md) |
 | Decide Superpowers upstream PR timing | |
-| Optional: `conductor drift --ci` GitHub Action example | CLI flag done; Action example pending |
+| Optional: `conductor drift --ci` GitHub Action example | [../../integrations/github-actions/conductor-drift-ci.yml.sample](../../integrations/github-actions/conductor-drift-ci.yml.sample) |
 
 **Exit gate:** Fresh clone + skill install works without Venture Studio.
 

@@ -23,6 +23,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Production-readiness dogfood.** Added
   `docs/dogfood/production-readiness-2026-07-04.md`, covering unified CLI,
   resume, correction, pivot, archive, prior-contract drift, and `drift --ci`.
+- **Release and CI docs.** Added a beta release checklist and a copyable GitHub
+  Actions workflow sample for `conductor drift --ci`.
 
 - **Real freeze/approval step (dogfood finding #2).** `conductor-extract` now
   writes an unfrozen draft only; approval is a separate `conductor-freeze`

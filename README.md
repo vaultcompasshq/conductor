@@ -22,7 +22,7 @@ User conversation (messy)
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 **Relationship:** Feeder into AI Venture Studio — not a competitor
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **84 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **85 tests passing**
 
 **Resuming?** See [docs/NEXT.md](./docs/NEXT.md) (handoff) · [docs/TODO.md](./docs/TODO.md) (backlog) · [docs/cli-reference.md](./docs/cli-reference.md) (commands)
 
@@ -63,6 +63,7 @@ conductor/
 │   ├── hooks/           # shared lifecycle hook scripts ✅
 │   ├── codex/           # Codex hooks.json sample ✅
 │   ├── claude-code/     # Claude Code settings sample ✅
+│   ├── github-actions/  # conductor drift --ci workflow sample ✅
 │   ├── cursor/          # Cursor rule + git hook setup ✅
 │   └── ai-venture-studio/  # design notes
 └── docs/
@@ -89,7 +90,7 @@ pnpm conductor -- check --project . --staged
 
 ```bash
 pnpm install
-pnpm test      # 84 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # 85 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
 pnpm release:smoke
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
@@ -107,11 +108,13 @@ pnpm conductor -- brief   --project .                     # clean re-injectable 
 pnpm conductor -- resume  --project .                     # brief + recent history
 ```
 
-Full flags: [docs/cli-reference.md](./docs/cli-reference.md). The gate
+Full flags: [docs/cli-reference.md](./docs/cli-reference.md). Release steps:
+[docs/release/beta-release-checklist.md](./docs/release/beta-release-checklist.md).
+The gate
 (`conductor check`, legacy `conductor-check`) is the one place Conductor
 *enforces* rather than *suggests* —
 wire it via [integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
-or a CI step.
+or [integrations/github-actions/conductor-drift-ci.yml.sample](./integrations/github-actions/conductor-drift-ci.yml.sample).
 
 ## Origin
 

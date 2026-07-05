@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-04 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 84 tests passing.
+before merge. Baseline: 85 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -66,9 +66,9 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Release package metadata + `pnpm release:smoke` tarball checks for
       schema/core/skill/cli.
 - [x] Clear the low `esbuild` advisory with a pnpm override.
-- [ ] README install-without-Venture-Studio check, version tag
-      (`v0.3.0-beta`), npm publish dry-run/publish decision.
-- [ ] GitHub Action example around `conductor drift --ci`.
+- [x] README install-without-Venture-Studio quickstart and beta release checklist.
+- [x] GitHub Action example around `conductor drift --ci`.
+- [ ] Version tag (`v0.3.0-beta`) and npm publish decision/execution after merge.
 
 ## 5. Integrations (design-stage → real, if/when prioritized)
 
@@ -103,3 +103,4 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Codex/Claude Code hook adapter samples and Cursor project rule (#9).
 - [x] Unified `conductor` CLI + release smoke + production dogfood run.
 - [x] Low dependency advisory cleared (`pnpm audit --audit-level low` clean).
+- [x] GitHub Actions `conductor drift --ci` sample and beta release checklist.
