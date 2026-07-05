@@ -62,7 +62,7 @@
 | Checks | Code diff | User intent + constraints |
 | Multi-model | Some | Claude + Codex + Gemini by design |
 
-**Verdict:** Conductor is **upstream**. CodeRabbit catches bad code; Conductor catches bad direction.
+**Verdict:** Conductor is **upstream**. CodeRabbit catches implementation defects; Conductor catches intent drift.
 
 ---
 
@@ -84,18 +84,18 @@
 |-----------|---------------------|-----------|
 | Scope | End-to-end build | Governance layer |
 | Buyer | "Build my app" | "Keep my app on-spec" |
-| Venture Studio overlap | High | Low (feeder) |
+| downstream pipeline overlap | High | Low (integration layer) |
 
-**Verdict:** AI Venture Studio competes here. Conductor does not.
+**Verdict:** downstream pipeline competes here. Conductor does not.
 
 ---
 
-### 6. AI Venture Studio (internal)
+### 6. downstream pipeline (internal)
 
-| Dimension | Venture Studio | Conductor |
+| Dimension | downstream pipeline | Conductor |
 |-----------|----------------|-----------|
 | Pipeline | 8 agents, idea → launch | Session governance |
-| Agent #0 today | Venture go/no-go | Evolves to use Conductor |
+| session governance today | Product go/no-go | Evolves to use Conductor |
 | Distribution | Private pipeline | Public OSS |
 | Spinout grade | Platform (B+) | Conductor (A−) per ideas.md |
 
@@ -104,22 +104,22 @@
 ```
 Conductor (public OSS)
     ↓ depends
-AI Venture Studio (pipeline)
+downstream pipeline (pipeline)
     ↓ produces
-Products (Sheetful, Prismfolio, …)
+Products (active product repo, Prismfolio, …)
 ```
 
 ---
 
-### 7. Agent #4f Idea Alignment (internal, built)
+### 7. alignment review Idea Alignment (internal, built)
 
-| Dimension | Agent #4f | Conductor |
+| Dimension | alignment review | Conductor |
 |-----------|-----------|-----------|
 | When | Post-implementation audit | Session start + continuous |
 | Input | Guesses spec from README | Frozen Intent Contract |
-| Output | Linear comment + score | Drift alert + coaching |
+| Output | issue tracker comment + score | Drift alert + coaching |
 
-**Verdict:** Agent #4f becomes **more accurate** when Conductor provides the contract. Conductor is upstream.
+**Verdict:** alignment review becomes **more accurate** when Conductor provides the contract. Conductor is upstream.
 
 ---
 
@@ -141,8 +141,8 @@ Products (Sheetful, Prismfolio, …)
 | Intent Contract schema (open standard) | Medium — but first-mover + Superpowers integration |
 | Prompt coaching corpus | High — grows from real sessions |
 | Drift pattern library | High — incident → pattern → rule |
-| Venture Studio integration | Medium — internal advantage |
-| Multi-model audit bundle | Medium — already built in EngineeringAgents |
+| downstream pipeline integration | Medium — internal advantage |
+| Multi-model audit bundle | Medium — already built in downstream automation |
 
 **Weakest if:** Someone ships "spec mode" in Cursor natively.  
 **Mitigation:** Stay model-agnostic, publish schema, integrate everywhere.
@@ -170,25 +170,25 @@ Products (Sheetful, Prismfolio, …)
 | Built on proven internal designs | Not yet implemented |
 | Unique user coaching angle | Requires behavior change |
 | Multi-model by design | No brand yet outside V&C |
-| Feeds existing 32-venture pipeline | Solo maintainer risk |
+| Feeds existing multi-product pipeline | Solo maintainer risk |
 
 | Opportunities | Threats |
 |---------------|---------|
 | Superpowers upstream PR | Cursor ships native intent mode |
 | vaultcompasshq OSS credibility | Devin-style "just build it" mindset |
-| Agent #4f + audit integration | Complexity / alert fatigue |
+| alignment review + audit integration | Complexity / alert fatigue |
 | B2D CLI + schema standard | OpenAI/Anthropic prompt caching changes |
 
 ---
 
 ## Recommendation
 
-**Do not compete with AI Venture Studio or autonomous builders.**
+**Do not compete with downstream pipeline or autonomous builders.**
 
 Ship Conductor as:
 
 1. **Public OSS** (`vaultcompasshq/conductor`) — schema + skills + CLI
-2. **Internal dogfood** — required gate in Venture Studio Agent #0
+2. **Downstream validation** — required gate in a real host workflow
 3. **Ecosystem play** — Superpowers + Cursor rules + optional CodeRabbit handoff
 
 **Elevator pitch:**  

@@ -8,7 +8,7 @@
 
 ### Approach A: Superpowers skill only
 
-**Description:** Publish `intent-contract` and `drift-guard` skills. No CLI, no memory, no Venture Studio wiring.
+**Description:** Publish `intent-contract` and `drift-guard` skills. No CLI, no memory, no downstream pipeline wiring.
 
 ```
 User → skill extracts contract → Superpowers brainstorming → implementation
@@ -20,7 +20,7 @@ User → skill extracts contract → Superpowers brainstorming → implementatio
 |------|------|
 | Ship in 1–2 weeks | No cross-session memory |
 | Zero infra | Can't enforce in CI |
-| Easy Superpowers PR | Venture Studio still fragmented |
+| Easy Superpowers PR | downstream pipeline still fragmented |
 | Lowest maintenance | Weaker moat |
 
 **Best for:** Validation only. Too thin for "build it all out."
@@ -52,7 +52,7 @@ User → embed query → retrieve constraints → generate contract → work
 
 ```
 Phase 1: Schema + rubric
-Phase 2: Runtime + Venture Studio hooks
+Phase 2: Runtime + host integration samples
 Phase 3: Memory index (RAG-lite)
 Phase 4: Public skill + CLI
 ```
@@ -60,7 +60,7 @@ Phase 4: Public skill + CLI
 | Pros | Cons |
 |------|------|
 | Each phase shippable | 14 weeks total |
-| Dogfoods on real ventures | More docs + code |
+| Validates on real downstream projects | More docs + code |
 | Strong moat | Solo maintainer load |
 | Correct build order | |
 | Public + private split clear | |
@@ -76,7 +76,7 @@ Phase 4: Public skill + CLI
 | Phase | Weeks | Deliverable | Standalone value? |
 |-------|-------|-------------|-------------------|
 | 1 | 1–2 | Schema, rubric, examples | Yes — teams can adopt schema manually |
-| 2 | 3–6 | Runtime, VS integration | Yes — internal dogfood |
+| 2 | 3–6 | Runtime, host integrations | Yes — downstream validation |
 | 3 | 7–10 | Memory index | Yes — cross-session drift |
 | 4 | 11–14 | Skill + CLI publish | Yes — public OSS |
 
@@ -96,23 +96,23 @@ packages/cli        ← Phase 4
 
 ---
 
-## Agent #0 evolution
+## Downstream Pipeline Evolution
 
-**Today:** Venture strategic gatekeeper (go/no-go for new ideas).
+**Today:** Product strategic gatekeeper (go/no-go for new ideas).
 
 **Tomorrow:** Two modes, same Conductor brand:
 
 | Mode | Trigger | Output |
 |------|---------|--------|
-| **Venture** | New idea in Linear | Strategic analysis (existing) |
+| **Product** | New idea in issue tracker | Strategic analysis (existing) |
 | **Session** | Any coding task | Intent Contract (new) |
 
-Session mode does **not** replace venture mode — it extends Agent #0.
+Session mode does **not** replace pipeline-specific modes; it adds a reusable intent-governance layer.
 
 ```json
 {
   "modes": {
-    "venture": { "runsBefore": ["agent-01-ideation"] },
+    "product": { "runsBefore": ["product-intake"] },
     "session": { "runsBefore": ["brainstorming", "implementation"] }
   }
 }
@@ -123,7 +123,7 @@ Session mode does **not** replace venture mode — it extends Agent #0.
 ## Integration priority
 
 1. **Superpowers** — skill install (widest distribution)
-2. **AI Venture Studio** — Agent #0 + #4f (dogfood)
+2. **Downstream pipelines** — session governance + validation
 3. **Cursor** — rules + optional hook docs
 4. **GitHub Actions** — `conductor drift --ci` (phase 4+)
 
@@ -131,13 +131,13 @@ Session mode does **not** replace venture mode — it extends Agent #0.
 
 ## What to extract to public repo vs keep private
 
-| Public (`vaultcompasshq/conductor`) | Private (Venture Studio) |
+| Public (`vaultcompasshq/conductor`) | Private (downstream pipeline) |
 |-------------------------------------|--------------------------|
-| Schema, CLI, skills | Linear poller wiring |
-| Generic coaching templates | Venture scoring rubrics |
+| Schema, CLI, skills | issue tracker poller wiring |
+| Generic coaching templates | Product scoring rubrics |
 | Drift algorithms | Gold-standard test library |
 | Synthetic examples | Real incident fixtures |
-| Integration guides | API keys, portfolio data |
+| Integration guides | API keys, product portfolio data |
 
 ---
 
@@ -157,7 +157,7 @@ Stop if after Phase 2:
 | Question | Answer |
 |----------|--------|
 | Public repo? | **Yes** — `vaultcompasshq/conductor`, MIT |
-| Compete with Venture Studio? | **No** — feeder |
+| Replace downstream pipeline? | **No** — integration layer |
 | Which approach? | **C** — full platform, phased |
 | First code to write? | Schema validation + example contracts |
 | First integration? | Superpowers `intent-contract` skill |

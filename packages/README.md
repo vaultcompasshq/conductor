@@ -2,10 +2,10 @@
 
 | Package | NPM name | Status | Description |
 |---------|----------|--------|-------------|
-| `schema/` | `@vaultcompasshq/conductor-schema` | ✅ Phase 1 | Intent Contract JSON Schema v1.0.0, TypeScript types, and Ajv validation (`validateIntentContract`, `assertValidIntentContract`) |
-| `core/` | `@vaultcompasshq/conductor-core` | ✅ Phase 1 | Prompt coach (pattern detection, scoring, narrowing) and drift engine (weighted rubric, exit gates) |
-| `memory/` | — | Phase 3 | Project constraint index (RAG-lite) |
+| `schema/` | `@vaultcompasshq/conductor-schema` | Stable | Intent Contract JSON Schema v1.0.0, TypeScript types, and Ajv validation (`validateIntentContract`, `assertValidIntentContract`) |
+| `core/` | `@vaultcompasshq/conductor-core` | Stable | Prompt coach, extraction, drift scoring, gate, correction log, brief, history, and memory index |
+| `memory/` | - | Deferred | Separate package deferred; file-backed memory currently lives in `core/` |
 | `cli/` | `@vaultcompasshq/conductor-cli` | Unified CLI | `conductor <subcommand>` binary |
-| `skill/` | `@vaultcompasshq/conductor-skill` | ✅ Phase 2 | Superpowers skills + `conductor-coach`, `conductor-drift`, `conductor-extract`, `conductor-init` |
+| `skill/` | `@vaultcompasshq/conductor-skill` | Stable | Superpowers skills and legacy per-command CLIs |
 
 See [implementation roadmap](../docs/phases/implementation-roadmap.md) for the full 14-week plan.

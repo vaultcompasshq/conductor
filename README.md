@@ -2,38 +2,40 @@
 
 **Intent fidelity for AI-assisted development.**
 
-Conductor sits *above* foundation models and *below* your product code. It turns messy conversation into a frozen **Intent Contract**, coaches users when prompts cause scope explosion, and detects drift before bad code ships.
+Conductor sits *above* foundation models and *below* your product code. It turns an unstructured request into an approved **Intent Contract**, coaches users when prompts cause scope expansion, and blocks intent drift before misaligned changes reach review.
 
-The Intent Contract is a plain YAML file, so any model that can read a file (Claude, Codex, Gemini) can consume it. Today the enforcement surfaces that ship are the unified `conductor` CLI, the legacy `conductor-check` gate (pre-commit / CI), Cursor/Claude skills, and hook samples; deeper Gemini and Venture Studio wiring is **design-stage** — see [integrations/](./integrations).
+The Intent Contract is a plain YAML file, so any model or coding assistant that can read a file can consume it. Conductor does not replace spec tools, coding agents, or PR review. It gives those tools a shared source of truth for what the human approved, what is out of scope, and whether the current diff has drifted.
+
+Today the shipped surfaces are the unified `conductor` CLI, the legacy `conductor-check` gate for pre-commit and CI, Cursor/Claude skills, and hook samples. See [integrations/](./integrations) for host-specific examples.
 
 ```
-User conversation (messy)
-        ↓
-   Conductor layer          ← intent contract, drift guard, prompt coach
-        ↓
-   Superpowers / agents     ← brainstorming, TDD, build, review
-        ↓
+User conversation
+        |
+   Conductor layer       intent contract, drift guard, prompt coach
+        |
+   Coding assistants     planning, TDD, build, review
+        |
    Shipped product
 ```
 
 ## Status
 
-**Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, resume shipped — July 2026
+**Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, and resume shipped - July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
-**Relationship:** Feeder into AI Venture Studio — not a competitor
 
 **Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **85 tests passing**
 
-**Resuming?** See [docs/NEXT.md](./docs/NEXT.md) (handoff) · [docs/TODO.md](./docs/TODO.md) (backlog) · [docs/cli-reference.md](./docs/cli-reference.md) (commands)
+**Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
 
 ## Start here
 
 | Doc | Purpose |
 |-----|---------|
 | [AGENTS.md](./AGENTS.md) | Agent rules, phase status, verification |
-| [docs/NEXT.md](./docs/NEXT.md) | Phase 2 handoff — current task work |
-| [BRAINSTORMING.md](./BRAINSTORMING.md) | Session index — read this first |
-| [docs/repo-strategy.md](./docs/repo-strategy.md) | Public vs private, licensing, org placement |
+| [docs/NEXT.md](./docs/NEXT.md) | Maintainer status and next work |
+| [docs/product-positioning.md](./docs/product-positioning.md) | Competitive positioning and next product bets |
+| [BRAINSTORMING.md](./BRAINSTORMING.md) | Design-session index |
+| [docs/repo-strategy.md](./docs/repo-strategy.md) | Public scope, licensing, org placement |
 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved design spec (review gate) |
 | [docs/phases/implementation-roadmap.md](./docs/phases/implementation-roadmap.md) | 14-week build plan |
 | [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./docs/superpowers/plans/2026-06-17-conductor-phase1.md) | Phase 1 plan (complete) |
@@ -44,7 +46,7 @@ User conversation (messy)
 |----|-------|
 | Governance layer for AI coding sessions | A foundation model or fine-tune |
 | Intent Contract + drift detection | A full autonomous coding agent |
-| User prompt coaching | Replacement for Superpowers or Venture Studio |
+| User prompt coaching | Replacement for planning, review, or CI |
 | Multi-model (Claude, Codex, Gemini) | Cursor-only or single-vendor lock-in |
 
 ## Packages
@@ -52,20 +54,20 @@ User conversation (messy)
 ```
 conductor/
 ├── packages/
-│   ├── schema/          # @vaultcompasshq/conductor-schema ✅
-│   ├── core/            # @vaultcompasshq/conductor-core incl. history/index ✅
-│   ├── skill/           # Superpowers skills + CLIs incl. conductor-check/resume ✅
-│   ├── cli/             # unified conductor binary ✅
+│   ├── schema/          # @vaultcompasshq/conductor-schema
+│   ├── core/            # @vaultcompasshq/conductor-core incl. history/index
+│   ├── skill/           # Superpowers skills + legacy CLIs
+│   ├── cli/             # unified conductor binary
 │   └── memory/          # separate package deferred; file memory lives in core
 ├── integrations/
-│   ├── superpowers/     # skills + install script ✅
-│   ├── git-hooks/       # pre-commit gate sample ✅
-│   ├── hooks/           # shared lifecycle hook scripts ✅
-│   ├── codex/           # Codex hooks.json sample ✅
-│   ├── claude-code/     # Claude Code settings sample ✅
-│   ├── github-actions/  # conductor drift --ci workflow sample ✅
-│   ├── cursor/          # Cursor rule + git hook setup ✅
-│   └── ai-venture-studio/  # design notes
+│   ├── superpowers/     # skills + install script
+│   ├── git-hooks/       # pre-commit gate sample
+│   ├── hooks/           # shared lifecycle hook scripts
+│   ├── codex/           # Codex hooks.json sample
+│   ├── claude-code/     # Claude Code settings sample
+│   ├── github-actions/  # conductor drift --ci workflow sample
+│   ├── cursor/          # Cursor rule + git hook setup
+│   └── downstream-pipeline/  # design notes
 └── docs/
 ```
 
@@ -118,7 +120,7 @@ or [integrations/github-actions/conductor-drift-ci.yml.sample](./integrations/gi
 
 ## Origin
 
-Evolved from Agent #0 (Conductor) in EngineeringAgents, drift-resistant agent template, Agent #4f idea-alignment audit, and Superpowers process skills. See [docs/brainstorming/01-context-and-problem.md](./docs/brainstorming/01-context-and-problem.md).
+Conductor grew out of repeated intent-drift failures in AI-assisted development workflows: vague prompts expanded scope, long sessions lost the original request, and reviews caught implementation quality more reliably than direction. See [docs/brainstorming/01-context-and-problem.md](./docs/brainstorming/01-context-and-problem.md).
 
 ## License
 

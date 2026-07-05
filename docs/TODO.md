@@ -32,20 +32,56 @@ the right context.
 - [x] **Decide `packages/memory` vs `packages/core` module.** Roadmap names a
       `packages/memory` package; simplest is a core module unless isolation is
       wanted. Pick and record in the roadmap.
-- [x] Tests + docs + a real dogfood run (resume on "day 5+" references prior
+- [x] Tests + docs + a real validation run (resume on "day 5+" references prior
       contract — the roadmap Phase 3 exit gate). See
-      [production-readiness-2026-07-04.md](./dogfood/production-readiness-2026-07-04.md).
+      [production-readiness-2026-07-04.md](./validation/production-readiness-2026-07-04.md).
 
-## 2. Dogfood finding #3 — thin auto-extracted scope/AC — FIXED
+## 2. Validation finding #3 — thin auto-extracted scope/AC — FIXED
 
 - [x] `packages/core/src/extract.ts`: `extractInScope` / `extractAcceptanceCriteria`
       produce one generic bullet from a paragraph ask. Improve heuristics
       (split on sentences/conjunctions; derive AC from imperative clauses) OR
       formally rely on the human review pass before freeze and document it.
 - [x] Add tests with multi-sentence asks asserting >1 scope item / AC.
-- [x] Update [dogfood/phase2-live-run.md](./dogfood/phase2-live-run.md) finding #3.
+- [x] Update [validation/phase2-live-run.md](./validation/phase2-live-run.md) finding #3.
 
-## 3. Phase 3b — deferred from the correction-log spec
+## 3. Setup doctor command — recommended next core feature
+
+Goal: make a consuming repo self-diagnose its Conductor setup before users hit
+confusing gate failures.
+
+- [ ] Add `conductor doctor` to `packages/cli` and the legacy skill CLI surface
+      if needed.
+- [ ] Check `.conductor/config.yaml`, active contract presence, frozen/approval
+      state, archived contracts, generated index freshness, and common YAML
+      validation errors.
+- [ ] Detect missing or stale hook integrations for Git pre-commit, GitHub
+      Actions, Codex, Claude Code, and Cursor where those files are present.
+- [ ] Print human-readable findings by default and support `--json` for CI or
+      editor integrations.
+- [ ] Add tests for a clean repo, missing config, unfrozen contract, invalid
+      contract, and stale index.
+- [ ] Document the command in [cli-reference.md](./cli-reference.md) and README.
+
+## 4. Competitive positioning follow-ups
+
+See [product-positioning.md](./product-positioning.md). These make the value
+prop sharper against current spec tools, agent hosts, and PR review products.
+
+- [ ] **Rules audit.** Add `conductor rules audit` to list loaded rules from
+      `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules`,
+      `.continue/rules`, and `.kiro/steering`; detect conflicts, stale rules,
+      and rules that should become critical constraints.
+- [ ] **Spec bridge.** Add import/export paths for popular spec artifacts,
+      starting with Spec Kit and Kiro-style `requirements.md` / `design.md` /
+      `tasks.md`.
+- [ ] **Drift report.** Add `conductor report --staged` for PR/CI/agent handoff:
+      active contract summary, drift score, blockers, AC coverage, pivots,
+      corrections, and recommended next action.
+- [ ] **Semantic drift option.** Add an opt-in semantic classifier while keeping
+      the offline rule-based scorer as the default.
+
+## 5. Phase 3b — deferred from the correction-log spec
 
 See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/specs/2026-06-20-correction-log-and-brief.md) §6–7.
 
@@ -57,7 +93,7 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
       clean negative constraint is itself extraction; candidate for the optional
       LLM path. Keep rule-based as default/offline.
 
-## 4. Phase 4 — public release polish — CLI + SMOKE COMPLETE
+## 6. Phase 4 — public release polish — CLI + SMOKE COMPLETE
 
 - [x] `packages/cli` unified `conductor <subcommand>` binary wrapping the
       per-command CLIs (init, extract, freeze, coach, drift, check, correct,
@@ -66,21 +102,21 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Release package metadata + `pnpm release:smoke` tarball checks for
       schema/core/skill/cli.
 - [x] Clear the low `esbuild` advisory with a pnpm override.
-- [x] README install-without-Venture-Studio quickstart and beta release checklist.
+- [x] README install-without-downstream-pipeline quickstart and beta release checklist.
 - [x] GitHub Action example around `conductor drift --ci`.
 - [ ] Version tag (`v0.3.0-beta`) and npm publish decision/execution after merge.
 
-## 5. Integrations (design-stage → real, if/when prioritized)
+## 7. Integrations (design-stage → real, if/when prioritized)
 
 - [x] Codex / Claude Code hook adapter samples and Cursor project rule.
 - [ ] Gemini: confirm the contract YAML is consumed; no runtime wiring exists
       beyond reading `GEMINI.md` as a constraint file.
 - [ ] Cursor: native extension/MCP status panel, if prioritized. Current
       enforcement is project rule + Git pre-commit hook.
-- [ ] AI Venture Studio / EngineeringAgents wiring — separate-repo PR; explicitly
-      out of scope for this repo (see AGENTS.md boundaries).
+- [ ] Downstream product wiring — separate-repo PRs; explicitly out of scope
+      for this repo (see AGENTS.md boundaries).
 
-## 6. Smaller hygiene
+## 8. Smaller hygiene
 
 - [ ] Consider a deprecation alias or clear error if someone still passes
       `conductor-extract --freeze` (removed in PR #5).
@@ -96,11 +132,11 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Generic, project-independent drift scorer (#1).
 - [x] `conductor-check` enforcement gate + pre-commit sample (#1).
 - [x] CI workflow; build-before-typecheck fix (#1).
-- [x] Constraint-loader precision (dogfood finding #1) (#3).
+- [x] Constraint-loader precision (validation finding #1) (#3).
 - [x] Phase 3a: `correction_log` + `conductor-correct` + `conductor-brief` (#4).
-- [x] Real freeze/approval step (dogfood finding #2) (#5).
-- [x] Better paragraph extraction for scope/AC (dogfood finding #3).
+- [x] Real freeze/approval step (validation finding #2) (#5).
+- [x] Better paragraph extraction for scope/AC (validation finding #3).
 - [x] Codex/Claude Code hook adapter samples and Cursor project rule (#9).
-- [x] Unified `conductor` CLI + release smoke + production dogfood run.
+- [x] Unified `conductor` CLI + release smoke + production validation run.
 - [x] Low dependency advisory cleared (`pnpm audit --audit-level low` clean).
 - [x] GitHub Actions `conductor drift --ci` sample and beta release checklist.

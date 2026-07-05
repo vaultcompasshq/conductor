@@ -1,7 +1,7 @@
-# Next — cold-start handoff
+# Next - Maintainer Status
 
 **Updated:** 2026-07-04
-**Read this first if you are an agent resuming work.** It is the single source
+**Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
 
@@ -36,25 +36,31 @@ of truth for "where are we and what's next." For granular tasks see
 
 1. #1 production hardening (generic scorer, gate, CI, doc-credibility fixes)
 2. #2 correction-log design spec
-3. #3 constraint-loader noise fix (dogfood finding #1)
+3. #3 constraint-loader noise fix (validation finding #1)
 4. #4 Phase 3a: `correction_log` + `conductor-brief`
-5. #5 real freeze/approval step (dogfood finding #2)
+5. #5 real freeze/approval step (validation finding #2)
 6. #7 Phase 3 core: contract archive, generated index, resume, pivot CLI, and
    informational cross-session drift.
 7. #8 paragraph extraction hardening for richer scope/acceptance drafts.
 8. #9 Codex/Claude Code hook adapter samples and Cursor project rule.
-9. Production-readiness pass: unified CLI, release smoke, dogfood run, and
+9. Production-readiness pass: unified CLI, release smoke, validation run, and
    prohibition extraction fix.
 
 ---
 
 ## What's next (priority order)
 
-1. **Publish/tag execution** — decide whether to publish now, then tag
+1. **Public polish / release docs cleanup** — remove private workspace language,
+   standardize validation terminology, and keep the public tree ready for beta
+   users.
+2. **Publish/tag execution** — decide whether to publish now, then tag
    `v0.3.0-beta` from `main` after CI is green.
-2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+3. **Setup doctor command** — add `conductor doctor` to validate local
+   `.conductor` setup, active contract state, config, hook samples, package
+   versions, and common misconfigurations.
+4. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-3. **Integration hardening** — full runtime checks for hook adapters in real
+5. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
@@ -72,12 +78,12 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
 - **Drift scorer is rule-based:** good signal, but vocabulary-overlap false
   positives remain possible; LLM-assisted classification is a deferred option.
 - **Hook integrations are samples:** Codex and Claude Code hook configs plus a
-  Cursor project rule ship as integration examples; Venture Studio wiring is
-  still docs only.
+  Cursor project rule ship as integration examples. Downstream product wiring
+  should happen in those downstream repos.
 
 ---
 
-## Start prompt (resuming)
+## Resume Prompt
 
 ```
 Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.

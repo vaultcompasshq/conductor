@@ -3,7 +3,7 @@
 **Date:** 2026-06-17  
 **Version:** 1.0.0  
 **Status:** Draft — awaiting user review  
-**Author:** Vault & Compass / Conductor brainstorming session  
+**Author:** Conductor team
 **Repository:** `github.com/vaultcompasshq/conductor`
 
 ---
@@ -14,9 +14,9 @@
 
 **Solution:** **Conductor** — a model-agnostic governance layer that produces a frozen **Intent Contract**, coaches prompt quality, and detects drift continuously.
 
-**Not in scope:** Custom models, autonomous building, replacing AI Venture Studio.
+**Not in scope:** Custom models, autonomous building, or replacing downstream product pipelines.
 
-**Relationship:** Public OSS feeder into private Venture Studio pipeline.
+**Relationship:** Public OSS governance layer that downstream tools can consume.
 
 ---
 
@@ -28,15 +28,15 @@
 2. Score and coach user prompts before execution
 3. Detect drift vs contract + constraint files during work
 4. Log intentional pivots with acknowledgment
-5. Integrate with Superpowers, Cursor, and Venture Studio Agent #0 / #4f
+5. Integrate with Superpowers, Cursor, and downstream review workflows
 6. Work across Claude, Codex, Gemini via skills + CLI (not model APIs)
 
 ### Non-Goals (v1)
 
 - Fine-tuned models
 - Hosted SaaS / billing
-- Replacing security code review (Agent #4a)
-- Venture ideation scoring (Agent #1)
+- Replacing security code review
+- Product ideation scoring
 - Full vector DB / embedding pipeline
 
 ---
@@ -63,8 +63,8 @@
                               │
         ┌─────────────────────┼─────────────────────┐
         ▼                     ▼                     ▼
-  Superpowers           Venture Studio         Any IDE agent
-  (skills)              (Agent #0–#8)          (Claude/Codex/Gemini)
+  Superpowers           Downstream tools       Any IDE agent
+  (skills)              (review workflows)     (Claude/Codex/Gemini)
 ```
 
 ### 3.2 Components
@@ -92,7 +92,7 @@
 8. Drift Guard runs at handoff boundaries (and optionally on file write)
 9. If drift → soft block or coach per severity
 10. verification-before-completion checks acceptance_criteria
-11. Agent #4f consumes contract for idea-alignment audit
+11. Downstream review workflows consume the contract for alignment checks
 ```
 
 ---
@@ -189,7 +189,7 @@ Show coaching when `score < 60` or any `constraint_conflict`.
 
 ## 7. Memory Index (Phase 3)
 
-**Design:** Lightweight index inspired by EngineeringAgents memory system — no vector DB v1.
+**Design:** Lightweight file-backed index - no vector DB v1.
 
 ### 7.1 File layout
 
@@ -246,19 +246,19 @@ intent-contract → brainstorming → writing-plans → TDD → drift-guard → 
 
 See `integrations/superpowers/README.md`.
 
-### 8.2 AI Venture Studio
+### 8.2 Downstream Pipeline Integration
 
-| Agent | Integration |
-|-------|-------------|
-| **#0 Conductor** | Session mode calls Conductor CLI/skill before venture mode or implementation |
-| **#1 Ideation** | Reads `metadata.venture_linear_id` from contract |
-| **#3 Implementation** | Plans reference `contract_id` + AC ids |
-| **#4f Idea Alignment** | Uses contract as spec instead of guessing from README |
-| **#4e Aggregator** | Optional 6th score: Conductor drift score at review time |
+| Workflow | Integration |
+|----------|-------------|
+| Session intake | Calls Conductor CLI/skill before implementation |
+| Planning | Reads contract metadata when product-specific IDs are present |
+| Implementation | Plans reference `contract_id` + AC ids |
+| Alignment review | Uses contract as spec instead of guessing from README |
+| Aggregation | Optional extra score: Conductor drift score at review time |
 
 Import: `npm install @vaultcompasshq/conductor-schema` or git submodule.
 
-See `integrations/ai-venture-studio/README.md`.
+See `integrations/downstream-pipeline/README.md`.
 
 ### 8.3 Cursor
 
@@ -284,7 +284,7 @@ conductor pivot "description"     # Append to pivot_log
 conductor history                 # List contracts
 ```
 
-**Language:** TypeScript (Node 20+) — matches Venture Studio tooling.  
+**Language:** TypeScript (Node 20+) - matches the rest of this repo.
 **Alternative:** Rust CLI later if performance needed (not v1).
 
 ---
@@ -302,7 +302,7 @@ conductor/
 ├── integrations/
 │   ├── superpowers/
 │   ├── cursor/
-│   └── ai-venture-studio/
+│   └── downstream-pipeline/
 ├── examples/
 │   └── intent-contracts/
 ├── docs/
@@ -329,7 +329,7 @@ conductor/
 | Rework "not what I meant" turns | -50% |
 | Sessions with frozen contract | > 80% |
 | False positive drift rate | < 30% |
-| Agent #4f alignment score delta | +10 pts with contract |
+| Alignment review score delta | +10 pts with contract |
 | Superpowers skill installs | > 0 external (qualitative v1) |
 
 ---
@@ -342,7 +342,7 @@ conductor/
 | Schema churn pre-1.0 | Semver, changelog, migration guide |
 | Solo maintainer | Focus v1 on schema + skill; defer CLI polish |
 | Cursor ships native spec mode | Open schema standard; multi-platform |
-| Venture IP leakage | Public/private split documented in repo-strategy.md |
+| Private product-data leakage | Public/downstream split documented in repo-strategy.md |
 
 ---
 
@@ -353,7 +353,7 @@ See `docs/phases/implementation-roadmap.md` for week-by-week tasks.
 | Phase | Weeks | Exit gate |
 |-------|-------|-----------|
 | 1 Schema | 1–2 | 3 real sessions scorable manually |
-| 2 Runtime | 3–6 | 1 drift catch on dogfood project |
+| 2 Runtime | 3–6 | 1 drift catch on validation project |
 | 3 Memory | 7–10 | Cross-session drift on day 5+ |
 | 4 Publish | 11–14 | External install docs work |
 
@@ -370,14 +370,14 @@ See `docs/phases/implementation-roadmap.md` for week-by-week tasks.
 
 ---
 
-## Appendix A: Mapping from EngineeringAgents
+## Appendix A: Mapping from Earlier Internal Assets
 
-| EngineeringAgents asset | Conductor equivalent |
-|-------------------------|----------------------|
-| agent-00-conductor venture mode | `integrations/ai-venture-studio` |
+| Earlier asset | Conductor equivalent |
+|---------------|----------------------|
+| Session governance mode | `integrations/downstream-pipeline` |
 | drift-resistant template guardrails | `constraints[]` + drift rubric |
-| agent-4f idea-alignment | Downstream consumer of contract |
-| agent-00-audit gold standards | Phase 5+ optional module |
+| alignment review | Downstream consumer of contract |
+| audit gold standards | Phase 5+ optional module |
 | memory system design | `.conductor/index.md` |
 
 ## Appendix B: Glossary

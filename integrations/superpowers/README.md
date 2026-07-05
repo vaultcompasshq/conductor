@@ -111,7 +111,7 @@ Document this in skill frontmatter so users know Conductor overrides casual impl
 
 **Proposed PR:** Add optional `intent-contract` and `drift-guard` skills with link to vaultcompasshq/conductor schema.
 
-**Prerequisite:** v0.3 beta stable, 2+ weeks dogfood.
+**Prerequisite:** v0.3 beta stable, with at least two weeks of validation.
 
 ---
 

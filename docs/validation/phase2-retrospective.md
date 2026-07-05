@@ -1,7 +1,7 @@
-# Phase 2 dogfood retrospective
+# Phase 2 Validation Retrospective
 
 **Date:** 2026-06-17  
-**Target:** Conductor repo itself (not EngineeringAgents)  
+**Target:** Conductor repo itself  
 **Contract:** `examples/intent-contracts/conductor-phase2.yaml`
 
 ---
@@ -10,7 +10,7 @@
 > `packages/core/tests/phase2.test.ts` — not a live session that Conductor gated
 > in real time. No real session has yet been blocked by the gate. The
 > `conductor-check` enforcement point (added post-Phase-2) is the mechanism that
-> would make a real catch possible; a genuine dogfood run is still outstanding.
+> would make a real catch possible; a live validation run is still outstanding.
 
 ## Scenario
 
@@ -37,7 +37,7 @@ pnpm conductor:drift \
 | Action | `soft_block` |
 | Findings | CLI path / keyword match vs `out_of_scope` |
 
-Automated: `packages/core/tests/phase2.test.ts` — "Phase 2 dogfood drift"
+Automated: `packages/core/tests/phase2.test.ts` - "Phase 2 validation drift"
 
 ## False positive check
 
@@ -55,10 +55,10 @@ Expected: `proceed` or `info` (score &lt; 51).
 
 | Gate | Status |
 |------|--------|
-| ≥1 real drift catch | ✅ CLI out-of-scope caught |
-| False positive rate &lt;40% | ✅ Aligned skill/core paths score low (see `phase2.test.ts` + manual check) |
-| EngineeringAgents wiring | ⏭️ Skipped (explicit constraint) |
+| At least one real drift catch | CLI out-of-scope caught |
+| False positive rate &lt;40% | Aligned skill/core paths score low (see `phase2.test.ts` + manual check) |
+| Downstream host wiring | Skipped (explicit constraint) |
 
 ## Next
 
-Phase 3 — `packages/memory` index and cross-session resume.
+Phase 3 - `packages/memory` index and cross-session resume.

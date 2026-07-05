@@ -64,18 +64,18 @@
 |------|--------|
 | `packages/skill/drift-guard/SKILL.md` | |
 | `integrations/superpowers/README.md` + install guide | |
-| `integrations/ai-venture-studio/README.md` | |
-| Wire Agent #4f to read `.conductor/intent-contract.yaml` | PR in EngineeringAgents |
+| `integrations/downstream-pipeline/README.md` | Design-stage downstream integration notes |
+| Wire a downstream alignment review to read `.conductor/intent-contract.yaml` | Separate downstream PR |
 
 ### Week 6
 
 | Task | Output |
 |------|--------|
-| Dogfood on EngineeringAgents + one Tier 0 project | |
+| Validate on a downstream host project | |
 | Tune thresholds from false positives | |
 | `drift-log.jsonl` writer | |
 
-**Exit gate:** ≥1 real drift catch in dogfood; false positive rate <40%.
+**Exit gate:** At least one real drift catch in validation; false positive rate <40%.
 
 ---
 
@@ -94,7 +94,7 @@
 | Task | Output |
 |------|--------|
 | Cross-session drift ("Tuesday scope vs Friday diff") | |
-| Agent #0 session mode in Venture Studio | |
+| Downstream session mode integration | |
 | Memory integration tests | |
 
 **Exit gate:** New session on day 5+ correctly references prior contract.
@@ -125,11 +125,11 @@
 | Task | Output |
 |------|--------|
 | Tag `v0.3.0-beta` | Pending after merge |
-| Dogfood report doc | [../dogfood/production-readiness-2026-07-04.md](../dogfood/production-readiness-2026-07-04.md) |
+| Validation report doc | [../validation/production-readiness-2026-07-04.md](../validation/production-readiness-2026-07-04.md) |
 | Decide Superpowers upstream PR timing | |
 | Optional: `conductor drift --ci` GitHub Action example | [../../integrations/github-actions/conductor-drift-ci.yml.sample](../../integrations/github-actions/conductor-drift-ci.yml.sample) |
 
-**Exit gate:** Fresh clone + skill install works without Venture Studio.
+**Exit gate:** Fresh clone + skill install works without downstream pipeline.
 
 ---
 
@@ -137,7 +137,7 @@
 
 | Item | Effort |
 |------|--------|
-| Agent #0 audit gold standards port | 5 weeks |
+| Audit gold standards port | 5 weeks |
 | LLM-assisted drift classification | 2 weeks |
 | Team dashboard | 3 weeks |
 | npm publish `@vaultcompasshq/conductor-cli` | 1 week |
@@ -150,7 +150,7 @@
 ```
 Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4
                 │
-                └──► EngineeringAgents PR (Agent #4f, #0)
+                └──► Downstream integration PR
 ```
 
 No phase starts before previous exit gate passes.

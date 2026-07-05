@@ -1,4 +1,4 @@
-# Phase 2 live dogfood run
+# Phase 2 Live Validation Run
 
 **Date:** 2026-06-20
 **Target:** Conductor repo itself, governing a real task on `feat/production-hardening`
@@ -15,12 +15,12 @@ git index.
 > `integrations/superpowers/README.md`. No changes to the drift scorer. No Phase
 > 3 memory index. No new packages.
 
-## Result — first real gate catch
+## Result - first real gate catch
 
 | Step | Staged change | Gate | Exit |
 |------|---------------|------|------|
-| In-scope | `integrations/superpowers/README.md` (Quickstart) | ✓ ok | 0 |
-| Out-of-scope | also edited `packages/core/src/drift.ts` | ✖ soft_block (71/100) | 1 |
+| In-scope | `integrations/superpowers/README.md` (Quickstart) | `ok` | 0 |
+| Out-of-scope | also edited `packages/core/src/drift.ts` | `soft_block` (71/100) | 1 |
 
 Out-of-scope finding (verbatim):
 
@@ -28,28 +28,28 @@ Out-of-scope finding (verbatim):
 - Out-of-scope touched: "No changes to the drift scorer" (matched: drift, scorer)
 ```
 
-The gate scored the change against the contract's own `out_of_scope` text — no
+The gate scored the change against the contract's own `out_of_scope` text; no
 rule about the drift scorer is hardcoded anywhere. This is the catch the
 roadmap's Phase 2 exit gate asked for, on a real diff rather than a fixture.
 
 ## Findings from the run (issues to fix)
 
-1. **Constraint loader is too noisy.** ✅ *Fixed.* `loadConstraintFiles` scraped
+1. **Constraint loader is too noisy.** Fixed. `loadConstraintFiles` scraped
    ~12 "constraints" out of `AGENTS.md` markdown bullets that are not rules at
    all (e.g. `"Tag: v0.1.0-alpha"`, `"Goal: Superpowers skills wired to
    packages/core"`). Two of these produced spurious `low constraint at risk`
    findings in the run by matching the token `core`. `extractConstraintsFromMarkdown`
    now requires normative language / leading prohibitions / rules-section
-   bullets and skips tables, links, and code fences — the same AGENTS.md now
+   bullets and skips tables, links, and code fences; the same AGENTS.md now
    yields 4 real boundary rules instead of 12.
-2. **`--freeze` sets `frozen_by: user` with no actual user approval.** ✅ *Fixed.*
+2. **`--freeze` sets `frozen_by: user` with no actual user approval.** Fixed.
    The "hard gate requires explicit user approval" claim was just a CLI flag.
    Freezing is now a separate `conductor-freeze` step that records an
    attributable `approval` block (who/when/how); in a non-interactive run it
    refuses unless `--approved-by` is given, so an agent cannot self-approve.
    `isContractFrozen` now requires that approval record. `conductor-extract`
    only writes unfrozen drafts.
-3. **Auto-extracted `in_scope`/`acceptance_criteria` are thin.** ✅ *Fixed.*
+3. **Auto-extracted `in_scope`/`acceptance_criteria` are thin.** Fixed.
    The extractor now splits multi-sentence asks and obvious conjunction clauses
    into multiple scope items, recognizes a broader implementation verb set, and
    derives up to four acceptance criteria from the resulting scope when the user
@@ -59,5 +59,5 @@ roadmap's Phase 2 exit gate asked for, on a real diff rather than a fixture.
 
 ## Next
 
-Continue Phase 3 memory-index persistence and dogfood resumed sessions; scope
+Continue Phase 3 memory-index persistence and validation resumed sessions; scope
 creep matching held up well in this run.

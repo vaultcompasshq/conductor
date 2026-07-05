@@ -35,6 +35,6 @@ integrations:
     require_contract_before:
       - brainstorming
       - test-driven-development
-  venture_studio:
+  downstream_pipeline:
     enabled: false
-    linear_team_id: null
+    issue_tracker_team_id: null

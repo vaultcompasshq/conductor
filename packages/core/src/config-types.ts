@@ -30,9 +30,9 @@ export interface ConductorConfig {
     superpowers: {
       require_contract_before: string[];
     };
-    venture_studio: {
+    downstream_pipeline: {
       enabled: boolean;
-      linear_team_id: string | null;
+      issue_tracker_team_id: string | null;
     };
   };
 }
@@ -66,9 +66,9 @@ export const DEFAULT_CONDUCTOR_CONFIG: ConductorConfig = {
     superpowers: {
       require_contract_before: ["brainstorming", "test-driven-development"],
     },
-    venture_studio: {
+    downstream_pipeline: {
       enabled: false,
-      linear_team_id: null,
+      issue_tracker_team_id: null,
     },
   },
 };
@@ -129,13 +129,13 @@ export function mergeConductorConfig(raw: Partial<ConductorConfig>): ConductorCo
           raw.integrations?.superpowers?.require_contract_before ??
           DEFAULT_CONDUCTOR_CONFIG.integrations.superpowers.require_contract_before,
       },
-      venture_studio: {
+      downstream_pipeline: {
         enabled:
-          raw.integrations?.venture_studio?.enabled ??
-          DEFAULT_CONDUCTOR_CONFIG.integrations.venture_studio.enabled,
-        linear_team_id:
-          raw.integrations?.venture_studio?.linear_team_id ??
-          DEFAULT_CONDUCTOR_CONFIG.integrations.venture_studio.linear_team_id,
+          raw.integrations?.downstream_pipeline?.enabled ??
+          DEFAULT_CONDUCTOR_CONFIG.integrations.downstream_pipeline.enabled,
+        issue_tracker_team_id:
+          raw.integrations?.downstream_pipeline?.issue_tracker_team_id ??
+          DEFAULT_CONDUCTOR_CONFIG.integrations.downstream_pipeline.issue_tracker_team_id,
       },
     },
   };

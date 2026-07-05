@@ -18,8 +18,9 @@ Two failure modes follow:
    correction was only ever a chat message, so the agreed methodology is gone.
    The agent re-makes a mistake the user already corrected.
 2. **Failure priming.** While the wrong attempts are *still* in context, the
-   model can re-read its own earlier bad code and resample it. Leaving failed
-   attempts in the window is leaving landmines; what you want is warning signs.
+   model can re-read its own earlier flawed implementation and resample it.
+   Leaving failed attempts in the window increases recurrence risk; what you
+   want is warning signs.
 
 The user wants a way to clean this up so that **only the correct methodology**
 remains as the operative context.
@@ -146,7 +147,7 @@ drift heuristics.
    a `high` constraint, or only on explicit `--promote`? Auto-promotion makes
    the scorer enforce corrections immediately but raises false-positive risk
    (compounding the existing constraint-loader noise — see
-   [dogfood/phase2-live-run.md](../../dogfood/phase2-live-run.md) finding #1,
+   [validation/phase2-live-run.md](../../validation/phase2-live-run.md) finding #1,
    which should be fixed first).
 2. **Dedup / decay** — corrections accumulate. Do stale ones expire, or get
    merged? A 40-correction brief is no longer "minimal."
@@ -158,7 +159,7 @@ drift heuristics.
 
 ## 7. Phasing
 
-- **Depends on:** fixing the constraint-loader noise (dogfood finding #1) before
+- **Depends on:** fixing the constraint-loader noise (validation finding #1) before
   auto-promotion is safe.
 - **Phase 3a:** `correction_log` schema + `conductor-correct` + `renderBrief()`
   / `conductor-brief` (no auto-promotion).

@@ -101,7 +101,7 @@ Set `metadata.superpowers_spec_path` when a design spec will follow (e.g. `docs/
 
 - `brainstorming` / `writing-plans` specs must reference `contract_id`
 - `verification-before-completion` checks `acceptance_criteria`
-- Agent #4f idea-alignment uses this file as primary spec (Venture Studio)
+- Downstream alignment reviews use this file as the primary spec
 
 ## Install (copy to Cursor skills)
 
