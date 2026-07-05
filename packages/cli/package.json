@@ -1,13 +1,13 @@
 {
-  "name": "@vaultcompasshq/conductor-core",
+  "name": "@vaultcompasshq/conductor-cli",
   "version": "0.3.0-beta.0",
   "type": "module",
-  "description": "Core prompt coaching, drift scoring, gate, correction, and memory-index utilities for Conductor",
+  "description": "Unified Conductor CLI for intent contracts, drift checks, and session continuity",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/vaultcompasshq/conductor.git",
-    "directory": "packages/core"
+    "directory": "packages/cli"
   },
   "bugs": {
     "url": "https://github.com/vaultcompasshq/conductor/issues"
@@ -16,23 +16,19 @@
   "publishConfig": {
     "access": "public"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+  "bin": {
+    "conductor": "./dist/conductor.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vaultcompasshq/conductor-schema": "workspace:*",
-    "yaml": "^2.8.0"
+    "@vaultcompasshq/conductor-skill": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

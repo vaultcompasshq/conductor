@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-04 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 77 tests passing.
+before merge. Baseline: 85 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -32,9 +32,9 @@ the right context.
 - [x] **Decide `packages/memory` vs `packages/core` module.** Roadmap names a
       `packages/memory` package; simplest is a core module unless isolation is
       wanted. Pick and record in the roadmap.
-- [~] Tests + docs + a real dogfood run (resume on "day 5+" references prior
-      contract — the roadmap Phase 3 exit gate). Tests/docs done; real dogfood
-      run remains.
+- [x] Tests + docs + a real dogfood run (resume on "day 5+" references prior
+      contract — the roadmap Phase 3 exit gate). See
+      [production-readiness-2026-07-04.md](./dogfood/production-readiness-2026-07-04.md).
 
 ## 2. Dogfood finding #3 — thin auto-extracted scope/AC — FIXED
 
@@ -57,13 +57,18 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
       clean negative constraint is itself extraction; candidate for the optional
       LLM path. Keep rule-based as default/offline.
 
-## 4. Phase 4 — public release polish
+## 4. Phase 4 — public release polish — CLI + SMOKE COMPLETE
 
-- [ ] `packages/cli` unified `conductor <subcommand>` binary wrapping the
+- [x] `packages/cli` unified `conductor <subcommand>` binary wrapping the
       per-command CLIs (init, extract, freeze, coach, drift, check, correct,
-      brief). Currently they are separate bins in `packages/skill`.
-- [ ] `conductor --help`, README install-without-Venture-Studio check, version
-      tag (`v0.3.0-beta`), optional `conductor drift --ci` GitHub Action example.
+      brief, resume, index, pivot).
+- [x] `conductor --help`, `conductor --version`, and `conductor drift --ci`.
+- [x] Release package metadata + `pnpm release:smoke` tarball checks for
+      schema/core/skill/cli.
+- [x] Clear the low `esbuild` advisory with a pnpm override.
+- [x] README install-without-Venture-Studio quickstart and beta release checklist.
+- [x] GitHub Action example around `conductor drift --ci`.
+- [ ] Version tag (`v0.3.0-beta`) and npm publish decision/execution after merge.
 
 ## 5. Integrations (design-stage → real, if/when prioritized)
 
@@ -96,3 +101,6 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Real freeze/approval step (dogfood finding #2) (#5).
 - [x] Better paragraph extraction for scope/AC (dogfood finding #3).
 - [x] Codex/Claude Code hook adapter samples and Cursor project rule (#9).
+- [x] Unified `conductor` CLI + release smoke + production dogfood run.
+- [x] Low dependency advisory cleared (`pnpm audit --audit-level low` clean).
+- [x] GitHub Actions `conductor drift --ci` sample and beta release checklist.

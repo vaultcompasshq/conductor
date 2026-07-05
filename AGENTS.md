@@ -33,7 +33,7 @@ Phase 1 reference (complete): [docs/superpowers/plans/2026-06-17-conductor-phase
 | Hardening — generic scorer, gate, approval | — | ✅ Complete (PRs #1, #3, #5) |
 | 3 — Memory-index persistence | 7–10 | ✅ Core complete (`history`, generated index, resume, pivot, cross-session drift) |
 | 3b — decay/dedup, LLM normalization | — | Deferred |
-| 4 — Unified CLI + public release | 11–14 | Planned |
+| 4 — Unified CLI + public release | 11–14 | ✅ CLI + release smoke complete; publish/tag pending |
 
 **Resuming work? Read [docs/NEXT.md](./docs/NEXT.md) (cold-start handoff) and
 [docs/TODO.md](./docs/TODO.md) first.**
@@ -47,7 +47,7 @@ packages/
 ├── schema/     # @vaultcompasshq/conductor-schema — AJV validator + types ✅
 ├── core/       # @vaultcompasshq/conductor-core — coach, drift, gate, correction, brief, history ✅
 ├── skill/      # Superpowers skills + 11 CLIs (coach/extract/freeze/check/drift/correct/brief/init/index/pivot/resume) ✅
-├── cli/        # unified conductor binary (Phase 4 — not built)
+├── cli/        # @vaultcompasshq/conductor-cli — unified conductor binary ✅
 └── memory/     # separate package deferred; file memory lives in core
 ```
 
@@ -62,7 +62,8 @@ pivot/correct → brief/resume.
 The Phase 3 core build is complete: frozen contracts archive to
 `.conductor/contracts/`, `index.md` is generated from real data, resume emits a
 Session Brief, pivots are logged, and `conductor-check` can surface prior-contract
-drift. Next work is dogfood/tuning, Phase 3b, and unified CLI polish.
+drift. The unified `conductor` CLI and release smoke checks are complete; next
+work is publish/tag cleanup, Phase 3b, and dependency/security hygiene.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`,
 `capture-correction` (`packages/skill/*/SKILL.md`).
@@ -76,9 +77,10 @@ task. All work lands on `main` via PR (never push to main); CI must be green.
 
 ```bash
 pnpm install
-pnpm test      # 77 tests — schema (7) + core (41) + skill (20) + examples/integrations (9)
+pnpm test      # 85 tests — schema (7) + core (42) + skill (20) + cli (6) + examples/integrations (10)
 pnpm build
 pnpm typecheck
+pnpm release:smoke
 ```
 
 `pnpm test` builds first (the skill CLI tests spawn the compiled `dist/`).

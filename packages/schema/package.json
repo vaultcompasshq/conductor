@@ -1,7 +1,21 @@
 {
   "name": "@vaultcompasshq/conductor-schema",
-  "version": "0.1.0",
+  "version": "0.3.0-beta.0",
   "type": "module",
+  "description": "Intent Contract schema, TypeScript types, and AJV validation",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vaultcompasshq/conductor.git",
+    "directory": "packages/schema"
+  },
+  "bugs": {
+    "url": "https://github.com/vaultcompasshq/conductor/issues"
+  },
+  "homepage": "https://github.com/vaultcompasshq/conductor#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

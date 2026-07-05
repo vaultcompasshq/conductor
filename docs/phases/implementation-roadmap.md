@@ -8,8 +8,9 @@
 > (project-independent) drift scorer, the `conductor-check` enforcement gate, a
 > real freeze/**approval** step, Phase **3a** (correction log + session brief),
 > and Phase **3 core** (history, generated index, resume, pivot, cross-session
-> drift), sharper paragraph extraction, and hook adapter samples. 77 tests
-> passing. **Next:** Phase 3 dogfood/tuning and unified CLI polish.
+> drift), sharper paragraph/prohibition extraction, hook adapter samples, and
+> the unified CLI with release smoke. 85 tests passing. **Next:** publish/tag
+> cleanup, Phase 3b, and integration hardening.
 > Live status: [../NEXT.md](../NEXT.md) · backlog: [../TODO.md](../TODO.md).
 
 ---
@@ -106,8 +107,8 @@
 
 | Task | Output |
 |------|--------|
-| `packages/cli` — init, validate, coach, drift | |
-| `conductor --help` documentation | |
+| `packages/cli` — init, validate, coach, drift | `packages/cli` unified dispatcher |
+| `conductor --help` documentation | Top-level help + [../cli-reference.md](../cli-reference.md) |
 | Polish Superpowers skills for external install | |
 
 ### Week 13
@@ -123,10 +124,10 @@
 
 | Task | Output |
 |------|--------|
-| Tag `v0.3.0-beta` | |
-| Dogfood report doc | |
+| Tag `v0.3.0-beta` | Pending after merge |
+| Dogfood report doc | [../dogfood/production-readiness-2026-07-04.md](../dogfood/production-readiness-2026-07-04.md) |
 | Decide Superpowers upstream PR timing | |
-| Optional: `conductor drift --ci` GitHub Action example | |
+| Optional: `conductor drift --ci` GitHub Action example | [../../integrations/github-actions/conductor-drift-ci.yml.sample](../../integrations/github-actions/conductor-drift-ci.yml.sample) |
 
 **Exit gate:** Fresh clone + skill install works without Venture Studio.
 

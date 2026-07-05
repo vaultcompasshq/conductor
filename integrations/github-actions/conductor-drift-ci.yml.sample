@@ -1,0 +1,39 @@
+name: Conductor Drift
+
+on:
+  pull_request:
+
+jobs:
+  conductor-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Conductor
+        run: pnpm dlx @vaultcompasshq/conductor-cli@0.3.0-beta.0 --version
+
+      - name: Collect changed paths
+        id: changed
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          paths="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" | paste -sd, -)"
+          echo "paths=${paths}" >> "$GITHUB_OUTPUT"
+
+      - name: Check intent drift
+        run: |
+          pnpm dlx @vaultcompasshq/conductor-cli@0.3.0-beta.0 drift \
+            --ci \
+            --contract .conductor/intent-contract.yaml \
+            --paths "${{ steps.changed.outputs.paths }}"

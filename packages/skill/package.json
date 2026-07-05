@@ -1,9 +1,21 @@
 {
   "name": "@vaultcompasshq/conductor-skill",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.3.0-beta.0",
   "type": "module",
   "description": "Superpowers-compatible Conductor skills and helper CLIs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vaultcompasshq/conductor.git",
+    "directory": "packages/skill"
+  },
+  "bugs": {
+    "url": "https://github.com/vaultcompasshq/conductor/issues"
+  },
+  "homepage": "https://github.com/vaultcompasshq/conductor#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "conductor-coach": "./dist/coach-cli.js",
     "conductor-drift": "./dist/drift-cli.js",

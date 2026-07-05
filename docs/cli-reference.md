@@ -1,12 +1,14 @@
 # CLI reference
 
-All CLIs live in `packages/skill` and are built to `packages/skill/dist`. Run via
-the package bin (after `pnpm build`) or the root `pnpm conductor:*` scripts.
+The public entrypoint is the unified `conductor` binary in `packages/cli`.
+Legacy per-command bins still ship from `packages/skill` for compatibility.
 
 ```bash
 pnpm build
-pnpm conductor:check -- --project . --staged        # root script form
-# or, if packages/skill/dist is on PATH / via pnpm exec:
+pnpm conductor -- check --project . --staged        # root script form
+# after package install:
+conductor check --project . --staged
+# legacy package bin:
 conductor-check --project . --staged
 ```
 
@@ -15,12 +17,26 @@ The session lifecycle: **coach → extract (draft) → freeze (approve) → chec
 
 ---
 
-## conductor-coach `<prompt text>`
+## Unified `conductor`
+
+```bash
+conductor --help
+conductor --version
+conductor <command> [flags]
+```
+
+Commands: `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`,
+`brief`, `resume`, `index`, `pivot`.
+
+`conductor drift --ci` runs the lower-level drift scorer and exits `1` when the
+JSON result has `block: true`; otherwise it preserves the normal command output.
+
+## conductor coach `<prompt text>` / conductor-coach `<prompt text>`
 
 Scores a prompt for scope/clarity issues. JSON: `score`, `issues`,
 `coaching`, `needs_coaching`. Never blocks.
 
-## conductor-extract
+## conductor extract / conductor-extract
 
 Draft an Intent Contract from an ask. **Writes an UNFROZEN draft** — approval is
 separate (`conductor-freeze`).
@@ -34,7 +50,7 @@ separate (`conductor-freeze`).
 JSON: `valid`, `written_path`, `frozen` (always false), `next_step`,
 `prompt_score`, `needs_coaching`, `coaching`, `contract_yaml`.
 
-## conductor-freeze
+## conductor freeze / conductor-freeze
 
 Approve a draft. A deliberate, attributable step — an agent must not self-approve.
 
@@ -49,7 +65,7 @@ Behavior: on a TTY, shows a summary and asks to confirm. Non-interactively,
 **refuses unless `--approved-by` is given**. Records an `approval` block
 (`approved_by` / `approved_at` / `method`). Idempotent if already frozen.
 
-## conductor-check (the gate)
+## conductor check / conductor-check (the gate)
 
 Exits non-zero when no **approved** contract exists or staged changes drift past
 a blocking threshold. Used by the pre-commit hook / CI.
@@ -69,7 +85,7 @@ Exit 0 = ok, 1 = blocked.
 When `--previous-contract` is provided, JSON includes `crossSessionDrift`;
 this does not change the gate exit code.
 
-## conductor-drift
+## conductor drift / conductor-drift
 
 Scores drift for a given contract path (lower-level than `check`; does not gate
 on contract presence).
@@ -78,10 +94,11 @@ on contract presence).
 |------|---------|
 | `--contract <path>` | contract YAML (required) |
 | `--project <root>` · `--paths` · `--signals` · `--message` · `--log` | as above |
+| `--ci` | unified CLI only; exit 1 when `block: true` |
 
 JSON: `overall`, `action`, `categories`, `findings`, `message`, `block`.
 
-## conductor-correct
+## conductor correct / conductor-correct
 
 Record a user correction as a durable lesson on the contract.
 
@@ -94,7 +111,7 @@ Record a user correction as a durable lesson on the contract.
 | `--acknowledge` | user-confirmed (authoritative); else `pending` |
 | `--promote` | also add to `constraints[]` (requires `--acknowledge`) so drift-guard enforces it |
 
-## conductor-pivot
+## conductor pivot / conductor-pivot
 
 Record an intentional scope change and update the active contract through the
 append-only `pivot_log`.
@@ -111,7 +128,7 @@ append-only `pivot_log`.
 
 JSON: `written_path`, `index_path`, `pivot`, `pending`.
 
-## conductor-brief
+## conductor brief / conductor-brief
 
 Emit the minimal correct-methodology context (intent, scope, AC, critical/high
 constraints, **acknowledged** corrections — no failed code). Re-inject after a
@@ -122,7 +139,7 @@ context reset instead of replaying the transcript.
 | `--project <root>` | target project |
 | `--json` | machine-readable (default is markdown) |
 
-## conductor-resume
+## conductor resume / conductor-resume
 
 Emit the current Session Brief plus recent prior contracts. Use at the start of
 a resumed agent session after context compaction or a new day.
@@ -132,7 +149,7 @@ a resumed agent session after context compaction or a new day.
 | `--project <root>` | target project |
 | `--json` | machine-readable (`resume_markdown`) |
 
-## conductor-index
+## conductor index / conductor-index
 
 Render or regenerate `.conductor/index.md` from real contract history, pivots,
 constraints, and acknowledged corrections.
@@ -143,7 +160,7 @@ constraints, and acknowledged corrections.
 | `--write` | write `.conductor/index.md`; default prints markdown |
 | `--json` | machine-readable output |
 
-## conductor-init
+## conductor init / conductor-init
 
 Create the `.conductor/` skeleton (`config.yaml`, `index.md`, `contracts/`).
 

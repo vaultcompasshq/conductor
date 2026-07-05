@@ -32,3 +32,6 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Release smoke
+        run: pnpm release:smoke
