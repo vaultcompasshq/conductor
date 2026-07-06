@@ -50,20 +50,35 @@ the right context.
 Goal: make a consuming repo self-diagnose its Conductor setup before users hit
 confusing gate failures.
 
-- [ ] Add `conductor doctor` to `packages/cli` and the legacy skill CLI surface
+- [x] Add `conductor doctor` to `packages/cli` and the legacy skill CLI surface
       if needed.
-- [ ] Check `.conductor/config.yaml`, active contract presence, frozen/approval
+- [x] Check `.conductor/config.yaml`, active contract presence, frozen/approval
       state, archived contracts, generated index freshness, and common YAML
       validation errors.
-- [ ] Detect missing or stale hook integrations for Git pre-commit, GitHub
+- [x] Detect missing or stale hook integrations for Git pre-commit, GitHub
       Actions, Codex, Claude Code, and Cursor where those files are present.
-- [ ] Print human-readable findings by default and support `--json` for CI or
+- [x] Print human-readable findings by default and support `--json` for CI or
       editor integrations.
-- [ ] Add tests for a clean repo, missing config, unfrozen contract, invalid
+- [x] Add tests for a clean repo, missing config, unfrozen contract, invalid
       contract, and stale index.
-- [ ] Document the command in [cli-reference.md](./cli-reference.md) and README.
+- [x] Document the command in [cli-reference.md](./cli-reference.md) and README.
 
-## 4. Competitive positioning follow-ups
+## 4. Public repo validation harness
+
+Goal: keep the public-repo smoke test repeatable while v1 features mature.
+
+- [ ] Promote the temporary `/tmp` public-repo validation script into
+      `scripts/validate-public-repos.mjs`.
+- [ ] Cover at least 8 repositories: small package, CLI, web app, monorepo,
+      docs-heavy repo, repo with agent rules, repo without agent rules, and a
+      larger TypeScript project.
+- [ ] Record reports under `docs/validation/public-repos/`.
+- [ ] Add controls for README-only pass, source/package drift block, path-only
+      drift, explicit-signal drift, and existing-rule noise.
+- [ ] Decide which parts should run in CI and which stay manual because they
+      require network access.
+
+## 5. Competitive positioning follow-ups
 
 See [product-positioning.md](./product-positioning.md). These make the value
 prop sharper against current spec tools, agent hosts, and PR review products.
@@ -81,7 +96,7 @@ prop sharper against current spec tools, agent hosts, and PR review products.
 - [ ] **Semantic drift option.** Add an opt-in semantic classifier while keeping
       the offline rule-based scorer as the default.
 
-## 5. Phase 3b — deferred from the correction-log spec
+## 6. Phase 3b — deferred from the correction-log spec
 
 See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/specs/2026-06-20-correction-log-and-brief.md) §6–7.
 
@@ -93,7 +108,7 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
       clean negative constraint is itself extraction; candidate for the optional
       LLM path. Keep rule-based as default/offline.
 
-## 6. Phase 4 — public release polish — CLI + SMOKE COMPLETE
+## 7. Phase 4 — public release polish — CLI + SMOKE COMPLETE
 
 - [x] `packages/cli` unified `conductor <subcommand>` binary wrapping the
       per-command CLIs (init, extract, freeze, coach, drift, check, correct,
@@ -104,9 +119,10 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Clear the low `esbuild` advisory with a pnpm override.
 - [x] README install-without-downstream-pipeline quickstart and beta release checklist.
 - [x] GitHub Action example around `conductor drift --ci`.
-- [ ] Version tag (`v0.3.0-beta`) and npm publish decision/execution after merge.
+- [ ] Version tag and npm publish decision/execution, deferred until v1 readiness
+      work is complete.
 
-## 7. Integrations (design-stage → real, if/when prioritized)
+## 8. Integrations (design-stage → real, if/when prioritized)
 
 - [x] Codex / Claude Code hook adapter samples and Cursor project rule.
 - [ ] Gemini: confirm the contract YAML is consumed; no runtime wiring exists
@@ -116,7 +132,7 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [ ] Downstream product wiring — separate-repo PRs; explicitly out of scope
       for this repo (see AGENTS.md boundaries).
 
-## 8. Smaller hygiene
+## 9. Smaller hygiene
 
 - [ ] Consider a deprecation alias or clear error if someone still passes
       `conductor-extract --freeze` (removed in PR #5).

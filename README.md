@@ -83,6 +83,7 @@ or a CI step.
 pnpm install
 pnpm build
 pnpm conductor -- init --project .
+pnpm conductor -- doctor --project .
 pnpm conductor -- extract --project . --text "Add CSV export. Do not add new API endpoints. Verify the file downloads."
 pnpm conductor -- freeze --project . --approved-by "<name>"
 pnpm conductor -- check --project . --staged
@@ -103,7 +104,8 @@ pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 ```bash
 pnpm conductor -- extract --project . --text "the ask"   # 1. draft (unfrozen)
 pnpm conductor -- freeze  --project . --approved-by me    # 2. approve
-pnpm conductor -- check   --project . --staged            # 3. gate (exit 1 = blocked)
+pnpm conductor -- doctor  --project .                     # 3. diagnose setup
+pnpm conductor -- check   --project . --staged            # 4. gate (exit 1 = blocked)
 pnpm conductor -- pivot   --project . --change "..." --acknowledge
 pnpm conductor -- correct --project . --wrong "..." --right "..." --rule "..." --acknowledge
 pnpm conductor -- brief   --project .                     # clean re-injectable context
