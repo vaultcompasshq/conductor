@@ -8,6 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Setup doctor.** Added `conductor doctor` / `conductor-doctor` to diagnose
+  local setup, active contract state, approval/freeze status, archive/index
+  state, package version, and visible hook/workflow files. Supports readable
+  output and `--json`.
+- **Public repo validation harness.** Added
+  `scripts/validate-public-repos.mjs` plus `pnpm validate:public-repos` for
+  repeatable manual validation against public GitHub repositories, with optional
+  markdown reports under `docs/validation/public-repos/`.
 - **Unified CLI beta package.** Added `@vaultcompasshq/conductor-cli` with the
   public `conductor <subcommand>` binary wrapping the existing command surface:
   `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`, `brief`,
@@ -20,13 +28,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   dependency ranges.
 - **Dependency audit cleanup.** Added a pnpm override for patched `esbuild` so
   `pnpm audit --audit-level low` is clean.
-- **Production-readiness dogfood.** Added
-  `docs/dogfood/production-readiness-2026-07-04.md`, covering unified CLI,
+- **Production-readiness validation.** Added
+  `docs/validation/production-readiness-2026-07-04.md`, covering unified CLI,
   resume, correction, pivot, archive, prior-contract drift, and `drift --ci`.
 - **Release and CI docs.** Added a beta release checklist and a copyable GitHub
   Actions workflow sample for `conductor drift --ci`.
 
-- **Real freeze/approval step (dogfood finding #2).** `conductor-extract` now
+- **Real freeze/approval step (validation finding #2).** `conductor-extract` now
   writes an unfrozen draft only; approval is a separate `conductor-freeze`
   command that records an attributable `approval` block (approved_by /
   approved_at / method). On a TTY it shows a summary and asks to confirm;
@@ -47,7 +55,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Constraint-loader precision fix: `extractConstraintsFromMarkdown` now requires
   normative language / leading prohibitions / rules-section bullets and skips
   tables, links, and code fences (real AGENTS.md: 12 bogus rules → 4 real ones).
-  Resolves dogfood finding #1.
+  Resolves validation finding #1.
 
 - `conductor-check` CLI + `checkGate()` — a real enforcement gate that exits
   non-zero when no frozen contract exists or staged changes drift past a
@@ -75,7 +83,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 - Prohibition clauses such as "Do not add new API endpoints" no longer leak
   into `in_scope`, and overlapping prohibition matches are deduped in
-  `out_of_scope`. This fixes a dogfood case where prior-contract drift was
+  `out_of_scope`. This fixes a validation case where prior-contract drift was
   masked by in-scope token subtraction.
 - Corrected test-count claims across README / NEXT / AGENTS (was "29"/"14",
   actual is 39: schema 3 + core 22 + skill 8 + examples 6).
@@ -91,7 +99,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Root scripts: `pnpm conductor:coach`, `conductor:extract`, `conductor:drift`, `conductor:init`, `conductor:install-skills`
 - Core runtime: `extract.ts`, `constraints.ts` (incl. `.cursor/rules`), `config.ts`, `init.ts`, `drift-log.ts`
 - `.conductor/` directory spec — `docs/schemas/directory-layout.md`
-- Phase 2 dogfood retrospective — `docs/dogfood/phase2-retrospective.md`
+- Phase 2 validation retrospective — `docs/validation/phase2-retrospective.md`
 - Example contract `examples/intent-contracts/conductor-phase2.yaml`
 - `integrations/superpowers/install-skills.sh`
 

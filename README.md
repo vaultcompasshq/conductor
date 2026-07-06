@@ -23,7 +23,7 @@ User conversation
 **Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, and resume shipped - July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **85 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **94 tests passing**
 
 **Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
 
@@ -93,9 +93,10 @@ pnpm conductor -- check --project . --staged
 
 ```bash
 pnpm install
-pnpm test      # 85 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # 94 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
 pnpm release:smoke
+pnpm validate:public-repos
 pnpm conductor:install-skills   # copy skills to ~/.cursor/skills
 ```
 
