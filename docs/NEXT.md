@@ -50,18 +50,23 @@ of truth for "where are we and what's next." For granular tasks see
 
 ## What's next (priority order)
 
-1. **Public polish / release docs cleanup** — remove private workspace language,
-   standardize validation terminology, and keep the public tree ready for beta
-   users.
-2. **Publish/tag execution** — decide whether to publish now, then tag
-   `v0.3.0-beta` from `main` after CI is green.
-3. **Setup doctor command** — add `conductor doctor` to validate local
+1. **Setup doctor command** — add `conductor doctor` to validate local
    `.conductor` setup, active contract state, config, hook samples, package
    versions, and common misconfigurations.
-4. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+2. **Public repo validation harness** — keep the `/tmp` validation flow as a
+   repeatable script and expand it beyond the first 4 repos.
+3. **Drift report** — add a handoff/PR report that explains score, blockers,
+   acceptance criteria coverage, pivots, and corrections.
+4. **Rules audit** — inspect project rules across AGENTS/Claude/Cursor/Continue/Kiro
+   files and flag stale, conflicting, or overbroad rules.
+5. **Spec bridge** — import Spec Kit / Kiro-style requirements, designs, and
+   tasks into an Intent Contract.
+6. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-5. **Integration hardening** — full runtime checks for hook adapters in real
+7. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
+8. **Publish/tag execution** — deferred until the v1 readiness items above are
+   complete.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -80,6 +85,10 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
 - **Hook integrations are samples:** Codex and Claude Code hook configs plus a
   Cursor project rule ship as integration examples. Downstream product wiring
   should happen in those downstream repos.
+- **Public repo validation learned:** init/extract/freeze/check worked on
+  `sindresorhus/is`, `chalk/chalk`, `expressjs/express`, and `vitejs/vite`.
+  The negative control was strongest when explicit change signals were supplied,
+  so v1 should improve diagnostics/reporting around path-only drift.
 
 ---
 

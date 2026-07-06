@@ -13,6 +13,7 @@ const COMMANDS = {
   drift: "drift-cli.js",
   correct: "correct-cli.js",
   brief: "brief-cli.js",
+  doctor: "doctor-cli.js",
   resume: "resume-cli.js",
   index: "index-cli.js",
   pivot: "pivot-cli.js",
@@ -31,6 +32,7 @@ Commands:
   drift     Score drift for a specific contract file
   correct   Record a durable correction lesson
   brief     Emit a compact Session Brief
+  doctor    Diagnose local Conductor setup
   resume    Emit a Session Brief plus recent history
   index     Render or regenerate .conductor/index.md
   pivot     Record an intentional scope change
@@ -43,6 +45,7 @@ Examples:
   conductor init --project .
   conductor extract --project . --text "Add CSV export. No new API endpoints."
   conductor freeze --project . --approved-by alice
+  conductor doctor --project .
   conductor check --project . --staged
   conductor drift --ci --contract .conductor/intent-contract.yaml --paths src/app/api/export/route.ts
 

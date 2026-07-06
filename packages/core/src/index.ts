@@ -69,6 +69,14 @@ export {
   type CheckGateOptions,
 } from "./gate.js";
 export {
+  runDoctor,
+  type DoctorFinding,
+  type DoctorFindingStatus,
+  type DoctorResult,
+  type DoctorStatus,
+  type DoctorSummary,
+} from "./doctor.js";
+export {
   archiveContract,
   archivedContractPath,
   contractsDir,

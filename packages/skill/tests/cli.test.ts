@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 
 const DIST = join(import.meta.dirname, "..", "dist");
+const execFileAsync = promisify(execFile);
 
 interface RunResult {
   code: number;
@@ -12,18 +14,18 @@ interface RunResult {
   stderr: string;
 }
 
-function run(cli: string, args: string[], cwd?: string): RunResult {
+async function run(cli: string, args: string[], cwd?: string): Promise<RunResult> {
   try {
-    const stdout = execFileSync("node", [join(DIST, cli), ...args], {
+    const { stdout, stderr } = await execFileAsync("node", [join(DIST, cli), ...args], {
       cwd,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000,
     });
-    return { code: 0, stdout, stderr: "" };
+    return { code: 0, stdout: String(stdout), stderr: String(stderr ?? "") };
   } catch (err) {
-    const e = err as { status?: number; stdout?: string; stderr?: string };
+    const e = err as { code?: number | string; stdout?: string; stderr?: string };
     return {
-      code: e.status ?? 1,
+      code: typeof e.code === "number" ? e.code : 1,
       stdout: e.stdout ?? "",
       stderr: e.stderr ?? "",
     };
@@ -41,17 +43,17 @@ beforeAll(() => {
 });
 
 // Extract a draft and approve it, returning the project dir.
-function frozenProjectWith(text: string): string {
+async function frozenProjectWith(text: string): Promise<string> {
   const dir = tmpProject();
-  run("extract-cli.js", ["--project", dir, "--text", text]);
-  run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+  await run("extract-cli.js", ["--project", dir, "--text", text]);
+  await run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
   return dir;
 }
 
 describe("conductor-init", () => {
-  it("creates the .conductor skeleton", () => {
+  it("creates the .conductor skeleton", async () => {
     const dir = tmpProject();
-    const res = run("init-cli.js", ["--project", dir]);
+    const res = await run("init-cli.js", ["--project", dir]);
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.created).toContain(".conductor/config.yaml");
@@ -60,8 +62,8 @@ describe("conductor-init", () => {
 });
 
 describe("conductor-coach", () => {
-  it("flags a vague minimizer prompt", () => {
-    const res = run("coach-cli.js", ["just quickly add export like notion and figma"]);
+  it("flags a vague minimizer prompt", async () => {
+    const res = await run("coach-cli.js", ["just quickly add export like notion and figma"]);
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.needs_coaching).toBe(true);
@@ -70,9 +72,9 @@ describe("conductor-coach", () => {
 });
 
 describe("conductor-extract", () => {
-  it("--dry-run does not write a contract", () => {
+  it("--dry-run does not write a contract", async () => {
     const dir = tmpProject();
-    const res = run("extract-cli.js", [
+    const res = await run("extract-cli.js", [
       "--project", dir,
       "--text", "Add a CSV export button. No new API endpoints. Verify file downloads.",
       "--dry-run",
@@ -84,9 +86,9 @@ describe("conductor-extract", () => {
     expect(existsSync(join(dir, ".conductor", "intent-contract.yaml"))).toBe(false);
   });
 
-  it("writes an UNFROZEN draft (no approval)", () => {
+  it("writes an UNFROZEN draft (no approval)", async () => {
     const dir = tmpProject();
-    const res = run("extract-cli.js", [
+    const res = await run("extract-cli.js", [
       "--project", dir,
       "--text", "Add a CSV export button. No new API endpoints. Verify file downloads.",
     ]);
@@ -101,18 +103,18 @@ describe("conductor-extract", () => {
 });
 
 describe("conductor-freeze (approval gate)", () => {
-  it("refuses to freeze non-interactively without an approver", () => {
+  it("refuses to freeze non-interactively without an approver", async () => {
     const dir = tmpProject();
-    run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
-    const res = run("freeze-cli.js", ["--project", dir, "--json"]);
+    await run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
+    const res = await run("freeze-cli.js", ["--project", dir, "--json"]);
     expect(res.code).toBe(1);
     expect(res.stderr).toMatch(/approval requires --approved-by/i);
   });
 
-  it("freezes with an explicit approver and records the approval", () => {
+  it("freezes with an explicit approver and records the approval", async () => {
     const dir = tmpProject();
-    run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
-    const res = run("freeze-cli.js", ["--project", dir, "--approved-by", "alice", "--json"]);
+    await run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
+    const res = await run("freeze-cli.js", ["--project", dir, "--approved-by", "alice", "--json"]);
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.frozen).toBe(true);
@@ -126,11 +128,11 @@ describe("conductor-freeze (approval gate)", () => {
     expect(existsSync(join(dir, ".conductor", "contracts", `${contractId}.yaml`))).toBe(true);
   });
 
-  it("is idempotent on an already-frozen contract", () => {
+  it("is idempotent on an already-frozen contract", async () => {
     const dir = tmpProject();
-    run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
-    run("freeze-cli.js", ["--project", dir, "--approved-by", "alice"]);
-    const res = run("freeze-cli.js", ["--project", dir, "--approved-by", "bob", "--json"]);
+    await run("extract-cli.js", ["--project", dir, "--text", "Add a theme toggle. Verify it persists."]);
+    await run("freeze-cli.js", ["--project", dir, "--approved-by", "alice"]);
+    const res = await run("freeze-cli.js", ["--project", dir, "--approved-by", "bob", "--json"]);
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.already_frozen).toBe(true);
@@ -139,22 +141,22 @@ describe("conductor-freeze (approval gate)", () => {
 });
 
 describe("conductor-check (enforcement gate)", () => {
-  it("blocks with exit 1 when no contract exists", () => {
+  it("blocks with exit 1 when no contract exists", async () => {
     const dir = tmpProject();
-    const res = run("check-cli.js", ["--project", dir, "--json"]);
+    const res = await run("check-cli.js", ["--project", dir, "--json"]);
     expect(res.code).toBe(1);
     const out = JSON.parse(res.stdout);
     expect(out.status).toBe("blocked");
     expect(out.contractFound).toBe(false);
   });
 
-  it("blocks with exit 1 when a draft exists but is not approved", () => {
+  it("blocks with exit 1 when a draft exists but is not approved", async () => {
     const dir = tmpProject();
-    run("extract-cli.js", [
+    await run("extract-cli.js", [
       "--project", dir,
       "--text", "Add a CSV export button to the report table. Verify file downloads.",
     ]);
-    const res = run("check-cli.js", ["--project", dir, "--json"]);
+    const res = await run("check-cli.js", ["--project", dir, "--json"]);
     expect(res.code).toBe(1);
     const out = JSON.parse(res.stdout);
     expect(out.status).toBe("blocked");
@@ -162,11 +164,11 @@ describe("conductor-check (enforcement gate)", () => {
     expect(out.contractFrozen).toBe(false);
   });
 
-  it("passes with exit 0 when frozen and work is aligned", () => {
-    const dir = frozenProjectWith(
+  it("passes with exit 0 when frozen and work is aligned", async () => {
+    const dir = await frozenProjectWith(
       "Add a CSV export button to the report table. No new API endpoints. Verify file downloads.",
     );
-    const res = run("check-cli.js", [
+    const res = await run("check-cli.js", [
       "--project", dir,
       "--paths", "src/ReportTable.tsx",
       "--json",
@@ -176,11 +178,11 @@ describe("conductor-check (enforcement gate)", () => {
     expect(out.status).toBe("ok");
   });
 
-  it("blocks with exit 1 on out-of-scope drift", () => {
-    const dir = frozenProjectWith(
+  it("blocks with exit 1 on out-of-scope drift", async () => {
+    const dir = await frozenProjectWith(
       "Add a CSV export button to the report table. No new API endpoints. Verify file downloads.",
     );
-    const res = run("check-cli.js", [
+    const res = await run("check-cli.js", [
       "--project", dir,
       "--paths", "src/app/api/export/route.ts",
       "--signals", "added new api endpoint for export",
@@ -192,31 +194,31 @@ describe("conductor-check (enforcement gate)", () => {
     expect(out.drift.action === "soft_block" || out.drift.action === "hard_block").toBe(true);
   });
 
-  it("--no-require-frozen allows missing contract but still scores drift", () => {
+  it("--no-require-frozen allows missing contract but still scores drift", async () => {
     const dir = tmpProject();
-    const res = run("check-cli.js", ["--project", dir, "--no-require-frozen", "--json"]);
+    const res = await run("check-cli.js", ["--project", dir, "--no-require-frozen", "--json"]);
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.status).toBe("ok");
   });
 
-  it("surfaces previous-contract drift as informational JSON", () => {
+  it("surfaces previous-contract drift as informational JSON", async () => {
     const dir = tmpProject();
-    run("extract-cli.js", [
+    await run("extract-cli.js", [
       "--project", dir,
       "--text", "Add a CSV export button. No new API endpoints. Verify file downloads.",
     ]);
-    run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+    await run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
     const first = readFileSync(join(dir, ".conductor", "intent-contract.yaml"), "utf8");
     const firstId = first.match(/contract_id: (ic-[a-z0-9-]+)/)?.[1]!;
 
-    run("extract-cli.js", [
+    await run("extract-cli.js", [
       "--project", dir,
       "--text", "Add CSV export through a new API endpoint. Verify file downloads.",
     ]);
-    run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+    await run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
 
-    const res = run("check-cli.js", [
+    const res = await run("check-cli.js", [
       "--project", dir,
       "--paths", "src/app/api/export/route.ts",
       "--signals", "added new api endpoint for export",
@@ -230,16 +232,41 @@ describe("conductor-check (enforcement gate)", () => {
   });
 });
 
-function frozenProject(): string {
+describe("conductor-doctor", () => {
+  it("reports missing setup as an error in JSON", async () => {
+    const dir = tmpProject();
+    const res = await run("doctor-cli.js", ["--project", dir, "--json"]);
+    expect(res.code).toBe(1);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("error");
+    expect(out.findings.some((f: { id: string }) => f.id === "conductor_not_initialized")).toBe(true);
+  });
+
+  it("prints readable diagnostics for a healthy frozen project", async () => {
+    const dir = tmpProject();
+    await run("init-cli.js", ["--project", dir]);
+    await run("extract-cli.js", [
+      "--project", dir,
+      "--text", "Update README usage documentation. Do not change source code. Verify the README includes the new note.",
+    ]);
+    await run("freeze-cli.js", ["--project", dir, "--approved-by", "tester"]);
+    const res = await run("doctor-cli.js", ["--project", dir]);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("Conductor doctor: ok");
+    expect(res.stdout).toContain("Active contract is frozen");
+  });
+});
+
+function frozenProject(): Promise<string> {
   return frozenProjectWith(
     "Add a theme toggle to the settings page. Verify it persists across reloads.",
   );
 }
 
 describe("conductor-correct + conductor-brief", () => {
-  it("records a pending correction without promoting", () => {
-    const dir = frozenProject();
-    const res = run("correct-cli.js", [
+  it("records a pending correction without promoting", async () => {
+    const dir = await frozenProject();
+    const res = await run("correct-cli.js", [
       "--project", dir,
       "--wrong", "fetched data in the component",
       "--right", "use a useThemePreference hook",
@@ -252,9 +279,9 @@ describe("conductor-correct + conductor-brief", () => {
     expect(out.correction.id).toBe("cl-1");
   });
 
-  it("promotes an acknowledged correction into the contract", () => {
-    const dir = frozenProject();
-    const res = run("correct-cli.js", [
+  it("promotes an acknowledged correction into the contract", async () => {
+    const dir = await frozenProject();
+    const res = await run("correct-cli.js", [
       "--project", dir,
       "--wrong", "fetched in the component", "--right", "used a hook",
       "--rule", "Never fetch in components; use a hook",
@@ -265,20 +292,20 @@ describe("conductor-correct + conductor-brief", () => {
     expect(out.pending).toBe(false);
   });
 
-  it("brief includes acknowledged corrections and intent, as JSON", () => {
-    const dir = frozenProject();
-    run("correct-cli.js", [
+  it("brief includes acknowledged corrections and intent, as JSON", async () => {
+    const dir = await frozenProject();
+    await run("correct-cli.js", [
       "--project", dir,
       "--wrong", "did the wrong thing", "--right", "did the right thing",
       "--rule", "Acknowledged lesson here",
       "--acknowledge",
     ]);
-    run("correct-cli.js", [
+    await run("correct-cli.js", [
       "--project", dir,
       "--wrong", "another wrong thing", "--right", "another right thing",
       "--rule", "Pending lesson here",
     ]);
-    const res = run("brief-cli.js", ["--project", dir, "--json"]);
+    const res = await run("brief-cli.js", ["--project", dir, "--json"]);
     expect(res.code).toBe(0);
     const brief = JSON.parse(res.stdout);
     expect(brief.intent).toMatch(/theme toggle/i);
@@ -287,9 +314,9 @@ describe("conductor-correct + conductor-brief", () => {
     ]);
   });
 
-  it("brief renders markdown by default", () => {
-    const dir = frozenProject();
-    const res = run("brief-cli.js", ["--project", dir]);
+  it("brief renders markdown by default", async () => {
+    const dir = await frozenProject();
+    const res = await run("brief-cli.js", ["--project", dir]);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain("# Session brief —");
     expect(res.stdout).toContain("## Intent");
@@ -297,29 +324,29 @@ describe("conductor-correct + conductor-brief", () => {
 });
 
 describe("conductor-index, conductor-resume, conductor-pivot", () => {
-  it("renders and writes the generated index", () => {
-    const dir = frozenProject();
-    const render = run("index-cli.js", ["--project", dir, "--json"]);
+  it("renders and writes the generated index", async () => {
+    const dir = await frozenProject();
+    const render = await run("index-cli.js", ["--project", dir, "--json"]);
     expect(render.code).toBe(0);
     const out = JSON.parse(render.stdout);
     expect(out.index_markdown).toContain("## Active");
 
-    const write = run("index-cli.js", ["--project", dir, "--write", "--json"]);
+    const write = await run("index-cli.js", ["--project", dir, "--write", "--json"]);
     expect(write.code).toBe(0);
     expect(JSON.parse(write.stdout).written_path).toContain(".conductor/index.md");
   });
 
-  it("prints a resume brief for the active contract", () => {
-    const dir = frozenProject();
-    const res = run("resume-cli.js", ["--project", dir]);
+  it("prints a resume brief for the active contract", async () => {
+    const dir = await frozenProject();
+    const res = await run("resume-cli.js", ["--project", dir]);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain("# Session brief");
     expect(res.stdout).toContain("theme toggle");
   });
 
-  it("records a pivot and regenerates the index", () => {
-    const dir = frozenProject();
-    const res = run("pivot-cli.js", [
+  it("records a pivot and regenerates the index", async () => {
+    const dir = await frozenProject();
+    const res = await run("pivot-cli.js", [
       "--project", dir,
       "--change", "Also support keyboard shortcut",
       "--reason", "User clarified accessibility requirement",

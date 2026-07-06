@@ -26,7 +26,7 @@ conductor <command> [flags]
 ```
 
 Commands: `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`,
-`brief`, `resume`, `index`, `pivot`.
+`brief`, `doctor`, `resume`, `index`, `pivot`.
 
 `conductor drift --ci` runs the lower-level drift scorer and exits `1` when the
 JSON result has `block: true`; otherwise it preserves the normal command output.
@@ -84,6 +84,20 @@ a blocking threshold. Used by the pre-commit hook / CI.
 Exit 0 = ok, 1 = blocked.
 When `--previous-contract` is provided, JSON includes `crossSessionDrift`;
 this does not change the gate exit code.
+
+## conductor doctor / conductor-doctor
+
+Diagnose whether a project is ready to use Conductor before a gate fails.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--json` | machine-readable output |
+
+Checks include `.conductor/config.yaml`, active contract validity, frozen
+approval state, archived contracts, generated index freshness, package version,
+and visible hook/workflow integrations. Missing setup or an invalid/unfrozen
+contract exits `1`; warnings such as stale index or non-Conductor hooks exit `0`.
 
 ## conductor drift / conductor-drift
 

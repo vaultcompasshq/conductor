@@ -76,6 +76,15 @@ describe("conductor", () => {
     expect(existsSync(join(dir, ".conductor", "config.yaml"))).toBe(true);
   });
 
+  it("runs doctor through the unified binary", () => {
+    const dir = tmpProject();
+    const res = run(["doctor", "--project", dir, "--json"]);
+    expect(res.code).toBe(1);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("error");
+    expect(out.findings.some((f: { id: string }) => f.id === "conductor_not_initialized")).toBe(true);
+  });
+
   it("supports drift --ci with a blocking exit code", () => {
     const dir = tmpProject();
     const contractPath = join(dir, "intent-contract.yaml");
