@@ -1,14 +1,14 @@
-name: Conductor Drift
+name: Conductor and Vault Guard
 
 # Post-publish sample: this workflow assumes
 # @vaultcompasshq/conductor-cli@0.3.0-beta.0 is available on npm.
-# Until then, run Conductor from a local checkout or a release artifact.
+# vault-guard is installed from its published npm package.
 
 on:
   pull_request:
 
 jobs:
-  conductor-drift:
+  guardrails:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,3 +41,6 @@ jobs:
             --ci \
             --contract .conductor/intent-contract.yaml \
             --paths "${{ steps.changed.outputs.paths }}"
+
+      - name: Check secrets
+        run: npx --yes @vaultcompass/vault-guard@latest -- scan . --format text

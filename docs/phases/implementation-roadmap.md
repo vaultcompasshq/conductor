@@ -9,8 +9,10 @@
 > real freeze/**approval** step, Phase **3a** (correction log + session brief),
 > and Phase **3 core** (history, generated index, resume, pivot, cross-session
 > drift), sharper paragraph/prohibition extraction, hook adapter samples, and
-> the unified CLI with release smoke. 85 tests passing. **Next:** publish/tag
-> cleanup, Phase 3b, and integration hardening.
+> the unified CLI with release smoke, setup doctor, public-repo validation
+> harness, and optional vault-guard pairing samples. 96 tests passing.
+> **Next:** drift report, rules audit, broader public-repo validation, then
+> publish/tag execution.
 > Live status: [../NEXT.md](../NEXT.md) · backlog: [../TODO.md](../TODO.md).
 
 ---
