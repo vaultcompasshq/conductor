@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-06 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 94 tests passing.
+before merge. Baseline: 96 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -57,6 +57,8 @@ confusing gate failures.
       validation errors.
 - [x] Detect missing or stale hook integrations for Git pre-commit, GitHub
       Actions, Codex, Claude Code, and Cursor where those files are present.
+- [x] Detect optional vault-guard pairing signals: config, binary, Git hook, and
+      GitHub Actions workflow references.
 - [x] Print human-readable findings by default and support `--json` for CI or
       editor integrations.
 - [x] Add tests for a clean repo, missing config, unfrozen contract, invalid
@@ -128,6 +130,8 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 ## 8. Integrations (design-stage → real, if/when prioritized)
 
 - [x] Codex / Claude Code hook adapter samples and Cursor project rule.
+- [x] Optional vault-guard pairing samples for Git pre-commit and GitHub
+      Actions, plus `conductor doctor` awareness.
 - [ ] Gemini: confirm the contract YAML is consumed; no runtime wiring exists
       beyond reading `GEMINI.md` as a constraint file.
 - [ ] Cursor: native extension/MCP status panel, if prioritized. Current

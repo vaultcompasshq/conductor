@@ -16,6 +16,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   `scripts/validate-public-repos.mjs` plus `pnpm validate:public-repos` for
   repeatable manual validation against public GitHub repositories, with optional
   markdown reports under `docs/validation/public-repos/`.
+- **Optional vault-guard pairing.** `conductor doctor` now reports vault-guard
+  config, binary, Git hook, and GitHub Actions references when present. Added a
+  paired pre-commit sample and a paired CI sample for teams that want intent
+  drift and secret scanning as independent gates.
 - **Unified CLI beta package.** Added `@vaultcompasshq/conductor-cli` with the
   public `conductor <subcommand>` binary wrapping the existing command surface:
   `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`, `brief`,
@@ -78,6 +82,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   so a single out-of-scope or critical-constraint hit can block. `--signals`
   is now documented as open-vocabulary free text.
 - Root `pnpm test` now builds first (skill CLI tests run the compiled `dist/`).
+- GitHub Actions integration docs now mark package-install workflow samples as
+  post-publish templates until `@vaultcompasshq/conductor-cli` is available on
+  npm.
 
 ### Fixed
 

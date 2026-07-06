@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -99,6 +100,23 @@ function readText(path: string): string | null {
 
 function textMentionsConductor(path: string): boolean {
   return /conductor/i.test(readText(path) ?? "");
+}
+
+function textMentionsVaultGuard(path: string): boolean {
+  return /vault[- ]guard/i.test(readText(path) ?? "");
+}
+
+function commandVersion(command: string): string | null {
+  try {
+    const result = spawnSync(command, ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.error || result.signal || result.status !== 0) return null;
+    return (result.stdout || result.stderr).trim().split("\n")[0] || "available";
+  } catch {
+    return null;
+  }
 }
 
 function filesInDir(path: string, extensions: string[]): string[] {
@@ -307,6 +325,37 @@ function indexStatus(projectRoot: string, findings: DoctorFinding[]): void {
 }
 
 function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void {
+  const vaultGuardConfig = [
+    ".vault-guard.json",
+    ".vault-guard.local.json",
+    ".vault-guard.yaml",
+    ".vault-guard.yml",
+  ].find((path) => existsSync(join(projectRoot, path)));
+  const vaultGuardVersion = commandVersion("vault-guard");
+  const vaultGuardEvidence: string[] = [];
+
+  if (vaultGuardConfig) {
+    vaultGuardEvidence.push(vaultGuardConfig);
+    findings.push(
+      finding(
+        "ok",
+        "vault_guard_config_present",
+        "vault-guard config is present.",
+        vaultGuardConfig,
+      ),
+    );
+  }
+
+  if (vaultGuardVersion) {
+    findings.push(
+      finding(
+        "ok",
+        "vault_guard_binary_found",
+        `vault-guard binary found: ${vaultGuardVersion}`,
+      ),
+    );
+  }
+
   const gitDir = join(projectRoot, ".git");
   if (existsSync(gitDir)) {
     const preCommit = join(gitDir, "hooks", "pre-commit");
@@ -338,6 +387,18 @@ function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void
         ),
       );
     }
+
+    if (existsSync(preCommit) && textMentionsVaultGuard(preCommit)) {
+      vaultGuardEvidence.push(".git/hooks/pre-commit");
+      findings.push(
+        finding(
+          "ok",
+          "git_pre_commit_vault_guard",
+          "Git pre-commit hook mentions vault-guard.",
+          ".git/hooks/pre-commit",
+        ),
+      );
+    }
   }
 
   const workflowFiles = filesInDir(join(projectRoot, ".github", "workflows"), [
@@ -356,6 +417,18 @@ function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void
         ".github/workflows/",
       ),
     );
+
+    if (workflowFiles.some(textMentionsVaultGuard)) {
+      vaultGuardEvidence.push(".github/workflows/");
+      findings.push(
+        finding(
+          "ok",
+          "github_actions_vault_guard",
+          "At least one GitHub Actions workflow mentions vault-guard.",
+          ".github/workflows/",
+        ),
+      );
+    }
   }
 
   const codexHooks = join(projectRoot, ".codex", "hooks.json");
@@ -401,6 +474,25 @@ function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void
           ? "Cursor rules mention Conductor."
           : "Cursor rules exist but none mention Conductor.",
         ".cursor/rules/",
+      ),
+    );
+  }
+
+  if (vaultGuardEvidence.length === 0 && !vaultGuardVersion) {
+    findings.push(
+      finding(
+        "info",
+        "vault_guard_not_detected",
+        "Optional vault-guard secret scanning is not detected.",
+      ),
+    );
+  } else if (vaultGuardEvidence.length > 0 && !vaultGuardVersion) {
+    findings.push(
+      finding(
+        "warn",
+        "vault_guard_binary_missing",
+        "vault-guard is referenced by project files, but the binary was not found on PATH.",
+        vaultGuardEvidence.join(", "),
       ),
     );
   }

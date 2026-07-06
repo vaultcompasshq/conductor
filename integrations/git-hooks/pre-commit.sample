@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 #
-# Conductor pre-commit gate — a REAL enforcement point, not a markdown
-# instruction an agent can ignore. Blocks the commit when no frozen Intent
-# Contract exists or when staged changes drift past a blocking threshold.
+# Conductor pre-commit gate. Blocks the commit when no frozen Intent Contract
+# exists or when staged changes drift past a blocking threshold.
 #
 # Install:
 #   cp integrations/git-hooks/pre-commit.sample .git/hooks/pre-commit

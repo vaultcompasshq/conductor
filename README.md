@@ -6,7 +6,7 @@ Conductor sits *above* foundation models and *below* your product code. It turns
 
 The Intent Contract is a plain YAML file, so any model or coding assistant that can read a file can consume it. Conductor does not replace spec tools, coding agents, or PR review. It gives those tools a shared source of truth for what the human approved, what is out of scope, and whether the current diff has drifted.
 
-Today the shipped surfaces are the unified `conductor` CLI, the legacy `conductor-check` gate for pre-commit and CI, Cursor/Claude skills, and hook samples. See [integrations/](./integrations) for host-specific examples.
+Today the shipped surfaces are the unified `conductor` CLI, the legacy `conductor-check` gate for pre-commit and CI, Cursor/Claude skills, and hook samples. Optional vault-guard pairing samples are available for teams that want intent drift and secret scanning as separate gates. See [integrations/](./integrations) for host-specific examples.
 
 ```
 User conversation
@@ -23,7 +23,7 @@ User conversation
 **Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, and resume shipped - July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **94 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **96 tests passing**
 
 **Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
 
@@ -61,11 +61,11 @@ conductor/
 │   └── memory/          # separate package deferred; file memory lives in core
 ├── integrations/
 │   ├── superpowers/     # skills + install script
-│   ├── git-hooks/       # pre-commit gate sample
+│   ├── git-hooks/       # pre-commit gate samples
 │   ├── hooks/           # shared lifecycle hook scripts
 │   ├── codex/           # Codex hooks.json sample
 │   ├── claude-code/     # Claude Code settings sample
-│   ├── github-actions/  # conductor drift --ci workflow sample
+│   ├── github-actions/  # drift CI and optional vault-guard workflow samples
 │   ├── cursor/          # Cursor rule + git hook setup
 │   └── downstream-pipeline/  # design notes
 └── docs/
@@ -74,7 +74,9 @@ conductor/
 The enforcement gate (`conductor check`, legacy `conductor-check`) returns a non-zero exit code when no
 frozen contract exists or staged changes drift past a blocking threshold — the
 one place Conductor *enforces* rather than *suggests*. Wire it via
-[integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
+[integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample),
+the optional paired
+[vault-guard hook](./integrations/git-hooks/pre-commit-with-vault-guard.sample),
 or a CI step.
 
 ## Quickstart
@@ -93,7 +95,7 @@ pnpm conductor -- check --project . --staged
 
 ```bash
 pnpm install
-pnpm test      # 94 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # 96 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
 pnpm release:smoke
 pnpm validate:public-repos
@@ -120,6 +122,9 @@ The gate
 *enforces* rather than *suggests* —
 wire it via [integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample)
 or [integrations/github-actions/conductor-drift-ci.yml.sample](./integrations/github-actions/conductor-drift-ci.yml.sample).
+Use [pre-commit-with-vault-guard.sample](./integrations/git-hooks/pre-commit-with-vault-guard.sample)
+or [conductor-vault-guard-ci.yml.sample](./integrations/github-actions/conductor-vault-guard-ci.yml.sample)
+when you want a separate secret-scanning gate beside Conductor.
 
 ## Origin
 

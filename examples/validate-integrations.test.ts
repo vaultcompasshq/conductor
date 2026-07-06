@@ -34,6 +34,8 @@ describe("integration hook samples", () => {
 
   it("keeps hook shell scripts syntactically valid", () => {
     for (const script of [
+      "integrations/git-hooks/pre-commit.sample",
+      "integrations/git-hooks/pre-commit-with-vault-guard.sample",
       "integrations/hooks/conductor-lib.sh",
       "integrations/hooks/conductor-session-start.sh",
       "integrations/hooks/conductor-stop-check.sh",
@@ -54,5 +56,12 @@ describe("integration hook samples", () => {
     expect(workflow).toContain("drift");
     expect(workflow).toContain("--ci");
     expect(workflow).toContain(".conductor/intent-contract.yaml");
+
+    const pairedWorkflow = readText(
+      "integrations/github-actions/conductor-vault-guard-ci.yml.sample",
+    );
+    expect(pairedWorkflow).toContain("@vaultcompasshq/conductor-cli@0.3.0-beta.0");
+    expect(pairedWorkflow).toContain("@vaultcompass/vault-guard@latest");
+    expect(pairedWorkflow).toContain("scan . --format text");
   });
 });

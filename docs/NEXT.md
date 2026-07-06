@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 94 passing — schema 7 · core 48 · skill 22 · cli 7 · examples/integrations 10.
+- **Tests:** 96 passing — schema 7 · core 50 · skill 22 · cli 7 · examples/integrations 10.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -30,8 +30,8 @@ of truth for "where are we and what's next." For granular tasks see
 | Memory-index persistence | `history.ts`, `memory-index.ts`, `pivot.ts` + `index`/`pivot`/`resume` CLIs | Phase 3 core |
 | Hook adapter samples | `integrations/hooks`, `integrations/codex`, `integrations/claude-code`, `integrations/cursor` | Codex/Claude Code lifecycle samples, Cursor rule + git hook setup |
 | Unified CLI + release smoke | `packages/cli`, `scripts/release-smoke.mjs` | `conductor <subcommand>`, `drift --ci`, pack smoke for schema/core/skill/cli |
-| Release docs + CI sample | `docs/release`, `integrations/github-actions` | beta release checklist and copyable `conductor drift --ci` workflow |
-| Setup doctor | `doctor.ts`, `doctor` CLI | local setup diagnostics for config, contract state, archive/index, package version, and visible hooks/workflows |
+| Release docs + CI sample | `docs/release`, `integrations/github-actions` | beta release checklist, copyable `conductor drift --ci` workflow, and optional vault-guard pairing sample |
+| Setup doctor | `doctor.ts`, `doctor` CLI | local setup diagnostics for config, contract state, archive/index, package version, visible hooks/workflows, and optional vault-guard pairing |
 | Public repo validation harness | `scripts/validate-public-repos.mjs` | repeatable manual smoke against public GitHub repos; writes optional markdown reports |
 
 ### Recent shipped work
@@ -51,6 +51,9 @@ of truth for "where are we and what's next." For granular tasks see
     validation naming, and product positioning.
 11. #12 setup doctor diagnostics across core, skill CLI, unified CLI, docs,
     and tests.
+12. #13 docs/status sync and repeatable public-repo validation harness.
+13. Optional vault-guard pairing: doctor awareness, combined pre-commit sample,
+    paired CI sample, and clarified package-install workflow status.
 
 ---
 
@@ -105,5 +108,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (94 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (96 passing baseline).
 ```

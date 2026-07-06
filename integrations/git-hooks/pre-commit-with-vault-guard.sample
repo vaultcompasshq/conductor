@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# Combined pre-commit guard for repositories that want both:
+#   - Conductor: block intent drift against the approved Intent Contract
+#   - vault-guard: block staged secrets
+#
+# Install:
+#   cp integrations/git-hooks/pre-commit-with-vault-guard.sample .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Requires conductor-check and vault-guard on PATH, or set CONDUCTOR_CHECK /
+# VAULT_GUARD to explicit binary paths. Missing tools are reported and skipped
+# so teams can adopt the gates incrementally.
+
+set -euo pipefail
+
+CONDUCTOR_CHECK="${CONDUCTOR_CHECK:-conductor-check}"
+VAULT_GUARD="${VAULT_GUARD:-vault-guard}"
+
+status=0
+
+if command -v "$CONDUCTOR_CHECK" >/dev/null 2>&1; then
+  "$CONDUCTOR_CHECK" --project . --staged || status=$?
+else
+  echo "conductor-check not found on PATH; skipping Conductor gate." >&2
+  echo "Set CONDUCTOR_CHECK to the binary path to enforce." >&2
+fi
+
+if command -v "$VAULT_GUARD" >/dev/null 2>&1; then
+  "$VAULT_GUARD" scan --staged || status=$?
+else
+  echo "vault-guard not found on PATH; skipping secret scan." >&2
+  echo "Set VAULT_GUARD to the binary path to enforce." >&2
+fi
+
+exit "$status"
