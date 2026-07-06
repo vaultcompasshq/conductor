@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI and release smoke checks are complete. Next work is publish/tag execution, Phase 3b correction-memory hygiene, and runtime validation in real host environments.
+The unified `conductor` CLI, release smoke checks, setup doctor, and first public-repo validation harness are complete. Next work is the v1 readiness set: drift report, rules audit, broader public-repo validation, and then publish/tag execution.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 
@@ -67,10 +67,11 @@ The unified `conductor` CLI and release smoke checks are complete. Next work is 
 
 ```bash
 pnpm install
-pnpm test      # 85 tests: schema (7), core (42), skill (20), cli (6), examples/integrations (10)
+pnpm test      # 94 tests: schema (7), core (48), skill (22), cli (7), examples/integrations (10)
 pnpm build
 pnpm typecheck
 pnpm release:smoke
+pnpm validate:public-repos   # manual; clones public GitHub repos
 ```
 
 `pnpm test` builds first because the skill CLI tests spawn compiled `dist/` files.

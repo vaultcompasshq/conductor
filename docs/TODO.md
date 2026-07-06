@@ -1,8 +1,8 @@
 # TODO — detailed task backlog
 
-**Updated:** 2026-07-04 · companion to [NEXT.md](./NEXT.md).
+**Updated:** 2026-07-06 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 85 tests passing.
+before merge. Baseline: 94 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -45,7 +45,7 @@ the right context.
 - [x] Add tests with multi-sentence asks asserting >1 scope item / AC.
 - [x] Update [validation/phase2-live-run.md](./validation/phase2-live-run.md) finding #3.
 
-## 3. Setup doctor command — recommended next core feature
+## 3. Setup doctor command — SHIPPED
 
 Goal: make a consuming repo self-diagnose its Conductor setup before users hit
 confusing gate failures.
@@ -67,14 +67,17 @@ confusing gate failures.
 
 Goal: keep the public-repo smoke test repeatable while v1 features mature.
 
-- [ ] Promote the temporary `/tmp` public-repo validation script into
+- [x] Promote the temporary `/tmp` public-repo validation script into
       `scripts/validate-public-repos.mjs`.
 - [ ] Cover at least 8 repositories: small package, CLI, web app, monorepo,
       docs-heavy repo, repo with agent rules, repo without agent rules, and a
       larger TypeScript project.
-- [ ] Record reports under `docs/validation/public-repos/`.
-- [ ] Add controls for README-only pass, source/package drift block, path-only
-      drift, explicit-signal drift, and existing-rule noise.
+- [x] Record reports under `docs/validation/public-repos/` when a run should be
+      committed (`--report docs/validation/public-repos/YYYY-MM-DD.md`).
+- [~] Add controls for README-only pass, source/package drift block, path-only
+      drift, explicit-signal drift, and existing-rule noise. README pass,
+      source/package block, and explicit-signal drift are covered; path-only
+      drift and existing-rule noise are still pending.
 - [ ] Decide which parts should run in CI and which stay manual because they
       require network access.
 

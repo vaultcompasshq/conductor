@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-04
+**Updated:** 2026-07-06
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 85 passing — schema 7 · core 42 · skill 20 · cli 6 · examples/integrations 10.
+- **Tests:** 94 passing — schema 7 · core 48 · skill 22 · cli 7 · examples/integrations 10.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -31,6 +31,8 @@ of truth for "where are we and what's next." For granular tasks see
 | Hook adapter samples | `integrations/hooks`, `integrations/codex`, `integrations/claude-code`, `integrations/cursor` | Codex/Claude Code lifecycle samples, Cursor rule + git hook setup |
 | Unified CLI + release smoke | `packages/cli`, `scripts/release-smoke.mjs` | `conductor <subcommand>`, `drift --ci`, pack smoke for schema/core/skill/cli |
 | Release docs + CI sample | `docs/release`, `integrations/github-actions` | beta release checklist and copyable `conductor drift --ci` workflow |
+| Setup doctor | `doctor.ts`, `doctor` CLI | local setup diagnostics for config, contract state, archive/index, package version, and visible hooks/workflows |
+| Public repo validation harness | `scripts/validate-public-repos.mjs` | repeatable manual smoke against public GitHub repos; writes optional markdown reports |
 
 ### Recent shipped work
 
@@ -43,29 +45,32 @@ of truth for "where are we and what's next." For granular tasks see
    informational cross-session drift.
 7. #8 paragraph extraction hardening for richer scope/acceptance drafts.
 8. #9 Codex/Claude Code hook adapter samples and Cursor project rule.
-9. Production-readiness pass: unified CLI, release smoke, validation run, and
-   prohibition extraction fix.
+9. #10 production-readiness pass: unified CLI, release smoke, validation run,
+   and prohibition extraction fix.
+10. #11 public positioning cleanup: generic downstream integration docs,
+    validation naming, and product positioning.
+11. #12 setup doctor diagnostics across core, skill CLI, unified CLI, docs,
+    and tests.
 
 ---
 
 ## What's next (priority order)
 
-1. **Setup doctor command** — add `conductor doctor` to validate local
-   `.conductor` setup, active contract state, config, hook samples, package
-   versions, and common misconfigurations.
-2. **Public repo validation harness** — keep the `/tmp` validation flow as a
-   repeatable script and expand it beyond the first 4 repos.
-3. **Drift report** — add a handoff/PR report that explains score, blockers,
+1. **Drift report** — add a handoff/PR report that explains score, blockers,
    acceptance criteria coverage, pivots, and corrections.
-4. **Rules audit** — inspect project rules across AGENTS/Claude/Cursor/Continue/Kiro
+2. **Rules audit** — inspect project rules across AGENTS/Claude/Cursor/Continue/Kiro
    files and flag stale, conflicting, or overbroad rules.
-5. **Spec bridge** — import Spec Kit / Kiro-style requirements, designs, and
+3. **Public repo validation expansion** — use
+   `scripts/validate-public-repos.mjs` to expand coverage beyond the first 4
+   repos, add path-only drift controls, and decide what stays manual because it
+   requires network access.
+4. **Spec bridge** — import Spec Kit / Kiro-style requirements, designs, and
    tasks into an Intent Contract.
-6. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+5. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-7. **Integration hardening** — full runtime checks for hook adapters in real
+6. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
-8. **Publish/tag execution** — deferred until the v1 readiness items above are
+7. **Publish/tag execution** — deferred until the v1 readiness items above are
    complete.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
@@ -88,7 +93,8 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
 - **Public repo validation learned:** init/extract/freeze/check worked on
   `sindresorhus/is`, `chalk/chalk`, `expressjs/express`, and `vitejs/vite`.
   The negative control was strongest when explicit change signals were supplied,
-  so v1 should improve diagnostics/reporting around path-only drift.
+  so v1 should improve diagnostics/reporting around path-only drift. The
+  repeatable harness now lives at `scripts/validate-public-repos.mjs`.
 
 ---
 
@@ -99,5 +105,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (85 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (94 passing baseline).
 ```

@@ -43,13 +43,26 @@ Lead with:
 - **Host neutrality:** one contract can be read by Claude, Codex, Cursor, Gemini, hooks, or CI.
 - **Local-first:** no hosted dependency is required.
 
-## What Is Missing
+## Recently Added
 
-### 1. `conductor doctor`
+### `conductor doctor`
 
-This is the best next core feature. Users need one command that explains whether their repo is set up correctly before a gate fails.
+`conductor doctor` now gives users one command to diagnose local setup before a gate fails. It checks config, active contract state, approval/freeze status, archived contracts, index freshness, package version, and visible hook/workflow files, with readable output by default and JSON for CI/editor integrations.
 
-It should check config, active contract, approval state, archived contracts, index freshness, package versions, and installed hook samples. It should return readable findings by default and JSON with `--json`.
+## What Is Missing Next
+
+### 1. Drift Report
+
+The CLI currently returns scores and findings. A more compelling user experience is a concise report that a PR, CI job, or agent handoff can paste:
+
+- Active contract summary
+- Current drift score
+- Blocking reasons
+- Acceptance criteria coverage
+- Pivot/correction history
+- Recommended next action
+
+Candidate command: `conductor report --staged`.
 
 ### 2. Rules Audit
 
@@ -75,18 +88,9 @@ Candidate commands:
 - `conductor import-spec --from kiro`
 - `conductor export --format markdown`
 
-### 4. Drift Report
+### 4. Public Validation Expansion
 
-The CLI currently returns scores and findings. A more compelling user experience is a concise report that a PR, CI job, or agent handoff can paste:
-
-- Active contract summary
-- Current drift score
-- Blocking reasons
-- Acceptance criteria coverage
-- Pivot/correction history
-- Recommended next action
-
-Candidate command: `conductor report --staged`.
+The first public-repo validation harness is in `scripts/validate-public-repos.mjs`. Before v1, expand it beyond the initial four repositories and add path-only drift plus existing-rule-noise controls.
 
 ### 5. Optional Semantic Classifier
 
