@@ -20,6 +20,7 @@
     "conductor-coach": "./dist/coach-cli.js",
     "conductor-drift": "./dist/drift-cli.js",
     "conductor-extract": "./dist/extract-cli.js",
+    "conductor-import-spec": "./dist/import-spec-cli.js",
     "conductor-freeze": "./dist/freeze-cli.js",
     "conductor-init": "./dist/init-cli.js",
     "conductor-index": "./dist/index-cli.js",

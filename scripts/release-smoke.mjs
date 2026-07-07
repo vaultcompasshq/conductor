@@ -27,6 +27,7 @@ const packages = [
     name: "@vaultcompasshq/conductor-skill",
     requiredFiles: [
       "package/dist/check-cli.js",
+      "package/dist/import-spec-cli.js",
       "package/dist/report-cli.js",
       "package/dist/rules-cli.js",
       "package/dist/resume-cli.js",

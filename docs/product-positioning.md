@@ -61,21 +61,15 @@ Lead with:
 
 `scripts/validate-public-repos.mjs` now defaults to 8 public repositories and includes README positive controls, explicit-signal source/package drift controls, path-only source/package drift controls, and doctor diagnostics.
 
-## What Is Missing Next
-
-### 1. Spec Bridge
+### `conductor import-spec`
 
 Spec Kit and Kiro are not enemies. They are good upstream sources for Conductor.
 
-Conductor should import requirements/tasks from popular spec systems into an Intent Contract, then enforce the approved scope during implementation.
+`conductor import-spec` imports Spec Kit or Kiro-style artifacts into an unfrozen Intent Contract draft. The key boundary remains intact: the imported draft still requires human review and `conductor freeze` before the gate trusts it.
 
-Candidate commands:
+## What Is Missing Next
 
-- `conductor import-spec --from spec-kit`
-- `conductor import-spec --from kiro`
-- `conductor export --format markdown`
-
-### 2. Optional Semantic Classifier
+### 1. Optional Semantic Classifier
 
 The offline rule-based scorer is a good default, but nuanced drift needs an optional semantic path. This should be opt-in and preserve local/offline behavior as the baseline.
 

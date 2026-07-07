@@ -10,9 +10,9 @@
 > and Phase **3 core** (history, generated index, resume, pivot, cross-session
 > drift), sharper paragraph/prohibition extraction, hook adapter samples, and
 > the unified CLI with release smoke, setup doctor, handoff reports, rules
-> audit, expanded public-repo validation, path-only drift controls, and optional
-> vault-guard pairing samples. 110 tests passing.
-> **Next:** spec bridge, Phase 3b correction hygiene, adapter hardening, then
+> audit, spec import, expanded public-repo validation, path-only drift controls,
+> and optional vault-guard pairing samples. 115 tests passing.
+> **Next:** Phase 3b correction hygiene, adapter hardening, then
 > maintainer-approved publish/tag execution.
 > Live status: [../NEXT.md](../NEXT.md) · backlog: [../TODO.md](../TODO.md).
 

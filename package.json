@@ -13,6 +13,7 @@
     "conductor": "node packages/cli/dist/conductor.js",
     "conductor:coach": "node packages/skill/dist/coach-cli.js",
     "conductor:extract": "node packages/skill/dist/extract-cli.js",
+    "conductor:import-spec": "node packages/skill/dist/import-spec-cli.js",
     "conductor:freeze": "node packages/skill/dist/freeze-cli.js",
     "conductor:drift": "node packages/skill/dist/drift-cli.js",
     "conductor:init": "node packages/skill/dist/init-cli.js",

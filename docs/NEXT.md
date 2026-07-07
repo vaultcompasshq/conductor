@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 110 passing — schema 7 · core 59 · skill 25 · cli 9 · examples/integrations 10.
+- **Tests:** 115 passing — schema 7 · core 61 · skill 27 · cli 10 · examples/integrations 10.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -34,6 +34,7 @@ of truth for "where are we and what's next." For granular tasks see
 | Setup doctor | `doctor.ts`, `doctor` CLI | local setup diagnostics for config, contract state, archive/index, package version, visible hooks/workflows, and optional vault-guard pairing |
 | Drift report | `report.ts`, `report` CLI | PR/CI handoff with contract summary, gate result, drift, AC coverage, pivots, corrections, and recommendation |
 | Rules audit | `rules-audit.ts`, `rules audit` CLI | inspects AGENTS/Claude/Gemini/Cursor/Continue/Kiro rules; flags duplicates, stale/broad rules, conflicts, and critical candidates |
+| Spec bridge | `spec-bridge.ts`, `import-spec` CLI | imports Spec Kit or Kiro artifacts into an unfrozen Intent Contract draft |
 | Public repo validation harness | `scripts/validate-public-repos.mjs` | repeatable manual smoke against 8 public GitHub repos; includes explicit-signal and path-only drift controls |
 
 ### Recent shipped work
@@ -58,20 +59,19 @@ of truth for "where are we and what's next." For granular tasks see
     paired CI sample, and clarified package-install workflow status.
 14. v1 readiness pass: `conductor report`, `conductor rules audit`, constraint
     deduplication, path-only drift controls, and broader public-repo validation.
+15. Spec bridge: `conductor import-spec` for Spec Kit and Kiro-style artifacts.
 
 ---
 
 ## What's next (priority order)
 
-1. **Spec bridge** — import Spec Kit / Kiro-style requirements, designs, and
-   tasks into an Intent Contract.
-2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+1. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-3. **Integration hardening** — full runtime checks for hook adapters in real
+2. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
-4. **Public repo validation policy** — decide what stays manual because it
+3. **Public repo validation policy** — decide what stays manual because it
    requires network access and whether a smaller offline fixture belongs in CI.
-5. **Publish/tag execution** — deferred until the maintainer approves a release.
+4. **Publish/tag execution** — deferred until the maintainer approves a release.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -104,5 +104,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (110 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (115 passing baseline).
 ```

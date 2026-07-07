@@ -123,3 +123,10 @@ export {
   type RulesAuditResult,
   type RulesAuditStatus,
 } from "./rules-audit.js";
+export {
+  importSpecContract,
+  type ImportedSpecContract,
+  type ImportSpecOptions,
+  type SpecBridgeFile,
+  type SpecBridgeFormat,
+} from "./spec-bridge.js";

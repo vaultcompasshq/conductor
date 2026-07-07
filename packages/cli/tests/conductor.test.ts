@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -121,6 +121,34 @@ describe("conductor", () => {
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.summary.duplicates).toBe(1);
+  });
+
+  it("runs import-spec through the unified binary", () => {
+    const dir = tmpProject();
+    const specDir = join(dir, ".kiro", "specs", "theme-toggle");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(
+      join(specDir, "requirements.md"),
+      "WHEN a user toggles theme, THE SYSTEM SHALL persist the preference.\n",
+      "utf8",
+    );
+    writeFileSync(join(specDir, "design.md"), "Use existing settings storage.\n", "utf8");
+    writeFileSync(join(specDir, "tasks.md"), "- [ ] Add theme toggle\n", "utf8");
+
+    const res = run([
+      "import-spec",
+      "--project",
+      dir,
+      "--from",
+      "kiro",
+      "--spec-dir",
+      ".kiro/specs/theme-toggle",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.format).toBe("kiro");
+    expect(out.written_path).toContain("intent-contract.yaml");
+    expect(readFileSync(out.written_path, "utf8")).not.toContain("approval:");
   });
 
   it("supports drift --ci with a blocking exit code", () => {
