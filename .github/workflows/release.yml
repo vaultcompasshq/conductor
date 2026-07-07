@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -41,7 +41,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Publish to npm
-        run: pnpm publish -r --access public --no-git-checks
+        run: npx npm@latest publish -r --access public --no-git-checks
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

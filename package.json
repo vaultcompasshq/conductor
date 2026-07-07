@@ -12,6 +12,7 @@
     "validate:public-repos": "node scripts/validate-public-repos.mjs",
     "publish:beta": "node scripts/publish-beta.mjs",
     "publish:beta:dry-run": "node scripts/publish-beta.mjs --dry-run",
+    "publish:bootstrap": "bash scripts/bootstrap-npm-packages.sh",
     "conductor": "node packages/cli/dist/conductor.js",
     "conductor:coach": "node packages/skill/dist/coach-cli.js",
     "conductor:extract": "node packages/skill/dist/extract-cli.js",
