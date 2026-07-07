@@ -40,7 +40,7 @@ jobs:
       - name: Publish to npm
         run: |
           for pkg in packages/schema packages/core packages/skill packages/cli; do
-            pnpm --dir "$pkg" publish --access public --no-git-checks --tag beta
+            (cd "$pkg" && pnpm publish --access public --tag beta)
           done
 
       - name: Create GitHub Release

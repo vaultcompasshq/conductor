@@ -26,7 +26,7 @@ pnpm release:smoke
 for pkg in "${PACKAGES[@]}"; do
   echo ""
   echo "Publishing ${pkg}..."
-  (cd "$ROOT/$pkg" && pnpm publish --access public --no-git-checks)
+  (cd "$ROOT/$pkg" && pnpm publish --access public --tag beta)
 done
 
 cat <<'EOF'
