@@ -8,7 +8,7 @@ import {
   readContract,
   writeContract,
   writeIndex,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

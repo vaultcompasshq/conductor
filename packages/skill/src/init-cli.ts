@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { initConductor } from "@vaultcompasshq/conductor-core";
+import { initConductor } from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

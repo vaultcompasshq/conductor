@@ -66,8 +66,8 @@ Design an installable governance layer that:
 
 - Spec approved (2026-06-17)
 - Repo live: https://github.com/vaultcompasshq/conductor
-- Phase 1 complete: `@vaultcompasshq/conductor-schema`, `@vaultcompasshq/conductor-core`, 5 example contracts
-- Phase 2 complete: `@vaultcompasshq/conductor-skill`, runtime CLIs
+- Phase 1 complete: `@vaultcompass/conductor-schema`, `@vaultcompass/conductor-core`, 5 example contracts
+- Phase 2 complete: `@vaultcompass/conductor-skill`, runtime CLIs
 - Current baseline: 85 tests passing across schema, core, skill, cli, examples, and integrations
 
 ## Next step

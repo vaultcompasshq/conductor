@@ -2,7 +2,7 @@ import type {
   Constraint,
   CorrectionLogEntry,
   IntentContract,
-} from "@vaultcompasshq/conductor-schema";
+} from "@vaultcompass/conductor-schema";
 
 export interface AddCorrectionInput {
   /** What the agent did that was wrong. */

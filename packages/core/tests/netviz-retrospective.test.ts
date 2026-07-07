@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { scoreDrift } from "../src/drift.js";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 
 describe("NetViz retrospective", () => {
   it("drift score >= 70 for stubbed implementation signals", () => {

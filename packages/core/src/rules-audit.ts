@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type {
   Constraint,
   ConstraintSource,
-} from "@vaultcompasshq/conductor-schema";
+} from "@vaultcompass/conductor-schema";
 import {
   extractConstraintsFromMarkdown,
   normalizeConstraintRule,

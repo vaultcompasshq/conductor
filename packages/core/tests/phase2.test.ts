@@ -8,7 +8,7 @@ import { initConductor } from "../src/init.js";
 import { conductorDir } from "../src/contract-store.js";
 import { loadCursorRules } from "../src/constraints.js";
 import { scoreDrift } from "../src/drift.js";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 
 describe("loadConfig", () => {
   it("returns defaults when config missing", () => {

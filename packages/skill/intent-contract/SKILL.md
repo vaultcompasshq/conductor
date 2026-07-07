@@ -47,7 +47,7 @@ Read from project root when present:
 From the conductor repo (after `pnpm build`):
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill exec conductor-extract \
+pnpm --filter @vaultcompass/conductor-skill exec conductor-extract \
   --project /path/to/target-project \
   --text "USER'S ORIGINAL ASK HERE" \
   --dry-run
@@ -73,7 +73,7 @@ Ask **one question at a time** for gaps. Update the draft mentally before writin
 ### 6. Write the draft
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill exec conductor-extract \
+pnpm --filter @vaultcompass/conductor-skill exec conductor-extract \
   --project /path/to/target-project \
   --text "FINAL ASK"
 ```
@@ -85,7 +85,7 @@ This writes an **unfrozen draft**. The gate still blocks until it is approved.
 Freezing is a separate, deliberate step — the agent must **not** self-approve.
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill exec conductor-freeze \
+pnpm --filter @vaultcompass/conductor-skill exec conductor-freeze \
   --project /path/to/target-project
 # Interactive TTY → shows a summary and asks to confirm.
 # Non-interactive → requires --approved-by "<name>".
@@ -115,4 +115,4 @@ Also copy sibling skill folders from `packages/skill/`.
 
 ## Schema
 
-Validated by `@vaultcompasshq/conductor-schema`. Examples: `examples/intent-contracts/`.
+Validated by `@vaultcompass/conductor-schema`. Examples: `examples/intent-contracts/`.

@@ -52,7 +52,7 @@ describe("integration hook samples", () => {
     const workflow = readText(
       "integrations/github-actions/conductor-drift-ci.yml.sample",
     );
-    expect(workflow).toContain("@vaultcompasshq/conductor-cli@0.3.0-beta.0");
+    expect(workflow).toContain("@vaultcompass/conductor-cli@0.3.0-beta.0");
     expect(workflow).toContain("drift");
     expect(workflow).toContain("--ci");
     expect(workflow).toContain(".conductor/intent-contract.yaml");
@@ -60,7 +60,7 @@ describe("integration hook samples", () => {
     const pairedWorkflow = readText(
       "integrations/github-actions/conductor-vault-guard-ci.yml.sample",
     );
-    expect(pairedWorkflow).toContain("@vaultcompasshq/conductor-cli@0.3.0-beta.0");
+    expect(pairedWorkflow).toContain("@vaultcompass/conductor-cli@0.3.0-beta.0");
     expect(pairedWorkflow).toContain("@vaultcompass/vault-guard@latest");
     expect(pairedWorkflow).toContain("scan . --format text");
   });

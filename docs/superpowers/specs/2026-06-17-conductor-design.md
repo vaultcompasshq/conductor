@@ -256,7 +256,7 @@ See `integrations/superpowers/README.md`.
 | Alignment review | Uses contract as spec instead of guessing from README |
 | Aggregation | Optional extra score: Conductor drift score at review time |
 
-Import: `npm install @vaultcompasshq/conductor-schema` or git submodule.
+Import: `npm install @vaultcompass/conductor-schema` or git submodule.
 
 See `integrations/downstream-pipeline/README.md`.
 

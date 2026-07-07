@@ -39,7 +39,7 @@
     }
   },
   "devDependencies": {
-    "@vaultcompasshq/conductor-schema": "workspace:*",
+    "@vaultcompass/conductor-schema": "workspace:*",
     "vitest": "^3.0.5",
     "yaml": "^2.8.0"
   }

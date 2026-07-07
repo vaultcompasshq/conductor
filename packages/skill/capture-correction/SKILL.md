@@ -61,5 +61,5 @@ is the harness's job. Load the brief; let the harness drop the noise.
 
 `packages/core/src/correction.ts` (capture/promote) and
 `packages/core/src/brief.ts` (render). Schema: `correction_log` in
-`@vaultcompasshq/conductor-schema`. Design:
+`@vaultcompass/conductor-schema`. Design:
 `docs/superpowers/specs/2026-06-20-correction-log-and-brief.md`.

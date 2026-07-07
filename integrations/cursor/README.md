@@ -94,7 +94,7 @@ Conductor is model-agnostic:
 | Cursor (Claude) | Skills via skill tool |
 | Codex CLI | Skill equivalent or CLI |
 | Gemini CLI | `activate_skill` mapping per GEMINI.md |
-| Downstream automation | Node imports `@vaultcompasshq/conductor-core` |
+| Downstream automation | Node imports `@vaultcompass/conductor-core` |
 
 Same `intent-contract.yaml` — any model reads it.
 

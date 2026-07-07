@@ -1,5 +1,5 @@
 {
-  "name": "@vaultcompasshq/conductor-schema",
+  "name": "@vaultcompass/conductor-schema",
   "version": "0.3.0-beta.0",
   "type": "module",
   "description": "Intent Contract schema, TypeScript types, and AJV validation",

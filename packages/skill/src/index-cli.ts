@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { renderIndex, writeIndex } from "@vaultcompasshq/conductor-core";
+import { renderIndex, writeIndex } from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

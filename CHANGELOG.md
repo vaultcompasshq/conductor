@@ -8,7 +8,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- **Release finish-line polish.** `conductor init` JSON now includes `next_steps`;
+- **npm scope alignment.** Publishable packages now use the `@vaultcompass/*`
+  scope (same org as vault-guard). GitHub org remains `vaultcompasshq`.
+- **GitHub Actions release.** Tag `v*` triggers `.github/workflows/release.yml`
+  for OIDC npm publish and post-publish CLI smoke.
   `--human` prints readable onboarding hints. `conductor report --with-secrets`
   appends an optional vault-guard staged scan when installed. Added offline
   lifecycle fixture tests for CI, `scripts/publish-beta.mjs`, and README npm
@@ -43,7 +46,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   config, binary, Git hook, and GitHub Actions references when present. Added a
   paired pre-commit sample and a paired CI sample for teams that want intent
   drift and secret scanning as independent gates.
-- **Unified CLI beta package.** Added `@vaultcompasshq/conductor-cli` with the
+- **Unified CLI beta package.** Added `@vaultcompass/conductor-cli` with the
   public `conductor <subcommand>` binary wrapping the existing command surface:
   `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`, `brief`,
   `resume`, `index`, and `pivot`. Added top-level `--help` and `--version`.
@@ -106,7 +109,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   is now documented as open-vocabulary free text.
 - Root `pnpm test` now builds first (skill CLI tests run the compiled `dist/`).
 - GitHub Actions integration docs now mark package-install workflow samples as
-  post-publish templates until `@vaultcompasshq/conductor-cli` is available on
+  post-publish templates until `@vaultcompass/conductor-cli` is available on
   npm.
 - Constraint loading now deduplicates identical rules across loaded files and
   keeps the highest priority copy.
@@ -131,7 +134,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- `@vaultcompasshq/conductor-skill` — Superpowers skills (`intent-contract`, `prompt-coach`, `drift-guard`)
+- `@vaultcompass/conductor-skill` — Superpowers skills (`intent-contract`, `prompt-coach`, `drift-guard`)
 - Helper CLIs: `conductor-coach`, `conductor-extract`, `conductor-drift`, `conductor-init`
 - Root scripts: `pnpm conductor:coach`, `conductor:extract`, `conductor:drift`, `conductor:init`, `conductor:install-skills`
 - Core runtime: `extract.ts`, `constraints.ts` (incl. `.cursor/rules`), `config.ts`, `init.ts`, `drift-log.ts`
@@ -152,8 +155,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- `@vaultcompasshq/conductor-schema` package — Intent Contract JSON Schema v1.0.0 with Ajv validation
-- `@vaultcompasshq/conductor-core` package — prompt coach and drift scoring engines
+- `@vaultcompass/conductor-schema` package — Intent Contract JSON Schema v1.0.0 with Ajv validation
+- `@vaultcompass/conductor-core` package — prompt coach and drift scoring engines
 - 5 example intent contracts in `examples/intent-contracts/`
 - NetViz retrospective exit gate (drift score 83)
 - Phase 1 implementation plan (`docs/superpowers/plans/2026-06-17-conductor-phase1.md`)

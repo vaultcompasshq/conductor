@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { describe, it, expect } from "vitest";
-import { validateIntentContract } from "@vaultcompasshq/conductor-schema";
+import { validateIntentContract } from "@vaultcompass/conductor-schema";
 
 const dir = join(import.meta.dirname, "intent-contracts");
 

@@ -6,8 +6,8 @@ import {
   formatDriftMessage,
   loadConfig,
   scoreDrift,
-} from "@vaultcompasshq/conductor-core";
-import { assertValidIntentContract } from "@vaultcompasshq/conductor-schema";
+} from "@vaultcompass/conductor-core";
+import { assertValidIntentContract } from "@vaultcompass/conductor-schema";
 
 function parseArgs(argv: string[]) {
   let contractPath = "";

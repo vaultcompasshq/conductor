@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { configPath, loadConfig } from "./config.js";
 import {
   contractPath,
@@ -503,7 +503,7 @@ export function runDoctor(projectRoot: string): DoctorResult {
     finding(
       "ok",
       "package_version",
-      `@vaultcompasshq/conductor-core ${packageVersion()}`,
+      `@vaultcompass/conductor-core ${packageVersion()}`,
     ),
   ];
 

@@ -3,7 +3,7 @@ import type {
   CorrectionLogEntry,
   IntentContract,
   PivotLogEntry,
-} from "@vaultcompasshq/conductor-schema";
+} from "@vaultcompass/conductor-schema";
 import {
   isContractFrozen,
   readContract,

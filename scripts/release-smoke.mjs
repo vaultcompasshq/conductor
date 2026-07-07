@@ -11,7 +11,7 @@ const expectedVersion = "0.3.0-beta.0";
 const packages = [
   {
     dir: "packages/schema",
-    name: "@vaultcompasshq/conductor-schema",
+    name: "@vaultcompass/conductor-schema",
     requiredFiles: [
       "package/dist/index.js",
       "package/dist/intent-contract.schema.json",
@@ -19,12 +19,12 @@ const packages = [
   },
   {
     dir: "packages/core",
-    name: "@vaultcompasshq/conductor-core",
+    name: "@vaultcompass/conductor-core",
     requiredFiles: ["package/dist/index.js"],
   },
   {
     dir: "packages/skill",
-    name: "@vaultcompasshq/conductor-skill",
+    name: "@vaultcompass/conductor-skill",
     requiredFiles: [
       "package/dist/check-cli.js",
       "package/dist/import-spec-cli.js",
@@ -37,7 +37,7 @@ const packages = [
   },
   {
     dir: "packages/cli",
-    name: "@vaultcompasshq/conductor-cli",
+    name: "@vaultcompass/conductor-cli",
     requiredFiles: ["package/dist/conductor.js"],
   },
 ];

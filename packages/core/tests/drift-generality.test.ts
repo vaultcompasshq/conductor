@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { scoreDrift } from "../src/drift.js";
 
 // These contracts use vocabulary that appears nowhere in drift.ts. They prove

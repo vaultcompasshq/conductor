@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
-import { assertValidIntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
+import { assertValidIntentContract } from "@vaultcompass/conductor-schema";
 import { addCorrection, acknowledgedCorrections } from "../src/correction.js";
 import { buildBrief, renderBriefMarkdown } from "../src/brief.js";
 

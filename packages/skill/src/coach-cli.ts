@@ -2,7 +2,7 @@
 import {
   coachMessage,
   scorePrompt,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 const text = process.argv.slice(2).join(" ").trim();
 if (!text) {

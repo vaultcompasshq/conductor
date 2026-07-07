@@ -13,7 +13,7 @@ Superpowers-compatible skills for Intent Contract, prompt coaching, and drift de
 ## Build CLIs
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill build
+pnpm --filter @vaultcompass/conductor-skill build
 ```
 
 ## CLI helpers
@@ -30,7 +30,7 @@ pnpm --filter @vaultcompasshq/conductor-skill build
 Run via pnpm from repo root:
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill exec conductor-coach "Add export like Notion"
+pnpm --filter @vaultcompass/conductor-skill exec conductor-coach "Add export like Notion"
 ```
 
 ## Install into Cursor

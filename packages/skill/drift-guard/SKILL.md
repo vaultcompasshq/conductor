@@ -29,7 +29,7 @@ description: >-
 ## Score drift (helper CLI)
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill exec conductor-drift \
+pnpm --filter @vaultcompass/conductor-skill exec conductor-drift \
   --contract /path/to/project/.conductor/intent-contract.yaml \
   --project /path/to/project \
   --paths "src/api/new-route.ts,src/hooks/useWebSocket.ts" \

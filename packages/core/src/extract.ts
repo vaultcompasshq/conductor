@@ -2,7 +2,7 @@ import type {
   AcceptanceCriterion,
   Constraint,
   IntentContract,
-} from "@vaultcompasshq/conductor-schema";
+} from "@vaultcompass/conductor-schema";
 import { scorePrompt } from "./coach.js";
 import { constraintRuleTexts } from "./constraints.js";
 
