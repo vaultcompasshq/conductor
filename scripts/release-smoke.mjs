@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const expectedVersion = "0.3.0-beta.0";
+const expectedVersion = "0.3.0-beta.1";
 
 const packages = [
   {
