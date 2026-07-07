@@ -14,6 +14,8 @@ const COMMANDS = {
   correct: "correct-cli.js",
   brief: "brief-cli.js",
   doctor: "doctor-cli.js",
+  report: "report-cli.js",
+  rules: "rules-cli.js",
   resume: "resume-cli.js",
   index: "index-cli.js",
   pivot: "pivot-cli.js",
@@ -33,6 +35,8 @@ Commands:
   correct   Record a durable correction lesson
   brief     Emit a compact Session Brief
   doctor    Diagnose local Conductor setup
+  report    Emit a PR/CI handoff report
+  rules     Inspect project rule files
   resume    Emit a Session Brief plus recent history
   index     Render or regenerate .conductor/index.md
   pivot     Record an intentional scope change
@@ -46,6 +50,8 @@ Examples:
   conductor extract --project . --text "Add CSV export. No new API endpoints."
   conductor freeze --project . --approved-by alice
   conductor doctor --project .
+  conductor report --project . --staged
+  conductor rules audit --project .
   conductor check --project . --staged
   conductor drift --ci --contract .conductor/intent-contract.yaml --paths src/app/api/export/route.ts
 

@@ -85,6 +85,44 @@ describe("conductor", () => {
     expect(out.findings.some((f: { id: string }) => f.id === "conductor_not_initialized")).toBe(true);
   });
 
+  it("runs report through the unified binary", () => {
+    const dir = tmpProject();
+    run([
+      "extract",
+      "--project",
+      dir,
+      "--text",
+      "Update README usage docs. Do not change source code or package metadata. Verify README includes one usage example.",
+    ]);
+    run(["freeze", "--project", dir, "--approved-by", "tester"]);
+
+    const res = run([
+      "report",
+      "--project",
+      dir,
+      "--paths",
+      "README.md",
+      "--signals",
+      "README documentation update",
+      "--json",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("ok");
+    expect(out.contract.approved_by).toBe("tester");
+  });
+
+  it("runs rules audit through the unified binary", () => {
+    const dir = tmpProject();
+    writeFileSync(join(dir, "AGENTS.md"), "## Rules\n- Never commit secrets\n", "utf8");
+    writeFileSync(join(dir, "CLAUDE.md"), "## Rules\n- NEVER commit secrets\n", "utf8");
+
+    const res = run(["rules", "audit", "--project", dir, "--json"]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.summary.duplicates).toBe(1);
+  });
+
   it("supports drift --ci with a blocking exit code", () => {
     const dir = tmpProject();
     const contractPath = join(dir, "intent-contract.yaml");

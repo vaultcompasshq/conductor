@@ -8,6 +8,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Drift handoff report.** Added `conductor report` / `conductor-report` for
+  PR, CI, and agent handoffs. The report runs the gate, exits with the same
+  status as `check`, and summarizes the active contract, drift score, blockers,
+  acceptance criteria coverage, pivots, corrections, changed paths, signals,
+  and recommended next action.
+- **Rules audit.** Added `conductor rules audit` / `conductor-rules audit` to
+  inspect `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules`,
+  `.continue/rules`, and `.kiro/steering`. It reports loaded rules, duplicates,
+  potential conflicts, stale or overbroad rules, and rules that may deserve
+  critical priority.
+- **Path-only drift controls.** Drift scoring now derives generic source,
+  manifest, API, documentation, and test signals from changed paths, so obvious
+  out-of-scope source/package changes can block without requiring explicit
+  `--signals`.
 - **Setup doctor.** Added `conductor doctor` / `conductor-doctor` to diagnose
   local setup, active contract state, approval/freeze status, archive/index
   state, package version, and visible hook/workflow files. Supports readable
@@ -85,9 +99,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - GitHub Actions integration docs now mark package-install workflow samples as
   post-publish templates until `@vaultcompasshq/conductor-cli` is available on
   npm.
+- Constraint loading now deduplicates identical rules across loaded files and
+  keeps the highest priority copy.
+- Public repo validation now defaults to 8 repositories and checks both
+  explicit-signal drift and path-only source/package drift.
 
 ### Fixed
 
+- Prohibition lists such as "Do not change source code, package metadata, or
+  runtime behavior" now expand into separate out-of-scope items, so path-only
+  manifest changes have a contract item to match.
 - Prohibition clauses such as "Do not add new API endpoints" no longer leak
   into `in_scope`, and overlapping prohibition matches are deduped in
   `out_of_scope`. This fixes a validation case where prior-contract drift was

@@ -41,4 +41,23 @@ describe("scoreDrift", () => {
     expect(["soft_block", "hard_block"]).toContain(result.action);
     expect(result.categories.constraint_violation).toBeGreaterThan(0);
   });
+
+  it("blocks obvious API drift from paths alone", () => {
+    const result = scoreDrift(baseContract, {
+      changedPaths: ["src/app/api/export/route.ts"],
+    });
+    expect(result.action).toBe("soft_block");
+    expect(result.findings.some((finding) => /api/i.test(finding))).toBe(true);
+  });
+
+  it("blocks package metadata drift from paths alone", () => {
+    const result = scoreDrift(
+      {
+        ...baseContract,
+        out_of_scope: ["Package metadata and dependency manifests"],
+      },
+      { changedPaths: ["package.json"] },
+    );
+    expect(result.action).toBe("soft_block");
+  });
 });

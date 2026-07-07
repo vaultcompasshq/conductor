@@ -1,6 +1,6 @@
 # Product Positioning
 
-**Updated:** 2026-07-05
+**Updated:** 2026-07-07
 
 Conductor should position itself as the portable intent-control layer for AI-assisted development. It should not compete with full spec-driven development systems, coding agents, or PR review tools. Those products help create plans, run agents, or review code. Conductor's job is to preserve and enforce what the human approved.
 
@@ -49,34 +49,21 @@ Lead with:
 
 `conductor doctor` now gives users one command to diagnose local setup before a gate fails. It checks config, active contract state, approval/freeze status, archived contracts, index freshness, package version, and visible hook/workflow files, with readable output by default and JSON for CI/editor integrations.
 
+### `conductor report`
+
+`conductor report --staged` turns the gate result into a PR/CI handoff: active contract summary, score, blocking reasons, acceptance criteria coverage inferred from paths/signals, pivot/correction history, changed paths, and a recommended next action. It exits with the same status as `conductor check`.
+
+### `conductor rules audit`
+
+`conductor rules audit` inspects `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules`, `.continue/rules`, and `.kiro/steering`; reports what is loaded; and flags duplicates, stale or overbroad rules, potential conflicts, and rules that may deserve critical priority.
+
+### Expanded public validation
+
+`scripts/validate-public-repos.mjs` now defaults to 8 public repositories and includes README positive controls, explicit-signal source/package drift controls, path-only source/package drift controls, and doctor diagnostics.
+
 ## What Is Missing Next
 
-### 1. Drift Report
-
-The CLI currently returns scores and findings. A more compelling user experience is a concise report that a PR, CI job, or agent handoff can paste:
-
-- Active contract summary
-- Current drift score
-- Blocking reasons
-- Acceptance criteria coverage
-- Pivot/correction history
-- Recommended next action
-
-Candidate command: `conductor report --staged`.
-
-### 2. Rules Audit
-
-Competitors increasingly support project rules: `AGENTS.md`, `CLAUDE.md`, `.cursor/rules`, `.continue/rules`, `.kiro/steering`, and similar files. Conductor already loads some constraints, but the compelling feature is an audit:
-
-- Which rules are loaded?
-- Which conflict?
-- Which are too broad or stale?
-- Which should become critical constraints?
-- Which are project guidance rather than task constraints?
-
-Candidate command: `conductor rules audit`.
-
-### 3. Spec Bridge
+### 1. Spec Bridge
 
 Spec Kit and Kiro are not enemies. They are good upstream sources for Conductor.
 
@@ -88,11 +75,7 @@ Candidate commands:
 - `conductor import-spec --from kiro`
 - `conductor export --format markdown`
 
-### 4. Public Validation Expansion
-
-The first public-repo validation harness is in `scripts/validate-public-repos.mjs`. Before v1, expand it beyond the initial four repositories and add path-only drift plus existing-rule-noise controls.
-
-### 5. Optional Semantic Classifier
+### 2. Optional Semantic Classifier
 
 The offline rule-based scorer is a good default, but nuanced drift needs an optional semantic path. This should be opt-in and preserve local/offline behavior as the baseline.
 

@@ -104,3 +104,22 @@ export {
   renderBriefMarkdown,
   type SessionBrief,
 } from "./brief.js";
+export {
+  buildConductorReport,
+  renderConductorReportMarkdown,
+  type AcceptanceCoverage,
+  type BuildReportOptions,
+  type ConductorReport,
+  type CoverageStatus,
+  type ReportContractSummary,
+} from "./report.js";
+export {
+  auditRules,
+  renderRulesAuditMarkdown,
+  type RulesAuditDuplicate,
+  type RulesAuditFile,
+  type RulesAuditFinding,
+  type RulesAuditFindingStatus,
+  type RulesAuditResult,
+  type RulesAuditStatus,
+} from "./rules-audit.js";

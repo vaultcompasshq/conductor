@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractConstraintsFromMarkdown } from "../src/constraints.js";
+import {
+  dedupeConstraints,
+  extractConstraintsFromMarkdown,
+  loadAllConstraints,
+} from "../src/constraints.js";
 
 describe("extractConstraintsFromMarkdown precision", () => {
   it("keeps normative rules and assigns priority", () => {
@@ -68,5 +73,26 @@ describe("extractConstraintsFromMarkdown precision", () => {
     );
     expect(rules.every((r) => !/^tag:/i.test(r.rule))).toBe(true);
     expect(rules.every((r) => !/v0\.1\.0-alpha/i.test(r.rule))).toBe(true);
+  });
+
+  it("dedupes identical rules across loaded constraint files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "conductor-constraints-"));
+    writeFileSync(join(dir, "AGENTS.md"), "- Never commit secrets\n", "utf8");
+    writeFileSync(join(dir, "CLAUDE.md"), "- NEVER commit secrets\n", "utf8");
+
+    const loaded = loadAllConstraints(dir);
+    expect(loaded.loadedFiles).toEqual(["AGENTS.md", "CLAUDE.md"]);
+    expect(loaded.constraints).toHaveLength(1);
+    expect(loaded.constraints[0].rule).toMatch(/commit secrets/i);
+  });
+
+  it("keeps the highest priority when deduping rules", () => {
+    const deduped = dedupeConstraints([
+      { source: "AGENTS.md", rule: "Prefer no production deploys", priority: "medium" },
+      { source: "CLAUDE.md", rule: "Prefer no production deploys", priority: "critical" },
+    ]);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].priority).toBe("critical");
   });
 });

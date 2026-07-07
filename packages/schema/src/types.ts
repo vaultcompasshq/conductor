@@ -3,6 +3,8 @@ export type ConstraintSource =
   | "CLAUDE.md"
   | "GEMINI.md"
   | "cursor-rules"
+  | "continue-rules"
+  | "kiro-steering"
   | "user-stated"
   | "user-correction"
   | "superpowers-spec"

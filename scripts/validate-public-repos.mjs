@@ -16,6 +16,10 @@ const DEFAULT_REPOS = [
   "chalk/chalk",
   "expressjs/express",
   "vitejs/vite",
+  "prettier/prettier",
+  "eslint/eslint",
+  "openai/codex",
+  "fastify/fastify",
 ];
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -135,6 +139,14 @@ function pickReadme(files) {
 function pickSourceOrPackage(files) {
   const preferred = [
     "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "pyproject.toml",
+    "requirements.txt",
+    "Gemfile",
+    "composer.json",
+    "pom.xml",
+    "build.gradle",
     "src/index.ts",
     "src/index.js",
     "src/main.ts",
@@ -145,7 +157,14 @@ function pickSourceOrPackage(files) {
   ];
   return (
     preferred.find((file) => files.includes(file)) ||
-    files.find((file) => !/(^|\/)(readme|license|copying|contributing)(\.|$)/i.test(file))
+    files.find(
+      (file) =>
+        !/(^|\/)(readme|license|copying|contributing|changelog|codeowners)(\.|$)/i.test(
+          file,
+        ) &&
+        !/\.(md|mdx|txt|rst)$/i.test(file) &&
+        !/(^|\/)docs?\//i.test(file),
+    )
   );
 }
 
@@ -160,16 +179,16 @@ function parseJsonOutput(result) {
 function stageAndCheck({ repoPath, cliPath, file, text, signal }) {
   appendFileSync(join(repoPath, file), text);
   requireOk(run("git", ["add", "--", file], { cwd: repoPath }), `git add ${file}`);
-  const check = run(process.execPath, [
+  const args = [
     cliPath,
     "check",
     "--project",
     repoPath,
     "--staged",
-    "--signals",
-    signal,
     "--json",
-  ]);
+  ];
+  if (signal) args.push("--signals", signal);
+  const check = run(process.execPath, args);
   const parsed = parseJsonOutput(check);
   run("git", ["restore", "--staged", "--", file], { cwd: repoPath });
   run("git", ["restore", "--", file], { cwd: repoPath });
@@ -227,9 +246,18 @@ function validateRepo(repo, options) {
     text: "\n",
     signal: "changed source code implementation outside README",
   });
+  const pathOnlySourceCheck = stageAndCheck({
+    repoPath,
+    cliPath,
+    file: sourceOrPackage,
+    text: "\n",
+  });
 
   const sourceBlocked =
     sourceCheck.status !== 0 && sourceCheck.parsed?.status === "blocked";
+  const pathOnlySourceBlocked =
+    pathOnlySourceCheck.status !== 0 &&
+    pathOnlySourceCheck.parsed?.status === "blocked";
   const readmePassed =
     readmeCheck.status === 0 && readmeCheck.parsed?.status === "ok";
   const extractOk = extract.ok && parseJsonOutput(extract)?.valid === true;
@@ -246,6 +274,7 @@ function validateRepo(repo, options) {
     doctorStatus: parseJsonOutput(doctor)?.status ?? "unknown",
     readmePassed,
     sourceBlocked,
+    pathOnlySourceBlocked,
     errors: [
       init.ok ? "" : "init failed",
       extractOk ? "" : "extract failed",
@@ -253,6 +282,7 @@ function validateRepo(repo, options) {
       doctor.ok ? "" : "doctor failed",
       readmePassed ? "" : "README control did not pass",
       sourceBlocked ? "" : "source/package control did not block",
+      pathOnlySourceBlocked ? "" : "path-only source/package control did not block",
     ].filter(Boolean),
   };
 }
@@ -261,23 +291,23 @@ function mark(value) {
   return value ? "yes" : "no";
 }
 
-function renderReport({ commit, results }) {
+function renderReport({ revision, results }) {
   const passed = results.filter((result) => result.errors.length === 0).length;
   const lines = [
     `# Public Repo Validation - ${date}`,
     "",
-    `**Conductor commit:** \`${commit}\``,
+    `**Conductor revision:** \`${revision}\``,
     "**Mode:** local built CLI, public repos cloned into a temporary workdir, no upstream changes.",
     "",
     "## Repos",
     "",
-    "| Repo | Init | Extract | Freeze | Doctor | README pass | Source/package block |",
-    "|---|---:|---:|---:|---:|---:|---:|",
+    "| Repo | Init | Extract | Freeze | Doctor | README pass | Source/package block | Path-only block |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
   ];
 
   for (const result of results) {
     lines.push(
-      `| \`${result.repo}\` | ${mark(result.initOk)} | ${mark(result.extractOk)} | ${mark(result.freezeOk)} | ${result.doctorStatus} | ${mark(result.readmePassed)} | ${mark(result.sourceBlocked)} |`,
+      `| \`${result.repo}\` | ${mark(result.initOk)} | ${mark(result.extractOk)} | ${mark(result.freezeOk)} | ${result.doctorStatus} | ${mark(result.readmePassed)} | ${mark(result.sourceBlocked)} | ${mark(result.pathOnlySourceBlocked)} |`,
     );
   }
 
@@ -289,13 +319,14 @@ function renderReport({ commit, results }) {
     "",
     "- Positive control: staged README-only change against a contract that allows README usage documentation and disallows source/package changes.",
     "- Negative control: staged source/package change with an explicit signal describing implementation drift.",
+    "- Path-only negative control: staged source/package change with no explicit signal.",
     "- Setup diagnostic: `conductor doctor --json` runs after freeze and before drift controls.",
     "",
     "## Notes",
     "",
     "- This harness is intentionally manual by default because it clones public repositories.",
     "- Use `--report docs/validation/public-repos/YYYY-MM-DD.md` when the run should be committed.",
-    "- Expand the repo list before v1 to cover more layouts, agent-rule files, and path-only drift controls.",
+    "- Expand the repo list further before v1 if specific downstream host layouts need coverage.",
   );
 
   const failures = results.filter((result) => result.errors.length > 0);
@@ -321,6 +352,8 @@ function main() {
   }
 
   const commit = run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim() || "unknown";
+  const dirty = run("git", ["status", "--short"]).stdout.trim().length > 0;
+  const revision = dirty ? `${commit} + working tree` : commit;
   const results = [];
   let failed = false;
 
@@ -340,12 +373,13 @@ function main() {
         doctorStatus: "error",
         readmePassed: false,
         sourceBlocked: false,
+        pathOnlySourceBlocked: false,
         errors: [(error instanceof Error ? error.message : String(error))],
       });
     }
   }
 
-  const report = renderReport({ commit, results });
+  const report = renderReport({ revision, results });
   mkdirSync(dirname(options.report), { recursive: true });
   writeFileSync(options.report, report);
   console.log(`\nWrote ${options.report}`);

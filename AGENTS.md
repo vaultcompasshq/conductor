@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI, release smoke checks, setup doctor, first public-repo validation harness, and optional vault-guard pairing samples are complete. Next work is the v1 readiness set: drift report, rules audit, broader public-repo validation, and then publish/tag execution.
+The unified `conductor` CLI, release smoke checks, setup doctor, handoff reports, rules audit, expanded public-repo validation harness, path-only drift controls, and optional vault-guard pairing samples are complete. Next work is the remaining v1 readiness set: spec bridge, Phase 3b correction hygiene, deeper adapter validation, and publish/tag execution after maintainer approval.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 
@@ -67,7 +67,7 @@ The unified `conductor` CLI, release smoke checks, setup doctor, first public-re
 
 ```bash
 pnpm install
-pnpm test      # 96 tests: schema (7), core (50), skill (22), cli (7), examples/integrations (10)
+pnpm test      # 110 tests: schema (7), core (59), skill (25), cli (9), examples/integrations (10)
 pnpm build
 pnpm typecheck
 pnpm release:smoke
