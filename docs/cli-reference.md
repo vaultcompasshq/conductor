@@ -12,8 +12,8 @@ conductor check --project . --staged
 conductor-check --project . --staged
 ```
 
-The session lifecycle: **coach → extract (draft) → freeze (approve) → check
-(gate) → report/rules → pivot/correct → brief/resume**.
+The session lifecycle: **coach → extract/import-spec (draft) → freeze
+(approve) → check (gate) → report/rules → pivot/correct → brief/resume**.
 
 ---
 
@@ -25,8 +25,9 @@ conductor --version
 conductor <command> [flags]
 ```
 
-Commands: `init`, `coach`, `extract`, `freeze`, `check`, `report`, `rules`,
-`drift`, `correct`, `brief`, `doctor`, `resume`, `index`, `pivot`.
+Commands: `init`, `coach`, `extract`, `import-spec`, `freeze`, `check`,
+`report`, `rules`, `drift`, `correct`, `brief`, `doctor`, `resume`, `index`,
+`pivot`.
 
 `conductor drift --ci` runs the lower-level drift scorer and exits `1` when the
 JSON result has `block: true`; otherwise it preserves the normal command output.
@@ -49,6 +50,28 @@ separate (`conductor-freeze`).
 
 JSON: `valid`, `written_path`, `frozen` (always false), `next_step`,
 `prompt_score`, `needs_coaching`, `coaching`, `contract_yaml`.
+
+## conductor import-spec / conductor-import-spec
+
+Import Spec Kit or Kiro-style artifacts into an unfrozen Intent Contract draft.
+This is a bridge into Conductor's approval flow, not a second spec system:
+review the draft, edit if needed, then run `conductor freeze`.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--from auto|spec-kit|kiro` | source format; default `auto` |
+| `--spec-dir <dir>` | explicit spec directory |
+| `--requirements <path>` | explicit requirements/spec/bugfix file |
+| `--design <path>` | explicit design/plan file |
+| `--tasks <path>` | explicit tasks file |
+| `--dry-run` | print the draft JSON, write nothing |
+
+Discovery checks Spec Kit-style `specs/<feature>/spec.md`, `plan.md`,
+`tasks.md` and `.specify/specs/<feature>/...`; Kiro-style
+`.kiro/specs/<feature>/requirements.md` or `bugfix.md`, `design.md`, and
+`tasks.md`. JSON includes `format`, `spec_dir`, `imported_files`,
+`written_path`, `frozen: false`, `next_step`, and `contract_yaml`.
 
 ## conductor freeze / conductor-freeze
 

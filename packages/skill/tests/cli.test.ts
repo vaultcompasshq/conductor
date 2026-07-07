@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -99,6 +99,56 @@ describe("conductor-extract", () => {
     const written = readFileSync(out.written_path, "utf8");
     expect(written).not.toContain("frozen_by: user");
     expect(written).not.toContain("approval:");
+  });
+});
+
+describe("conductor-import-spec", () => {
+  it("imports a Kiro spec as an unfrozen draft", async () => {
+    const dir = tmpProject();
+    const specDir = join(dir, ".kiro", "specs", "readme-usage");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(
+      join(specDir, "requirements.md"),
+      "WHEN a reader opens README, THE SYSTEM SHALL show one usage example.\n",
+      "utf8",
+    );
+    writeFileSync(join(specDir, "design.md"), "Use existing docs structure.\n", "utf8");
+    writeFileSync(join(specDir, "tasks.md"), "- [ ] Update README usage\n", "utf8");
+
+    const res = await run("import-spec-cli.js", [
+      "--project", dir,
+      "--from", "kiro",
+      "--spec-dir", ".kiro/specs/readme-usage",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.format).toBe("kiro");
+    expect(out.written_path).toContain("intent-contract.yaml");
+    expect(out.frozen).toBe(false);
+    const written = readFileSync(out.written_path, "utf8");
+    expect(written).toContain("Import kiro spec");
+    expect(written).not.toContain("approval:");
+  });
+
+  it("--dry-run prints a contract without writing", async () => {
+    const dir = tmpProject();
+    const specDir = join(dir, "specs", "export");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(join(specDir, "spec.md"), "- Build CSV export\n", "utf8");
+    writeFileSync(join(specDir, "plan.md"), "Client-side only.\n", "utf8");
+    writeFileSync(join(specDir, "tasks.md"), "- [ ] Add export button\n", "utf8");
+
+    const res = await run("import-spec-cli.js", [
+      "--project", dir,
+      "--from", "spec-kit",
+      "--dry-run",
+    ]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.format).toBe("spec-kit");
+    expect(out.written_path).toBeNull();
+    expect(out.contract_yaml).toContain("Build CSV export");
+    expect(existsSync(join(dir, ".conductor", "intent-contract.yaml"))).toBe(false);
   });
 });
 

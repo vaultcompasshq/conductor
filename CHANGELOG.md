@@ -18,6 +18,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   `.continue/rules`, and `.kiro/steering`. It reports loaded rules, duplicates,
   potential conflicts, stale or overbroad rules, and rules that may deserve
   critical priority.
+- **Spec bridge.** Added `conductor import-spec` /
+  `conductor-import-spec` to import Spec Kit or Kiro-style artifacts into an
+  unfrozen Intent Contract draft. Supports auto-discovery plus explicit
+  `--spec-dir`, `--requirements`, `--design`, and `--tasks` paths.
 - **Path-only drift controls.** Drift scoring now derives generic source,
   manifest, API, documentation, and test signals from changed paths, so obvious
   out-of-scope source/package changes can block without requiring explicit

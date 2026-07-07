@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-07 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 110 tests passing.
+before merge. Baseline: 115 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -93,9 +93,9 @@ prop sharper against current spec tools, agent hosts, and PR review products.
       `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules`,
       `.continue/rules`, and `.kiro/steering`; detect conflicts, stale rules,
       and rules that should become critical constraints.
-- [ ] **Spec bridge.** Add import/export paths for popular spec artifacts,
+- [x] **Spec import bridge.** Add import paths for popular spec artifacts,
       starting with Spec Kit and Kiro-style `requirements.md` / `design.md` /
-      `tasks.md`.
+      `tasks.md`; imported specs become unfrozen Intent Contract drafts.
 - [x] **Drift report.** Add `conductor report --staged` for PR/CI/agent handoff:
       active contract summary, drift score, blockers, AC coverage, pivots,
       corrections, and recommended next action.

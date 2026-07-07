@@ -8,6 +8,7 @@ const COMMANDS = {
   init: "init-cli.js",
   coach: "coach-cli.js",
   extract: "extract-cli.js",
+  "import-spec": "import-spec-cli.js",
   freeze: "freeze-cli.js",
   check: "check-cli.js",
   drift: "drift-cli.js",
@@ -29,6 +30,7 @@ Commands:
   init      Create a .conductor project skeleton
   coach     Score a prompt for scope and clarity risks
   extract   Draft an unfrozen Intent Contract from an ask
+  import-spec Import Spec Kit or Kiro artifacts as an unfrozen draft
   freeze    Approve and freeze the active draft contract
   check     Run the enforcement gate against changed paths
   drift     Score drift for a specific contract file
@@ -48,6 +50,7 @@ Global flags:
 Examples:
   conductor init --project .
   conductor extract --project . --text "Add CSV export. No new API endpoints."
+  conductor import-spec --project . --from kiro --spec-dir .kiro/specs/export
   conductor freeze --project . --approved-by alice
   conductor doctor --project .
   conductor report --project . --staged
