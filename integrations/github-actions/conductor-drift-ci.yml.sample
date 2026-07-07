@@ -1,8 +1,6 @@
 name: Conductor Drift
 
-# Post-publish sample: this workflow assumes
-# @vaultcompass/conductor-cli@0.3.0-beta.0 is available on npm.
-# Until then, run Conductor from a local checkout or a release artifact.
+# Post-publish sample: installs @vaultcompass/conductor-cli@0.3.0-beta.1 from npm.
 
 on:
   pull_request:
@@ -25,7 +23,7 @@ jobs:
           cache: pnpm
 
       - name: Install Conductor
-        run: pnpm dlx @vaultcompass/conductor-cli@0.3.0-beta.0 --version
+        run: pnpm dlx @vaultcompass/conductor-cli@0.3.0-beta.1 --version
 
       - name: Collect changed paths
         id: changed
@@ -37,7 +35,7 @@ jobs:
 
       - name: Check intent drift
         run: |
-          pnpm dlx @vaultcompass/conductor-cli@0.3.0-beta.0 drift \
+          pnpm dlx @vaultcompass/conductor-cli@0.3.0-beta.1 drift \
             --ci \
             --contract .conductor/intent-contract.yaml \
             --paths "${{ steps.changed.outputs.paths }}"

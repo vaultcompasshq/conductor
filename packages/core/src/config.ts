@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import {
   DEFAULT_CONDUCTOR_CONFIG,
   mergeConductorConfig,
@@ -22,10 +22,5 @@ export function loadConfig(projectRoot: string): ConductorConfig {
 }
 
 export function defaultConfigYaml(): string {
-  return readFileSync(
-    join(import.meta.dirname, "../../../examples/conductor.config.example.yaml"),
-    "utf8",
-  )
-    .replace(/^#.*\n/gm, "")
-    .trim();
+  return stringify(DEFAULT_CONDUCTOR_CONFIG).trim();
 }

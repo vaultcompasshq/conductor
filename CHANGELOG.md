@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.3.0-beta.1] - 2026-07-07
+
+### Fixed
+
+- **`conductor init` from npm.** Default `config.yaml` is now generated from embedded
+  defaults in `@vaultcompass/conductor-core` instead of reading
+  `examples/conductor.config.example.yaml`, which is not shipped in published
+  packages.
+
 ### Added
 
 - **npm scope alignment.** Publishable packages now use the `@vaultcompass/*`
