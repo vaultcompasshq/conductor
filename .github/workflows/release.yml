@@ -37,11 +37,11 @@ jobs:
       - name: Release smoke
         run: pnpm release:smoke
 
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
-
       - name: Publish to npm
-        run: npx npm@latest publish -r --access public --no-git-checks
+        run: |
+          for pkg in packages/schema packages/core packages/skill packages/cli; do
+            pnpm --dir "$pkg" publish --access public --no-git-checks --tag beta
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

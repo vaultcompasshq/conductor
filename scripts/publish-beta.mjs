@@ -49,7 +49,7 @@ console.log("Running release smoke...");
 run("pnpm", ["release:smoke"]);
 
 for (const pkg of PACKAGES) {
-  const args = ["publish", "--access", "public", "--no-git-checks"];
+  const args = ["publish", "--access", "public", "--no-git-checks", "--tag", "beta"];
   if (dryRun) args.push("--dry-run");
   console.log(`\nPublishing ${pkg}...`);
   run("pnpm", args, { cwd: resolve(repoRoot, pkg) });
