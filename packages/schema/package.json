@@ -14,7 +14,8 @@
   },
   "homepage": "https://github.com/vaultcompasshq/conductor#readme",
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "beta"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
