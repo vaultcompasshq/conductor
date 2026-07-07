@@ -28,7 +28,7 @@ function usage() {
   console.log(`Usage: node scripts/publish-beta.mjs [--dry-run]
 
 Publishes @vaultcompass/conductor packages in dependency order.
-Requires npm login with publish access to the @vaultcompasshq scope.
+Requires npm login with publish access to the @vaultcompass scope.
 
 Steps:
   1. pnpm build
