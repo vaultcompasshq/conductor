@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-07 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 115 tests passing.
+before merge. Baseline: 117 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -81,8 +81,9 @@ Goal: keep the public-repo smoke test repeatable while v1 features mature.
       source/package block, explicit-signal drift, and path-only drift are
       covered by the harness. Existing-rule noise is covered by `rules audit`
       and constraint deduplication tests.
-- [ ] Decide which parts should run in CI and which stay manual because they
-      require network access.
+- [x] Decide which parts should run in CI and which stay manual because they
+      require network access. Offline lifecycle fixture runs in CI;
+      `validate-public-repos.mjs` stays manual/networked.
 
 ## 5. Competitive positioning follow-ups
 
@@ -125,8 +126,8 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Clear the low `esbuild` advisory with a pnpm override.
 - [x] README install-without-downstream-pipeline quickstart and beta release checklist.
 - [x] GitHub Action example around `conductor drift --ci`.
-- [ ] Version tag and npm publish decision/execution, deferred until v1 readiness
-      work is complete.
+- [ ] Version tag and npm publish execution — run `pnpm publish:beta` after the
+      release PR merges and CI is green.
 
 ## 8. Integrations (design-stage → real, if/when prioritized)
 

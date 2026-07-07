@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 115 passing — schema 7 · core 61 · skill 27 · cli 10 · examples/integrations 10.
+- **Tests:** 117 passing — schema 7 · core 62 · skill 27 · cli 10 · examples/integrations 11.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -59,19 +59,19 @@ of truth for "where are we and what's next." For granular tasks see
     paired CI sample, and clarified package-install workflow status.
 14. v1 readiness pass: `conductor report`, `conductor rules audit`, constraint
     deduplication, path-only drift controls, and broader public-repo validation.
-15. Spec bridge: `conductor import-spec` for Spec Kit and Kiro-style artifacts.
-
----
+16. Release finish-line polish: init `next_steps`, report `--with-secrets`,
+    offline lifecycle fixture, publish script, and README npm guardrails.
 
 ## What's next (priority order)
 
-1. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+1. **Publish/tag execution** — run `pnpm publish:beta` and tag `v0.3.0-beta`
+   after CI is green on the release PR.
+2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-2. **Integration hardening** — full runtime checks for hook adapters in real
+3. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
-3. **Public repo validation policy** — decide what stays manual because it
-   requires network access and whether a smaller offline fixture belongs in CI.
-4. **Publish/tag execution** — deferred until the maintainer approves a release.
+4. **Dogfood on a Vault & Compass repo** — paired Conductor + vault-guard
+   pre-commit on one Tier 0 app.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -104,5 +104,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (115 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (117 passing baseline).
 ```

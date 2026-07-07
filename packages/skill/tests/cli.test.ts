@@ -57,6 +57,7 @@ describe("conductor-init", () => {
     expect(res.code).toBe(0);
     const out = JSON.parse(res.stdout);
     expect(out.created).toContain(".conductor/config.yaml");
+    expect(out.next_steps?.length).toBeGreaterThan(0);
     expect(existsSync(join(dir, ".conductor", "config.yaml"))).toBe(true);
   });
 });

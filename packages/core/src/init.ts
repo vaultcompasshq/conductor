@@ -4,10 +4,19 @@ import { conductorDir } from "./contract-store.js";
 import { defaultConfigYaml, configPath } from "./config.js";
 import { renderIndex } from "./memory-index.js";
 
+export const INIT_NEXT_STEPS = [
+  "conductor extract --project . --text \"<your ask>\"",
+  "conductor freeze --project . --approved-by <you>",
+  "conductor doctor --project .",
+  "conductor check --project . --staged",
+  "Optional: cp integrations/git-hooks/pre-commit-with-vault-guard.sample .git/hooks/pre-commit",
+] as const;
+
 export interface InitResult {
   conductor_dir: string;
   created: string[];
   skipped: string[];
+  next_steps: string[];
 }
 
 export function initConductor(projectRoot: string): InitResult {
@@ -40,5 +49,10 @@ export function initConductor(projectRoot: string): InitResult {
     skipped.push(".conductor/contracts/");
   }
 
-  return { conductor_dir: dir, created, skipped };
+  return {
+    conductor_dir: dir,
+    created,
+    skipped,
+    next_steps: [...INIT_NEXT_STEPS],
+  };
 }

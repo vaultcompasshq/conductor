@@ -13,7 +13,7 @@ pnpm release:smoke
 pnpm audit --audit-level low
 ```
 
-Expected baseline: 115 tests passing.
+Expected baseline: 117 tests passing.
 
 ## Package Smoke
 
@@ -48,3 +48,18 @@ git push origin v0.3.0-beta
 ```
 
 Do not tag before the release commit has landed on `main`.
+
+## Publish
+
+After verification:
+
+```bash
+pnpm publish:beta:dry-run
+pnpm publish:beta
+git tag v0.3.0-beta
+git push origin v0.3.0-beta
+```
+
+`scripts/publish-beta.mjs` builds, runs release smoke, then publishes schema →
+core → skill → cli with `--access public`. Requires `npm login` with publish
+access to `@vaultcompasshq`.

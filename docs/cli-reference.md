@@ -122,6 +122,7 @@ It runs the same gate as `conductor check` and exits with the gate result.
 | `--message "<text>"` | latest user message |
 | `--previous-contract <id>` | include prior-contract drift context |
 | `--no-require-frozen` | allow a missing contract, matching `check` |
+| `--with-secrets` | append optional vault-guard staged scan when installed |
 | `--json` | machine-readable report |
 
 Markdown includes the active contract, gate reasons, drift score, acceptance
@@ -242,3 +243,7 @@ Create the `.conductor/` skeleton (`config.yaml`, `index.md`, `contracts/`).
 | Flag | Meaning |
 |------|---------|
 | `--project <root>` | target project |
+| `--json` | JSON output with `next_steps` (default) |
+| `--human` | readable output with next-step hints |
+
+JSON includes `next_steps` with the recommended lifecycle commands after init.

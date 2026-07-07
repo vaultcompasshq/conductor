@@ -46,7 +46,7 @@ export {
 export { appendDriftEvent, driftLogPath, type DriftLogEvent } from "./drift-log.js";
 export { draftContract, generateContractId, type DraftContractInput } from "./extract.js";
 export { formatDriftMessage } from "./format-drift.js";
-export { initConductor, type InitResult } from "./init.js";
+export { initConductor, INIT_NEXT_STEPS, type InitResult } from "./init.js";
 export { DRIFT_WEIGHTS, DRIFT_THRESHOLDS, driftAction } from "./rubric.js";
 export {
   crossSessionDrift,
@@ -113,6 +113,10 @@ export {
   type CoverageStatus,
   type ReportContractSummary,
 } from "./report.js";
+export {
+  scanVaultGuardStaged,
+  type VaultGuardScanSummary,
+} from "./vault-guard-scan.js";
 export {
   auditRules,
   renderRulesAuditMarkdown,

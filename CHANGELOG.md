@@ -8,6 +8,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Release finish-line polish.** `conductor init` JSON now includes `next_steps`;
+  `--human` prints readable onboarding hints. `conductor report --with-secrets`
+  appends an optional vault-guard staged scan when installed. Added offline
+  lifecycle fixture tests for CI, `scripts/publish-beta.mjs`, and README npm
+  install + AI session guardrails quickstart.
 - **Drift handoff report.** Added `conductor report` / `conductor-report` for
   PR, CI, and agent handoffs. The report runs the gate, exits with the same
   status as `check`, and summarizes the active contract, drift score, blockers,

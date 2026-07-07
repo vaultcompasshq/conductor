@@ -6,10 +6,12 @@
   "license": "MIT",
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm build && pnpm -r test && vitest run examples/validate-examples.test.ts examples/validate-integrations.test.ts",
+    "test": "pnpm build && pnpm -r test && vitest run examples/validate-examples.test.ts examples/validate-integrations.test.ts examples/validate-offline-lifecycle.test.ts",
     "typecheck": "pnpm -r typecheck",
     "release:smoke": "pnpm build && node scripts/release-smoke.mjs",
     "validate:public-repos": "node scripts/validate-public-repos.mjs",
+    "publish:beta": "node scripts/publish-beta.mjs",
+    "publish:beta:dry-run": "node scripts/publish-beta.mjs --dry-run",
     "conductor": "node packages/cli/dist/conductor.js",
     "conductor:coach": "node packages/skill/dist/coach-cli.js",
     "conductor:extract": "node packages/skill/dist/extract-cli.js",
