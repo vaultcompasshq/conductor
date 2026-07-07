@@ -19,6 +19,10 @@ import {
   intersectingTokens,
   tokenize,
 } from "./tokenize.js";
+import {
+  scanVaultGuardStaged,
+  type VaultGuardScanSummary,
+} from "./vault-guard-scan.js";
 
 export type CoverageStatus = "covered" | "unclear";
 
@@ -63,12 +67,14 @@ export interface ConductorReport {
     pending: CorrectionLogEntry[];
   };
   crossSessionDrift?: CrossSessionDriftScore;
+  vault_guard?: VaultGuardScanSummary;
 }
 
 export interface BuildReportOptions {
   requireFrozen?: boolean;
   signals?: DriftSignals;
   previousContract?: string;
+  withSecrets?: boolean;
 }
 
 function evidenceTokens(signals: DriftSignals): Set<string> {
@@ -201,6 +207,9 @@ export function buildConductorReport(
     crossSessionDrift: crossSession,
   };
   report.recommendation = recommendation({ gate, contract, signals });
+  if (options.withSecrets) {
+    report.vault_guard = scanVaultGuardStaged(projectRoot);
+  }
   return report;
 }
 
@@ -302,6 +311,22 @@ export function renderConductorReportMarkdown(report: ConductorReport): string {
 
   section(lines, "Changed paths", list(report.changed_paths));
   section(lines, "Signals", list(report.signals));
+
+  if (report.vault_guard) {
+    const scan = report.vault_guard;
+    if (!scan.available) {
+      section(lines, "Secrets (vault-guard)", [
+        `- skipped: ${scan.skipped ?? "vault-guard unavailable"}`,
+      ]);
+    } else {
+      section(lines, "Secrets (vault-guard)", [
+        `- version: ${scan.version ?? "unknown"}`,
+        `- staged secrets: ${scan.secrets}`,
+        `- staged files with matches: ${scan.files}`,
+        `- scan exit: ${scan.exitCode}`,
+      ]);
+    }
+  }
 
   return lines.join("\n");
 }

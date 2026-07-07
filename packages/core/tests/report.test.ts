@@ -67,4 +67,21 @@ describe("conductor report", () => {
     expect(report.gate.drift?.action).toBe("soft_block");
     expect(report.recommendation).toMatch(/resolve the drift/i);
   });
+
+  it("can include an optional vault-guard summary when requested", () => {
+    const dir = tmpProject();
+    writeContract(dir, frozenContract());
+
+    const report = buildConductorReport(dir, {
+      withSecrets: true,
+      signals: {
+        changedPaths: ["README.md"],
+      },
+    });
+
+    expect(report.vault_guard).toBeDefined();
+    expect(typeof report.vault_guard?.available).toBe("boolean");
+    const markdown = renderConductorReportMarkdown(report);
+    expect(markdown).toContain("Secrets (vault-guard)");
+  });
 });

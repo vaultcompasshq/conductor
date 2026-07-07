@@ -20,10 +20,10 @@ User conversation
 
 ## Status
 
-**Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, and resume shipped - July 2026
+**Phase:** v0.3.0-beta ready to publish; unified CLI, gate, report, rules audit, spec import, and validation harness shipped — July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **115 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **117 tests passing**
 
 **Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
 
@@ -81,6 +81,35 @@ or a CI step.
 
 ## Quickstart
 
+### Install (npm)
+
+```bash
+npx @vaultcompasshq/conductor-cli@0.3.0-beta init --project .
+npx @vaultcompasshq/conductor-cli@0.3.0-beta extract --project . --text "Add CSV export. Do not add new API endpoints."
+npx @vaultcompasshq/conductor-cli@0.3.0-beta freeze --project . --approved-by "<you>"
+npx @vaultcompasshq/conductor-cli@0.3.0-beta check --project . --staged
+```
+
+Pair with [vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) for secret scanning:
+
+```bash
+cp integrations/git-hooks/pre-commit-with-vault-guard.sample .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+### AI session guardrails
+
+Conductor and vault-guard are independent gates for the same workflow:
+
+| Gate | Tool | Blocks |
+|------|------|--------|
+| Intent drift | `conductor check --staged` | Work outside the approved contract |
+| Secret leakage | `vault-guard scan --staged` | Credentials in staged files |
+
+Use `conductor doctor` to verify setup, `conductor report --staged` for PR/agent handoffs, and `conductor report --staged --with-secrets` when vault-guard is installed.
+
+### Develop from source
+
 ```bash
 pnpm install
 pnpm build
@@ -98,7 +127,7 @@ pnpm conductor -- rules audit --project .
 
 ```bash
 pnpm install
-pnpm test      # 115 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # 117 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
 pnpm release:smoke
 pnpm validate:public-repos

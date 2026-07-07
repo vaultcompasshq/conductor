@@ -31,7 +31,7 @@ Phase 1 reference: [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./doc
 | Hardening - generic scorer, gate, approval | - | Complete (PRs #1, #3, #5) |
 | 3 - Memory-index persistence | 7-10 | Core complete (`history`, generated index, resume, pivot, cross-session drift) |
 | 3b - decay/dedup, LLM normalization | - | Deferred |
-| 4 - Unified CLI + public release | 11-14 | CLI + release smoke complete; publish/tag pending |
+| 4 - Unified CLI + public release | 11-14 | CLI + release smoke complete; publish/tag is the remaining step |
 
 ---
 
@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI, release smoke checks, setup doctor, handoff reports, rules audit, spec import, expanded public-repo validation harness, path-only drift controls, and optional vault-guard pairing samples are complete. Next work is the remaining v1 readiness set: Phase 3b correction hygiene, deeper adapter validation, and publish/tag execution after maintainer approval.
+The unified `conductor` CLI, release smoke checks, setup doctor, handoff reports, rules audit, spec import, expanded public-repo validation harness, path-only drift controls, optional vault-guard pairing samples, offline lifecycle fixture, and publish script are complete. Next work: merge the release PR, publish `v0.3.0-beta`, dogfood on a Vault & Compass repo, then Phase 3b correction hygiene and adapter hardening.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 
@@ -67,7 +67,7 @@ The unified `conductor` CLI, release smoke checks, setup doctor, handoff reports
 
 ```bash
 pnpm install
-pnpm test      # 115 tests: schema (7), core (61), skill (27), cli (10), examples/integrations (10)
+pnpm test      # 117 tests: schema (7), core (62), skill (27), cli (10), examples/integrations (11)
 pnpm build
 pnpm typecheck
 pnpm release:smoke

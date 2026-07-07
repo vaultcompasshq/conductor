@@ -14,6 +14,7 @@ function parseArgs(argv: string[]) {
   let requireFrozen = true;
   let json = false;
   let previousContract = "";
+  let withSecrets = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -31,6 +32,8 @@ function parseArgs(argv: string[]) {
       requireFrozen = false;
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--with-secrets") {
+      withSecrets = true;
     } else if (arg === "--previous-contract" && argv[i + 1]) {
       previousContract = argv[++i];
     }
@@ -45,6 +48,7 @@ function parseArgs(argv: string[]) {
     requireFrozen,
     json,
     previousContract,
+    withSecrets,
   };
 }
 
@@ -67,6 +71,7 @@ if (args.staged) changedPaths.push(...stagedPaths(args.projectRoot));
 const report = buildConductorReport(args.projectRoot, {
   requireFrozen: args.requireFrozen,
   previousContract: args.previousContract || undefined,
+  withSecrets: args.withSecrets,
   signals: {
     changedPaths,
     signals: args.signals,
