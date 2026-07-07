@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-06
+**Updated:** 2026-07-07
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 96 passing — schema 7 · core 50 · skill 22 · cli 7 · examples/integrations 10.
+- **Tests:** 110 passing — schema 7 · core 59 · skill 25 · cli 9 · examples/integrations 10.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -22,8 +22,8 @@ of truth for "where are we and what's next." For granular tasks see
 |------------|-------|-------|
 | Intent Contract schema + validator | `packages/schema` | AJV; `correction_log` + `approval` added |
 | Prompt coach | `packages/core/coach*.ts` | rule/regex patterns |
-| Generic drift scorer | `packages/core/drift.ts` + `tokenize.ts` | project-independent token matching, in-scope subtraction, severity floor |
-| Constraint loader | `packages/core/constraints.ts` | precision filter (finding #1 fixed) |
+| Generic drift scorer | `packages/core/drift.ts` + `tokenize.ts` | project-independent token matching, in-scope subtraction, severity floor, path-derived source/package/API signals |
+| Constraint loader | `packages/core/constraints.ts` | precision filter (finding #1 fixed), duplicate rule merge |
 | Draft → **approve** → gate | `extract` → `freeze` → `check` CLIs | real approval step (finding #2 fixed) |
 | Enforcement gate | `conductor-check` + `gate.ts` | non-zero exit; pre-commit sample |
 | Correction log + Session Brief | `correction.ts`, `brief.ts`, `correct`/`brief` CLIs | Phase 3a |
@@ -32,7 +32,9 @@ of truth for "where are we and what's next." For granular tasks see
 | Unified CLI + release smoke | `packages/cli`, `scripts/release-smoke.mjs` | `conductor <subcommand>`, `drift --ci`, pack smoke for schema/core/skill/cli |
 | Release docs + CI sample | `docs/release`, `integrations/github-actions` | beta release checklist, copyable `conductor drift --ci` workflow, and optional vault-guard pairing sample |
 | Setup doctor | `doctor.ts`, `doctor` CLI | local setup diagnostics for config, contract state, archive/index, package version, visible hooks/workflows, and optional vault-guard pairing |
-| Public repo validation harness | `scripts/validate-public-repos.mjs` | repeatable manual smoke against public GitHub repos; writes optional markdown reports |
+| Drift report | `report.ts`, `report` CLI | PR/CI handoff with contract summary, gate result, drift, AC coverage, pivots, corrections, and recommendation |
+| Rules audit | `rules-audit.ts`, `rules audit` CLI | inspects AGENTS/Claude/Gemini/Cursor/Continue/Kiro rules; flags duplicates, stale/broad rules, conflicts, and critical candidates |
+| Public repo validation harness | `scripts/validate-public-repos.mjs` | repeatable manual smoke against 8 public GitHub repos; includes explicit-signal and path-only drift controls |
 
 ### Recent shipped work
 
@@ -54,27 +56,22 @@ of truth for "where are we and what's next." For granular tasks see
 12. #13 docs/status sync and repeatable public-repo validation harness.
 13. Optional vault-guard pairing: doctor awareness, combined pre-commit sample,
     paired CI sample, and clarified package-install workflow status.
+14. v1 readiness pass: `conductor report`, `conductor rules audit`, constraint
+    deduplication, path-only drift controls, and broader public-repo validation.
 
 ---
 
 ## What's next (priority order)
 
-1. **Drift report** — add a handoff/PR report that explains score, blockers,
-   acceptance criteria coverage, pivots, and corrections.
-2. **Rules audit** — inspect project rules across AGENTS/Claude/Cursor/Continue/Kiro
-   files and flag stale, conflicting, or overbroad rules.
-3. **Public repo validation expansion** — use
-   `scripts/validate-public-repos.mjs` to expand coverage beyond the first 4
-   repos, add path-only drift controls, and decide what stays manual because it
-   requires network access.
-4. **Spec bridge** — import Spec Kit / Kiro-style requirements, designs, and
+1. **Spec bridge** — import Spec Kit / Kiro-style requirements, designs, and
    tasks into an Intent Contract.
-5. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-6. **Integration hardening** — full runtime checks for hook adapters in real
+3. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
-7. **Publish/tag execution** — deferred until the v1 readiness items above are
-   complete.
+4. **Public repo validation policy** — decide what stays manual because it
+   requires network access and whether a smaller offline fixture belongs in CI.
+5. **Publish/tag execution** — deferred until the maintainer approves a release.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -88,16 +85,15 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
 - **Approval is best-effort headless:** `conductor-freeze` requires an explicit
   `--approved-by` in non-interactive runs, but software can't *prove* a human
   approved. Documented limitation, not a bug.
-- **Drift scorer is rule-based:** good signal, but vocabulary-overlap false
-  positives remain possible; LLM-assisted classification is a deferred option.
+- **Drift scorer is rule-based:** good signal, including path-derived API/source
+  and manifest controls, but vocabulary-overlap false positives remain possible;
+  LLM-assisted classification is a deferred option.
 - **Hook integrations are samples:** Codex and Claude Code hook configs plus a
   Cursor project rule ship as integration examples. Downstream product wiring
   should happen in those downstream repos.
-- **Public repo validation learned:** init/extract/freeze/check worked on
-  `sindresorhus/is`, `chalk/chalk`, `expressjs/express`, and `vitejs/vite`.
-  The negative control was strongest when explicit change signals were supplied,
-  so v1 should improve diagnostics/reporting around path-only drift. The
-  repeatable harness now lives at `scripts/validate-public-repos.mjs`.
+- **Public repo validation learned:** init/extract/freeze/doctor/check run
+  against the default public-repo matrix in `scripts/validate-public-repos.mjs`.
+  The matrix now includes explicit-signal and path-only negative controls.
 
 ---
 
@@ -108,5 +104,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (96 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (110 passing baseline).
 ```

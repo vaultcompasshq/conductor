@@ -13,6 +13,42 @@ export interface LoadedConstraints {
   loadedFiles: string[];
 }
 
+const PRIORITY_RANK: Record<Constraint["priority"], number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+export function normalizeConstraintRule(rule: string): string {
+  return rule
+    .toLowerCase()
+    .replace(/[`*_~]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function dedupeConstraints(constraints: Constraint[]): Constraint[] {
+  const byRule = new Map<string, Constraint>();
+
+  for (const constraint of constraints) {
+    const key = normalizeConstraintRule(constraint.rule);
+    if (!key) continue;
+    const current = byRule.get(key);
+    if (!current) {
+      byRule.set(key, constraint);
+      continue;
+    }
+
+    const currentRank = PRIORITY_RANK[current.priority];
+    const nextRank = PRIORITY_RANK[constraint.priority];
+    if (nextRank > currentRank) byRule.set(key, constraint);
+  }
+
+  return [...byRule.values()];
+}
+
 function inferPriority(line: string): Constraint["priority"] {
   if (/\b(MUST NOT|NEVER|CRITICAL|DO NOT)\b/i.test(line)) return "critical";
   if (/\b(MUST|IMPORTANT|REQUIRED)\b/i.test(line)) return "high";
@@ -131,7 +167,7 @@ export function loadAllConstraints(projectRoot: string): LoadedConstraints {
   const fromFiles = loadConstraintFiles(projectRoot);
   const fromRules = loadCursorRules(projectRoot);
   return {
-    constraints: [...fromFiles.constraints, ...fromRules.constraints],
+    constraints: dedupeConstraints([...fromFiles.constraints, ...fromRules.constraints]),
     loadedFiles: [...fromFiles.loadedFiles, ...fromRules.loadedFiles],
   };
 }

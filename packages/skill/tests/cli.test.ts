@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -254,6 +254,57 @@ describe("conductor-doctor", () => {
     expect(res.code).toBe(0);
     expect(res.stdout).toContain("Conductor doctor: ok");
     expect(res.stdout).toContain("Active contract is frozen");
+  });
+});
+
+describe("conductor-report", () => {
+  it("renders a markdown report for aligned work", async () => {
+    const dir = await frozenProjectWith(
+      "Update README usage documentation. Do not change source code or package metadata. Verify README includes one usage example.",
+    );
+    const res = await run("report-cli.js", [
+      "--project", dir,
+      "--paths", "README.md",
+      "--signals", "README documentation update",
+    ]);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("# Conductor report");
+    expect(res.stdout).toContain("Status: ok");
+    expect(res.stdout).toContain("Acceptance criteria");
+  });
+
+  it("returns JSON and exit 1 for blocking drift", async () => {
+    const dir = await frozenProjectWith(
+      "Update README usage documentation. Do not change source code or package metadata. Verify README includes one usage example.",
+    );
+    const res = await run("report-cli.js", [
+      "--project", dir,
+      "--paths", "package.json",
+      "--json",
+    ]);
+    expect(res.code).toBe(1);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("blocked");
+    expect(out.gate.drift.action).toBe("soft_block");
+  });
+});
+
+describe("conductor-rules", () => {
+  it("audits project rule files", async () => {
+    const dir = tmpProject();
+    await run("init-cli.js", ["--project", dir]);
+    writeFileSync(
+      join(dir, "AGENTS.md"),
+      "## Rules\n- Never commit secrets\n- Prefer no production deploys\n",
+      "utf8",
+    );
+    writeFileSync(join(dir, "CLAUDE.md"), "## Rules\n- NEVER commit secrets\n", "utf8");
+
+    const res = await run("rules-cli.js", ["audit", "--project", dir, "--json"]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.status).toBe("warn");
+    expect(out.summary.duplicates).toBe(1);
   });
 });
 

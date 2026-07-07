@@ -64,11 +64,39 @@ const PRIORITY_SEVERITY: Record<string, number> = {
 
 const PIVOT_PHRASES = /\b(actually|also|while we're at it|and another thing)\b/i;
 
+function pathSemanticTokens(path: string): string[] {
+  const normalized = path.toLowerCase();
+  const tokens: string[] = [];
+
+  if (/(^|\/)(src|lib|app|server|client|packages?)\//.test(normalized)) {
+    tokens.push("source");
+  }
+  if (/(^|\/)(readme|docs?|documentation)(\/|\.|$)/.test(normalized)) {
+    tokens.push("readme", "documentation");
+  }
+  if (
+    /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|cargo\.toml|cargo\.lock|go\.mod|go\.sum|pyproject\.toml|requirements\.txt|poetry\.lock|gemfile|gemfile\.lock|composer\.json|pom\.xml|build\.gradle|gradle\.lockfile)(\/|$)?/.test(
+      normalized,
+    )
+  ) {
+    tokens.push("metadata", "dependency", "manifest");
+  }
+  if (/(^|\/)(api|routes?|controllers?|server)(\/|\.|$)/.test(normalized)) {
+    tokens.push("api", "endpoint");
+  }
+  if (/(^|\/)(tests?|specs?|__tests__)(\/|\.|$)/.test(normalized)) {
+    tokens.push("test");
+  }
+
+  return tokens;
+}
+
 /** Union of tokens describing what the work touched (paths + signals). */
 function targetTokens(input: DriftSignals): Set<string> {
   const all = new Set<string>();
   for (const path of input.changedPaths ?? []) {
     for (const t of tokenize(path)) all.add(t);
+    for (const t of pathSemanticTokens(path)) all.add(t);
   }
   for (const signal of input.signals ?? []) {
     for (const t of tokenize(signal)) all.add(t);

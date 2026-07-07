@@ -121,6 +121,26 @@ describe("draftContract", () => {
     expect(drift.action === "soft_block" || drift.action === "hard_block").toBe(true);
   });
 
+  it("splits comma-separated prohibition lists into separate out-of-scope items", () => {
+    const contract = draftContract({
+      userText:
+        "Update README usage documentation. Do not change source code, package metadata, build configuration, dependency manifests, or runtime behavior. Done when README has one usage example.",
+    });
+
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([
+        "Do not change source code",
+        "Do not change package metadata",
+        "Do not change build configuration",
+        "Do not change dependency manifests",
+        "Do not change runtime behavior",
+      ]),
+    );
+
+    const drift = scoreDrift(contract, { changedPaths: ["package.json"] });
+    expect(drift.action).toBe("soft_block");
+  });
+
   it("generateContractId matches schema pattern", () => {
     expect(generateContractId(new Date("2026-06-17T12:00:00Z"))).toMatch(
       /^ic-20260617-[a-z0-9]{6}$/,

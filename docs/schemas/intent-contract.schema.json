@@ -64,6 +64,8 @@
               "CLAUDE.md",
               "GEMINI.md",
               "cursor-rules",
+              "continue-rules",
+              "kiro-steering",
               "user-stated",
               "superpowers-spec",
               "project-spec"

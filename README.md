@@ -6,7 +6,7 @@ Conductor sits *above* foundation models and *below* your product code. It turns
 
 The Intent Contract is a plain YAML file, so any model or coding assistant that can read a file can consume it. Conductor does not replace spec tools, coding agents, or PR review. It gives those tools a shared source of truth for what the human approved, what is out of scope, and whether the current diff has drifted.
 
-Today the shipped surfaces are the unified `conductor` CLI, the legacy `conductor-check` gate for pre-commit and CI, Cursor/Claude skills, and hook samples. Optional vault-guard pairing samples are available for teams that want intent drift and secret scanning as separate gates. See [integrations/](./integrations) for host-specific examples.
+Today the shipped surfaces are the unified `conductor` CLI, the legacy `conductor-check` gate for pre-commit and CI, Cursor/Claude skills, hook samples, handoff reports, and rules audit. Optional vault-guard pairing samples are available for teams that want intent drift and secret scanning as separate gates. See [integrations/](./integrations) for host-specific examples.
 
 ```
 User conversation
@@ -23,7 +23,7 @@ User conversation
 **Phase:** Phase 4 beta packaging in progress; unified CLI, freeze/approval, gate, history, and resume shipped - July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **96 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **110 tests passing**
 
 **Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
 
@@ -89,13 +89,15 @@ pnpm conductor -- doctor --project .
 pnpm conductor -- extract --project . --text "Add CSV export. Do not add new API endpoints. Verify the file downloads."
 pnpm conductor -- freeze --project . --approved-by "<name>"
 pnpm conductor -- check --project . --staged
+pnpm conductor -- report --project . --staged
+pnpm conductor -- rules audit --project .
 ```
 
 ## Development
 
 ```bash
 pnpm install
-pnpm test      # 96 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # 110 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
 pnpm release:smoke
 pnpm validate:public-repos
@@ -109,6 +111,8 @@ pnpm conductor -- extract --project . --text "the ask"   # 1. draft (unfrozen)
 pnpm conductor -- freeze  --project . --approved-by me    # 2. approve
 pnpm conductor -- doctor  --project .                     # 3. diagnose setup
 pnpm conductor -- check   --project . --staged            # 4. gate (exit 1 = blocked)
+pnpm conductor -- report  --project . --staged            # PR/CI handoff
+pnpm conductor -- rules   audit --project .               # project-rule hygiene
 pnpm conductor -- pivot   --project . --change "..." --acknowledge
 pnpm conductor -- correct --project . --wrong "..." --right "..." --rule "..." --acknowledge
 pnpm conductor -- brief   --project .                     # clean re-injectable context

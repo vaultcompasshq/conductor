@@ -119,6 +119,27 @@ function isProhibitionClause(text: string): boolean {
   return PROHIBITION_RE.test(text);
 }
 
+function expandProhibitionLists(text: string): string[] {
+  const items: string[] = [];
+  const pattern =
+    /\b(do not|don't|must not|should not|cannot|can't|never|avoid|no)\s+([a-z]+)\s+([^.!?]{3,200})/gi;
+
+  for (const match of text.matchAll(pattern)) {
+    const prefix = match[1].replace(/\s+/g, " ");
+    const verb = match[2];
+    const rest = match[3];
+    if (!rest.includes(",")) continue;
+
+    for (const part of rest.split(",")) {
+      const target = normalizeItem(part.trim().replace(/^(and|or)\s+/i, ""));
+      if (target.length < 5) continue;
+      items.push(`${prefix} ${verb} ${target}`);
+    }
+  }
+
+  return items;
+}
+
 function extractInScope(text: string): string[] {
   const bullets = bulletItems(text);
   if (bullets.length > 0) {
@@ -151,6 +172,7 @@ function extractOutOfScope(text: string): string[] {
     /\bwithout\s+([a-z][\w\s-]{3,80})/gi,
   ];
   const items: string[] = [];
+  items.push(...expandProhibitionLists(text));
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) {
       const item = match[0].trim().replace(/\s+/g, " ");

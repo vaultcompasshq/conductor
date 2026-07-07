@@ -1,8 +1,8 @@
 # TODO — detailed task backlog
 
-**Updated:** 2026-07-06 · companion to [NEXT.md](./NEXT.md).
+**Updated:** 2026-07-07 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 96 tests passing.
+before merge. Baseline: 110 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -71,15 +71,16 @@ Goal: keep the public-repo smoke test repeatable while v1 features mature.
 
 - [x] Promote the temporary `/tmp` public-repo validation script into
       `scripts/validate-public-repos.mjs`.
-- [ ] Cover at least 8 repositories: small package, CLI, web app, monorepo,
+- [x] Cover at least 8 repositories: small package, CLI, web app, monorepo,
       docs-heavy repo, repo with agent rules, repo without agent rules, and a
       larger TypeScript project.
 - [x] Record reports under `docs/validation/public-repos/` when a run should be
       committed (`--report docs/validation/public-repos/YYYY-MM-DD.md`).
-- [~] Add controls for README-only pass, source/package drift block, path-only
+- [x] Add controls for README-only pass, source/package drift block, path-only
       drift, explicit-signal drift, and existing-rule noise. README pass,
-      source/package block, and explicit-signal drift are covered; path-only
-      drift and existing-rule noise are still pending.
+      source/package block, explicit-signal drift, and path-only drift are
+      covered by the harness. Existing-rule noise is covered by `rules audit`
+      and constraint deduplication tests.
 - [ ] Decide which parts should run in CI and which stay manual because they
       require network access.
 
@@ -88,14 +89,14 @@ Goal: keep the public-repo smoke test repeatable while v1 features mature.
 See [product-positioning.md](./product-positioning.md). These make the value
 prop sharper against current spec tools, agent hosts, and PR review products.
 
-- [ ] **Rules audit.** Add `conductor rules audit` to list loaded rules from
+- [x] **Rules audit.** Add `conductor rules audit` to list loaded rules from
       `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules`,
       `.continue/rules`, and `.kiro/steering`; detect conflicts, stale rules,
       and rules that should become critical constraints.
 - [ ] **Spec bridge.** Add import/export paths for popular spec artifacts,
       starting with Spec Kit and Kiro-style `requirements.md` / `design.md` /
       `tasks.md`.
-- [ ] **Drift report.** Add `conductor report --staged` for PR/CI/agent handoff:
+- [x] **Drift report.** Add `conductor report --staged` for PR/CI/agent handoff:
       active contract summary, drift score, blockers, AC coverage, pivots,
       corrections, and recommended next action.
 - [ ] **Semantic drift option.** Add an opt-in semantic classifier while keeping

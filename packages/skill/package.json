@@ -27,6 +27,8 @@
     "conductor-correct": "./dist/correct-cli.js",
     "conductor-brief": "./dist/brief-cli.js",
     "conductor-doctor": "./dist/doctor-cli.js",
+    "conductor-report": "./dist/report-cli.js",
+    "conductor-rules": "./dist/rules-cli.js",
     "conductor-pivot": "./dist/pivot-cli.js",
     "conductor-resume": "./dist/resume-cli.js"
   },

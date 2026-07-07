@@ -13,7 +13,7 @@ conductor-check --project . --staged
 ```
 
 The session lifecycle: **coach → extract (draft) → freeze (approve) → check
-(gate) → pivot/correct → brief/resume**.
+(gate) → report/rules → pivot/correct → brief/resume**.
 
 ---
 
@@ -25,8 +25,8 @@ conductor --version
 conductor <command> [flags]
 ```
 
-Commands: `init`, `coach`, `extract`, `freeze`, `check`, `drift`, `correct`,
-`brief`, `doctor`, `resume`, `index`, `pivot`.
+Commands: `init`, `coach`, `extract`, `freeze`, `check`, `report`, `rules`,
+`drift`, `correct`, `brief`, `doctor`, `resume`, `index`, `pivot`.
 
 `conductor drift --ci` runs the lower-level drift scorer and exits `1` when the
 JSON result has `block: true`; otherwise it preserves the normal command output.
@@ -84,6 +84,42 @@ a blocking threshold. Used by the pre-commit hook / CI.
 Exit 0 = ok, 1 = blocked.
 When `--previous-contract` is provided, JSON includes `crossSessionDrift`;
 this does not change the gate exit code.
+
+## conductor report / conductor-report
+
+Emit a reviewer-friendly handoff report for PRs, CI logs, or agent resumes.
+It runs the same gate as `conductor check` and exits with the gate result.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--staged` | auto-collect staged paths via `git diff --cached --name-only` |
+| `--paths a,b` | explicit changed paths |
+| `--signals "x,y"` | free-text descriptions of what changed |
+| `--message "<text>"` | latest user message |
+| `--previous-contract <id>` | include prior-contract drift context |
+| `--no-require-frozen` | allow a missing contract, matching `check` |
+| `--json` | machine-readable report |
+
+Markdown includes the active contract, gate reasons, drift score, acceptance
+criteria coverage inferred from paths/signals, pivots, corrections, changed
+paths, signals, and a recommended next action.
+
+## conductor rules audit / conductor-rules audit
+
+Inspect project rule files and surface maintainability problems before they
+become noisy task constraints.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project |
+| `--json` | machine-readable output |
+
+Sources: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules`,
+`.continue/rules`, and `.kiro/steering`. Findings include duplicate rules,
+potential conflicts, stale or temporary wording, overbroad rules, and rules that
+may deserve critical priority. The audit exits `0`; `status: warn` means the
+maintainer should review findings.
 
 ## conductor doctor / conductor-doctor
 
