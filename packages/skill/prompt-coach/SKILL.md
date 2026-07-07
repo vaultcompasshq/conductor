@@ -24,7 +24,7 @@ Show coaching and suggested rewrite. User may proceed without changing their ask
 ## Score prompt (helper CLI)
 
 ```bash
-pnpm --filter @vaultcompasshq/conductor-skill exec conductor-coach "USER MESSAGE HERE"
+pnpm --filter @vaultcompass/conductor-skill exec conductor-coach "USER MESSAGE HERE"
 ```
 
 JSON output:

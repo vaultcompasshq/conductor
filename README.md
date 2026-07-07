@@ -54,8 +54,8 @@ User conversation
 ```
 conductor/
 ├── packages/
-│   ├── schema/          # @vaultcompasshq/conductor-schema
-│   ├── core/            # @vaultcompasshq/conductor-core incl. history/index
+│   ├── schema/          # @vaultcompass/conductor-schema
+│   ├── core/            # @vaultcompass/conductor-core incl. history/index
 │   ├── skill/           # Superpowers skills + legacy CLIs
 │   ├── cli/             # unified conductor binary
 │   └── memory/          # separate package deferred; file memory lives in core
@@ -84,10 +84,10 @@ or a CI step.
 ### Install (npm)
 
 ```bash
-npx @vaultcompasshq/conductor-cli@0.3.0-beta init --project .
-npx @vaultcompasshq/conductor-cli@0.3.0-beta extract --project . --text "Add CSV export. Do not add new API endpoints."
-npx @vaultcompasshq/conductor-cli@0.3.0-beta freeze --project . --approved-by "<you>"
-npx @vaultcompasshq/conductor-cli@0.3.0-beta check --project . --staged
+npx @vaultcompass/conductor-cli@0.3.0-beta init --project .
+npx @vaultcompass/conductor-cli@0.3.0-beta extract --project . --text "Add CSV export. Do not add new API endpoints."
+npx @vaultcompass/conductor-cli@0.3.0-beta freeze --project . --approved-by "<you>"
+npx @vaultcompass/conductor-cli@0.3.0-beta check --project . --staged
 ```
 
 Pair with [vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) for secret scanning:

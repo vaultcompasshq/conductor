@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+      - name: Release smoke
+        run: pnpm release:smoke
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Publish to npm
+        run: pnpm publish -r --access public --no-git-checks
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            Published @vaultcompass/conductor packages to npm.
+            See CHANGELOG.md on main.
+
+  smoke-published:
+    name: Smoke test published CLI
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install published CLI and run init
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "Smoke testing @vaultcompass/conductor-cli@${VERSION}"
+
+          FOUND=0
+          for i in $(seq 1 12); do
+            if [[ "$(npm view "@vaultcompass/conductor-cli@${VERSION}" version 2>/dev/null)" == "${VERSION}" ]]; then
+              echo "Package visible on registry."
+              FOUND=1
+              break
+            fi
+            echo "Waiting for npm registry (attempt ${i}/12)…"
+            sleep 10
+          done
+          if [[ "${FOUND}" -ne 1 ]]; then
+            echo "::error::Timed out waiting for @vaultcompass/conductor-cli@${VERSION} on the npm registry."
+            exit 1
+          fi
+
+          TMP=$(mktemp -d)
+          cd "${TMP}"
+          npm init -y >/dev/null 2>&1
+          npm install "@vaultcompass/conductor-cli@${VERSION}"
+          ./node_modules/.bin/conductor --version
+          ./node_modules/.bin/conductor init --project .
+          test -f .conductor/config.yaml
+          echo "Release smoke passed."

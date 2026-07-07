@@ -2,7 +2,7 @@
 import {
   auditRules,
   renderRulesAuditMarkdown,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 function usage(): never {
   console.error("Usage: conductor-rules audit [--project <root>] [--json]");

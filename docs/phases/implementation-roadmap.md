@@ -143,7 +143,7 @@
 | Audit gold standards port | 5 weeks |
 | LLM-assisted drift classification | 2 weeks |
 | Team dashboard | 3 weeks |
-| npm publish `@vaultcompasshq/conductor-cli` | 1 week |
+| npm publish `@vaultcompass/conductor-cli` | 1 week |
 | Superpowers upstream PR | 1 week |
 
 ---

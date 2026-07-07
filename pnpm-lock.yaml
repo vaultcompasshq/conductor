@@ -11,7 +11,7 @@ importers:
 
   .:
     devDependencies:
-      '@vaultcompasshq/conductor-schema':
+      '@vaultcompass/conductor-schema':
         specifier: workspace:*
         version: link:packages/schema
       vitest:
@@ -23,7 +23,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@vaultcompasshq/conductor-skill':
+      '@vaultcompass/conductor-skill':
         specifier: workspace:*
         version: link:../skill
     devDependencies:
@@ -39,7 +39,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@vaultcompasshq/conductor-schema':
+      '@vaultcompass/conductor-schema':
         specifier: workspace:*
         version: link:../schema
       yaml:
@@ -74,10 +74,10 @@ importers:
 
   packages/skill:
     dependencies:
-      '@vaultcompasshq/conductor-core':
+      '@vaultcompass/conductor-core':
         specifier: workspace:*
         version: link:../core
-      '@vaultcompasshq/conductor-schema':
+      '@vaultcompass/conductor-schema':
         specifier: workspace:*
         version: link:../schema
       yaml:

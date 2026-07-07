@@ -4,7 +4,7 @@
 
 **Goal:** Ship a testable TypeScript monorepo with Intent Contract validation, prompt coaching, and rule-based drift scoring — no CLI or skills yet.
 
-**Architecture:** pnpm workspace with two packages: `@vaultcompasshq/conductor-schema` (AJV validation + types) and `@vaultcompasshq/conductor-core` (coach patterns, drift rubric). Schema JSON is canonical in `packages/schema/`; `docs/schemas/` stays a symlink or copy for docs consumers.
+**Architecture:** pnpm workspace with two packages: `@vaultcompass/conductor-schema` (AJV validation + types) and `@vaultcompass/conductor-core` (coach patterns, drift rubric). Schema JSON is canonical in `packages/schema/`; `docs/schemas/` stays a symlink or copy for docs consumers.
 
 **Tech Stack:** Node 20+, TypeScript 5, pnpm workspaces, Vitest, AJV 8, yaml
 
@@ -122,7 +122,7 @@ git commit -m "chore: scaffold pnpm monorepo root"
 
 ```json
 {
-  "name": "@vaultcompasshq/conductor-schema",
+  "name": "@vaultcompass/conductor-schema",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -387,7 +387,7 @@ git commit -m "feat(schema): add Intent Contract validator with AJV"
 
 ```json
 {
-  "name": "@vaultcompasshq/conductor-core",
+  "name": "@vaultcompass/conductor-core",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -404,7 +404,7 @@ git commit -m "feat(schema): add Intent Contract validator with AJV"
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vaultcompasshq/conductor-schema": "workspace:*"
+    "@vaultcompass/conductor-schema": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.3",
@@ -622,7 +622,7 @@ git commit -m "feat(core): add prompt coach patterns and quality scoring"
 
 ```typescript
 import { describe, it, expect } from "vitest";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { scoreDrift } from "../src/drift.js";
 
 const baseContract: IntentContract = {
@@ -704,7 +704,7 @@ export function driftAction(overall: number): DriftAction {
 - [ ] **Step 4: Implement `packages/core/src/drift.ts`**
 
 ```typescript
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { DRIFT_WEIGHTS, driftAction, type DriftAction } from "./rubric.js";
 
 export interface DriftSignals {
@@ -877,7 +877,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { describe, it, expect } from "vitest";
-import { validateIntentContract } from "@vaultcompasshq/conductor-schema";
+import { validateIntentContract } from "@vaultcompass/conductor-schema";
 
 const dir = join(import.meta.dirname, "intent-contracts");
 
@@ -901,7 +901,7 @@ Root `package.json` scripts add:
 "test": "pnpm -r test && vitest run examples/validate-examples.test.ts"
 ```
 
-Root devDependencies: `vitest`, `yaml`, `@vaultcompasshq/conductor-schema` workspace.*
+Root devDependencies: `vitest`, `yaml`, `@vaultcompass/conductor-schema` workspace.*
 
 - [ ] **Step 5: Run full test suite**
 
@@ -936,7 +936,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { scoreDrift } from "../src/drift.js";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 
 describe("NetViz retrospective", () => {
   it("drift score >= 70 for stubbed implementation signals", () => {

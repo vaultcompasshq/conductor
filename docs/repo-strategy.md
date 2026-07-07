@@ -56,7 +56,7 @@ Contributions from Superpowers community possible if skills are contributed upst
 ```
 conductor/
 ├── packages/
-│   ├── schema/                 # @vaultcompasshq/conductor-schema
+│   ├── schema/                 # @vaultcompass/conductor-schema
 │   ├── skill/                  # Superpowers skill files
 │   ├── cli/                    # conductor binary
 │   └── memory/                 # constraint index
@@ -70,7 +70,7 @@ conductor/
 └── LICENSE
 ```
 
-Publish to npm eventually as `@vaultcompasshq/conductor-cli` (optional, phase 4).
+Publish to npm eventually as `@vaultcompass/conductor-cli` (optional, phase 4).
 
 ---
 

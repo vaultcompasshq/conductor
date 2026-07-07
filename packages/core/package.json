@@ -1,5 +1,5 @@
 {
-  "name": "@vaultcompasshq/conductor-core",
+  "name": "@vaultcompass/conductor-core",
   "version": "0.3.0-beta.0",
   "type": "module",
   "description": "Core prompt coaching, drift scoring, gate, correction, and memory-index utilities for Conductor",
@@ -31,7 +31,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vaultcompasshq/conductor-schema": "workspace:*",
+    "@vaultcompass/conductor-schema": "workspace:*",
     "yaml": "^2.8.0"
   },
   "devDependencies": {

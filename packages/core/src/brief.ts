@@ -1,4 +1,4 @@
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { acknowledgedCorrections } from "./correction.js";
 
 export interface SessionBrief {

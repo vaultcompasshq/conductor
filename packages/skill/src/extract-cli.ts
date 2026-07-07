@@ -8,8 +8,8 @@ import {
   loadConfig,
   scorePrompt,
   writeContract,
-} from "@vaultcompasshq/conductor-core";
-import { validateIntentContract } from "@vaultcompasshq/conductor-schema";
+} from "@vaultcompass/conductor-core";
+import { validateIntentContract } from "@vaultcompass/conductor-schema";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

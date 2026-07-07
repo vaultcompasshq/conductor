@@ -3,7 +3,7 @@ import {
   runDoctor,
   type DoctorFinding,
   type DoctorFindingStatus,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

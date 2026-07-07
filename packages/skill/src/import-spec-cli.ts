@@ -4,7 +4,7 @@ import {
   importSpecContract,
   loadAllConstraints,
   writeContract,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 function usage(): never {
   console.error(

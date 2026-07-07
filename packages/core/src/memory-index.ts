@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { acknowledgedCorrections } from "./correction.js";
 import { conductorDir, readContract } from "./contract-store.js";
 import { listContracts } from "./history.js";

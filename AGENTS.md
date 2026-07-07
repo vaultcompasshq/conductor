@@ -39,10 +39,10 @@ Phase 1 reference: [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./doc
 
 ```
 packages/
-├── schema/     # @vaultcompasshq/conductor-schema - AJV validator + types
-├── core/       # @vaultcompasshq/conductor-core - coach, drift, gate, correction, brief, history
-├── skill/      # @vaultcompasshq/conductor-skill - skills + legacy CLIs
-├── cli/        # @vaultcompasshq/conductor-cli - unified conductor binary
+├── schema/     # @vaultcompass/conductor-schema - AJV validator + types
+├── core/       # @vaultcompass/conductor-core - coach, drift, gate, correction, brief, history
+├── skill/      # @vaultcompass/conductor-skill - skills + legacy CLIs
+├── cli/        # @vaultcompass/conductor-cli - unified conductor binary
 └── memory/     # deferred; file-backed memory currently lives in core
 ```
 

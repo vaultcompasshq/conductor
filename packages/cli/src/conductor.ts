@@ -69,7 +69,7 @@ function packageVersion(): string {
 
 function skillCliPath(command: Command): string {
   const require = createRequire(import.meta.url);
-  const pkgJson = require.resolve("@vaultcompasshq/conductor-skill/package.json");
+  const pkgJson = require.resolve("@vaultcompass/conductor-skill/package.json");
   return join(dirname(pkgJson), "dist", COMMANDS[command]);
 }
 

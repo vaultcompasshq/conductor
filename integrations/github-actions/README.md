@@ -3,7 +3,7 @@
 Use these samples when a repository already has a frozen
 `.conductor/intent-contract.yaml` and wants CI to fail on blocking drift.
 
-The package-install samples assume `@vaultcompasshq/conductor-cli@0.3.0-beta.0`
+The package-install samples assume `@vaultcompass/conductor-cli@0.3.0-beta.0`
 has been published to npm. Until publish, run Conductor from a local checkout or
 a release artifact in the consuming repository's workflow.
 

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   buildConductorReport,
   renderConductorReportMarkdown,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

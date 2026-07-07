@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { buildBrief, readContract, renderBriefMarkdown } from "@vaultcompasshq/conductor-core";
+import { buildBrief, readContract, renderBriefMarkdown } from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

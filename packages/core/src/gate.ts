@@ -1,4 +1,4 @@
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { readContract, isContractFrozen } from "./contract-store.js";
 import { scoreDrift, type DriftSignals, type DriftScore } from "./drift.js";
 import { loadConfig } from "./config.js";

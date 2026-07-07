@@ -7,7 +7,7 @@ import {
   formatDriftMessage,
   readArchivedContract,
   readContract,
-} from "@vaultcompasshq/conductor-core";
+} from "@vaultcompass/conductor-core";
 
 function parseArgs(argv: string[]) {
   let projectRoot = ".";

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import {
   addPivot,
   archiveContract,

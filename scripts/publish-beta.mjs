@@ -27,7 +27,7 @@ function run(command, args, options = {}) {
 function usage() {
   console.log(`Usage: node scripts/publish-beta.mjs [--dry-run]
 
-Publishes @vaultcompasshq/conductor packages in dependency order.
+Publishes @vaultcompass/conductor packages in dependency order.
 Requires npm login with publish access to the @vaultcompasshq scope.
 
 Steps:

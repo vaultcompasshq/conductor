@@ -1,4 +1,4 @@
-import type { IntentContract } from "@vaultcompasshq/conductor-schema";
+import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { DRIFT_WEIGHTS, type DriftAction } from "./rubric.js";
 import {
   driftActionForScore,
