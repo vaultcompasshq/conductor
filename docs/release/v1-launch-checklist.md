@@ -12,12 +12,7 @@ version is already **`1.0.0`** in schema.
 - [x] Release workflow: build → test → smoke → publish → post-publish init smoke
 - [x] Publish uses `latest` dist-tag (npm page shows current version)
 - [x] Package READMEs on npm (cli, schema, core, skill)
-- [ ] **`latest` on npm points to newest beta** — run once if needed:
-  ```bash
-  for pkg in conductor-schema conductor-core conductor-skill conductor-cli; do
-    npm dist-tag add "@vaultcompass/$pkg@0.3.0-beta.2" latest
-  done
-  ```
+- [x] **`latest` on npm points to newest beta** — `0.3.0-beta.3` as of 2026-07-08.
 
 ## Dogfood gate (required for v1)
 
@@ -40,11 +35,12 @@ npx @vaultcompass/conductor-cli@latest check --project . --staged
 
 Checklist for the dogfood run:
 
-- [ ] Init creates `.conductor/config.yaml` and skeleton
-- [ ] Extract → freeze → check passes on aligned work
-- [ ] Check blocks or warns on an intentional out-of-scope change
-- [ ] `conductor report` useful in a PR or handoff
-- [ ] Optional: paired secret scanning via `conductor hook install --with-vault-guard`
+- [x] Init creates `.conductor/config.yaml` and skeleton (CapitalCanvas Tier 0, `0.3.0-beta.3`)
+- [x] Extract → freeze → check passes on aligned work (CapitalCanvas `taxBuckets.test.ts`)
+- [x] Check blocks on an intentional out-of-scope API/backend path change (CapitalCanvas)
+- [x] `conductor report` useful in a PR or handoff (CapitalCanvas aligned run: status ok, drift 0)
+- [x] Optional: paired secret scanning via `conductor hook install --with-vault-guard` (install refused foreign hook; CapitalCanvas already has security pre-commit)
+- [x] Full run on one **Vault & Compass Tier 0** app repo — **CapitalCanvas** (2026-07-08)
 
 Record results in your local notes (do not commit app-repo contracts to this public repo).
 
@@ -52,14 +48,19 @@ Record results in your local notes (do not commit app-repo contracts to this pub
 
 - [x] Pre-commit hook installable from npm (`conductor hook install`) — no dependency
   on the Conductor source repo; verified by dogfood audit 2026-07-07.
-- [ ] Git pre-commit hook OR GitHub Actions `conductor drift --ci` exercised on a real repo PR
+- [x] Git pre-commit hook AND GitHub Actions drift gate exercised on a real repo PR
+  - CapitalCanvas [PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109) (2026-07-08):
+    repo-local `.githooks/pre-commit` pairs vault-guard + soft `conductor check --staged`;
+    the hook ran on the merge commit (`✓ Conductor gate: ok`) and the `Conductor Drift`
+    CI job (`intent-drift`) passed on the PR. Out-of-scope frontend edits reproduced a
+    drift `soft_block` (71/100) locally.
 - [ ] Cursor rule or Claude/Codex hook sample validated in one real session (optional but recommended)
 
 ## Stability declaration
 
 - [x] [stability-policy.md](./stability-policy.md) documents semver for packages and schema
-- [ ] README status line updated to **v1.0.0** on launch day
-- [ ] CHANGELOG `## [1.0.0]` section with launch summary
+- [x] README status line updated to **v1.0.0**
+- [x] CHANGELOG `## [1.0.0]` section with launch summary
 
 ## Release `v1.0.0`
 

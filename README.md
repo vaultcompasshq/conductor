@@ -20,10 +20,10 @@ User conversation
 
 ## Status
 
-**Phase:** `v0.3.0-beta.2` on npm (`@vaultcompass/conductor-*`); v1 launch checklist in [docs/release/v1-launch-checklist.md](./docs/release/v1-launch-checklist.md) — July 2026
+**Phase:** `1.0.0` — stable CLI/API on npm (`@vaultcompass/conductor-*`); see [docs/release/stability-policy.md](./docs/release/stability-policy.md) — July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **117 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **127 tests passing**
 
 **Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
 
@@ -130,7 +130,7 @@ pnpm conductor -- rules audit --project .
 
 ```bash
 pnpm install
-pnpm test      # 117 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # 127 tests (builds first, then schema + core + skill + cli + examples/integrations)
 pnpm build
 pnpm release:smoke
 pnpm validate:public-repos

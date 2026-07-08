@@ -141,6 +141,26 @@ describe("draftContract", () => {
     expect(drift.action).toBe("soft_block");
   });
 
+  it("does not split dotted file tokens into nonsense fragments", () => {
+    const contract = draftContract({
+      userText:
+        "Add a repo-local .githooks pre-commit hook, a tools/install-git-hooks.sh bootstrap, and a .github/workflows/conductor-drift.yml CI job. Update .gitignore to commit config.yaml. Do not modify backend services.",
+    });
+
+    // original_ask keeps the full first sentence, not a fragment cut at ".githooks".
+    expect(contract.original_ask).toMatch(/pre-commit hook/i);
+    expect(contract.original_ask).not.toMatch(/^Add a repo-local \.?$/);
+
+    const allItems = [...contract.in_scope, ...contract.acceptance_criteria.map((a) => a.description)];
+    // No item should be a bare file-extension fragment like "yml CI ...".
+    for (const item of allItems) {
+      expect(item).not.toMatch(/^(yml|yaml|sh|githooks|github|gitignore)\b/i);
+    }
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([expect.stringMatching(/do not modify backend services/i)]),
+    );
+  });
+
   it("generateContractId matches schema pattern", () => {
     expect(generateContractId(new Date("2026-06-17T12:00:00Z"))).toMatch(
       /^ic-20260617-[a-z0-9]{6}$/,

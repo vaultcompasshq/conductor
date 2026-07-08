@@ -127,7 +127,7 @@
 
 | Task | Output |
 |------|--------|
-| Tag `v0.3.0-beta` | Pending after merge |
+| Tag `v0.3.0-beta.3` | Shipped on npm (`latest`) |
 | Validation report doc | [../validation/production-readiness-2026-07-04.md](../validation/production-readiness-2026-07-04.md) |
 | Decide Superpowers upstream PR timing | |
 | Optional: `conductor drift --ci` GitHub Action example | [../../integrations/github-actions/conductor-drift-ci.yml.sample](../../integrations/github-actions/conductor-drift-ci.yml.sample) |
@@ -143,7 +143,7 @@
 | Audit gold standards port | 5 weeks |
 | LLM-assisted drift classification | 2 weeks |
 | Team dashboard | 3 weeks |
-| npm publish `@vaultcompass/conductor-cli` | 1 week |
+| npm publish `@vaultcompass/conductor-cli` | Shipped (`0.3.0-beta.3`) |
 | Superpowers upstream PR | 1 week |
 
 ---

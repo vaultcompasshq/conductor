@@ -20,11 +20,32 @@ export function generateContractId(date = new Date()): string {
   return `ic-${ymd}-${randomSuffix()}`;
 }
 
+// A '.', '!' or '?' terminates a sentence only when followed by whitespace or
+// end of input. This keeps dotted tokens like ".yml", ".githooks", or
+// "config.yaml" intact instead of shredding them into nonsense fragments.
+const SENTENCE_TERMINATOR = /[.!?](?=\s|$)/;
+const SENTENCE_BOUNDARY = /(?<=[.!?])\s+/;
+
 function oneSentence(text: string, max = 500): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const match = normalized.match(/^[^.!?]+[.!?]?/);
-  const sentence = (match?.[0] ?? normalized).trim();
+  const boundary = normalized.search(SENTENCE_TERMINATOR);
+  const sentence = (boundary === -1
+    ? normalized
+    : normalized.slice(0, boundary + 1)
+  ).trim();
   return sentence.length > max ? `${sentence.slice(0, max - 1)}…` : sentence;
+}
+
+// Split into sentence-like segments without breaking dotted file tokens.
+// Newlines and semicolons always separate clauses; periods/!/? only when
+// they are real sentence boundaries (followed by whitespace or EOL).
+function splitSentences(text: string): string[] {
+  return text
+    .split(/\n+/)
+    .flatMap((line) => line.split(SENTENCE_BOUNDARY))
+    .flatMap((chunk) => chunk.split(";"))
+    .map((segment) => segment.trim())
+    .filter(Boolean);
 }
 
 function bulletItems(text: string): string[] {
@@ -101,8 +122,7 @@ function uniqueItems(items: string[], max: number): string[] {
 }
 
 function textClauses(text: string): string[] {
-  return text
-    .split(/\n+|[.!?;]+/)
+  return splitSentences(text)
     .flatMap((segment) =>
       segment.split(
         new RegExp(
