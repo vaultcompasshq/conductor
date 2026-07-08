@@ -9,7 +9,7 @@ export const INIT_NEXT_STEPS = [
   "conductor freeze --project . --approved-by <you>",
   "conductor doctor --project .",
   "conductor check --project . --staged",
-  "Optional: cp integrations/git-hooks/pre-commit-with-vault-guard.sample .git/hooks/pre-commit",
+  "Optional: conductor hook install --project . (add --with-vault-guard to pair secret scanning)",
 ] as const;
 
 export interface InitResult {

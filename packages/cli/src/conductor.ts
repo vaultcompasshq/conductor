@@ -15,6 +15,7 @@ const COMMANDS = {
   correct: "correct-cli.js",
   brief: "brief-cli.js",
   doctor: "doctor-cli.js",
+  hook: "hook-cli.js",
   report: "report-cli.js",
   rules: "rules-cli.js",
   resume: "resume-cli.js",
@@ -37,6 +38,7 @@ Commands:
   correct   Record a durable correction lesson
   brief     Emit a compact Session Brief
   doctor    Diagnose local Conductor setup
+  hook      Install the Git pre-commit gate hook
   report    Emit a PR/CI handoff report
   rules     Inspect project rule files
   resume    Emit a Session Brief plus recent history
@@ -53,6 +55,7 @@ Examples:
   conductor import-spec --project . --from kiro --spec-dir .kiro/specs/export
   conductor freeze --project . --approved-by alice
   conductor doctor --project .
+  conductor hook install --project . --with-vault-guard
   conductor report --project . --staged
   conductor rules audit --project .
   conductor check --project . --staged

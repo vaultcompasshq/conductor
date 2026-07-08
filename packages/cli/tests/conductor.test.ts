@@ -58,7 +58,7 @@ describe("conductor", () => {
   it("prints the package version", () => {
     const res = run(["--version"]);
     expect(res.code).toBe(0);
-    expect(res.stdout.trim()).toBe("0.3.0-beta.2");
+    expect(res.stdout.trim()).toBe("0.3.0-beta.3");
   });
 
   it("dispatches to an existing subcommand", () => {
@@ -110,6 +110,18 @@ describe("conductor", () => {
     const out = JSON.parse(res.stdout);
     expect(out.status).toBe("ok");
     expect(out.contract.approved_by).toBe("tester");
+  });
+
+  it("installs the pre-commit hook through the unified binary", () => {
+    const dir = tmpProject();
+    mkdirSync(join(dir, ".git", "hooks"), { recursive: true });
+    const res = run(["hook", "install", "--project", dir, "--with-vault-guard"]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.installed).toBe(true);
+    const hook = readFileSync(join(dir, ".git", "hooks", "pre-commit"), "utf8");
+    expect(hook).toContain("conductor-managed-pre-commit");
+    expect(hook).toContain("vault-guard scan --staged");
   });
 
   it("runs rules audit through the unified binary", () => {

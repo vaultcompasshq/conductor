@@ -26,8 +26,8 @@ conductor <command> [flags]
 ```
 
 Commands: `init`, `coach`, `extract`, `import-spec`, `freeze`, `check`,
-`report`, `rules`, `drift`, `correct`, `brief`, `doctor`, `resume`, `index`,
-`pivot`.
+`report`, `rules`, `drift`, `correct`, `brief`, `doctor`, `hook`, `resume`,
+`index`, `pivot`.
 
 `conductor drift --ci` runs the lower-level drift scorer and exits `1` when the
 JSON result has `block: true`; otherwise it preserves the normal command output.
@@ -160,6 +160,24 @@ visible hook/workflow integrations, and optional vault-guard pairing signals.
 Missing setup or an invalid/unfrozen contract exits `1`; warnings such as stale
 index, non-Conductor hooks, or a referenced vault-guard setup without a local
 `vault-guard` binary exit `0`.
+
+## conductor hook install / conductor-hook
+
+Install a self-contained Git pre-commit hook that runs the enforcement gate on
+staged changes. The generated hook resolves `conductor-check`/`conductor` (or
+`npx`) at commit time and depends on no files from the Conductor source repo, so
+it works from an `npx`/npm install.
+
+| Flag | Meaning |
+|------|---------|
+| `--project <root>` | target project (must contain `.git`) |
+| `--with-vault-guard` | also run `vault-guard scan --staged` in the hook |
+| `--force` | overwrite an existing non-Conductor `pre-commit` hook |
+| `--json` / `--human` | output format (default JSON) |
+
+Exits `1` when the target is not a git repo or a foreign hook exists without
+`--force`. Re-installing a Conductor-managed hook is idempotent. Bypass a single
+commit with `git commit --no-verify`.
 
 ## conductor drift / conductor-drift
 

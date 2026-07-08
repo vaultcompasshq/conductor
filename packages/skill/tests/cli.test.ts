@@ -72,6 +72,27 @@ describe("conductor-coach", () => {
   });
 });
 
+describe("conductor-hook", () => {
+  it("installs an executable pre-commit hook into a git repo", async () => {
+    const dir = tmpProject();
+    mkdirSync(join(dir, ".git", "hooks"), { recursive: true });
+    const res = await run("hook-cli.js", ["install", "--project", dir]);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.installed).toBe(true);
+    const hook = readFileSync(join(dir, ".git", "hooks", "pre-commit"), "utf8");
+    expect(hook).toContain("conductor-managed-pre-commit");
+    expect(hook).not.toContain("integrations/");
+  });
+
+  it("exits non-zero when there is no git repo", async () => {
+    const dir = tmpProject();
+    const res = await run("hook-cli.js", ["install", "--project", dir]);
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stdout).reason).toBe("not_a_git_repo");
+  });
+});
+
 describe("conductor-extract", () => {
   it("--dry-run does not write a contract", async () => {
     const dir = tmpProject();

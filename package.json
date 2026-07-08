@@ -1,7 +1,7 @@
 {
   "name": "conductor",
   "private": true,
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "description": "Intent fidelity for AI-assisted development",
   "license": "MIT",
   "scripts": {
@@ -26,6 +26,7 @@
     "conductor:correct": "node packages/skill/dist/correct-cli.js",
     "conductor:brief": "node packages/skill/dist/brief-cli.js",
     "conductor:doctor": "node packages/skill/dist/doctor-cli.js",
+    "conductor:hook": "node packages/skill/dist/hook-cli.js",
     "conductor:report": "node packages/skill/dist/report-cli.js",
     "conductor:rules": "node packages/skill/dist/rules-cli.js",
     "conductor:pivot": "node packages/skill/dist/pivot-cli.js",

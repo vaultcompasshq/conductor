@@ -74,11 +74,12 @@ conductor/
 
 The enforcement gate (`conductor check`, legacy `conductor-check`) returns a non-zero exit code when no
 frozen contract exists or staged changes drift past a blocking threshold — the
-one place Conductor *enforces* rather than *suggests*. Wire it via
-[integrations/git-hooks/pre-commit.sample](./integrations/git-hooks/pre-commit.sample),
-the optional paired
-[vault-guard hook](./integrations/git-hooks/pre-commit-with-vault-guard.sample),
-or a CI step.
+one place Conductor *enforces* rather than *suggests*. Install it with
+`conductor hook install` (add `--with-vault-guard` to pair secret scanning), or
+wire the sample hooks
+([pre-commit.sample](./integrations/git-hooks/pre-commit.sample),
+[vault-guard hook](./integrations/git-hooks/pre-commit-with-vault-guard.sample))
+or a CI step from a source checkout.
 
 ## Quickstart
 
@@ -91,12 +92,13 @@ npx @vaultcompass/conductor-cli@latest freeze --project . --approved-by "<you>"
 npx @vaultcompass/conductor-cli@latest check --project . --staged
 ```
 
-Pair with [vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) for secret scanning:
+Install the pre-commit gate (and optionally pair [vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) secret scanning):
 
 ```bash
-cp integrations/git-hooks/pre-commit-with-vault-guard.sample .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
+npx @vaultcompass/conductor-cli@latest hook install --project . --with-vault-guard
 ```
+
+This writes a self-contained `.git/hooks/pre-commit`; drop `--with-vault-guard` for intent-only enforcement.
 
 ### AI session guardrails
 
