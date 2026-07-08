@@ -6,6 +6,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-08
+
+First stable release. The CLI surface and the `@vaultcompass/conductor-*` package
+APIs are now covered by the [stability policy](./docs/release/stability-policy.md);
+breaking changes require a major version bump.
+
+### Added
+
+- **Stable `1.0.0` line** for `@vaultcompass/conductor-{schema,core,skill,cli}`.
+
+### Fixed
+
+- **Intent extraction no longer shreds dotted file tokens.** `conductor extract`
+  treated any `.` as a sentence boundary, so prompts mentioning paths like
+  `.githooks`, `.github/workflows/conductor-drift.yml`, or `config.yaml` produced
+  mangled `original_ask`/`in_scope` fragments (e.g. `"yml CI on pull requests"`).
+  Periods now only end a sentence when followed by whitespace or end of input.
+
+### Verified
+
+- **Tier 0 dogfood + real PR gate.** Conductor's pre-commit hook and CI drift job
+  were exercised on CapitalCanvas
+  ([PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)): aligned
+  changes pass, out-of-scope changes soft-block, and the `intent-drift` CI job is green.
+
 ## [0.3.0-beta.3] - 2026-07-07
 
 ### Fixed

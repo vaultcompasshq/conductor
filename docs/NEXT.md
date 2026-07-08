@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-07
+**Updated:** 2026-07-08
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 117 passing — schema 7 · core 62 · skill 27 · cli 10 · examples/integrations 11.
+- **Tests:** 128 passing — schema 7 · core 70 · skill 29 · cli 11 · examples/integrations 11.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -29,7 +29,7 @@ of truth for "where are we and what's next." For granular tasks see
 | Correction log + Session Brief | `correction.ts`, `brief.ts`, `correct`/`brief` CLIs | Phase 3a |
 | Memory-index persistence | `history.ts`, `memory-index.ts`, `pivot.ts` + `index`/`pivot`/`resume` CLIs | Phase 3 core |
 | Hook adapter samples | `integrations/hooks`, `integrations/codex`, `integrations/claude-code`, `integrations/cursor` | Codex/Claude Code lifecycle samples, Cursor rule + git hook setup |
-| Unified CLI + release smoke | `packages/cli`, `scripts/release-smoke.mjs` | `conductor <subcommand>`, `drift --ci`, pack smoke for schema/core/skill/cli |
+| Unified CLI + release smoke | `packages/cli`, `scripts/release-smoke.mjs` | `conductor <subcommand>`, `hook install`, `drift --ci`, OIDC npm publish |
 | Release docs + CI sample | `docs/release`, `integrations/github-actions` | beta release checklist, copyable `conductor drift --ci` workflow, and optional vault-guard pairing sample |
 | Setup doctor | `doctor.ts`, `doctor` CLI | local setup diagnostics for config, contract state, archive/index, package version, visible hooks/workflows, and optional vault-guard pairing |
 | Drift report | `report.ts`, `report` CLI | PR/CI handoff with contract summary, gate result, drift, AC coverage, pivots, corrections, and recommendation |
@@ -61,12 +61,18 @@ of truth for "where are we and what's next." For granular tasks see
     deduplication, path-only drift controls, and broader public-repo validation.
 16. Release finish-line polish: init `next_steps`, report `--with-secrets`,
     offline lifecycle fixture, publish script, and README npm guardrails.
+17. npm publish `@0.3.0-beta.3` via trusted publisher; `conductor hook install`
+    for npm users; v1 launch checklist and stability policy.
+18. v1 release prep: extraction dotted-token fix, packages bumped to `1.0.0`,
+    CHANGELOG `[1.0.0]` section, and CapitalCanvas Tier 0 PR gate ([PR #109]) green.
 
 ## What's next (priority order)
 
-1. **v1.0.0 launch** — follow [release/v1-launch-checklist.md](./release/v1-launch-checklist.md):
-   tag `v0.3.0-beta.2` (npm READMEs + `latest` dist-tag), dogfood on a Tier 0 app
-   via `scripts/dogfood-tier0.sh`, then bump to `1.0.0` and tag `v1.0.0`.
+1. **Tag `v1.0.0`** — release prep is complete: all packages are at `1.0.0`,
+   `pnpm test` (128) and `pnpm release:smoke` are green, and the CapitalCanvas
+   Tier 0 dogfood + PR drift gate ([PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109))
+   passed. Remaining: merge the release-prep PR to `main`, then `git tag v1.0.0`
+   and confirm the release workflow publishes all four packages.
 2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
 3. **Integration hardening** — full runtime checks for hook adapters in real
@@ -103,5 +109,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (117 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (127 passing baseline).
 ```

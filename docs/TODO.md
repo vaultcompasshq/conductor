@@ -1,8 +1,8 @@
 # TODO — detailed task backlog
 
-**Updated:** 2026-07-07 · companion to [NEXT.md](./NEXT.md).
+**Updated:** 2026-07-08 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 117 tests passing.
+before merge. Baseline: 128 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -126,8 +126,10 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Clear the low `esbuild` advisory with a pnpm override.
 - [x] README install-without-downstream-pipeline quickstart and beta release checklist.
 - [x] GitHub Action example around `conductor drift --ci`.
-- [x] Version tag and npm publish execution — `v0.3.0-beta.1` on npm via trusted publisher.
-- [ ] **v1.0.0** — complete [v1-launch-checklist.md](./release/v1-launch-checklist.md) (dogfood gate, then tag `v1.0.0`).
+- [x] Version tag and npm publish execution — `0.3.0-beta.3` on npm via trusted publisher (`latest`).
+- [~] **v1.0.0** — prep complete: packages bumped to `1.0.0`, dogfood + PR gate green
+  ([CapitalCanvas PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)),
+  `pnpm test` (128) + `release:smoke` green. Remaining: merge release-prep PR, tag `v1.0.0`.
 
 ## 8. Integrations (design-stage → real, if/when prioritized)
 

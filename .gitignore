@@ -4,15 +4,5 @@ dist/
 .env
 .env.*
 .DS_Store
-.conductor/drift-log.jsonl
-
-# IDE
-.idea/
-.vscode/
-
-# Test artifacts
-coverage/
-
-# Local dogfood/session artifacts (per AGENTS.md, contracts live in app repos)
-.conductor/intent-contract.yaml
-.conductor/drift-log.jsonl
+# Local Conductor state (contracts and runtime files belong in consuming app repos)
+.conductor/

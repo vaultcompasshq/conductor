@@ -15,7 +15,7 @@ pnpm release:smoke
 pnpm audit --audit-level low
 ```
 
-Expected baseline: 117 tests passing.
+Expected baseline: 128 tests passing.
 
 ## Package Smoke
 
