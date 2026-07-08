@@ -64,14 +64,13 @@ of truth for "where are we and what's next." For granular tasks see
 
 ## What's next (priority order)
 
-1. **Publish/tag execution** — run `pnpm publish:beta` and tag `v0.3.0-beta`
-   after CI is green on the release PR.
+1. **v1.0.0 launch** — follow [release/v1-launch-checklist.md](./release/v1-launch-checklist.md):
+   tag `v0.3.0-beta.2` (npm READMEs + `latest` dist-tag), dogfood on a Tier 0 app
+   via `scripts/dogfood-tier0.sh`, then bump to `1.0.0` and tag `v1.0.0`.
 2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
 3. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments.
-4. **Dogfood on a Vault & Compass repo** — paired Conductor + vault-guard
-   pre-commit on one Tier 0 app.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 

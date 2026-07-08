@@ -126,8 +126,8 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Clear the low `esbuild` advisory with a pnpm override.
 - [x] README install-without-downstream-pipeline quickstart and beta release checklist.
 - [x] GitHub Action example around `conductor drift --ci`.
-- [ ] Version tag and npm publish execution — run `pnpm publish:beta` after the
-      release PR merges and CI is green.
+- [x] Version tag and npm publish execution — `v0.3.0-beta.1` on npm via trusted publisher.
+- [ ] **v1.0.0** — complete [v1-launch-checklist.md](./release/v1-launch-checklist.md) (dogfood gate, then tag `v1.0.0`).
 
 ## 8. Integrations (design-stage → real, if/when prioritized)
 

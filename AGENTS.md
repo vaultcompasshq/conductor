@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI, release smoke checks, setup doctor, handoff reports, rules audit, spec import, expanded public-repo validation harness, path-only drift controls, optional vault-guard pairing samples, offline lifecycle fixture, and publish script are complete. Next work: merge the release PR, publish `v0.3.0-beta`, dogfood on a Vault & Compass repo, then Phase 3b correction hygiene and adapter hardening.
+The unified `conductor` CLI is published to npm (`@vaultcompass/conductor-*`, trusted-publisher OIDC). v1 launch path: [docs/release/v1-launch-checklist.md](./docs/release/v1-launch-checklist.md) and [stability-policy.md](./docs/release/stability-policy.md). Remaining gate: dogfood on a Vault & Compass Tier 0 repo, then tag `v1.0.0`.
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 

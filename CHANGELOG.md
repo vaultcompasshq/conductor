@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.3.0-beta.2] - 2026-07-07
+
+### Added
+
+- **v1 launch path.** [v1-launch-checklist.md](./docs/release/v1-launch-checklist.md),
+  [stability-policy.md](./docs/release/stability-policy.md), and
+  `scripts/dogfood-tier0.sh` for Tier 0 app dogfood before `1.0.0`.
+- **npm package READMEs** for `@vaultcompass/conductor-{schema,core,skill,cli}` and
+  keywords for registry discoverability.
+
+### Changed
+
+- Release workflow publishes with **`latest`** dist-tag (npm page shows current version).
+- GitHub Actions integration samples use `@vaultcompass/conductor-cli@latest`.
+
 ## [0.3.0-beta.1] - 2026-07-07
 
 ### Fixed

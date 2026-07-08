@@ -1,7 +1,7 @@
 {
   "name": "conductor",
   "private": true,
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0-beta.2",
   "description": "Intent fidelity for AI-assisted development",
   "license": "MIT",
   "scripts": {
@@ -13,6 +13,7 @@
     "publish:beta": "node scripts/publish-beta.mjs",
     "publish:beta:dry-run": "node scripts/publish-beta.mjs --dry-run",
     "publish:bootstrap": "bash scripts/bootstrap-npm-packages.sh",
+    "dogfood:tier0": "bash scripts/dogfood-tier0.sh",
     "conductor": "node packages/cli/dist/conductor.js",
     "conductor:coach": "node packages/skill/dist/coach-cli.js",
     "conductor:extract": "node packages/skill/dist/extract-cli.js",
