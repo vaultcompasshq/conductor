@@ -68,6 +68,8 @@ of truth for "where are we and what's next." For granular tasks see
 19. **v1.0.0 shipped** — [PR #25](https://github.com/vaultcompasshq/conductor/pull/25) merged,
     tag [`v1.0.0`](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.0) published;
     all four `@vaultcompass/conductor-*` packages on npm at `1.0.0` (`latest`).
+20. CapitalCanvas Conductor integration merged — [PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)
+    (repo-local `.githooks` + `Conductor Drift` CI on PRs).
 
 ## What's next (priority order)
 
@@ -75,8 +77,6 @@ of truth for "where are we and what's next." For granular tasks see
    LLM-assisted rule normalization, auto-promotion policy.
 2. **Integration hardening** — full runtime checks for hook adapters in real
    Codex/Claude/Cursor environments; optional Cursor rule validation in a real session.
-3. **Downstream adoption** — merge CapitalCanvas [PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)
-   (Conductor hook + CI drift gate) when branch protection allows.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
