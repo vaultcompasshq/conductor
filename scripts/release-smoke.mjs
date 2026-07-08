@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const expectedVersion = "0.3.0-beta.1";
+const expectedVersion = "0.3.0-beta.2";
 
 const packages = [
   {
@@ -15,12 +15,13 @@ const packages = [
     requiredFiles: [
       "package/dist/index.js",
       "package/dist/intent-contract.schema.json",
+      "package/README.md",
     ],
   },
   {
     dir: "packages/core",
     name: "@vaultcompass/conductor-core",
-    requiredFiles: ["package/dist/index.js"],
+    requiredFiles: ["package/dist/index.js", "package/README.md"],
   },
   {
     dir: "packages/skill",
@@ -33,12 +34,13 @@ const packages = [
       "package/dist/resume-cli.js",
       "package/intent-contract/SKILL.md",
       "package/drift-guard/SKILL.md",
+      "package/README.md",
     ],
   },
   {
     dir: "packages/cli",
     name: "@vaultcompass/conductor-cli",
-    requiredFiles: ["package/dist/conductor.js"],
+    requiredFiles: ["package/dist/conductor.js", "package/README.md"],
   },
 ];
 

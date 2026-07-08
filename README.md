@@ -20,7 +20,7 @@ User conversation
 
 ## Status
 
-**Phase:** v0.3.0-beta ready to publish; unified CLI, gate, report, rules audit, spec import, and validation harness shipped — July 2026
+**Phase:** `v0.3.0-beta.2` on npm (`@vaultcompass/conductor-*`); v1 launch checklist in [docs/release/v1-launch-checklist.md](./docs/release/v1-launch-checklist.md) — July 2026
 **Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
 
 **Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **117 tests passing**
@@ -37,7 +37,8 @@ User conversation
 | [BRAINSTORMING.md](./BRAINSTORMING.md) | Design-session index |
 | [docs/repo-strategy.md](./docs/repo-strategy.md) | Public scope, licensing, org placement |
 | [docs/superpowers/specs/2026-06-17-conductor-design.md](./docs/superpowers/specs/2026-06-17-conductor-design.md) | Approved design spec (review gate) |
-| [docs/phases/implementation-roadmap.md](./docs/phases/implementation-roadmap.md) | 14-week build plan |
+| [docs/release/v1-launch-checklist.md](./docs/release/v1-launch-checklist.md) | Beta → v1.0.0 launch gate |
+| [docs/release/stability-policy.md](./docs/release/stability-policy.md) | Schema and package semver policy |
 | [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./docs/superpowers/plans/2026-06-17-conductor-phase1.md) | Phase 1 plan (complete) |
 
 ## What Conductor is / isn't
@@ -84,10 +85,10 @@ or a CI step.
 ### Install (npm)
 
 ```bash
-npx @vaultcompass/conductor-cli@0.3.0-beta init --project .
-npx @vaultcompass/conductor-cli@0.3.0-beta extract --project . --text "Add CSV export. Do not add new API endpoints."
-npx @vaultcompass/conductor-cli@0.3.0-beta freeze --project . --approved-by "<you>"
-npx @vaultcompass/conductor-cli@0.3.0-beta check --project . --staged
+npx @vaultcompass/conductor-cli@latest init --project .
+npx @vaultcompass/conductor-cli@latest extract --project . --text "Add CSV export. Do not add new API endpoints."
+npx @vaultcompass/conductor-cli@latest freeze --project . --approved-by "<you>"
+npx @vaultcompass/conductor-cli@latest check --project . --staged
 ```
 
 Pair with [vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) for secret scanning:

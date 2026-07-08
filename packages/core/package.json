@@ -1,9 +1,10 @@
 {
   "name": "@vaultcompass/conductor-core",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0-beta.2",
   "type": "module",
   "description": "Core prompt coaching, drift scoring, gate, correction, and memory-index utilities for Conductor",
   "license": "MIT",
+  "keywords": ["conductor", "drift", "intent", "ai", "governance"],
   "repository": {
     "type": "git",
     "url": "https://github.com/vaultcompasshq/conductor.git",
@@ -15,7 +16,7 @@
   "homepage": "https://github.com/vaultcompasshq/conductor#readme",
   "publishConfig": {
     "access": "public",
-    "tag": "beta"
+    "tag": "latest"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +26,7 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

@@ -1,44 +1,26 @@
-# Conductor skills
+# @vaultcompass/conductor-skill
 
-Superpowers-compatible skills for Intent Contract, prompt coaching, and drift detection.
+Superpowers-compatible skills and legacy `conductor-*` CLIs for [Conductor](https://github.com/vaultcompasshq/conductor).
+
+## Install
+
+```bash
+npm install -D @vaultcompass/conductor-skill
+```
+
+Prefer the unified binary: `@vaultcompass/conductor-cli` (`conductor <subcommand>`).
 
 ## Skills
 
-| Skill | Path | Gate |
-|-------|------|------|
-| `intent-contract` | `intent-contract/SKILL.md` | Hard — blocks implementation until frozen |
-| `prompt-coach` | `prompt-coach/SKILL.md` | Soft — suggests rewrites |
-| `drift-guard` | `drift-guard/SKILL.md` | Warn / soft-block by score |
+Shipped under this package:
 
-## Build CLIs
+- `intent-contract`
+- `prompt-coach`
+- `drift-guard`
+- `capture-correction`
 
-```bash
-pnpm --filter @vaultcompass/conductor-skill build
-```
+Copy into your agent skills directory or follow [integrations/superpowers](https://github.com/vaultcompasshq/conductor/tree/main/integrations/superpowers).
 
-## CLI helpers
+## License
 
-| Command | Purpose |
-|---------|---------|
-| `conductor-coach "<text>"` | Prompt quality score + coaching |
-| `conductor-extract --text "..." --project <root>` | Draft/write intent contract |
-| `conductor-drift --contract <path> --paths a,b` | Drift score + optional log |
-| `conductor-index --project <root> [--write]` | Render/regenerate `.conductor/index.md` |
-| `conductor-pivot --change "..." --acknowledge` | Log an intentional scope pivot |
-| `conductor-resume --project <root>` | Print the current Session Brief + recent history |
-
-Run via pnpm from repo root:
-
-```bash
-pnpm --filter @vaultcompass/conductor-skill exec conductor-coach "Add export like Notion"
-```
-
-## Install into Cursor
-
-```bash
-cp -r packages/skill/intent-contract ~/.cursor/skills/intent-contract
-cp -r packages/skill/prompt-coach ~/.cursor/skills/prompt-coach
-cp -r packages/skill/drift-guard ~/.cursor/skills/drift-guard
-```
-
-See [integrations/superpowers/README.md](../../integrations/superpowers/README.md) for hook order and upstream contribution plan.
+MIT

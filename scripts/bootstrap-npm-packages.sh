@@ -26,7 +26,7 @@ pnpm release:smoke
 for pkg in "${PACKAGES[@]}"; do
   echo ""
   echo "Publishing ${pkg}..."
-  (cd "$ROOT/$pkg" && pnpm publish --access public --tag beta)
+  (cd "$ROOT/$pkg" && pnpm publish --access public --tag latest)
 done
 
 cat <<'EOF'

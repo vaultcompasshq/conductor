@@ -2,6 +2,8 @@
 
 Use this checklist before tagging or publishing `v0.3.0-beta`.
 
+See [v1-launch-checklist.md](./v1-launch-checklist.md) for the path from beta to **`1.0.0`**.
+
 ## Required Verification
 
 ```bash
