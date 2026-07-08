@@ -45,7 +45,7 @@ echo "  1. conductor extract --project . --text \"<real task for this app>\""
 echo "  2. conductor freeze --project . --approved-by <you>"
 echo "  3. Make a small aligned change, then: conductor check --project . --staged"
 echo "  4. Make an out-of-scope change, confirm check blocks or warns"
-echo "  5. Optional: cp integrations/git-hooks/pre-commit-with-vault-guard.sample .git/hooks/pre-commit"
+echo "  5. Optional: conductor hook install --project . --with-vault-guard"
 echo ""
 echo "See docs/release/v1-launch-checklist.md — mark dogfood items when done."
 

@@ -47,6 +47,13 @@ export { appendDriftEvent, driftLogPath, type DriftLogEvent } from "./drift-log.
 export { draftContract, generateContractId, type DraftContractInput } from "./extract.js";
 export { formatDriftMessage } from "./format-drift.js";
 export { initConductor, INIT_NEXT_STEPS, type InitResult } from "./init.js";
+export {
+  CONDUCTOR_HOOK_MARKER,
+  installPreCommitHook,
+  renderPreCommitHook,
+  type InstallHookOptions,
+  type InstallHookResult,
+} from "./hook.js";
 export { DRIFT_WEIGHTS, DRIFT_THRESHOLDS, driftAction } from "./rubric.js";
 export {
   crossSessionDrift,

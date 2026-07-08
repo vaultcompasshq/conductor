@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.3.0-beta.3] - 2026-07-07
+
+### Fixed
+
+- **Broken pre-commit guidance for npm installs.** `conductor init` previously
+  told users to `cp integrations/git-hooks/...`, a path that does not ship in the
+  published packages. `init` now points to `conductor hook install`.
+
+### Added
+
+- **`conductor hook install` / `conductor-hook`.** Writes a self-contained Git
+  pre-commit hook that runs the enforcement gate on staged changes and resolves
+  the CLI at commit time (no dependency on the Conductor source repo). Supports
+  `--with-vault-guard`, `--force`, and refuses to clobber a foreign hook.
+
 ## [0.3.0-beta.2] - 2026-07-07
 
 ### Added

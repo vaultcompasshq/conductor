@@ -44,13 +44,15 @@ Checklist for the dogfood run:
 - [ ] Extract → freeze → check passes on aligned work
 - [ ] Check blocks or warns on an intentional out-of-scope change
 - [ ] `conductor report` useful in a PR or handoff
-- [ ] Optional: paired vault-guard pre-commit from `integrations/git-hooks/`
+- [ ] Optional: paired secret scanning via `conductor hook install --with-vault-guard`
 
 Record results in your local notes (do not commit app-repo contracts to this public repo).
 
 ## Runtime verification (minimum one path)
 
-- [ ] Git pre-commit hook OR GitHub Actions `conductor drift --ci` on a real repo PR
+- [x] Pre-commit hook installable from npm (`conductor hook install`) — no dependency
+  on the Conductor source repo; verified by dogfood audit 2026-07-07.
+- [ ] Git pre-commit hook OR GitHub Actions `conductor drift --ci` exercised on a real repo PR
 - [ ] Cursor rule or Claude/Codex hook sample validated in one real session (optional but recommended)
 
 ## Stability declaration

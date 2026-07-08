@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const expectedVersion = "0.3.0-beta.2";
+const expectedVersion = "0.3.0-beta.3";
 
 const packages = [
   {
@@ -32,6 +32,7 @@ const packages = [
       "package/dist/report-cli.js",
       "package/dist/rules-cli.js",
       "package/dist/resume-cli.js",
+      "package/dist/hook-cli.js",
       "package/intent-contract/SKILL.md",
       "package/drift-guard/SKILL.md",
       "package/README.md",

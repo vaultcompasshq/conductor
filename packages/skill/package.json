@@ -1,6 +1,6 @@
 {
   "name": "@vaultcompass/conductor-skill",
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "type": "module",
   "description": "Superpowers-compatible Conductor skills and helper CLIs",
   "license": "MIT",
@@ -30,6 +30,7 @@
     "conductor-correct": "./dist/correct-cli.js",
     "conductor-brief": "./dist/brief-cli.js",
     "conductor-doctor": "./dist/doctor-cli.js",
+    "conductor-hook": "./dist/hook-cli.js",
     "conductor-report": "./dist/report-cli.js",
     "conductor-rules": "./dist/rules-cli.js",
     "conductor-pivot": "./dist/pivot-cli.js",

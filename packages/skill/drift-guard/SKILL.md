@@ -102,8 +102,8 @@ exists or staged changes drift past a blocking threshold:
 conductor-check --project . --staged
 ```
 
-Wire it as a git pre-commit hook
-(`integrations/git-hooks/pre-commit.sample`) or a CI step.
+Install it as a git pre-commit hook with `conductor hook install` (add
+`--with-vault-guard` to pair secret scanning), or wire a CI step.
 
 ## Implementation
 
