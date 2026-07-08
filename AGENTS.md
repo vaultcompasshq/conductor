@@ -31,7 +31,7 @@ Phase 1 reference: [docs/superpowers/plans/2026-06-17-conductor-phase1.md](./doc
 | Hardening - generic scorer, gate, approval | - | Complete (PRs #1, #3, #5) |
 | 3 - Memory-index persistence | 7-10 | Core complete (`history`, generated index, resume, pivot, cross-session drift) |
 | 3b - decay/dedup, LLM normalization | - | Deferred |
-| 4 - Unified CLI + public release | 11-14 | `0.3.0-beta.3` on npm; `1.0.0` prepped (Tier 0 dogfood + PR gate green), tag pending |
+| 4 - Unified CLI + public release | 11-14 | **Complete** — `1.0.0` on npm ([release](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.0)) |
 
 ---
 
@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI is published to npm at **`0.3.0-beta.3`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). The tree is now bumped to **`1.0.0`** with the Tier 0 dogfood + PR drift gate complete ([CapitalCanvas PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)); `pnpm test` (128) and `pnpm release:smoke` are green. v1 launch path: [docs/release/v1-launch-checklist.md](./docs/release/v1-launch-checklist.md) and [stability-policy.md](./docs/release/stability-policy.md). Remaining gate: merge the release-prep PR, then tag `v1.0.0`.
+The unified `conductor` CLI is published to npm at **`1.0.0`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Tier 0 dogfood + PR drift gate complete ([CapitalCanvas PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)); release tagged [`v1.0.0`](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.0) on 2026-07-08. Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md).
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 

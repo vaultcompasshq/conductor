@@ -12,7 +12,7 @@ version is already **`1.0.0`** in schema.
 - [x] Release workflow: build → test → smoke → publish → post-publish init smoke
 - [x] Publish uses `latest` dist-tag (npm page shows current version)
 - [x] Package READMEs on npm (cli, schema, core, skill)
-- [x] **`latest` on npm points to newest beta** — `0.3.0-beta.3` as of 2026-07-08.
+- [x] **`latest` on npm points to `1.0.0`** — shipped 2026-07-08 (was `0.3.0-beta.3`).
 
 ## Dogfood gate (required for v1)
 
@@ -62,29 +62,14 @@ Record results in your local notes (do not commit app-repo contracts to this pub
 - [x] README status line updated to **v1.0.0**
 - [x] CHANGELOG `## [1.0.0]` section with launch summary
 
-## Release `v1.0.0`
+## Release `v1.0.0` — shipped 2026-07-08
 
-1. Bump all four package versions to `1.0.0` (root `package.json` too).
-2. Update `scripts/release-smoke.mjs` expected version and CLI version test.
-3. Verify locally:
-
-   ```bash
-   pnpm install && pnpm test && pnpm release:smoke
-   ```
-
-4. Merge PR to `main`, then:
-
-   ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-
-5. Confirm [Release workflow](https://github.com/vaultcompasshq/conductor/actions/workflows/release.yml) publishes all four packages and post-publish smoke passes.
-6. Smoke from a clean directory:
-
-   ```bash
-   npx @vaultcompass/conductor-cli@latest init --project .
-   ```
+- [x] Bump all four package versions to `1.0.0` (root `package.json` too) — [PR #25](https://github.com/vaultcompasshq/conductor/pull/25)
+- [x] Update `scripts/release-smoke.mjs` expected version and CLI version test
+- [x] Verify locally: `pnpm install && pnpm test && pnpm release:smoke` (128 tests)
+- [x] Merge PR to `main`, tag `v1.0.0`, push tag
+- [x] [Release workflow](https://github.com/vaultcompasshq/conductor/actions/workflows/release.yml) published all four packages; post-publish smoke passed
+- [x] `npx @vaultcompass/conductor-cli@latest init --project .` from clean install (post-publish smoke)
 
 ## Post-v1 (not blockers)
 

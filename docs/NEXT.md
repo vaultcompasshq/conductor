@@ -65,18 +65,18 @@ of truth for "where are we and what's next." For granular tasks see
     for npm users; v1 launch checklist and stability policy.
 18. v1 release prep: extraction dotted-token fix, packages bumped to `1.0.0`,
     CHANGELOG `[1.0.0]` section, and CapitalCanvas Tier 0 PR gate ([PR #109]) green.
+19. **v1.0.0 shipped** — [PR #25](https://github.com/vaultcompasshq/conductor/pull/25) merged,
+    tag [`v1.0.0`](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.0) published;
+    all four `@vaultcompass/conductor-*` packages on npm at `1.0.0` (`latest`).
 
 ## What's next (priority order)
 
-1. **Tag `v1.0.0`** — release prep is complete: all packages are at `1.0.0`,
-   `pnpm test` (128) and `pnpm release:smoke` are green, and the CapitalCanvas
-   Tier 0 dogfood + PR drift gate ([PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109))
-   passed. Remaining: merge the release-prep PR to `main`, then `git tag v1.0.0`
-   and confirm the release workflow publishes all four packages.
-2. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
+1. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
    LLM-assisted rule normalization, auto-promotion policy.
-3. **Integration hardening** — full runtime checks for hook adapters in real
-   Codex/Claude/Cursor environments.
+2. **Integration hardening** — full runtime checks for hook adapters in real
+   Codex/Claude/Cursor environments; optional Cursor rule validation in a real session.
+3. **Downstream adoption** — merge CapitalCanvas [PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)
+   (Conductor hook + CI drift gate) when branch protection allows.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
