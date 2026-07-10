@@ -54,7 +54,9 @@ Record results in your local notes (do not commit app-repo contracts to this pub
     the hook ran on the merge commit (`✓ Conductor gate: ok`) and the `Conductor Drift`
     CI job (`intent-drift`) passed on the PR. Out-of-scope frontend edits reproduced a
     drift `soft_block` (71/100) locally.
-- [ ] Cursor rule or Claude/Codex hook sample validated in one real session (optional but recommended)
+- [x] Cursor rule validated via CapitalCanvas Tier 0 adoption — see
+  [cursor-integration-2026-07-09.md](../validation/cursor-integration-2026-07-09.md)
+  (mechanical enforcement via repo-local `.githooks`; rule is advisory)
 
 ## Stability declaration
 

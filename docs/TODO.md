@@ -2,7 +2,7 @@
 
 **Updated:** 2026-07-08 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 128 tests passing.
+before merge. Baseline: 132 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -107,10 +107,10 @@ prop sharper against current spec tools, agent hosts, and PR review products.
 
 See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/specs/2026-06-20-correction-log-and-brief.md) §6–7.
 
-- [ ] **Correction decay/dedup** — corrections accumulate; a 40-item brief isn't
-      "minimal." Merge near-duplicate rules; optionally expire stale ones.
-- [ ] **Auto-promotion policy** — decide whether acknowledged corrections
-      auto-promote to constraints (currently explicit `--promote` only).
+- [~] **Correction decay/dedup** — brief/index surfaces dedupe near-identical rules,
+      cap at 10, and drop >90-day entries from brief only; full log unchanged.
+      LLM normalization remains deferred.
+- [x] **Auto-promotion policy** — explicit `--promote` only; no auto-promotion.
 - [ ] **LLM-assisted rule normalization** — turning a messy correction into a
       clean negative constraint is itself extraction; candidate for the optional
       LLM path. Keep rule-based as default/offline.
@@ -144,8 +144,7 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 
 ## 9. Smaller hygiene
 
-- [ ] Consider a deprecation alias or clear error if someone still passes
-      `conductor-extract --freeze` (removed in PR #5).
+- [x] Deprecation message for removed `conductor-extract --freeze` (points to `conductor-freeze`).
 - [ ] `prompt-coach` product-name list is hardcoded (9 products) — generalize or
       document as illustrative.
 - [ ] Decide whether to commit a `.conductor/intent-contract.yaml` for this repo

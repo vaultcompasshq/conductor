@@ -3,6 +3,10 @@ import type {
   CorrectionLogEntry,
   IntentContract,
 } from "@vaultcompass/conductor-schema";
+import {
+  briefCorrections,
+  type BriefCorrectionOptions,
+} from "./correction-brief.js";
 
 export interface AddCorrectionInput {
   /** What the agent did that was wrong. */
@@ -76,3 +80,22 @@ export function acknowledgedCorrections(
     (c) => c.acknowledged_by === "user",
   );
 }
+
+/**
+ * Acknowledged corrections trimmed for brief/index surfaces: deduped, age-filtered,
+ * capped. Full correction_log on the contract is unchanged.
+ */
+export function briefAcknowledgedCorrections(
+  contract: IntentContract,
+  options?: BriefCorrectionOptions,
+): CorrectionLogEntry[] {
+  return briefCorrections(acknowledgedCorrections(contract), options);
+}
+
+export type { BriefCorrectionOptions } from "./correction-brief.js";
+export {
+  briefCorrections,
+  DEFAULT_BRIEF_CORRECTION_MAX,
+  DEFAULT_BRIEF_CORRECTION_MAX_AGE_DAYS,
+  CORRECTION_RULE_DEDUPE_THRESHOLD,
+} from "./correction-brief.js";

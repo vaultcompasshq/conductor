@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 128 passing — schema 7 · core 70 · skill 29 · cli 11 · examples/integrations 11.
+- **Tests:** 132 passing — schema 7 · core 73 · skill 30 · cli 11 · examples/integrations 11.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -70,13 +70,14 @@ of truth for "where are we and what's next." For granular tasks see
     all four `@vaultcompass/conductor-*` packages on npm at `1.0.0` (`latest`).
 20. CapitalCanvas Conductor integration merged — [PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)
     (repo-local `.githooks` + `Conductor Drift` CI on PRs).
+21. Post-v1 hygiene: brief correction dedup/cap (3b partial), `--freeze` deprecation,
+    Cursor validation doc ([cursor-integration-2026-07-09.md](./validation/cursor-integration-2026-07-09.md)).
 
 ## What's next (priority order)
 
-1. **Phase 3b deferred** (from the correction-log spec): correction decay/dedup,
-   LLM-assisted rule normalization, auto-promotion policy.
-2. **Integration hardening** — full runtime checks for hook adapters in real
-   Codex/Claude/Cursor environments; optional Cursor rule validation in a real session.
+1. **Phase 3b (remaining)** — LLM-assisted rule normalization (opt-in); further
+   correction decay tuning if brief caps prove insufficient in dogfood.
+2. **Integration hardening** — Codex/Claude Code hook samples in live sessions.
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -109,5 +110,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (127 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (132 passing baseline).
 ```

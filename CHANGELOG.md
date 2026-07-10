@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 3b (partial): brief correction dedup + cap.** Session Brief and generated
+  `index.md` dedupe near-identical acknowledged correction rules (keep newest),
+  drop entries older than 90 days from brief surfaces, and cap at 10 items. Full
+  `correction_log` on the contract is unchanged. Promotion to constraints stays
+  **explicit** (`conductor correct --promote` only).
+
+### Changed
+
+- **`conductor-extract --freeze` deprecation.** Removed flag now exits with a clear
+  message pointing to `conductor-freeze`.
+- Cursor integration rule references `conductor hook install` instead of the
+  non-shipping `integrations/git-hooks` sample path.
+
 ## [1.0.0] - 2026-07-08
 
 First stable release. The CLI surface and the `@vaultcompass/conductor-*` package

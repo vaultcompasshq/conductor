@@ -67,7 +67,7 @@ The unified `conductor` CLI is published to npm at **`1.0.0`** (`@vaultcompass/c
 
 ```bash
 pnpm install
-pnpm test      # 128 tests: schema (7), core (70), skill (29), cli (11), examples/integrations (11)
+pnpm test      # 132 tests: schema (7), core (73), skill (30), cli (11), examples/integrations (11)
 pnpm build
 pnpm typecheck
 pnpm release:smoke

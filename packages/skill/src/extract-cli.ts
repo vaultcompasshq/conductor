@@ -24,6 +24,12 @@ function parseArgs(argv: string[]) {
       userText = argv[++i];
     } else if (arg === "--dry-run") {
       dryRun = true;
+    } else if (arg === "--freeze") {
+      console.error(
+        "conductor-extract --freeze was removed. Extract only writes unfrozen drafts.\n" +
+          "Review the draft, then approve with: conductor-freeze --project <root> [--approved-by <name>]",
+      );
+      process.exit(2);
     }
   }
 

@@ -17,4 +17,5 @@ Before implementation work:
    `conductor-pivot --project . --change "<summary>" --acknowledge`.
 
 Cursor has project rules and AGENTS.md support, but this rule is not a lifecycle
-hook. Use `integrations/git-hooks/pre-commit.sample` for mechanical enforcement.
+hook. For mechanical enforcement use `conductor hook install --project .`
+(or repo-local `.githooks` when the consuming app ships its own hook).
