@@ -1,5 +1,8 @@
 import type { IntentContract } from "@vaultcompass/conductor-schema";
-import { acknowledgedCorrections } from "./correction.js";
+import {
+  briefAcknowledgedCorrections,
+  type BriefCorrectionOptions,
+} from "./correction.js";
 
 export interface SessionBrief {
   contract_id: string;
@@ -16,7 +19,10 @@ export interface SessionBrief {
  * context reset instead of replaying the messy transcript — it carries the
  * distilled lessons (corrections) but none of the failed attempts.
  */
-export function buildBrief(contract: IntentContract): SessionBrief {
+export function buildBrief(
+  contract: IntentContract,
+  options?: BriefCorrectionOptions,
+): SessionBrief {
   return {
     contract_id: contract.contract_id,
     intent: contract.original_ask,
@@ -26,7 +32,7 @@ export function buildBrief(contract: IntentContract): SessionBrief {
     constraints: contract.constraints
       .filter((c) => c.priority === "critical" || c.priority === "high")
       .map((c) => c.rule),
-    corrections: acknowledgedCorrections(contract).map((c) => ({
+    corrections: briefAcknowledgedCorrections(contract, options).map((c) => ({
       rule: c.rule,
       wrong: c.wrong,
       right: c.right,
@@ -34,8 +40,11 @@ export function buildBrief(contract: IntentContract): SessionBrief {
   };
 }
 
-export function renderBriefMarkdown(contract: IntentContract): string {
-  const b = buildBrief(contract);
+export function renderBriefMarkdown(
+  contract: IntentContract,
+  options?: BriefCorrectionOptions,
+): string {
+  const b = buildBrief(contract, options);
   const lines: string[] = [`# Session brief — ${b.contract_id}`, "", "## Intent", b.intent];
 
   const section = (title: string, items: string[]) => {

@@ -108,6 +108,19 @@ describe("conductor-extract", () => {
     expect(existsSync(join(dir, ".conductor", "intent-contract.yaml"))).toBe(false);
   });
 
+  it("rejects deprecated --freeze with a clear message", async () => {
+    const dir = tmpProject();
+    const res = await run("extract-cli.js", [
+      "--project", dir,
+      "--text", "Add a CSV export button.",
+      "--freeze",
+    ]);
+    expect(res.code).toBe(2);
+    expect(res.stderr).toMatch(/removed/i);
+    expect(res.stderr).toMatch(/conductor-freeze/i);
+    expect(existsSync(join(dir, ".conductor", "intent-contract.yaml"))).toBe(false);
+  });
+
   it("writes an UNFROZEN draft (no approval)", async () => {
     const dir = tmpProject();
     const res = await run("extract-cli.js", [

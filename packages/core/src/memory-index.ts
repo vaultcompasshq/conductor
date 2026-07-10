@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IntentContract } from "@vaultcompass/conductor-schema";
-import { acknowledgedCorrections } from "./correction.js";
+import { briefAcknowledgedCorrections } from "./correction.js";
 import { conductorDir, readContract } from "./contract-store.js";
 import { listContracts } from "./history.js";
 import { renderBriefMarkdown } from "./brief.js";
@@ -78,7 +78,7 @@ export function renderIndex(projectRoot: string): string {
   }
 
   lines.push("", "## Acknowledged corrections");
-  const corrections = active ? acknowledgedCorrections(active).slice(-8) : [];
+  const corrections = active ? briefAcknowledgedCorrections(active) : [];
   if (corrections.length > 0) {
     for (const correction of corrections) {
       lines.push(bullet(`${correction.id}: ${correction.rule}`));

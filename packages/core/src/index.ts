@@ -104,7 +104,13 @@ export {
 export {
   addCorrection,
   acknowledgedCorrections,
+  briefAcknowledgedCorrections,
+  briefCorrections,
+  CORRECTION_RULE_DEDUPE_THRESHOLD,
+  DEFAULT_BRIEF_CORRECTION_MAX,
+  DEFAULT_BRIEF_CORRECTION_MAX_AGE_DAYS,
   type AddCorrectionInput,
+  type BriefCorrectionOptions,
 } from "./correction.js";
 export {
   buildBrief,

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { assertValidIntentContract } from "@vaultcompass/conductor-schema";
 import { addCorrection, acknowledgedCorrections } from "../src/correction.js";
+import { briefCorrections } from "../src/correction-brief.js";
 import { buildBrief, renderBriefMarkdown } from "../src/brief.js";
 
 const base: IntentContract = {
@@ -89,5 +90,79 @@ describe("buildBrief / renderBriefMarkdown", () => {
     expect(md).toContain("Never fetch in components");
     // Must NOT leak failed-attempt code; only the distilled rule + wrong/right.
     expect(md).not.toContain("```");
+  });
+});
+
+describe("briefCorrections", () => {
+  const now = new Date("2026-07-09T12:00:00Z");
+  const recent = new Date("2026-07-08T12:00:00Z").toISOString();
+  const stale = new Date("2026-01-01T12:00:00Z").toISOString();
+
+  it("dedupes near-identical rules and keeps the newest", () => {
+    const entries = briefCorrections(
+      [
+        {
+          id: "cl-1",
+          timestamp: recent,
+          wrong: "a",
+          right: "b",
+          rule: "Never fetch in components; use a hook",
+          acknowledged_by: "user",
+        },
+        {
+          id: "cl-2",
+          timestamp: now.toISOString(),
+          wrong: "c",
+          right: "d",
+          rule: "Never fetch inside components; use hooks",
+          acknowledged_by: "user",
+        },
+      ],
+      { maxAgeDays: null },
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].id).toBe("cl-2");
+  });
+
+  it("caps the number of corrections shown in brief surfaces", () => {
+    const labels = [
+      "alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
+      "golf", "hotel", "india", "juliet", "kilo", "lima",
+    ];
+    const entries = briefCorrections(
+      labels.map((label, i) => ({
+        id: `cl-${i + 1}`,
+        timestamp: new Date(now.getTime() - i * 60_000).toISOString(),
+        wrong: `wrong-${label}`,
+        right: `right-${label}`,
+        rule: `Keep ${label} logic out of view components`,
+        acknowledged_by: "user" as const,
+      })),
+      { maxItems: 10, maxAgeDays: null },
+    );
+    expect(entries).toHaveLength(10);
+    const ids = entries.map((entry) => entry.id);
+    expect(ids).toContain("cl-1");
+    expect(ids).not.toContain("cl-11");
+    expect(ids).not.toContain("cl-12");
+  });
+
+  it("drops stale corrections from brief surfaces but not the contract log", () => {
+    let contract = addCorrection(base, {
+      wrong: "old",
+      right: "new",
+      rule: "Stale lesson about fetching in components",
+      acknowledged: true,
+    });
+    contract = {
+      ...contract,
+      correction_log: contract.correction_log!.map((entry) => ({
+        ...entry,
+        timestamp: stale,
+      })),
+    };
+    const brief = buildBrief(contract, { maxAgeDays: 30 });
+    expect(contract.correction_log).toHaveLength(1);
+    expect(brief.corrections).toHaveLength(0);
   });
 });
