@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-09
+
 ### Added
 
 - **Phase 3b (partial): brief correction dedup + cap.** Session Brief and generated

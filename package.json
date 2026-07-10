@@ -1,7 +1,7 @@
 {
   "name": "conductor",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Intent fidelity for AI-assisted development",
   "license": "MIT",
   "scripts": {
