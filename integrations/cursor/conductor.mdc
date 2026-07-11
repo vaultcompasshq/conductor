@@ -6,14 +6,17 @@ alwaysApply: true
 Before implementation work:
 
 1. If `.conductor/intent-contract.yaml` is missing, draft one with
-   `conductor-extract --project . --text "<user ask>"`.
+   `conductor extract --project . --text "<user ask>"`.
 2. Do not treat a draft as approved. Ask the user to review it, then run
-   `conductor-freeze --project . --approved-by "<name>"`.
-3. At the start of a resumed session, run `conductor-resume --project .` and
+   `conductor freeze --project . --approved-by "<name>"`.
+3. **One contract per feature branch** — regenerate extract/freeze when scope
+   changes; do not reuse a stale contract from another task (e.g. the integration
+   contract on `main` is not a template for product work).
+4. At the start of a resumed session, run `conductor-resume --project .` and
    use the Session Brief as the authoritative intent context.
-4. Before claiming completion or committing, run
+5. Before claiming completion or committing, run
    `conductor-check --project . --staged`.
-5. If the user intentionally changes scope, record it with
+6. If the user intentionally changes scope, record it with
    `conductor-pivot --project . --change "<summary>" --acknowledge`.
 
 Cursor has project rules and AGENTS.md support, but this rule is not a lifecycle

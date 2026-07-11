@@ -161,6 +161,32 @@ describe("draftContract", () => {
     );
   });
 
+  it("does not treat a file-extension period as the end of original_ask", () => {
+    const contract = draftContract({
+      userText:
+        "Add unit tests for strategyFilter in frontend/src/features/proposal-builder/lib/strategyFilter.ts. Verify filtering excludes strategies not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
+    });
+
+    expect(contract.original_ask).toMatch(/strategyFilter\.ts/i);
+    expect(contract.original_ask).toMatch(/Verify filtering/i);
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unit tests for strategyFilter/i),
+      ]),
+    );
+    expect(contract.out_of_scope).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/not in the selected preset/i)]),
+    );
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([expect.stringMatching(/do not add API endpoints/i)]),
+    );
+    expect(contract.acceptance_criteria.map((ac) => ac.description)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/filtering excludes strategies/i),
+      ]),
+    );
+  });
+
   it("generateContractId matches schema pattern", () => {
     expect(generateContractId(new Date("2026-06-17T12:00:00Z"))).toMatch(
       /^ic-20260617-[a-z0-9]{6}$/,

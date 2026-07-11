@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Extraction no longer breaks on `file.ts.` sentence boundaries.** Prompts like
+  `strategyFilter.ts. Verify…` no longer truncate `original_ask` at the extension
+  period; the full first sentence is preserved.
+- **Prohibition extraction false positives.** Bare `not …` matches inside verify
+  clauses (e.g. "excludes strategies not in the selected preset") are no longer
+  added to `out_of_scope`.
+
+### Changed
+
+- Cursor integration rule: one contract per feature branch; do not reuse stale
+  contracts from unrelated tasks.
+
 ## [1.0.1] - 2026-07-09
 
 ### Added
