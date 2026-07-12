@@ -1,8 +1,8 @@
 # TODO — detailed task backlog
 
-**Updated:** 2026-07-11 · companion to [NEXT.md](./NEXT.md).
+**Updated:** 2026-07-12 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 133 tests passing.
+before merge. Baseline: 135 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 

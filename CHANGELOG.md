@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-07-12
+
 ### Fixed
 
 - **Compound file extensions end sentences correctly.** Periods after `.test.ts.`,
