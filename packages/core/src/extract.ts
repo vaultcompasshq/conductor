@@ -21,14 +21,29 @@ export function generateContractId(date = new Date()): string {
 }
 
 // A '.', '!' or '?' terminates a sentence only when followed by whitespace or
-// end of input. This keeps dotted tokens like ".yml", ".githooks", or
-// "config.yaml" intact instead of shredding them into nonsense fragments.
-const SENTENCE_TERMINATOR = /[.!?](?=\s|$)/;
-const SENTENCE_BOUNDARY = /(?<=[.!?])\s+/;
+// end of input — except a '.' that closes a filename extension (e.g. ".ts.",
+// ".yaml.") before the next sentence.
+const FILE_EXTENSION_SUFFIX = /\.\w{1,8}$/;
+
+function isSentenceTerminatorAt(text: string, index: number): boolean {
+  const ch = text[index];
+  if (!/[.!?]/.test(ch)) return false;
+  const rest = text.slice(index + 1);
+  if (rest.length > 0 && !/^\s/.test(rest)) return false;
+  if (ch === "." && FILE_EXTENSION_SUFFIX.test(text.slice(0, index))) return false;
+  return true;
+}
+
+function findFirstSentenceEnd(text: string): number {
+  for (let i = 0; i < text.length; i++) {
+    if (isSentenceTerminatorAt(text, i)) return i;
+  }
+  return -1;
+}
 
 function oneSentence(text: string, max = 500): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const boundary = normalized.search(SENTENCE_TERMINATOR);
+  const boundary = findFirstSentenceEnd(normalized);
   const sentence = (boundary === -1
     ? normalized
     : normalized.slice(0, boundary + 1)
@@ -36,13 +51,26 @@ function oneSentence(text: string, max = 500): string {
   return sentence.length > max ? `${sentence.slice(0, max - 1)}…` : sentence;
 }
 
-// Split into sentence-like segments without breaking dotted file tokens.
-// Newlines and semicolons always separate clauses; periods/!/? only when
-// they are real sentence boundaries (followed by whitespace or EOL).
+// Split into sentence-like segments without breaking dotted file tokens or
+// treating ".ts." / ".yaml." as a sentence boundary.
 function splitSentences(text: string): string[] {
-  return text
-    .split(/\n+/)
-    .flatMap((line) => line.split(SENTENCE_BOUNDARY))
+  const segments: string[] = [];
+
+  for (const line of text.split(/\n+/)) {
+    let start = 0;
+    for (let i = 0; i < line.length; i++) {
+      if (!isSentenceTerminatorAt(line, i)) continue;
+      const chunk = line.slice(start, i + 1).trim();
+      if (chunk) segments.push(chunk);
+      start = i + 1;
+      while (start < line.length && /\s/.test(line[start]!)) start++;
+      i = start - 1;
+    }
+    const tail = line.slice(start).trim();
+    if (tail) segments.push(tail);
+  }
+
+  return segments
     .flatMap((chunk) => chunk.split(";"))
     .map((segment) => segment.trim())
     .filter(Boolean);
@@ -96,7 +124,7 @@ const ACTION_START_RE = new RegExp(
   "i",
 );
 const PROHIBITION_RE =
-  /\b(do not|don't|must not|should not|cannot|can't|never|avoid|no|not|without)\b/i;
+  /\b(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no|without)\b/i;
 
 function normalizeItem(text: string): string {
   return text
@@ -142,7 +170,7 @@ function isProhibitionClause(text: string): boolean {
 function expandProhibitionLists(text: string): string[] {
   const items: string[] = [];
   const pattern =
-    /\b(do not|don't|must not|should not|cannot|can't|never|avoid|no)\s+([a-z]+)\s+([^.!?]{3,200})/gi;
+    /\b(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no)\s+([a-z]+)\s+([^.!?]{3,200})/gi;
 
   for (const match of text.matchAll(pattern)) {
     const prefix = match[1].replace(/\s+/g, " ");
@@ -178,17 +206,23 @@ function extractInScope(text: string): string[] {
   return fallback.length >= 5 ? [fallback] : ["Describe the requested change"];
 }
 
+function isValidOutOfScopeItem(item: string): boolean {
+  return /^(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|without|no)\b/i.test(
+    item,
+  );
+}
+
 function extractOutOfScope(text: string): string[] {
   const patterns = [
     /\bdo\s+not\s+([a-z][\w\s-]{3,80})/gi,
     /\bmust\s+not\s+([a-z][\w\s-]{3,80})/gi,
     /\bshould\s+not\s+([a-z][\w\s-]{3,80})/gi,
+    /\bshall\s+not\s+([a-z][\w\s-]{3,80})/gi,
     /\bcannot\s+([a-z][\w\s-]{3,80})/gi,
     /\bcan't\s+([a-z][\w\s-]{3,80})/gi,
     /\bnever\s+([a-z][\w\s-]{3,80})/gi,
     /\bavoid\s+([a-z][\w\s-]{3,80})/gi,
     /\bno\s+([a-z][\w\s-]{3,80})/gi,
-    /\bnot\s+([a-z][\w\s-]{3,80})/gi,
     /\bwithout\s+([a-z][\w\s-]{3,80})/gi,
   ];
   const items: string[] = [];
@@ -196,7 +230,9 @@ function extractOutOfScope(text: string): string[] {
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) {
       const item = match[0].trim().replace(/\s+/g, " ");
-      if (item.length >= 5 && item.length <= 200) items.push(item);
+      if (item.length >= 5 && item.length <= 200 && isValidOutOfScopeItem(item)) {
+        items.push(item);
+      }
     }
   }
   const unique = uniqueItems(items, 12);
