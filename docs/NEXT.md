@@ -73,7 +73,8 @@ of truth for "where are we and what's next." For granular tasks see
 21. Post-v1 hygiene: brief correction dedup/cap (3b partial), `--freeze` deprecation,
     Cursor validation doc ([cursor-integration-2026-07-09.md](./validation/cursor-integration-2026-07-09.md)).
 22. **v1.0.2** — CapitalCanvas dogfood extraction fixes: `file.ts.` sentence boundaries,
-    prohibition false positives, Cursor rule one-contract-per-branch ([PR #29](https://github.com/vaultcompasshq/conductor/pull/29)).
+    prohibition false positives, Cursor rule one-contract-per-branch ([PR #29](https://github.com/vaultcompasshq/conductor/pull/29));
+    re-validated on CapitalCanvas — [capitalcanvas-extraction-2026-07-11.md](./validation/capitalcanvas-extraction-2026-07-11.md).
 
 ## What's next (priority order)
 
