@@ -21,16 +21,24 @@ export function generateContractId(date = new Date()): string {
 }
 
 // A '.', '!' or '?' terminates a sentence only when followed by whitespace or
-// end of input — except a '.' that closes a filename extension (e.g. ".ts.",
-// ".yaml.") before the next sentence.
-const FILE_EXTENSION_SUFFIX = /\.\w{1,8}$/;
+// end of input — except a '.' that closes a simple filename extension (e.g.
+// ".ts.", ".yaml.") before the next sentence. Compound extensions (".test.ts.",
+// ".spec.tsx.", ".d.ts.") still end the sentence at the final dot.
+const SIMPLE_FILE_EXTENSION_SUFFIX = /\.\w{1,8}$/;
+const COMPOUND_FILE_EXTENSION_SUFFIX = /\.[a-z0-9][\w-]*\.[a-z]{2,8}$/i;
+
+function isFilenameExtensionPeriod(text: string, index: number): boolean {
+  const before = text.slice(0, index);
+  if (COMPOUND_FILE_EXTENSION_SUFFIX.test(before)) return false;
+  return SIMPLE_FILE_EXTENSION_SUFFIX.test(before);
+}
 
 function isSentenceTerminatorAt(text: string, index: number): boolean {
   const ch = text[index];
   if (!/[.!?]/.test(ch)) return false;
   const rest = text.slice(index + 1);
   if (rest.length > 0 && !/^\s/.test(rest)) return false;
-  if (ch === "." && FILE_EXTENSION_SUFFIX.test(text.slice(0, index))) return false;
+  if (ch === "." && isFilenameExtensionPeriod(text, index)) return false;
   return true;
 }
 
@@ -99,6 +107,7 @@ const ACTION_VERBS = [
   "enable",
   "enforce",
   "export",
+  "extract",
   "fix",
   "generate",
   "hide",
@@ -124,7 +133,7 @@ const ACTION_START_RE = new RegExp(
   "i",
 );
 const PROHIBITION_RE =
-  /\b(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no|without)\b/i;
+  /\b(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no\s+(?!\S*-)|without)\b/i;
 
 function normalizeItem(text: string): string {
   return text
