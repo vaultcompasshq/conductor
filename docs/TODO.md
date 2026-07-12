@@ -1,8 +1,8 @@
 # TODO — detailed task backlog
 
-**Updated:** 2026-07-08 · companion to [NEXT.md](./NEXT.md).
+**Updated:** 2026-07-11 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 132 tests passing.
+before merge. Baseline: 133 tests passing.
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -154,6 +154,8 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 
 ## Done (recent, for context)
 
+- [x] CapitalCanvas dogfood extraction fixes (`file.ts.` boundaries, prohibition false
+      positives) — shipped in `1.0.2` ([#29](https://github.com/vaultcompasshq/conductor/pull/29)).
 - [x] Generic, project-independent drift scorer (#1).
 - [x] `conductor-check` enforcement gate + pre-commit sample (#1).
 - [x] CI workflow; build-before-typecheck fix (#1).

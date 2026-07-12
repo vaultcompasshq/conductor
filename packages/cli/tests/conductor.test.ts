@@ -58,7 +58,7 @@ describe("conductor", () => {
   it("prints the package version", () => {
     const res = run(["--version"]);
     expect(res.code).toBe(0);
-    expect(res.stdout.trim()).toBe("1.0.1");
+    expect(res.stdout.trim()).toBe("1.0.2");
   });
 
   it("dispatches to an existing subcommand", () => {

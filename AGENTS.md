@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI is published to npm at **`1.0.0`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Tier 0 dogfood + PR drift gate complete ([CapitalCanvas PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)); release tagged [`v1.0.0`](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.0) on 2026-07-08. Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md).
+The unified `conductor` CLI is published to npm at **`1.0.2`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Tier 0 dogfood + PR drift gate complete ([CapitalCanvas PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)); latest patch addresses CapitalCanvas extraction dogfood ([PR #29](https://github.com/vaultcompasshq/conductor/pull/29)). Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md).
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 
@@ -67,7 +67,7 @@ The unified `conductor` CLI is published to npm at **`1.0.0`** (`@vaultcompass/c
 
 ```bash
 pnpm install
-pnpm test      # 132 tests: schema (7), core (73), skill (30), cli (11), examples/integrations (11)
+pnpm test      # 133 tests: schema (7), core (74), skill (30), cli (11), examples/integrations (11)
 pnpm build
 pnpm typecheck
 pnpm release:smoke
