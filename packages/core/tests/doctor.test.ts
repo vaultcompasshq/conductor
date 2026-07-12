@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { draftContract } from "../src/extract.js";
 import { freezeContract, writeContract } from "../src/contract-store.js";
 import { initConductor } from "../src/init.js";
@@ -156,5 +157,32 @@ describe("runDoctor", () => {
     } finally {
       process.env.PATH = previousPath;
     }
+  });
+
+  it("recognizes core.hooksPath pre-commit hook", () => {
+    const dir = tmpProject();
+    initConductor(dir);
+    writeContract(dir, freezeContract(draft(), { approvedBy: "tester" }));
+    writeIndex(dir);
+    mkdirSync(join(dir, ".githooks"), { recursive: true });
+    writeFileSync(
+      join(dir, ".githooks", "pre-commit"),
+      "conductor check --project . --staged\nvault-guard scan --staged\n",
+      "utf8",
+    );
+    spawnSync("git", ["init"], { cwd: dir });
+    spawnSync("git", ["config", "core.hooksPath", ".githooks"], { cwd: dir });
+
+    const result = runDoctor(dir);
+    expect(
+      result.findings.some((f) => f.id === "git_pre_commit_conductor"),
+    ).toBe(true);
+    expect(
+      result.findings.some((f) => f.id === "git_pre_commit_without_conductor"),
+    ).toBe(false);
+    const conductorFinding = result.findings.find(
+      (f) => f.id === "git_pre_commit_conductor",
+    );
+    expect(conductorFinding?.path).toBe(".githooks/pre-commit");
   });
 });

@@ -230,6 +230,25 @@ describe("draftContract", () => {
     );
   });
 
+  it("does not add without review false positive from registry clause", () => {
+    const contract = draftContract({
+      userText:
+        "Start a new venture slug demo-app through agent-00-conductor. Update ventures/demo-app/control-state.json and produce conductor-output/decision.md. Run only the next approved agent stage. Do not commit secrets or skip Conductor approval. Do not modify agents/registry.json without review.",
+    });
+
+    expect(contract.out_of_scope).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^without review$/i)]),
+    );
+    expect(contract.out_of_scope).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^Do not modify agents$/i)]),
+    );
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/do not modify agents\/registry\.json/i),
+      ]),
+    );
+  });
+
   it("generateContractId matches schema pattern", () => {
     expect(generateContractId(new Date("2026-06-17T12:00:00Z"))).toMatch(
       /^ic-20260617-[a-z0-9]{6}$/,

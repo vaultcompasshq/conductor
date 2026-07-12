@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`conductor doctor` respects `core.hooksPath`.** Repo-local hooks such as
+  `.githooks/pre-commit` are detected instead of only `.git/hooks/pre-commit`.
+- **Prohibition extraction:** no bare `without review` false positives; file
+  paths in `do not modify …` clauses (e.g. `agents/registry.json`) are preserved.
+
 ## [1.0.3] - 2026-07-12
 
 ### Fixed

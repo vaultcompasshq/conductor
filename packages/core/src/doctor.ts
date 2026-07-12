@@ -324,6 +324,34 @@ function indexStatus(projectRoot: string, findings: DoctorFinding[]): void {
   }
 }
 
+function resolveGitPreCommitHook(
+  projectRoot: string,
+): { absolutePath: string; displayPath: string } | null {
+  const gitDir = join(projectRoot, ".git");
+  if (!existsSync(gitDir)) return null;
+
+  const hooksPathResult = spawnSync("git", ["config", "core.hooksPath"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  const hooksPath = hooksPathResult.stdout?.trim();
+  if (hooksPath) {
+    const hookPath = join(projectRoot, hooksPath, "pre-commit");
+    if (existsSync(hookPath)) {
+      const display = hooksPath.endsWith("/")
+        ? `${hooksPath}pre-commit`
+        : `${hooksPath}/pre-commit`;
+      return { absolutePath: hookPath, displayPath: display };
+    }
+  }
+
+  const defaultHook = join(gitDir, "hooks", "pre-commit");
+  if (existsSync(defaultHook)) {
+    return { absolutePath: defaultHook, displayPath: ".git/hooks/pre-commit" };
+  }
+  return null;
+}
+
 function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void {
   const vaultGuardConfig = [
     ".vault-guard.json",
@@ -358,8 +386,8 @@ function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void
 
   const gitDir = join(projectRoot, ".git");
   if (existsSync(gitDir)) {
-    const preCommit = join(gitDir, "hooks", "pre-commit");
-    if (!existsSync(preCommit)) {
+    const preCommitHook = resolveGitPreCommitHook(projectRoot);
+    if (!preCommitHook) {
       findings.push(
         finding(
           "info",
@@ -368,13 +396,13 @@ function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void
           ".git/hooks/pre-commit",
         ),
       );
-    } else if (textMentionsConductor(preCommit)) {
+    } else if (textMentionsConductor(preCommitHook.absolutePath)) {
       findings.push(
         finding(
           "ok",
           "git_pre_commit_conductor",
           "Git pre-commit hook mentions Conductor.",
-          ".git/hooks/pre-commit",
+          preCommitHook.displayPath,
         ),
       );
     } else {
@@ -383,19 +411,22 @@ function integrationStatus(projectRoot: string, findings: DoctorFinding[]): void
           "warn",
           "git_pre_commit_without_conductor",
           "Git pre-commit hook exists but does not mention Conductor.",
-          ".git/hooks/pre-commit",
+          preCommitHook.displayPath,
         ),
       );
     }
 
-    if (existsSync(preCommit) && textMentionsVaultGuard(preCommit)) {
-      vaultGuardEvidence.push(".git/hooks/pre-commit");
+    if (
+      preCommitHook &&
+      textMentionsVaultGuard(preCommitHook.absolutePath)
+    ) {
+      vaultGuardEvidence.push(preCommitHook.displayPath);
       findings.push(
         finding(
           "ok",
           "git_pre_commit_vault_guard",
           "Git pre-commit hook mentions vault-guard.",
-          ".git/hooks/pre-commit",
+          preCommitHook.displayPath,
         ),
       );
     }
