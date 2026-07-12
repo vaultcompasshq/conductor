@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-11
+
 ### Fixed
 
 - **Extraction no longer breaks on `file.ts.` sentence boundaries.** Prompts like
