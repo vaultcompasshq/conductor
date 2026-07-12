@@ -187,6 +187,49 @@ describe("draftContract", () => {
     );
   });
 
+  it("splits compound extensions like .test.ts. and keeps in_scope under the length cap", () => {
+    const contract = draftContract({
+      userText:
+        "Add filterStrategies helper in frontend/src/features/proposal-builder/lib/strategyFilter.ts with unit tests in strategyFilter.test.ts. Build StrategyPicker component with searchable library, BYOS badge, and assign/assigned states. Verify filtering excludes strategies not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
+    });
+
+    expect(contract.in_scope.length).toBeGreaterThanOrEqual(2);
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/filterStrategies helper/i),
+        expect.stringMatching(/Build StrategyPicker/i),
+      ]),
+    );
+    expect(contract.out_of_scope).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/not in the selected preset/i)]),
+    );
+    for (const item of contract.in_scope) {
+      expect(item.length).toBeLessThanOrEqual(200);
+    }
+  });
+
+  it("extracts Extract-clauses into in_scope (PR #106 style)", () => {
+    const contract = draftContract({
+      userText:
+        'Fix proposal-builder so we only ever target a Draft proposal using canonical status casing "Draft" (not lowercase "draft"). Extract resolveDraftProposal helper. Add unit tests locking the no-overwrite rule. Do not modify backend Python services. Do not add new API endpoints.',
+    });
+
+    expect(contract.in_scope.length).toBeGreaterThanOrEqual(3);
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/Fix proposal-builder/i),
+        expect.stringMatching(/Extract resolveDraftProposal/i),
+        expect.stringMatching(/Add unit tests/i),
+      ]),
+    );
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/do not modify backend/i),
+        expect.stringMatching(/do not add new API endpoints/i),
+      ]),
+    );
+  });
+
   it("generateContractId matches schema pattern", () => {
     expect(generateContractId(new Date("2026-06-17T12:00:00Z"))).toMatch(
       /^ic-20260617-[a-z0-9]{6}$/,

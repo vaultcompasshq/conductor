@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Compound file extensions end sentences correctly.** Periods after `.test.ts.`,
+  `.spec.tsx.`, `.d.ts.`, etc. are sentence boundaries again; prompts no longer
+  merge into a single >200-character clause that drops all `in_scope` items.
+- **Extraction recognizes `Extract` as an action verb** so helper-extraction
+  clauses land in `in_scope` (CapitalCanvas PR #106-style prompts).
+- **Prohibition clause detection** no longer treats hyphenated words like
+  `no-overwrite` as a `no …` prohibition when filtering `in_scope`.
+
 ## [1.0.2] - 2026-07-11
 
 ### Fixed
