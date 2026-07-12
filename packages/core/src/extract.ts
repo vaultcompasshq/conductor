@@ -216,23 +216,33 @@ function extractInScope(text: string): string[] {
 }
 
 function isValidOutOfScopeItem(item: string): boolean {
-  return /^(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|without|no)\b/i.test(
-    item,
+  const normalized = item.trim();
+  if (/^without\b/i.test(normalized)) {
+    return /^without\s+(approval|permission|changing|modifying|adding|removing|introducing|writing)\b/i.test(
+      normalized,
+    );
+  }
+  return /^(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no)\b/i.test(
+    normalized,
   );
 }
 
 function extractOutOfScope(text: string): string[] {
+  const tail = String.raw`[\w\s/.\-]{3,80}`;
   const patterns = [
-    /\bdo\s+not\s+([a-z][\w\s-]{3,80})/gi,
-    /\bmust\s+not\s+([a-z][\w\s-]{3,80})/gi,
-    /\bshould\s+not\s+([a-z][\w\s-]{3,80})/gi,
-    /\bshall\s+not\s+([a-z][\w\s-]{3,80})/gi,
-    /\bcannot\s+([a-z][\w\s-]{3,80})/gi,
-    /\bcan't\s+([a-z][\w\s-]{3,80})/gi,
-    /\bnever\s+([a-z][\w\s-]{3,80})/gi,
-    /\bavoid\s+([a-z][\w\s-]{3,80})/gi,
-    /\bno\s+([a-z][\w\s-]{3,80})/gi,
-    /\bwithout\s+([a-z][\w\s-]{3,80})/gi,
+    new RegExp(String.raw`\bdo\s+not\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bmust\s+not\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bshould\s+not\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bshall\s+not\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bcannot\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bcan't\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bnever\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bavoid\s+([a-z]${tail})`, "gi"),
+    new RegExp(String.raw`\bno\s+([a-z]${tail})`, "gi"),
+    new RegExp(
+      String.raw`\bwithout\s+(approval|permission|changing|modifying|adding|removing|introducing|writing)\s+([a-z]${tail})`,
+      "gi",
+    ),
   ];
   const items: string[] = [];
   items.push(...expandProhibitionLists(text));
