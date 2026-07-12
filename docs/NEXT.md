@@ -77,6 +77,8 @@ of truth for "where are we and what's next." For granular tasks see
     re-validated on CapitalCanvas — [capitalcanvas-extraction-2026-07-11.md](./validation/capitalcanvas-extraction-2026-07-11.md).
 23. **v1.0.3** — compound `.test.ts.` sentence boundaries, `Extract` action verb,
     `no-overwrite` prohibition false positive ([#32](https://github.com/vaultcompasshq/conductor/pull/32)).
+24. **v1.0.4** — `doctor` respects `core.hooksPath`; prohibition path extraction
+    ([#34](https://github.com/vaultcompasshq/conductor/pull/34)).
 
 ## What's next (priority order)
 

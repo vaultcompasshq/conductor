@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-07-12
+
 ### Fixed
 
 - **`conductor doctor` respects `core.hooksPath`.** Repo-local hooks such as
