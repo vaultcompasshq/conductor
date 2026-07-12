@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-11
+**Updated:** 2026-07-12
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 133 passing — schema 7 · core 74 · skill 30 · cli 11 · examples/integrations 11.
+- **Tests:** 135 passing — schema 7 · core 76 · skill 30 · cli 11 · examples/integrations 11.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -75,6 +75,8 @@ of truth for "where are we and what's next." For granular tasks see
 22. **v1.0.2** — CapitalCanvas dogfood extraction fixes: `file.ts.` sentence boundaries,
     prohibition false positives, Cursor rule one-contract-per-branch ([PR #29](https://github.com/vaultcompasshq/conductor/pull/29));
     re-validated on CapitalCanvas — [capitalcanvas-extraction-2026-07-11.md](./validation/capitalcanvas-extraction-2026-07-11.md).
+23. **v1.0.3** — compound `.test.ts.` sentence boundaries, `Extract` action verb,
+    `no-overwrite` prohibition false positive ([#32](https://github.com/vaultcompasshq/conductor/pull/32)).
 
 ## What's next (priority order)
 
@@ -113,5 +115,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (133 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (135 passing baseline).
 ```
