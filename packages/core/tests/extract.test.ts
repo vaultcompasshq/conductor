@@ -164,14 +164,14 @@ describe("draftContract", () => {
   it("does not treat a file-extension period as the end of original_ask", () => {
     const contract = draftContract({
       userText:
-        "Add unit tests for optionFilter in frontend/src/features/widget-builder/lib/optionFilter.ts. Verify filtering excludes options not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
+        "Add unit tests for itemFilter in frontend/src/features/catalog-module/lib/itemFilter.ts. Verify filtering excludes items not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
     });
 
-    expect(contract.original_ask).toMatch(/optionFilter\.ts/i);
+    expect(contract.original_ask).toMatch(/itemFilter\.ts/i);
     expect(contract.original_ask).toMatch(/Verify filtering/i);
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/unit tests for optionFilter/i),
+        expect.stringMatching(/unit tests for itemFilter/i),
       ]),
     );
     expect(contract.out_of_scope).not.toEqual(
@@ -182,7 +182,7 @@ describe("draftContract", () => {
     );
     expect(contract.acceptance_criteria.map((ac) => ac.description)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/filtering excludes options/i),
+        expect.stringMatching(/filtering excludes items/i),
       ]),
     );
   });
@@ -190,14 +190,14 @@ describe("draftContract", () => {
   it("splits compound extensions like .test.ts. and keeps in_scope under the length cap", () => {
     const contract = draftContract({
       userText:
-        "Add filterOptions helper in frontend/src/features/widget-builder/lib/optionFilter.ts with unit tests in optionFilter.test.ts. Build OptionPicker component with searchable library, custom badge, and assign/assigned states. Verify filtering excludes options not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
+        "Add filterItems helper in frontend/src/features/catalog-module/lib/itemFilter.ts with unit tests in itemFilter.test.ts. Build ItemPicker component with searchable library, custom badge, and assign/assigned states. Verify filtering excludes items not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
     });
 
     expect(contract.in_scope.length).toBeGreaterThanOrEqual(2);
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/filterOptions helper/i),
-        expect.stringMatching(/Build OptionPicker/i),
+        expect.stringMatching(/filterItems helper/i),
+        expect.stringMatching(/Build ItemPicker/i),
       ]),
     );
     expect(contract.out_of_scope).not.toEqual(
@@ -211,14 +211,14 @@ describe("draftContract", () => {
   it("extracts Extract-clauses into in_scope (multi-clause prompts)", () => {
     const contract = draftContract({
       userText:
-        'Fix widget-builder so we only ever target a Draft widget using canonical status casing "Draft" (not lowercase "draft"). Extract resolveDraftWidget helper. Add unit tests locking the no-overwrite rule. Do not modify backend Python services. Do not add new API endpoints.',
+        'Fix catalog-module so we only ever target a Draft record using canonical status casing "Draft" (not lowercase "draft"). Extract resolveDraftRecord helper. Add unit tests locking the no-overwrite rule. Do not modify backend Python services. Do not add new API endpoints.',
     });
 
     expect(contract.in_scope.length).toBeGreaterThanOrEqual(3);
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/Fix widget-builder/i),
-        expect.stringMatching(/Extract resolveDraftWidget/i),
+        expect.stringMatching(/Fix catalog-module/i),
+        expect.stringMatching(/Extract resolveDraftRecord/i),
         expect.stringMatching(/Add unit tests/i),
       ]),
     );
@@ -233,7 +233,7 @@ describe("draftContract", () => {
   it("keeps imperative head when a clause embeds a trailing prohibition", () => {
     const contract = draftContract({
       userText:
-        "Fix duplicate connect clicks in onboarding: redirect start-connect into provider OAuth. Add unit tests for status-card. Do not modify payment-provider production credentials.",
+        "Fix duplicate connect clicks in onboarding: redirect start-connect when no config exists. Add unit tests for status-card. Do not modify third-party production credentials.",
     });
 
     expect(contract.in_scope).toEqual(
@@ -245,7 +245,7 @@ describe("draftContract", () => {
     );
     expect(contract.out_of_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/do not modify payment-provider production credentials/i),
+        expect.stringMatching(/do not modify third-party production credentials/i),
       ]),
     );
   });
@@ -253,18 +253,18 @@ describe("draftContract", () => {
   it("does not add without review false positive from registry clause", () => {
     const contract = draftContract({
       userText:
-        "Start a new venture slug demo-app through agent-00-conductor. Update ventures/demo-app/control-state.json and produce conductor-output/decision.md. Run only the next approved agent stage. Do not commit secrets or skip Conductor approval. Do not modify agents/registry.json without review.",
+        "Register module demo-module in the example orchestrator. Update modules/demo-module/state.json and produce output/decision.md. Run only the next approved stage. Do not commit secrets or skip Conductor approval. Do not modify config/registry.json without review.",
     });
 
     expect(contract.out_of_scope).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/^without review$/i)]),
     );
     expect(contract.out_of_scope).not.toEqual(
-      expect.arrayContaining([expect.stringMatching(/^Do not modify agents$/i)]),
+      expect.arrayContaining([expect.stringMatching(/^Do not modify config$/i)]),
     );
     expect(contract.out_of_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/do not modify agents\/registry\.json/i),
+        expect.stringMatching(/do not modify config\/registry\.json/i),
       ]),
     );
   });

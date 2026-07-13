@@ -4,7 +4,7 @@
 // decide whether a changed path or a free-text signal "touches" an out-of-scope
 // item or a constraint, without hardcoding any particular project's vocabulary.
 
-// Words that carry no scope meaning. Kept deliberately small and generic.
+// Words that carry no scope meaning. Kept small and generic.
 const STOPWORDS = new Set([
   "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with",
   "without", "no", "not", "new", "must", "should", "shall", "never", "do",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Dogfood Conductor on a real application repo (Vault & Compass Tier 0 or any app).
-# Usage: ./scripts/dogfood-tier0.sh /path/to/app-repo [conductor-version]
+# Dogfood Conductor on a consuming application repo.
+# Usage: ./scripts/dogfood-app.sh /path/to/app-repo [conductor-version]
 set -euo pipefail
 
 TARGET="${1:-}"

@@ -34,12 +34,12 @@
 
 | Task | Output |
 |------|--------|
-| Manual scoring worksheet | Score 3 past sessions (NetViz, Tier 0, drift session) |
+| Manual scoring worksheet | Score 3 past sessions (sample desktop app, downstream app, drift session) |
 | `.conductor/` directory spec | `docs/schemas/directory-layout.md` |
 | Config file schema | `.conductor/config.yaml` example |
 | Unit tests for validator + rubric | `tests/schema.test.ts` |
 
-**Exit gate:** NetViz-style session would score >70 drift retrospectively.
+**Exit gate:** sample desktop app-style session would score >70 drift retrospectively.
 
 ---
 

@@ -5,13 +5,13 @@ import { parse } from "yaml";
 import { scoreDrift } from "../src/drift.js";
 import type { IntentContract } from "@vaultcompass/conductor-schema";
 
-describe("NetViz retrospective", () => {
+describe("stub detection retrospective", () => {
   it("drift score >= 70 for stubbed implementation signals", () => {
     const contract = parse(
       readFileSync(
         join(
           import.meta.dirname,
-          "../../../examples/intent-contracts/netviz-retrospective.yaml",
+          "../../../examples/intent-contracts/stub-detection-retrospective.yaml",
         ),
         "utf8",
       ),
@@ -20,9 +20,9 @@ describe("NetViz retrospective", () => {
     const result = scoreDrift(contract, {
       changedPaths: [
         "src-tauri/src/notification_system.rs",
-        "src-tauri/src/safety_score.rs",
+        "src-tauri/src/metrics.rs",
       ],
-      signals: ["stub_println_notification", "hardcoded_safety_score"],
+      signals: ["stub_println_notification", "hardcoded_metric_values"],
     });
 
     expect(result.overall).toBeGreaterThanOrEqual(70);

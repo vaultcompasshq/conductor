@@ -16,7 +16,7 @@ Most AI coding disasters follow the same arc:
 5. Shipped product ≠ original idea
 ```
 
-**NetViz** is the canonical example in this workspace: notifications were `println!`, safety scores were hardcoded, preferences weren't persistent. Review agents scored architecture and linting — not **functional truth**.
+A representative desktop app retrospective is the canonical example in this workspace: notifications were `println!`, metrics were hardcoded, preferences weren't persistent. Review agents scored architecture and linting — not **functional truth**.
 
 ---
 

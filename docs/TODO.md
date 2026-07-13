@@ -154,7 +154,7 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 
 ## Done (recent, for context)
 
-- [x] Tier 0 dogfood extraction fixes (`file.ts.` boundaries, prohibition false
+- [x] downstream app dogfood extraction fixes (`file.ts.` boundaries, prohibition false
       positives) — shipped in `1.0.2` ([#29](https://github.com/vaultcompasshq/conductor/pull/29)).
 - [x] Generic, project-independent drift scorer (#1).
 - [x] `conductor-check` enforcement gate + pre-commit sample (#1).

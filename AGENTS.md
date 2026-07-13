@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI is published to npm at **`1.0.6`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Tier 0 dogfood + PR drift gate verified on a private downstream app repo; latest patches address extraction and drift false positives ([#29](https://github.com/vaultcompasshq/conductor/pull/29), [#32](https://github.com/vaultcompasshq/conductor/pull/32), [#34](https://github.com/vaultcompasshq/conductor/pull/34), [#36](https://github.com/vaultcompasshq/conductor/pull/36)). Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md). Public content policy: [docs/release/public-content-policy.md](./docs/release/public-content-policy.md).
+The unified `conductor` CLI is published to npm at **`1.0.6`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Consuming-app dogfood + PR drift gate verified on a private downstream app repo; latest patches address extraction and drift false positives ([#29](https://github.com/vaultcompasshq/conductor/pull/29), [#32](https://github.com/vaultcompasshq/conductor/pull/32), [#34](https://github.com/vaultcompasshq/conductor/pull/34), [#36](https://github.com/vaultcompasshq/conductor/pull/36)). Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md). Public content policy: [docs/release/public-content-policy.md](./docs/release/public-content-policy.md).
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 
@@ -86,7 +86,7 @@ Paste actual test output before claiming tests pass.
 - Keep this repo focused on Conductor packages, docs, examples, and integration samples.
 - Do not commit local per-project `.conductor/intent-contract.yaml` files here; consuming application repos own their active contracts.
 - Keep examples synthetic. Do not commit customer data, private project specs, API keys, or internal portfolio data.
-- **Never name portfolio products or link to private V&C app repos** in tracked files. Use generic "private Tier 0 app repo" / "downstream integration" wording. Enforce with `pnpm validate:portfolio-names`; policy: [docs/release/public-content-policy.md](./docs/release/public-content-policy.md). Maintainer notes belong in gitignored `.local/` or `TODO.local.md` only.
+- **Never name portfolio products or link to private V&C app repos** in tracked files. Use generic "private downstream app repo" / "downstream integration" wording. Enforce with `pnpm validate:portfolio-names`; policy: [docs/release/public-content-policy.md](./docs/release/public-content-policy.md). Maintainer notes belong in gitignored `.local/` or `TODO.local.md` only.
 - Runtime wiring for downstream products belongs in those downstream repos. This repo should expose packages and documented integration surfaces.
 
 ---

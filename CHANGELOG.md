@@ -8,6 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Public hygiene pass:** hash-only portfolio guard; generic fixtures and doc
+  names (`downstream-app-*`, `stub-detection-*`); remove internal jargon and
+  domain fingerprints from tests; trim decorative source comments.
 - **Portfolio guard:** hash blocklist only (vault-guard pattern); slim maintainer Cursor rule.
 - **Fixture hygiene:** genericized dogfood replay and extraction tests so tracked
   examples do not fingerprint private app domains.
@@ -18,7 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 - **Public content hygiene:** removed portfolio product names and private-repo links
   from docs, changelog history entries, and dogfood tests; renamed validation
-  notes to generic `tier0-*` filenames.
+  notes to generic `downstream-app-*` filenames.
 - **CI guard:** `pnpm validate:portfolio-names` fails if blocked product names appear
   in tracked files (see [CONTRIBUTING.md](./CONTRIBUTING.md#public-repo-hygiene-portfolio-names)).
 - **Cursor rule:** `integrations/cursor/no-portfolio-names.mdc` for maintainers (copy to
@@ -32,7 +35,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   filename when the prohibition names sensitive qualifiers (e.g. `vendor` in
   `vendor-link-button.tsx` vs “vendor production credentials”).
 - **Drift:** constraint scoring ignores noise-only token overlaps (`task`, `hooks`,
-  `component`, `web`, …) that caused false soft-blocks on large Tier 0 PRs.
+  `component`, `web`, …) that caused false soft-blocks on large downstream PRs.
 - **Extraction:** imperative clauses with embedded prohibitions (`Fix X … do not Y`)
   split correctly; colon-separated actions and `redirect` verbs land in `in_scope`;
   embedded `no config` no longer drops whole Fix sentences.
@@ -41,7 +44,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 - **`conductor rules audit`** flags `drift_noisy_rule` for meta-rules likely to
   false-block path drift (refactor-beyond-task, skip hooks, design-system tokens).
-- **Dogfood regression tests** for Tier 0 onboarding, sync, and reconnect replay
+- **Dogfood regression tests** for consuming-app onboarding, sync, and reconnect replay
   scenarios.
 
 ## [1.0.4] - 2026-07-12
@@ -70,7 +73,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 
 - **Extraction no longer breaks on `file.ts.` sentence boundaries.** Prompts like
-  `optionFilter.ts. Verify…` no longer truncate `original_ask` at the extension
+  `itemFilter.ts. Verify…` no longer truncate `original_ask` at the extension
   period; the full first sentence is preserved.
 - **Prohibition extraction false positives.** Bare `not …` matches inside verify
   clauses (e.g. "excludes strategies not in the selected preset") are no longer
@@ -118,7 +121,7 @@ breaking changes require a major version bump.
 
 ### Verified
 
-- **Tier 0 dogfood + real PR gate.** Conductor's pre-commit hook and CI drift job
+- **consuming-app dogfood + real PR gate.** Conductor's pre-commit hook and CI drift job
   were exercised on a private downstream app repo: aligned changes pass,
   out-of-scope changes soft-block, and the `intent-drift` CI job is green.
 
@@ -143,7 +146,7 @@ breaking changes require a major version bump.
 
 - **v1 launch path.** [v1-launch-checklist.md](./docs/release/v1-launch-checklist.md),
   [stability-policy.md](./docs/release/stability-policy.md), and
-  `scripts/dogfood-tier0.sh` for Tier 0 app dogfood before `1.0.0`.
+  `scripts/dogfood-app.sh` for consuming app dogfood before `1.0.0`.
 - **npm package READMEs** for `@vaultcompass/conductor-{schema,core,skill,cli}` and
   keywords for registry discoverability.
 
@@ -257,7 +260,7 @@ breaking changes require a major version bump.
 
 - **Drift scorer rebuilt** to be project-independent. Removed the five
   fixture-specific path regexes and four hardcoded signal strings that only
-  fired on the NetViz example. Matching now derives entirely from the
+  fired on the sample desktop app example. Matching now derives entirely from the
   contract's own `in_scope` / `out_of_scope` / `constraints` text, with
   in-scope-token subtraction to suppress false positives and a severity floor
   so a single out-of-scope or critical-constraint hit can block. `--signals`
@@ -313,7 +316,7 @@ breaking changes require a major version bump.
 - `@vaultcompass/conductor-schema` package — Intent Contract JSON Schema v1.0.0 with Ajv validation
 - `@vaultcompass/conductor-core` package — prompt coach and drift scoring engines
 - 5 example intent contracts in `examples/intent-contracts/`
-- NetViz retrospective exit gate (drift score 83)
+- sample desktop app retrospective exit gate (drift score 83)
 - Phase 1 implementation plan (`docs/superpowers/plans/2026-06-17-conductor-phase1.md`)
 - GitHub repository: https://github.com/vaultcompasshq/conductor
 - Brainstorming session and design documentation (2026-06-17)

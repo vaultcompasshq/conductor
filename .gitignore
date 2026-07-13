@@ -9,3 +9,4 @@ dist/
 TODO.local.md
 # Local Conductor state (contracts and runtime files belong in consuming app repos)
 .conductor/
+.cursor/

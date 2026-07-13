@@ -1,6 +1,6 @@
-# Cursor integration validation — Tier 0 app (2026-07-09)
+# Cursor integration validation — downstream app (2026-07-09)
 
-Validated on a private downstream app repo with Conductor pre-commit + PR drift CI.
+Validated on a private consuming app repo with Conductor pre-commit + PR drift CI.
 
 ## What was validated
 
@@ -14,7 +14,7 @@ Validated on a private downstream app repo with Conductor pre-commit + PR drift 
 ## Cursor rule (`integrations/cursor/conductor.mdc`)
 
 The Cursor project rule is **advisory** — it instructs agents to draft/freeze/check
-but does not enforce mechanically. The dogfood repo uses repo-local `.githooks` for
+but does not enforce mechanically. The consuming repo used repo-local `.githooks` for
 enforcement instead of `conductor hook install` (global `core.hooksPath` override).
 
 To adopt in a consuming repo:

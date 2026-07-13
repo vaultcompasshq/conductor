@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-17-conductor-design.md` (sections 4, 5, 6)
 
-**Exit gate:** Validator passes 5 example contracts; NetViz retrospective drift score ≥ 70; unit tests green.
+**Exit gate:** Validator passes 5 example contracts; stub-detection retrospective retrospective drift score ≥ 70; unit tests green.
 
 ---
 
@@ -33,7 +33,7 @@
 | `packages/core/src/drift.ts` | Rule-based drift scorer |
 | `packages/core/src/index.ts` | Public exports |
 | `examples/intent-contracts/*.yaml` | 5 synthetic fixtures |
-| `docs/retrospectives/netviz-drift-score.md` | Manual retrospective worksheet |
+| `docs/retrospectives/stub-detection-drift-score.md` | Manual retrospective worksheet |
 
 ---
 
@@ -824,7 +824,7 @@ git commit -m "feat(core): add rule-based drift scoring rubric"
 
 **Files:**
 - Create: `examples/intent-contracts/csv-export.yaml`
-- Create: `examples/intent-contracts/netviz-retrospective.yaml`
+- Create: `examples/intent-contracts/stub-detection-retrospective.yaml`
 - Create: `examples/intent-contracts/validate-examples.test.ts` (root)
 - Modify: `package.json` (add vitest at root)
 
@@ -832,10 +832,10 @@ git commit -m "feat(core): add rule-based drift scoring rubric"
 
 Use content from `docs/schemas/intent-contract.example.md` (YAML block).
 
-- [ ] **Step 2: Create `examples/intent-contracts/netviz-retrospective.yaml`**
+- [ ] **Step 2: Create `examples/intent-contracts/stub-detection-retrospective.yaml`**
 
 ```yaml
-contract_id: ic-20260315-netviz01
+contract_id: ic-20260315-stub-detection01
 version: "1.0.0"
 original_ask: "Build Wi-Fi network visualization with real notifications and safety scores."
 in_scope:
@@ -864,7 +864,7 @@ frozen_at: "2026-03-15T10:00:00Z"
 frozen_by: user
 pivot_log: []
 metadata:
-  project: netviz
+  project: stub-detection
   note: "Retrospective contract — what should have been frozen"
 ```
 
@@ -920,15 +920,15 @@ git commit -m "test: add example intent contracts and validation suite"
 
 ---
 
-### Task 6: NetViz retrospective exit gate
+### Task 6: stub-detection retrospective retrospective exit gate
 
 **Files:**
-- Create: `docs/retrospectives/netviz-drift-score.md`
-- Create: `packages/core/tests/netviz-retrospective.test.ts`
+- Create: `docs/retrospectives/stub-detection-drift-score.md`
+- Create: `packages/core/tests/stub-detection-retrospective.test.ts`
 
 - [ ] **Step 1: Write retrospective test**
 
-Simulate NetViz stubbed implementation paths:
+Simulate stub-detection retrospective stubbed implementation paths:
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -938,11 +938,11 @@ import { parse } from "yaml";
 import { scoreDrift } from "../src/drift.js";
 import type { IntentContract } from "@vaultcompass/conductor-schema";
 
-describe("NetViz retrospective", () => {
+describe("stub-detection retrospective retrospective", () => {
   it("drift score >= 70 for stubbed implementation signals", () => {
     const contract = parse(
       readFileSync(
-        join(import.meta.dirname, "../../../examples/intent-contracts/netviz-retrospective.yaml"),
+        join(import.meta.dirname, "../../../examples/intent-contracts/stub-detection-retrospective.yaml"),
         "utf8",
       ),
     ) as IntentContract;
@@ -965,15 +965,15 @@ Extend `scoreDrift` if needed to recognize `stub_println_notification` and `hard
 
 - [ ] **Step 2: Document retrospective**
 
-`docs/retrospectives/netviz-drift-score.md` — record actual score, findings, and "would have caught" narrative.
+`docs/retrospectives/stub-detection-drift-score.md` — record actual score, findings, and "would have caught" narrative.
 
 - [ ] **Step 3: Run test — expect PASS**
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/retrospectives packages/core/tests/netviz-retrospective.test.ts
-git commit -m "docs: add NetViz retrospective drift exit gate"
+git add docs/retrospectives packages/core/tests/stub-detection-retrospective.test.ts
+git commit -m "docs: add stub-detection retrospective retrospective drift exit gate"
 ```
 
 ---
@@ -1025,13 +1025,13 @@ git push origin main
 | §7 Memory index | Phase 2 (deferred) |
 | §8 Integrations | Phase 2 (deferred) |
 | §9 CLI | Phase 4 (deferred) |
-| Exit gate NetViz ≥70 | Task 6 |
+| Exit gate stub-detection retrospective ≥70 | Task 6 |
 
 ## Phase 1 complete when
 
 - [ ] `pnpm test` green at repo root
 - [ ] 5 example contracts validate
-- [ ] NetViz retrospective drift ≥ 70
+- [ ] stub-detection retrospective retrospective drift ≥ 70
 - [ ] Packages publishable locally via workspace
 - [ ] Pushed to `github.com/vaultcompasshq/conductor`
 
