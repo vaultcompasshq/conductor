@@ -8,6 +8,7 @@ products, private application repositories, or links to private downstream PRs.
 - Product names (specific app codenames or customer-facing brands from the V&C portfolio)
 - Links to private `github.com/vaultcompasshq/<app-repo>` PRs or issues
 - Dogfood validation notes that identify which private repo supplied a prompt
+- Domain-specific test fixtures that fingerprint a private app (fintech flows, vendor API shapes, branded integrations)
 - Maintainer session handoffs, audits, or week-ahead plans (use gitignored
   `.local/` or `TODO.local.md` instead)
 
@@ -17,12 +18,13 @@ products, private application repositories, or links to private downstream PRs.
 |------------|--------|
 | Named product + PR link | "private Tier 0 app repo", "downstream integration PR" |
 | App-branded validation doc filenames | `tier0-extraction-….md`, `tier0-cursor-integration-….md` |
-| Replay test titled with product + PR number | `onboarding replay: vendor-link path …` |
+| Replay test titled with product + PR number | `onboarding replay: connect-link path …` |
+| Fintech / vendor-specific test scenarios | Generic OAuth, `external_record_id`, `integrations/…` paths |
 | Portfolio tree listing app repos by name | `conductor` (public) + "private product repos" |
 
 ## Synthetic examples OK
 
-- Fictional paths (`frontend/src/features/.../strategyFilter.ts`)
+- Fictional paths (`frontend/src/features/.../optionFilter.ts`)
 - Third-party vendors in generic integration examples
 - The `vaultcompasshq/conductor` repo itself and `@vaultcompass/conductor-*` packages
 

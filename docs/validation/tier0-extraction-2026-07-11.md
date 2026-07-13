@@ -8,8 +8,8 @@ and release [`v1.0.2`](https://github.com/vaultcompasshq/conductor/releases/tag/
 ## Prompt (synthetic frontend filter dogfood)
 
 ```
-Add unit tests for strategyFilter in frontend/src/features/proposal-builder/lib/strategyFilter.ts.
-Verify filtering excludes strategies not in the selected preset.
+Add unit tests for optionFilter in frontend/src/features/widget-builder/lib/optionFilter.ts.
+Verify filtering excludes options not in the selected preset.
 Do not add API endpoints. Do not modify backend Python services.
 ```
 
@@ -17,7 +17,7 @@ Do not add API endpoints. Do not modify backend Python services.
 
 | Check | `1.0.1` | `1.0.2` |
 |-------|---------|---------|
-| `original_ask` keeps full first sentence through `.ts.` | **Fail** — truncated at `strategyFilter.ts.` | **Pass** — includes `Verify filtering excludes…` |
+| `original_ask` keeps full first sentence through `.ts.` | **Fail** — truncated at `optionFilter.ts.` | **Pass** — includes `Verify filtering excludes…` |
 | Verify clause `not in the selected preset` in `out_of_scope` | **Fail** — false positive | **Pass** — absent |
 | Explicit prohibitions in `out_of_scope` | Pass | Pass (`Do not add API endpoints`, `Do not modify backend Python services`) |
 
@@ -25,8 +25,8 @@ Do not add API endpoints. Do not modify backend Python services.
 
 | Scenario | Paths | Result |
 |----------|-------|--------|
-| Aligned frontend test work | `frontend/.../strategyFilter.test.ts` | `ok` — drift 0 |
-| Out-of-scope backend API | `backend/app/api/strategy_filter_probe.py` | `soft_block` — 71/100 |
+| Aligned frontend test work | `frontend/.../optionFilter.test.ts` | `ok` — drift 0 |
+| Out-of-scope backend API | `backend/app/api/option_filter_probe.py` | `soft_block` — 71/100 |
 
 ## Notes
 

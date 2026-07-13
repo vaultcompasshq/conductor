@@ -164,14 +164,14 @@ describe("draftContract", () => {
   it("does not treat a file-extension period as the end of original_ask", () => {
     const contract = draftContract({
       userText:
-        "Add unit tests for strategyFilter in frontend/src/features/proposal-builder/lib/strategyFilter.ts. Verify filtering excludes strategies not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
+        "Add unit tests for optionFilter in frontend/src/features/widget-builder/lib/optionFilter.ts. Verify filtering excludes options not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
     });
 
-    expect(contract.original_ask).toMatch(/strategyFilter\.ts/i);
+    expect(contract.original_ask).toMatch(/optionFilter\.ts/i);
     expect(contract.original_ask).toMatch(/Verify filtering/i);
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/unit tests for strategyFilter/i),
+        expect.stringMatching(/unit tests for optionFilter/i),
       ]),
     );
     expect(contract.out_of_scope).not.toEqual(
@@ -182,7 +182,7 @@ describe("draftContract", () => {
     );
     expect(contract.acceptance_criteria.map((ac) => ac.description)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/filtering excludes strategies/i),
+        expect.stringMatching(/filtering excludes options/i),
       ]),
     );
   });
@@ -190,14 +190,14 @@ describe("draftContract", () => {
   it("splits compound extensions like .test.ts. and keeps in_scope under the length cap", () => {
     const contract = draftContract({
       userText:
-        "Add filterStrategies helper in frontend/src/features/proposal-builder/lib/strategyFilter.ts with unit tests in strategyFilter.test.ts. Build StrategyPicker component with searchable library, BYOS badge, and assign/assigned states. Verify filtering excludes strategies not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
+        "Add filterOptions helper in frontend/src/features/widget-builder/lib/optionFilter.ts with unit tests in optionFilter.test.ts. Build OptionPicker component with searchable library, custom badge, and assign/assigned states. Verify filtering excludes options not in the selected preset. Do not add API endpoints. Do not modify backend Python services.",
     });
 
     expect(contract.in_scope.length).toBeGreaterThanOrEqual(2);
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/filterStrategies helper/i),
-        expect.stringMatching(/Build StrategyPicker/i),
+        expect.stringMatching(/filterOptions helper/i),
+        expect.stringMatching(/Build OptionPicker/i),
       ]),
     );
     expect(contract.out_of_scope).not.toEqual(
@@ -211,14 +211,14 @@ describe("draftContract", () => {
   it("extracts Extract-clauses into in_scope (multi-clause prompts)", () => {
     const contract = draftContract({
       userText:
-        'Fix proposal-builder so we only ever target a Draft proposal using canonical status casing "Draft" (not lowercase "draft"). Extract resolveDraftProposal helper. Add unit tests locking the no-overwrite rule. Do not modify backend Python services. Do not add new API endpoints.',
+        'Fix widget-builder so we only ever target a Draft widget using canonical status casing "Draft" (not lowercase "draft"). Extract resolveDraftWidget helper. Add unit tests locking the no-overwrite rule. Do not modify backend Python services. Do not add new API endpoints.',
     });
 
     expect(contract.in_scope.length).toBeGreaterThanOrEqual(3);
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/Fix proposal-builder/i),
-        expect.stringMatching(/Extract resolveDraftProposal/i),
+        expect.stringMatching(/Fix widget-builder/i),
+        expect.stringMatching(/Extract resolveDraftWidget/i),
         expect.stringMatching(/Add unit tests/i),
       ]),
     );
@@ -233,19 +233,19 @@ describe("draftContract", () => {
   it("keeps imperative head when a clause embeds a trailing prohibition", () => {
     const contract = draftContract({
       userText:
-        "Fix duplicate connect clicks in onboarding: redirect create-sheet into Google OAuth. Add unit tests for sync-status. Do not modify Plaid production credentials.",
+        "Fix duplicate connect clicks in onboarding: redirect start-connect into provider OAuth. Add unit tests for status-card. Do not modify payment-provider production credentials.",
     });
 
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/duplicate connect clicks/i),
-        expect.stringMatching(/redirect create-sheet/i),
-        expect.stringMatching(/unit tests for sync-status/i),
+        expect.stringMatching(/redirect start-connect/i),
+        expect.stringMatching(/unit tests for status-card/i),
       ]),
     );
     expect(contract.out_of_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/do not modify Plaid production credentials/i),
+        expect.stringMatching(/do not modify payment-provider production credentials/i),
       ]),
     );
   });

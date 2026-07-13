@@ -4,24 +4,24 @@ import { draftContract } from "../src/extract.js";
 import { scoreDrift } from "../src/drift.js";
 
 describe("drift dogfood regressions (Tier 0 replays)", () => {
-  it("onboarding replay: integration-link path does not trip production-credentials prohibition", () => {
+  it("onboarding replay: connect-link path does not trip production-credentials prohibition", () => {
     const contract = draftContract({
       userText:
-        "Add Open sheet link to dashboard Sync Status card when a spreadsheet destination is linked. Fix duplicate connect clicks in onboarding: redirect create-sheet directly into Google OAuth when no config exists. Add unit tests for sync-status. Do not modify payment-provider production credentials, database migrations, or deployment config.",
+        "Add export link to dashboard status card when an external destination is linked. Fix duplicate connect clicks in onboarding: redirect start-connect directly into provider OAuth when no config exists. Add unit tests for status-card. Do not modify payment-provider production credentials, database migrations, or deployment config.",
     });
 
     expect(contract.in_scope).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/open sheet link/i),
+        expect.stringMatching(/export link/i),
         expect.stringMatching(/duplicate connect clicks/i),
-        expect.stringMatching(/redirect create-sheet/i),
+        expect.stringMatching(/redirect start-connect/i),
       ]),
     );
 
     const drift = scoreDrift(contract, {
       changedPaths: [
-        "apps/web/components/banks/integration-link-button.tsx",
-        "apps/web/components/dashboard/sync-status.tsx",
+        "apps/web/components/integrations/connect-link-button.tsx",
+        "apps/web/components/dashboard/status-card.tsx",
       ],
     });
     expect(drift.action).toBe("proceed");
@@ -31,13 +31,13 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
   it("sync replay: aligned sync paths still pass", () => {
     const contract = draftContract({
       userText:
-        "Fix Accounts tab never updated by sync: add refreshAccountsGoogle. Fix Excel Balance History unformatted amounts. Add tests in accounts-balance-sheet.test.ts. Do not change vendor link token flow or billing webhooks.",
+        "Fix Records tab never updated by sync: add refreshRecordsRemote. Fix CSV history column unformatted values. Add tests in records-summary.test.ts. Do not change integration token flow or webhook handlers.",
     });
 
     const drift = scoreDrift(contract, {
       changedPaths: [
         "apps/web/lib/sync.ts",
-        "apps/web/lib/templates/accounts-balance-sheet.ts",
+        "apps/web/lib/templates/records-summary.ts",
       ],
     });
     expect(drift.action).toBe("proceed");
@@ -48,13 +48,13 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
       contract_id: "ic-20260713-reconn",
       version: "1.0.0",
       original_ask:
-        "Fix reconnect to pass external item_id string, not row UUID.",
+        "Fix reconnect to pass external_record_id string, not row UUID.",
       in_scope: [
-        "Fix reconnect: pass external item_id string to createUpdateLinkToken",
-        "update web Reconnect button to use sync_item_id",
+        "Fix reconnect: pass external_record_id string to createRefreshSession",
+        "update web Reconnect button to use remote_record_id",
         "Add tests",
       ],
-      out_of_scope: ["Do not change billing webhooks"],
+      out_of_scope: ["Do not change webhook handlers"],
       constraints: [
         {
           source: "cursor-rules",
@@ -63,7 +63,7 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
         },
       ],
       acceptance_criteria: [
-        { id: "ac-1", description: "Reconnect uses item_id string", testable: true },
+        { id: "ac-1", description: "Reconnect uses external_record_id string", testable: true },
       ],
       frozen_at: "2026-07-13T00:00:00Z",
       pivot_log: [],
@@ -71,8 +71,8 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
 
     const drift = scoreDrift(contract, {
       changedPaths: [
-        "packages/web-app/src/app/(webapp)/accounts/page.tsx",
-        "packages/api/src/services/accounts.ts",
+        "packages/web-app/src/app/(webapp)/records/page.tsx",
+        "packages/api/src/services/records.ts",
       ],
     });
     expect(drift.action).toBe("proceed");
@@ -82,7 +82,7 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
   it("still blocks real production vendor config drift", () => {
     const contract = draftContract({
       userText:
-        "Add Open sheet link on dashboard. Do not modify payment-provider production credentials or deployment config.",
+        "Add export link on dashboard. Do not modify payment-provider production credentials or deployment config.",
     });
 
     const drift = scoreDrift(contract, {
