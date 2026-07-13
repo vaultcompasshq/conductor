@@ -35,6 +35,26 @@ Open a GitHub issue (once remote exists) or comment on the spec with:
 
 ---
 
+## Public repo hygiene (portfolio names)
+
+Conductor is **public OSS**. Do **not** commit Vault & Compass portfolio product names,
+private app-repo links, or dogfood notes that identify downstream products.
+
+| OK in this repo | Keep out of git (use `.local/` or `TODO.local.md`) |
+|-----------------|-----------------------------------------------------|
+| Generic "Tier 0 app repo", "downstream integration" | Private app codenames or PR links |
+| Synthetic paths in tests (`strategyFilter.ts`) | Links to `vaultcompasshq/<private-app>` PRs |
+| `@vaultcompass/conductor-*` (this product) | Cross-repo audit handoffs with app names |
+
+CI runs `pnpm validate:portfolio-names` on every PR.
+
+**Git history:** Older commits may still mention product names. Cleaning **current**
+files is required; rewriting **history** needs `git filter-repo` and a force-pushed
+`main` (coordinate with maintainers — breaks clone SHAs and is usually not worth it
+once HEAD is clean).
+
+---
+
 ## Superpowers upstream
 
 Skills may be contributed to [obra/superpowers](https://github.com/obra/superpowers) after v0.3 beta. Coordinate via issue before duplicating skill names.

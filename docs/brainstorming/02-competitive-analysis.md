@@ -106,7 +106,7 @@ Conductor (public OSS)
     ↓ depends
 downstream pipeline (pipeline)
     ↓ produces
-Products (active product repo, Prismfolio, …)
+Products (private downstream app repos, not named in this public OSS repo)
 ```
 
 ---

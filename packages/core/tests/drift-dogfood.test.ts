@@ -4,10 +4,10 @@ import { draftContract } from "../src/extract.js";
 import { scoreDrift } from "../src/drift.js";
 
 describe("drift dogfood regressions (Tier 0 replays)", () => {
-  it("Sheetful #369: plaid-link-button path does not trip production-credentials prohibition", () => {
+  it("onboarding replay: integration-link path does not trip production-credentials prohibition", () => {
     const contract = draftContract({
       userText:
-        "Add Open sheet link to dashboard Sync Status card when a spreadsheet destination is linked. Fix duplicate connect clicks in onboarding: redirect create-sheet directly into Google OAuth when no config exists. Add unit tests for sync-status. Do not modify Plaid production credentials, database migrations, or deployment config.",
+        "Add Open sheet link to dashboard Sync Status card when a spreadsheet destination is linked. Fix duplicate connect clicks in onboarding: redirect create-sheet directly into Google OAuth when no config exists. Add unit tests for sync-status. Do not modify payment-provider production credentials, database migrations, or deployment config.",
     });
 
     expect(contract.in_scope).toEqual(
@@ -20,7 +20,7 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
 
     const drift = scoreDrift(contract, {
       changedPaths: [
-        "apps/web/components/banks/plaid-link-button.tsx",
+        "apps/web/components/banks/integration-link-button.tsx",
         "apps/web/components/dashboard/sync-status.tsx",
       ],
     });
@@ -28,10 +28,10 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
     expect(drift.categories.scope_creep).toBe(0);
   });
 
-  it("Sheetful #366: aligned sync paths still pass", () => {
+  it("sync replay: aligned sync paths still pass", () => {
     const contract = draftContract({
       userText:
-        "Fix Accounts tab never updated by sync: add refreshAccountsGoogle. Fix Excel Balance History unformatted amounts. Add tests in accounts-balance-sheet.test.ts. Do not change Plaid link token flow or Stripe billing.",
+        "Fix Accounts tab never updated by sync: add refreshAccountsGoogle. Fix Excel Balance History unformatted amounts. Add tests in accounts-balance-sheet.test.ts. Do not change vendor link token flow or billing webhooks.",
     });
 
     const drift = scoreDrift(contract, {
@@ -43,18 +43,18 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
     expect(drift.action).toBe("proceed");
   });
 
-  it("Prismfolio #463: meta refactor constraint does not block aligned reconnect fix", () => {
+  it("reconnect hotfix replay: meta refactor constraint does not block aligned fix", () => {
     const contract: IntentContract = {
-      contract_id: "ic-20260713-pr463",
+      contract_id: "ic-20260713-reconn",
       version: "1.0.0",
       original_ask:
-        "Fix Plaid reconnect to pass item_id string, not row UUID.",
+        "Fix reconnect to pass external item_id string, not row UUID.",
       in_scope: [
-        "Fix Plaid reconnect: pass Plaid item_id string to createUpdateLinkToken",
-        "update web Reconnect button to use plaid_sync_item_id",
+        "Fix reconnect: pass external item_id string to createUpdateLinkToken",
+        "update web Reconnect button to use sync_item_id",
         "Add tests",
       ],
-      out_of_scope: ["Do not change Stripe webhooks"],
+      out_of_scope: ["Do not change billing webhooks"],
       constraints: [
         {
           source: "cursor-rules",
@@ -79,15 +79,15 @@ describe("drift dogfood regressions (Tier 0 replays)", () => {
     expect(drift.categories.constraint_violation).toBe(0);
   });
 
-  it("still blocks real production Plaid config drift", () => {
+  it("still blocks real production vendor config drift", () => {
     const contract = draftContract({
       userText:
-        "Add Open sheet link on dashboard. Do not modify Plaid production credentials or deployment config.",
+        "Add Open sheet link on dashboard. Do not modify payment-provider production credentials or deployment config.",
     });
 
     const drift = scoreDrift(contract, {
-      changedPaths: ["apps/web/lib/plaid-production-config.ts"],
-      signals: ["updated plaid production credentials in dashboard"],
+      changedPaths: ["apps/web/lib/payment-provider-production-config.ts"],
+      signals: ["updated payment-provider production credentials in dashboard"],
     });
     expect(["soft_block", "hard_block"]).toContain(drift.action);
     expect(drift.categories.scope_creep).toBeGreaterThan(0);
