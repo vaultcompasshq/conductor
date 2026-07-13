@@ -49,7 +49,7 @@ describe("drift replay regressions", () => {
       version: "1.0.0",
       original_ask: "Fix relink to pass external_id string, not row UUID.",
       in_scope: [
-        "Fix relink: pass external_id string to createRefreshSession",
+        "Fix relink: pass external_id string to createSessionToken",
         "update web Relink button to use remote_id",
         "Add tests",
       ],

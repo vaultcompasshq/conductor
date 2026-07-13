@@ -2,7 +2,7 @@
 
 **Project:** Conductor  
 **Date:** 2026-06-17  
-**Facilitator:** AI + Melroy  
+**Facilitator:** design session  
 **Method:** Superpowers brainstorming skill
 
 ---
@@ -56,7 +56,7 @@ AI coding assistants produce unreliable output not because models are weak, but 
 
 | Stakeholder | Interest |
 |-------------|----------|
-| **Melroy (solo dev)** | multi-product pipeline, downstream app launches, less rework |
+| **Solo maintainer** | product pipeline, downstream app launches, less rework |
 | **Vault & Compass** | Brand credibility via OSS tooling under vaultcompasshq |
 | **External devs** | Installable skill, no downstream pipeline required |
 | **Superpowers community** | Upstream skill contribution |

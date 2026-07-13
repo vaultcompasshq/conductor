@@ -20,7 +20,7 @@ function draft() {
   });
 }
 
-describe("runDoctor", () => {
+describe("runDoctor", { timeout: 15_000 }, () => {
   it("errors when Conductor is not initialized", () => {
     const result = runDoctor(tmpProject());
     expect(result.status).toBe("error");

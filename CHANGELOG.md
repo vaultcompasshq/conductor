@@ -4,16 +4,18 @@ All notable changes to Conductor will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [1.0.7] - 2026-07-13
 
 ### Changed
 
 - **Public hygiene pass:** hash-only portfolio guard; generic fixtures and doc
-  names (`downstream-app-*`, `stub-detection-*`); remove internal jargon and
-  domain fingerprints from tests; trim decorative source comments.
-- **Portfolio guard:** hash blocklist only (vault-guard pattern); slim maintainer Cursor rule.
-- **Fixture hygiene:** genericized dogfood replay and extraction tests so tracked
-  examples do not fingerprint private app domains.
+  names (`downstream-app-*`, `stub-detection-*`); remove internal jargon from
+  tests; trim decorative source comments; `.cursor/` gitignored.
+- **Portfolio guard:** SHA-256 hash blocklist only (vault-guard pattern); slim
+  maintainer Cursor rule and CONTRIBUTING prose.
+- **Tests:** longer timeouts on spawn-heavy doctor, report, and skill CLI cases.
+
+## [Unreleased]
 
 ## [1.0.6] - 2026-07-13
 
@@ -31,9 +33,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- **Drift:** out-of-scope path matching no longer fires on a lone vendor token in a
-  filename when the prohibition names sensitive qualifiers (e.g. `vendor` in
-  `vendor-link-button.tsx` vs “vendor production credentials”).
+- **Drift:** out-of-scope path matching no longer fires on a lone integration token in a
+  filename when the prohibition names sensitive qualifiers (e.g. `connect-link-button.tsx`
+  vs “third-party production credentials”).
 - **Drift:** constraint scoring ignores noise-only token overlaps (`task`, `hooks`,
   `component`, `web`, …) that caused false soft-blocks on large downstream PRs.
 - **Extraction:** imperative clauses with embedded prohibitions (`Fix X … do not Y`)

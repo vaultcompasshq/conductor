@@ -111,7 +111,7 @@ Think **Return Replay** (from your product portfolio): recalculate "what we agre
 
 ## Personas
 
-### Persona A: Solo founder (Melroy)
+### Persona A: Solo founder
 
 - multiple products, context switching
 - Needs: cross-session memory, product-agnostic install
