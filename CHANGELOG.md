@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Fixture hygiene:** genericized dogfood replay and extraction tests so tracked
+  examples do not fingerprint private app domains (fintech, spreadsheets, vendor APIs).
+
 ## [1.0.6] - 2026-07-13
 
 ### Changed
@@ -64,7 +69,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 
 - **Extraction no longer breaks on `file.ts.` sentence boundaries.** Prompts like
-  `strategyFilter.ts. Verify…` no longer truncate `original_ask` at the extension
+  `optionFilter.ts. Verify…` no longer truncate `original_ask` at the extension
   period; the full first sentence is preserved.
 - **Prohibition extraction false positives.** Bare `not …` matches inside verify
   clauses (e.g. "excludes strategies not in the selected preset") are no longer

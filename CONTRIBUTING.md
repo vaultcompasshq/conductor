@@ -43,7 +43,7 @@ private app-repo links, or dogfood notes that identify downstream products.
 | OK in this repo | Keep out of git (use `.local/` or `TODO.local.md`) |
 |-----------------|-----------------------------------------------------|
 | Generic "Tier 0 app repo", "downstream integration" | Private app codenames or PR links |
-| Synthetic paths in tests (`strategyFilter.ts`) | Links to `vaultcompasshq/<private-app>` PRs |
+| Synthetic paths in tests (`optionFilter.ts`) | Links to `vaultcompasshq/<private-app>` PRs |
 | `@vaultcompass/conductor-*` (this product) | Cross-repo audit handoffs with app names |
 
 CI runs `pnpm validate:portfolio-names` on every PR.

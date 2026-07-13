@@ -21,8 +21,9 @@ products, private application repos, or links to private downstream PRs.
 |-------|-----|
 | Named product + PR link | "private Tier 0 app repo", "downstream integration PR" |
 | App-branded validation filenames | `tier0-extraction-….md`, `tier0-cursor-integration-….md` |
-| Replay tests titled with product + PR | `onboarding replay: integration-link path …` |
-| Same token in prohibition **and** test path | e.g. don't pair "vendor production credentials" with `vendor-link-button.tsx` |
+| Replay tests titled with product + PR | `onboarding replay: connect-link path …` |
+| Same token in prohibition **and** test path | e.g. don't pair "payment-provider production credentials" with `payment-provider-config.tsx` |
+| Fintech / vendor API shapes in tests | Generic `external_record_id`, `provider OAuth`, `integrations/…` paths |
 
 ## Before commit or PR
 
