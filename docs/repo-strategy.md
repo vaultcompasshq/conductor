@@ -26,11 +26,8 @@
 
 ```
 github.com/vaultcompasshq/
-├── sheetful              (product)
-├── prismfolio            (product)
-├── capitalcanvas         (product)
-├── conductor             (OSS tooling)  ← this repo
-└── downstream-pipeline     (private or public pipeline — separate)
+├── conductor             (public OSS — this repo)
+└── …                     (private product repositories — not named here)
 ```
 
 **Why `vaultcompasshq` not personal:**

@@ -1,11 +1,11 @@
-# CapitalCanvas extraction validation — `1.0.2` (2026-07-11)
+# Tier 0 extraction validation — `1.0.2` (2026-07-11)
 
 Re-validates the dogfood findings that motivated [PR #29](https://github.com/vaultcompasshq/conductor/pull/29)
 and release [`v1.0.2`](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.2).
 
-**Repo:** CapitalCanvas `main` (local clone, Conductor integration from [PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)).
+**Context:** private downstream app repo with Conductor integration (pre-commit + PR drift CI).
 
-## Prompt (strategyFilter dogfood)
+## Prompt (synthetic frontend filter dogfood)
 
 ```
 Add unit tests for strategyFilter in frontend/src/features/proposal-builder/lib/strategyFilter.ts.
@@ -30,7 +30,7 @@ Do not add API endpoints. Do not modify backend Python services.
 
 ## Notes
 
-- Stale integration contract on CapitalCanvas `main` (pre-1.0.0 `.yml` mangling) was replaced locally
+- Stale integration contract on the app repo `main` branch (pre-1.0.0 `.yml` mangling) was replaced locally
   for this run; **per feature branch**, teams should `extract` → `freeze` with the real task prompt.
 - Cursor rule update in `1.0.2` documents one-contract-per-feature-branch; enforcement remains
   repo-local `.githooks` + GitHub Actions drift gate.

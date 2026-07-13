@@ -208,7 +208,7 @@ describe("draftContract", () => {
     }
   });
 
-  it("extracts Extract-clauses into in_scope (PR #106 style)", () => {
+  it("extracts Extract-clauses into in_scope (multi-clause prompts)", () => {
     const contract = draftContract({
       userText:
         'Fix proposal-builder so we only ever target a Draft proposal using canonical status casing "Draft" (not lowercase "draft"). Extract resolveDraftProposal helper. Add unit tests locking the no-overwrite rule. Do not modify backend Python services. Do not add new API endpoints.',

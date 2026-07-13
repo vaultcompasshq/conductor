@@ -6,13 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-07-13
+
+### Changed
+
+- **Public content hygiene:** removed portfolio product names and private-repo links
+  from docs, changelog history entries, and dogfood tests; renamed validation
+  notes to generic `tier0-*` filenames.
+- **CI guard:** `pnpm validate:portfolio-names` fails if blocked product names appear
+  in tracked files (see [CONTRIBUTING.md](./CONTRIBUTING.md#public-repo-hygiene-portfolio-names)).
+
 ## [1.0.5] - 2026-07-13
 
 ### Fixed
 
 - **Drift:** out-of-scope path matching no longer fires on a lone vendor token in a
-  filename when the prohibition names sensitive qualifiers (e.g. `plaid` in
-  `plaid-link-button.tsx` vs “Plaid production credentials”).
+  filename when the prohibition names sensitive qualifiers (e.g. `vendor` in
+  `vendor-link-button.tsx` vs “vendor production credentials”).
 - **Drift:** constraint scoring ignores noise-only token overlaps (`task`, `hooks`,
   `component`, `web`, …) that caused false soft-blocks on large Tier 0 PRs.
 - **Extraction:** imperative clauses with embedded prohibitions (`Fix X … do not Y`)
@@ -23,7 +33,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 - **`conductor rules audit`** flags `drift_noisy_rule` for meta-rules likely to
   false-block path drift (refactor-beyond-task, skip hooks, design-system tokens).
-- **Dogfood regression tests** for Sheetful #369, #366, and Prismfolio #463 replay
+- **Dogfood regression tests** for Tier 0 onboarding, sync, and reconnect replay
   scenarios.
 
 ## [1.0.4] - 2026-07-12
@@ -43,7 +53,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   `.spec.tsx.`, `.d.ts.`, etc. are sentence boundaries again; prompts no longer
   merge into a single >200-character clause that drops all `in_scope` items.
 - **Extraction recognizes `Extract` as an action verb** so helper-extraction
-  clauses land in `in_scope` (CapitalCanvas PR #106-style prompts).
+  clauses land in `in_scope` (multi-clause extract prompts with an `Extract` verb).
 - **Prohibition clause detection** no longer treats hyphenated words like
   `no-overwrite` as a `no …` prohibition when filtering `in_scope`.
 
@@ -101,9 +111,8 @@ breaking changes require a major version bump.
 ### Verified
 
 - **Tier 0 dogfood + real PR gate.** Conductor's pre-commit hook and CI drift job
-  were exercised on CapitalCanvas
-  ([PR #109](https://github.com/vaultcompasshq/CapitalCanvas/pull/109)): aligned
-  changes pass, out-of-scope changes soft-block, and the `intent-drift` CI job is green.
+  were exercised on a private downstream app repo: aligned changes pass,
+  out-of-scope changes soft-block, and the `intent-drift` CI job is green.
 
 ## [0.3.0-beta.3] - 2026-07-07
 

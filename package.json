@@ -1,14 +1,15 @@
 {
   "name": "conductor",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Intent fidelity for AI-assisted development",
   "license": "MIT",
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm build && pnpm -r test && vitest run examples/validate-examples.test.ts examples/validate-integrations.test.ts examples/validate-offline-lifecycle.test.ts",
+    "test": "pnpm validate:portfolio-names && pnpm build && pnpm -r test && vitest run examples/validate-examples.test.ts examples/validate-integrations.test.ts examples/validate-offline-lifecycle.test.ts",
     "typecheck": "pnpm -r typecheck",
     "release:smoke": "pnpm build && node scripts/release-smoke.mjs",
+    "validate:portfolio-names": "node scripts/validate-no-portfolio-names.mjs",
     "validate:public-repos": "node scripts/validate-public-repos.mjs",
     "publish:beta": "node scripts/publish-beta.mjs",
     "publish:beta:dry-run": "node scripts/publish-beta.mjs --dry-run",
