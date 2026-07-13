@@ -15,6 +15,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   notes to generic `tier0-*` filenames.
 - **CI guard:** `pnpm validate:portfolio-names` fails if blocked product names appear
   in tracked files (see [CONTRIBUTING.md](./CONTRIBUTING.md#public-repo-hygiene-portfolio-names)).
+- **Cursor rule:** `integrations/cursor/no-portfolio-names.mdc` for maintainers (copy to
+  `.cursor/rules/`).
 
 ## [1.0.5] - 2026-07-13
 
