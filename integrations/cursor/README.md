@@ -22,11 +22,17 @@ bash /path/to/conductor/integrations/superpowers/install-skills.sh
 
 ### 2. User rule (recommended)
 
-Add the committed sample rule to your project:
+Add the committed sample rules to your project:
 
 ```bash
 mkdir -p .cursor/rules
 cp integrations/cursor/conductor.mdc .cursor/rules/conductor.mdc
+```
+
+**Conductor repo maintainers only** — also install the public-content guard:
+
+```bash
+cp integrations/cursor/no-portfolio-names.mdc .cursor/rules/no-portfolio-names.mdc
 ```
 
 Or paste this into Cursor user rules:

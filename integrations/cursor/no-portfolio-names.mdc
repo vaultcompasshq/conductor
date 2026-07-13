@@ -1,0 +1,40 @@
+---
+description: Never commit V&C portfolio product names in this public OSS repo
+alwaysApply: true
+---
+
+# Public repo hygiene (Conductor maintainers)
+
+Conductor is **public OSS**. Tracked files must **never** name Vault & Compass portfolio
+products, private application repos, or links to private downstream PRs.
+
+## Never put in git
+
+- Portfolio app codenames or customer-facing product brands
+- `github.com/vaultcompasshq/<private-app>` PR/issue links
+- Dogfood notes that identify which private repo supplied a prompt
+- Session handoffs, audits, or week-ahead plans (use gitignored `.local/` or `TODO.local.md`)
+
+## Write instead
+
+| Avoid | Use |
+|-------|-----|
+| Named product + PR link | "private Tier 0 app repo", "downstream integration PR" |
+| App-branded validation filenames | `tier0-extraction-….md`, `tier0-cursor-integration-….md` |
+| Replay tests titled with product + PR | `onboarding replay: integration-link path …` |
+| Same token in prohibition **and** test path | e.g. don't pair "vendor production credentials" with `vendor-link-button.tsx` |
+
+## Before commit or PR
+
+```bash
+pnpm validate:portfolio-names
+```
+
+CI runs this on every PR. Policy: [docs/release/public-content-policy.md](../../docs/release/public-content-policy.md).
+
+## Install locally
+
+```bash
+mkdir -p .cursor/rules
+cp integrations/cursor/no-portfolio-names.mdc .cursor/rules/no-portfolio-names.mdc
+```

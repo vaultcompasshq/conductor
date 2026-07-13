@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-12
+**Updated:** 2026-07-13
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -13,8 +13,8 @@ of truth for "where are we and what's next." For granular tasks see
   must be green before merge. See [[always-pr-to-main]] convention.
 - **Tests:** 143 passing — schema 7 · core 84 · skill 30 · cli 11 · examples/integrations 11.
   Verify with `pnpm install && pnpm test` (test builds first).
-- **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
-  release smoke, Node 22.
+- **CI:** `.github/workflows/ci.yml` — install → build → typecheck →
+  portfolio-name guard → test → release smoke, Node 22.
 
 ### What ships today (working, tested)
 
@@ -81,9 +81,9 @@ of truth for "where are we and what's next." For granular tasks see
     ([#34](https://github.com/vaultcompasshq/conductor/pull/34)).
 25. **v1.0.5** — drift path/constraint false-positive fixes; mixed-clause extraction;
     rules audit `drift_noisy_rule` ([#36](https://github.com/vaultcompasshq/conductor/pull/36)).
-26. **v1.0.6** — anonymize portfolio names from public docs/tests; `validate:portfolio-names` CI guard.
 26. **v1.0.6** — public content hygiene; portfolio-name CI guard
-    ([public-content-policy.md](./release/public-content-policy.md)).
+    ([#37](https://github.com/vaultcompasshq/conductor/pull/37),
+    [public-content-policy.md](./release/public-content-policy.md)).
 
 ## What's next (priority order)
 
