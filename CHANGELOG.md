@@ -8,8 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Portfolio guard:** hash blocklist only (vault-guard pattern); slim maintainer Cursor rule.
 - **Fixture hygiene:** genericized dogfood replay and extraction tests so tracked
-  examples do not fingerprint private app domains (fintech, spreadsheets, vendor APIs).
+  examples do not fingerprint private app domains.
 
 ## [1.0.6] - 2026-07-13
 
