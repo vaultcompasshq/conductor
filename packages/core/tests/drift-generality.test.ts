@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { IntentContract } from "@vaultcompass/conductor-schema";
 import { scoreDrift } from "../src/drift.js";
 
-// These contracts use vocabulary that appears nowhere in drift.ts. They prove
-// the scorer generalizes from the contract itself rather than recognizing the
-// NetViz / CLI fixtures it was originally tuned against.
+// These contracts use vocabulary that appears nowhere in drift.ts.
 
 const darkModeContract: IntentContract = {
   contract_id: "ic-20260618-dark01",

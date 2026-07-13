@@ -1,24 +1,24 @@
-contract_id: ic-20260315-nviz01
+contract_id: ic-20260315-stub01
 version: "1.0.0"
-original_ask: "Build Wi-Fi network visualization with real notifications and safety scores."
+original_ask: "Build a desktop dashboard with real notifications and computed metrics."
 in_scope:
-  - "3D network map visualization"
+  - "Dashboard visualization"
   - "Real system notifications for alerts"
-  - "Safety scores calculated from device metrics"
+  - "Metrics calculated from live data"
   - "Persistent user preferences"
 out_of_scope:
   - "Stub implementations with println only"
-  - "Hardcoded safety score values"
+  - "Hardcoded metric values"
 constraints:
   - source: user-stated
     rule: "All features must be functional, not stubbed"
     priority: critical
 acceptance_criteria:
   - id: ac-1
-    description: "Notifications use OS/Tauri notification API"
+    description: "Notifications use the platform notification API"
     testable: true
   - id: ac-2
-    description: "Safety scores derived from live metrics, not constants"
+    description: "Metrics derived from live data, not constants"
     testable: true
   - id: ac-3
     description: "Preferences persist across app restarts"
@@ -27,4 +27,4 @@ frozen_at: "2026-03-15T10:00:00Z"
 frozen_by: user
 pivot_log: []
 metadata:
-  project: netviz
+  project: example-desktop-app

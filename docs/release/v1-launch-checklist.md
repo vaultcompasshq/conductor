@@ -16,11 +16,11 @@ version is already **`1.0.0`** in schema.
 
 ## Dogfood gate (required for v1)
 
-Run on one Vault & Compass Tier 0 app repo (not this OSS repo):
+Run on one private consuming app repo (not this OSS repo):
 
 ```bash
 # From conductor repo:
-./scripts/dogfood-tier0.sh /path/to/your-app-repo
+./scripts/dogfood-app.sh /path/to/your-app-repo
 ```
 
 Or manually:
@@ -35,12 +35,12 @@ npx @vaultcompass/conductor-cli@latest check --project . --staged
 
 Checklist for the dogfood run:
 
-- [x] Init creates `.conductor/config.yaml` and skeleton (Tier 0 app repo, `0.3.0-beta.3`)
+- [x] Init creates `.conductor/config.yaml` and skeleton (consuming app repo, `0.3.0-beta.3`)
 - [x] Extract → freeze → check passes on aligned work (frontend unit test path)
 - [x] Check blocks on an intentional out-of-scope API/backend path change
 - [x] `conductor report` useful in a PR or handoff (aligned run: status ok, drift 0)
 - [x] Optional: paired secret scanning via `conductor hook install --with-vault-guard` (install refused foreign hook; app repo already has security pre-commit)
-- [x] Full run on one **private Tier 0** app repo (2026-07-08)
+- [x] Full run on one private consuming app repo (2026-07-08)
 
 Record results in your local notes (do not commit app-repo contracts to this public repo).
 
@@ -49,13 +49,13 @@ Record results in your local notes (do not commit app-repo contracts to this pub
 - [x] Pre-commit hook installable from npm (`conductor hook install`) — no dependency
   on the Conductor source repo; verified by dogfood audit 2026-07-07.
 - [x] Git pre-commit hook AND GitHub Actions drift gate exercised on a real repo PR
-  - Private Tier 0 app repo (2026-07-08):
+  - Private consuming app repo (2026-07-08):
     repo-local `.githooks/pre-commit` pairs vault-guard + soft `conductor check --staged`;
     the hook ran on the merge commit (`✓ Conductor gate: ok`) and the `Conductor Drift`
     CI job (`intent-drift`) passed on the PR. Out-of-scope frontend edits reproduced a
     drift `soft_block` (71/100) locally.
-- [x] Cursor rule validated via Tier 0 adoption — see
-  [tier0-cursor-integration-2026-07-09.md](../validation/tier0-cursor-integration-2026-07-09.md)
+- [x] Cursor rule validated via downstream adoption — see
+  [downstream-app-cursor-integration-2026-07-09.md](../validation/downstream-app-cursor-integration-2026-07-09.md)
   (mechanical enforcement via repo-local `.githooks`; rule is advisory)
 
 ## Stability declaration

@@ -42,7 +42,7 @@ How often should Drift Guard run?
 - **C)** Only at handoff boundaries (brainstorming → plan → implement → review)
 - **D)** Configurable per project
 
-**Recommendation:** D with default C, opt-in B for Tier 0 launches.
+**Recommendation:** D with default C, opt-in B for downstream app launches.
 
 ---
 
@@ -79,7 +79,7 @@ Which project validates Phase 2?
 - **C)** Conductor itself (meta)
 - **D)** Greenfield toy repo (clean signal)
 
-**Recommendation:** C for meta + one Tier 0 (A or B) in parallel.
+**Recommendation:** C for meta + one downstream app (A or B) in parallel.
 
 ---
 

@@ -133,7 +133,7 @@ export function scoreDrift(
   const { all: target, pathSegs } = targetTokens(input);
   const scope = scopeTokens(contract);
 
-  // ── Scope creep: work touching explicitly out-of-scope territory ──────────
+  // Scope creep: out-of-scope items touched by the work.
   let scopeHits = 0;
   let touchedAcWhileOutOfScope = 0;
   const acTokenSets = contract.acceptance_criteria.map((ac) =>
@@ -149,8 +149,7 @@ export function scoreDrift(
       findings.push(
         `Out-of-scope touched: "${item}" (matched: ${matched.join(", ")})`,
       );
-      // If the out-of-scope work also overlaps an acceptance criterion, the
-      // delivered behavior is diverging from what "done" was defined to mean.
+      // Overlap with an acceptance criterion amplifies divergence.
       if (
         acTokenSets.some((ac) => intersectingTokens(discriminating, ac).length > 0)
       ) {
@@ -160,7 +159,7 @@ export function scoreDrift(
   }
   const scopeCreep = Math.min(100, scopeHits * 40);
 
-  // ── Constraint violations: prohibitive rules whose subject was touched ────
+  // Constraint violations.
   let constraintViolation = 0;
   let criticalViolated = false;
   for (const c of contract.constraints) {
@@ -177,13 +176,13 @@ export function scoreDrift(
     );
   }
 
-  // ── Acceptance-criteria divergence ────────────────────────────────────────
+  // Acceptance-criteria divergence.
   const acDivergence = Math.min(100, touchedAcWhileOutOfScope * 80);
   if (acDivergence > 0) {
     findings.push("Out-of-scope change overlaps defined acceptance criteria");
   }
 
-  // ── Undocumented pivot: user signalled a scope change, not logged ─────────
+  // Undocumented pivot from user message.
   let undocumentedPivot = 0;
   if (
     input.userMessage &&
@@ -208,9 +207,7 @@ export function scoreDrift(
       categories.undocumented_pivot * DRIFT_WEIGHTS.undocumented_pivot,
   );
 
-  // A weighted average dilutes a single severe signal below any block
-  // threshold. Floor the score so that touching out-of-scope territory or a
-  // high/critical constraint is enough to pause on its own.
+  // Floor score so a single severe signal can still block.
   let floor = 0;
   if (scopeHits >= 1) floor = Math.max(floor, thresholds.soft_block);
   if (constraintViolation >= PRIORITY_SEVERITY.critical) {

@@ -64,17 +64,17 @@ of truth for "where are we and what's next." For granular tasks see
 17. npm publish `@0.3.0-beta.3` via trusted publisher; `conductor hook install`
     for npm users; v1 launch checklist and stability policy.
 18. v1 release prep: extraction dotted-token fix, packages bumped to `1.0.0`,
-    CHANGELOG `[1.0.0]` section, and Tier 0 PR drift gate green on a private downstream app repo.
+    CHANGELOG `[1.0.0]` section, and downstream app PR drift gate green on a private downstream app repo.
 19. **v1.0.0 shipped** — [PR #25](https://github.com/vaultcompasshq/conductor/pull/25) merged,
     tag [`v1.0.0`](https://github.com/vaultcompasshq/conductor/releases/tag/v1.0.0) published;
     all four `@vaultcompass/conductor-*` packages on npm at `1.0.0` (`latest`).
-20. Tier 0 Conductor integration verified on a private downstream app repo
+20. downstream app Conductor integration verified on a private downstream app repo
     (repo-local `.githooks` + `Conductor Drift` CI on PRs).
 21. Post-v1 hygiene: brief correction dedup/cap (3b partial), `--freeze` deprecation,
-    Cursor validation doc ([tier0-cursor-integration-2026-07-09.md](./validation/tier0-cursor-integration-2026-07-09.md)).
-22. **v1.0.2** — Tier 0 dogfood extraction fixes: `file.ts.` sentence boundaries,
+    Cursor validation doc ([downstream-app-cursor-integration-2026-07-09.md](./validation/downstream-app-cursor-integration-2026-07-09.md)).
+22. **v1.0.2** — downstream app dogfood extraction fixes: `file.ts.` sentence boundaries,
     prohibition false positives, Cursor rule one-contract-per-branch ([PR #29](https://github.com/vaultcompasshq/conductor/pull/29));
-    re-validated — [tier0-extraction-2026-07-11.md](./validation/tier0-extraction-2026-07-11.md).
+    re-validated — [downstream-app-extraction-2026-07-11.md](./validation/downstream-app-extraction-2026-07-11.md).
 23. **v1.0.3** — compound `.test.ts.` sentence boundaries, `Extract` action verb,
     `no-overwrite` prohibition false positive ([#32](https://github.com/vaultcompasshq/conductor/pull/32)).
 24. **v1.0.4** — `doctor` respects `core.hooksPath`; prohibition path extraction
