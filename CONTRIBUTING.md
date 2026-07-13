@@ -37,17 +37,25 @@ Open a GitHub issue (once remote exists) or comment on the spec with:
 
 ## Public repo hygiene (portfolio names)
 
-Conductor is **public OSS**. Do **not** commit Vault & Compass portfolio product names,
-private app-repo links, or dogfood notes that identify downstream products.
+Conductor is **public OSS**. Never commit names, paths, or context from other Vault &
+Compass products, private monorepos, or internal portfolio work.
 
-| OK in this repo | Keep out of git (use `.local/` or `TODO.local.md`) |
-|-----------------|-----------------------------------------------------|
-| Generic "Tier 0 app repo", "downstream integration" | Private app codenames or PR links |
-| Synthetic paths in tests (`optionFilter.ts`) | Links to `vaultcompasshq/<private-app>` PRs |
-| `@vaultcompass/conductor-*` (this product) | Cross-repo audit handoffs with app names |
+**Do not put in committed files** (including tests, fixtures, changelogs, comments):
+
+- Other product or venture codenames (internal app/repo names)
+- Paths like `/Users/.../Projects/<private-app>/` or workspace scan notes
+- Dogfood validation tied to a specific private repo
+- Session handoffs or maintainer audits
+
+**Use instead:** generic placeholders (`example-app/`, `private downstream app repo`)
+and describe the *pattern*, not the source repo.
+
+Local-only notes: `TODO.local.md`, `.local/`.
 
 Before opening a PR, search the diff for private product names and internal paths.
-CI runs `pnpm validate:portfolio-names` (hash blocklist — no plaintext codenames in the repo).
+CI runs `pnpm validate:portfolio-names` (hash blocklist — no plaintext codenames in
+the repo). To add a hash, see the comment at the top of
+`scripts/validate-no-portfolio-names.mjs`.
 
 **Git history:** Older commits may still mention product names. Cleaning **current**
 files is required; rewriting **history** needs `git filter-repo` and a force-pushed
