@@ -7,6 +7,7 @@ dist/
 # Local maintainer notes (public repo — never commit)
 .local/
 TODO.local.md
+audit.md
 # Local Conductor state (contracts and runtime files belong in consuming app repos)
 .conductor/
 .cursor/

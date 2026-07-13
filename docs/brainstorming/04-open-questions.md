@@ -1,7 +1,7 @@
 # Open Questions
 
 **Date:** 2026-06-17  
-**Status:** Awaiting Melroy's input — one decision unlocks implementation planning
+**Status:** Awaiting maintainer input — one decision unlocks implementation planning
 
 ---
 

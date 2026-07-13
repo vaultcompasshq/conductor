@@ -84,6 +84,8 @@ of truth for "where are we and what's next." For granular tasks see
 26. **v1.0.6** — public content hygiene; portfolio-name CI guard
     ([#37](https://github.com/vaultcompasshq/conductor/pull/37),
     [public-content-policy.md](./release/public-content-policy.md)).
+27. **v1.0.7** — hash-only portfolio guard; public hygiene pass on docs/fixtures
+    ([#40](https://github.com/vaultcompasshq/conductor/pull/40), [#43](https://github.com/vaultcompasshq/conductor/pull/43)).
 
 ## What's next (priority order)
 

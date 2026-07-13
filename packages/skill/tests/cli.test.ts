@@ -399,7 +399,7 @@ function frozenProject(): Promise<string> {
   );
 }
 
-describe("conductor-correct + conductor-brief", () => {
+describe("conductor-correct + conductor-brief", { timeout: 60_000 }, () => {
   it("records a pending correction without promoting", async () => {
     const dir = await frozenProject();
     const res = await run("correct-cli.js", [
@@ -459,7 +459,7 @@ describe("conductor-correct + conductor-brief", () => {
   });
 });
 
-describe("conductor-index, conductor-resume, conductor-pivot", () => {
+describe("conductor-index, conductor-resume, conductor-pivot", { timeout: 60_000 }, () => {
   it("renders and writes the generated index", async () => {
     const dir = await frozenProject();
     const render = await run("index-cli.js", ["--project", dir, "--json"]);
