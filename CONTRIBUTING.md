@@ -46,12 +46,12 @@ private app-repo links, or dogfood notes that identify downstream products.
 | Synthetic paths in tests (`optionFilter.ts`) | Links to `vaultcompasshq/<private-app>` PRs |
 | `@vaultcompass/conductor-*` (this product) | Cross-repo audit handoffs with app names |
 
-CI runs `pnpm validate:portfolio-names` on every PR.
+Before opening a PR, search the diff for private product names and internal paths.
+CI runs `pnpm validate:portfolio-names` (hash blocklist — no plaintext codenames in the repo).
 
 **Git history:** Older commits may still mention product names. Cleaning **current**
 files is required; rewriting **history** needs `git filter-repo` and a force-pushed
-`main` (coordinate with maintainers — breaks clone SHAs and is usually not worth it
-once HEAD is clean).
+`main` (coordinate with maintainers — usually not worth it once HEAD is clean).
 
 ---
 
