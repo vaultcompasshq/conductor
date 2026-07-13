@@ -287,7 +287,7 @@ breaking changes require a major version bump.
   masked by in-scope token subtraction.
 - Corrected test-count claims across README / NEXT / AGENTS (was "29"/"14",
   actual is 39: schema 3 + core 22 + skill 8 + examples 6).
-- Tightened README multi-model / Venture Studio language to reflect that those
+- Tightened README multi-model / downstream pipeline language to reflect that those
   integrations are design-stage, not shipped.
 
 ## [0.2.0-beta] - 2026-06-17
@@ -324,7 +324,7 @@ breaking changes require a major version bump.
 - Brainstorming session and design documentation (2026-06-17)
 - Competitive analysis and repo strategy
 - 14-week implementation roadmap
-- Integration guides: Superpowers, AI Venture Studio, Cursor
+- Integration guides: Superpowers, downstream pipelines, Cursor
 
 ## [0.0.0] - 2026-06-17
 
