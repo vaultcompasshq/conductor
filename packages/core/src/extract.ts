@@ -117,6 +117,7 @@ const ACTION_VERBS = [
   "persist",
   "preserve",
   "record",
+  "redirect",
   "regenerate",
   "render",
   "show",
@@ -176,6 +177,92 @@ function isProhibitionClause(text: string): boolean {
   return PROHIBITION_RE.test(text);
 }
 
+/** True only when the clause *starts* as a prohibition (not embedded "no config"). */
+function isLeadingProhibitionClause(text: string): boolean {
+  const trimmed = text.trim();
+  return /^(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no)\b/i.test(
+    trimmed,
+  );
+}
+
+interface ParsedClause {
+  imperatives: string[];
+  prohibitions: string[];
+}
+
+function splitColonActionClauses(text: string): string[] {
+  const idx = text.indexOf(":");
+  if (idx <= 0 || idx >= text.length - 5) return [text];
+  const head = text.slice(0, idx).trim();
+  const tail = text.slice(idx + 1).trim();
+  if (!ACTION_RE.test(head) || tail.length < 8) return [text];
+  const results = [head];
+  if (ACTION_RE.test(tail) || /^(redirect|route|wire|update)\b/i.test(tail)) {
+    results.push(normalizeItem(tail));
+  }
+  return results;
+}
+
+function splitImperativeFromProhibition(clause: string): ParsedClause {
+  const imperatives: string[] = [];
+  const prohibitions: string[] = [];
+  const prohibitionMatch = clause.match(
+    /\b(do not|don't|must not|should not|shall not|cannot|can't|never|avoid)\b/i,
+  );
+
+  if (!prohibitionMatch || prohibitionMatch.index === undefined) {
+    if (isLeadingProhibitionClause(clause)) {
+      prohibitions.push(normalizeItem(clause));
+    } else {
+      for (const part of splitColonActionClauses(clause)) {
+        imperatives.push(normalizeItem(part));
+      }
+    }
+    return { imperatives, prohibitions };
+  }
+
+  if (prohibitionMatch.index < 8) {
+    prohibitions.push(normalizeItem(clause));
+    return { imperatives, prohibitions };
+  }
+
+  const head = clause
+    .slice(0, prohibitionMatch.index)
+    .trim()
+    .replace(/[,:;]\s*$/, "")
+    .replace(/\s+so\s+users\s*$/i, "");
+  const tail = clause.slice(prohibitionMatch.index).trim();
+
+  if (head.length >= 5 && ACTION_RE.test(head) && !isProhibitionClause(head)) {
+    for (const part of splitColonActionClauses(head)) {
+      imperatives.push(normalizeItem(part));
+    }
+  }
+
+  if (tail.length >= 5 && isValidOutOfScopeItem(tail)) {
+    prohibitions.push(normalizeItem(tail));
+  } else if (imperatives.length === 0 && isProhibitionClause(clause)) {
+    prohibitions.push(normalizeItem(clause));
+  }
+
+  return { imperatives, prohibitions };
+}
+
+function parseActionClauses(text: string): ParsedClause {
+  const imperatives: string[] = [];
+  const prohibitions: string[] = [];
+  const bullets = bulletItems(text);
+  const sources = bullets.length > 0 ? bullets : textClauses(text);
+
+  for (const raw of sources) {
+    const parsed = splitImperativeFromProhibition(raw);
+    imperatives.push(...parsed.imperatives);
+    prohibitions.push(...parsed.prohibitions);
+  }
+
+  return { imperatives, prohibitions };
+}
+
 function expandProhibitionLists(text: string): string[] {
   const items: string[] = [];
   const pattern =
@@ -198,21 +285,28 @@ function expandProhibitionLists(text: string): string[] {
 }
 
 function extractInScope(text: string): string[] {
+  const { imperatives } = parseActionClauses(text);
   const bullets = bulletItems(text);
+
   if (bullets.length > 0) {
     return uniqueItems(
-      bullets.filter((item) => !isProhibitionClause(item)),
+      imperatives.filter((item) => !isLeadingProhibitionClause(item)),
       12,
     );
   }
 
-  const clauses = textClauses(text).filter(
-    (c) => ACTION_RE.test(c) && !isProhibitionClause(c),
+  const clauses = imperatives.filter(
+    (c) => ACTION_RE.test(c) && !isLeadingProhibitionClause(c),
   );
-  if (clauses.length > 0) return uniqueItems(clauses, 6);
+  if (clauses.length > 0) return uniqueItems(clauses, 8);
 
   const fallback = oneSentence(text, 200);
   return fallback.length >= 5 ? [fallback] : ["Describe the requested change"];
+}
+
+function extractEmbeddedProhibitions(text: string): string[] {
+  const { prohibitions } = parseActionClauses(text);
+  return uniqueItems(prohibitions, 12);
 }
 
 function isValidOutOfScopeItem(item: string): boolean {
@@ -320,12 +414,20 @@ export function draftContract(input: DraftContractInput): IntentContract {
     hasAcceptanceCriteria: /\b(verify|test|should|must|done)\b/i.test(userText),
   });
 
+  const outOfScope = uniqueItems(
+    [...extractOutOfScope(userText), ...extractEmbeddedProhibitions(userText)],
+    12,
+  ).filter((item, index, unique) => {
+    const key = item.toLowerCase();
+    return !unique.slice(0, index).some((previous) => previous.toLowerCase().includes(key));
+  }).slice(0, 8);
+
   return {
     contract_id: generateContractId(),
     version: "1.0.0",
     original_ask: oneSentence(userText),
     in_scope: inScope,
-    out_of_scope: extractOutOfScope(userText),
+    out_of_scope: outOfScope,
     constraints,
     acceptance_criteria: extractAcceptanceCriteria(userText, inScope),
     frozen_at: new Date().toISOString(),

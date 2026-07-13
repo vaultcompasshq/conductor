@@ -230,6 +230,26 @@ describe("draftContract", () => {
     );
   });
 
+  it("keeps imperative head when a clause embeds a trailing prohibition", () => {
+    const contract = draftContract({
+      userText:
+        "Fix duplicate connect clicks in onboarding: redirect create-sheet into Google OAuth. Add unit tests for sync-status. Do not modify Plaid production credentials.",
+    });
+
+    expect(contract.in_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/duplicate connect clicks/i),
+        expect.stringMatching(/redirect create-sheet/i),
+        expect.stringMatching(/unit tests for sync-status/i),
+      ]),
+    );
+    expect(contract.out_of_scope).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/do not modify Plaid production credentials/i),
+      ]),
+    );
+  });
+
   it("does not add without review false positive from registry clause", () => {
     const contract = draftContract({
       userText:

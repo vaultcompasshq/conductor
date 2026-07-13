@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 135 passing — schema 7 · core 76 · skill 30 · cli 11 · examples/integrations 11.
+- **Tests:** 143 passing — schema 7 · core 84 · skill 30 · cli 11 · examples/integrations 11.
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck → test →
   release smoke, Node 22.
@@ -79,6 +79,8 @@ of truth for "where are we and what's next." For granular tasks see
     `no-overwrite` prohibition false positive ([#32](https://github.com/vaultcompasshq/conductor/pull/32)).
 24. **v1.0.4** — `doctor` respects `core.hooksPath`; prohibition path extraction
     ([#34](https://github.com/vaultcompasshq/conductor/pull/34)).
+25. **v1.0.5** — drift path/constraint false-positive fixes; mixed-clause extraction;
+    rules audit `drift_noisy_rule` ([#36](https://github.com/vaultcompasshq/conductor/pull/36)).
 
 ## What's next (priority order)
 
@@ -117,5 +119,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (135 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (143 passing baseline).
 ```

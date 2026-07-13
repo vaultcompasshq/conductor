@@ -6,6 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-07-13
+
+### Fixed
+
+- **Drift:** out-of-scope path matching no longer fires on a lone vendor token in a
+  filename when the prohibition names sensitive qualifiers (e.g. `plaid` in
+  `plaid-link-button.tsx` vs “Plaid production credentials”).
+- **Drift:** constraint scoring ignores noise-only token overlaps (`task`, `hooks`,
+  `component`, `web`, …) that caused false soft-blocks on large Tier 0 PRs.
+- **Extraction:** imperative clauses with embedded prohibitions (`Fix X … do not Y`)
+  split correctly; colon-separated actions and `redirect` verbs land in `in_scope`;
+  embedded `no config` no longer drops whole Fix sentences.
+
+### Added
+
+- **`conductor rules audit`** flags `drift_noisy_rule` for meta-rules likely to
+  false-block path drift (refactor-beyond-task, skip hooks, design-system tokens).
+- **Dogfood regression tests** for Sheetful #369, #366, and Prismfolio #463 replay
+  scenarios.
+
 ## [1.0.4] - 2026-07-12
 
 ### Fixed
