@@ -23,6 +23,22 @@ const GENERIC_TOKENS = new Set([
   "cjs", "html", "css", "scss", "file", "files", "code", "config",
 ]);
 
+// Tokens that appear in paths and meta-rules but rarely indicate drift alone.
+export const CONSTRAINT_NOISE_TOKENS = new Set([
+  "task", "tasks", "hooks", "hook", "component", "components", "web",
+  "refactor", "beyond", "variant", "variants", "button", "buttons",
+  "acceptable", "semantic", "design", "system", "tokens", "token", "raw",
+  "what", "requires", "other", "only", "map", "controls", "nav", "links", "tab",
+  "inline", "style", "styles", "always", "prefer",
+]);
+
+// When a prohibition mentions these, a path hit on a vendor name alone is weak.
+export const OUT_OF_SCOPE_QUALIFIER_TOKENS = new Set([
+  "production", "credential", "credentials", "secret", "secrets", "dashboard",
+  "migration", "migrations", "deploy", "deployment", "billing", "stripe",
+  "environment", "console", "operator", "vendor", "metadata", "manifest",
+]);
+
 const MIN_TOKEN_LENGTH = 3;
 
 /**
@@ -98,4 +114,64 @@ export function discriminatingTokens(
     if (!shared) result.add(t);
   }
   return result;
+}
+
+/** Path segments from `/`, `.`, `-`, `_` — used to avoid substring false positives. */
+export function pathSegmentTokens(path: string): Set<string> {
+  const segments = new Set<string>();
+  const normalized = path.toLowerCase().replace(/\\/g, "/");
+  for (const part of normalized.split("/")) {
+    if (!part) continue;
+    for (const piece of part.split(/[._-]+/)) {
+      if (piece.length < MIN_TOKEN_LENGTH) continue;
+      if (STOPWORDS.has(piece)) continue;
+      if (GENERIC_TOKENS.has(piece)) continue;
+      segments.add(piece);
+    }
+  }
+  return segments;
+}
+
+/** Constraint drift needs at least one non-noise token overlap. */
+export function hasSignificantConstraintMatch(matched: string[]): boolean {
+  return matched.some((t) => !CONSTRAINT_NOISE_TOKENS.has(t));
+}
+
+/**
+ * Out-of-scope path matching: when a prohibition names sensitive qualifiers
+ * (production, credentials, …), a lone vendor token in a filename is not enough.
+ */
+export function outOfScopeTouch(
+  discriminating: Set<string>,
+  target: Set<string>,
+  pathSegs: Set<string>,
+): string[] {
+  const matched = intersectingTokens(discriminating, target);
+  if (matched.length === 0) return [];
+
+  const qualifiers = [...discriminating].filter((t) =>
+    [...OUT_OF_SCOPE_QUALIFIER_TOKENS].some((q) => tokensMatch(t, q)),
+  );
+  if (qualifiers.length === 0) return matched;
+
+  const qualHits = intersectingTokens(new Set(qualifiers), target);
+  if (qualHits.length > 0) return matched;
+
+  const pathHits = intersectingTokens(discriminating, pathSegs);
+  if (pathHits.length > 0) return [];
+
+  return matched;
+}
+
+/** Meta-rules that tend to false-block any touch of common path tokens. */
+export function isDriftNoisyConstraintRule(rule: string): boolean {
+  return (
+    /\b(refactor|restructure|clean up).*\b(beyond|outside|what).*\b(task|scope)\b/i.test(
+      rule,
+    ) ||
+    /\bskip hooks?\b/i.test(rule) ||
+    /\b(raw hex|css tokens?|design-system\.css)\b/i.test(rule) ||
+    /\buse the .*<Button>\b/i.test(rule) ||
+    /\braw <button>\b/i.test(rule)
+  );
 }

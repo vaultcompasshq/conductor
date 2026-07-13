@@ -8,6 +8,7 @@ import {
   extractConstraintsFromMarkdown,
   normalizeConstraintRule,
 } from "./constraints.js";
+import { isDriftNoisyConstraintRule } from "./tokenize.js";
 
 export type RulesAuditFindingStatus = "info" | "warn";
 export type RulesAuditStatus = "ok" | "warn";
@@ -224,6 +225,17 @@ export function auditRules(projectRoot: string): RulesAuditResult {
     if (isOverbroad(rule.rule)) {
       findings.push(
         finding("warn", "overbroad_rule", "Rule may be too broad to enforce reliably.", path, rule.rule),
+      );
+    }
+    if (isDriftNoisyConstraintRule(rule.rule)) {
+      findings.push(
+        finding(
+          "warn",
+          "drift_noisy_rule",
+          "Rule is likely to cause path-token drift false positives.",
+          path,
+          rule.rule,
+        ),
       );
     }
     if (shouldBeCritical(rule)) {

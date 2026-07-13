@@ -52,4 +52,18 @@ describe("rules audit", () => {
     ]);
     expect(result.summary.rules).toBe(3);
   });
+
+  it("flags drift-noisy meta rules", () => {
+    const dir = tmpProject();
+    writeFileSync(
+      join(dir, "AGENTS.md"),
+      "- Do not refactor, clean up, or restructure code beyond what the task requires.",
+      "utf8",
+    );
+
+    const result = auditRules(dir);
+    expect(result.findings.some((finding) => finding.id === "drift_noisy_rule")).toBe(
+      true,
+    );
+  });
 });

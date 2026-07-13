@@ -6,7 +6,10 @@ import {
 } from "./config-types.js";
 import {
   discriminatingTokens,
+  hasSignificantConstraintMatch,
   intersectingTokens,
+  outOfScopeTouch,
+  pathSegmentTokens,
   tokenize,
 } from "./tokenize.js";
 
@@ -92,16 +95,21 @@ function pathSemanticTokens(path: string): string[] {
 }
 
 /** Union of tokens describing what the work touched (paths + signals). */
-function targetTokens(input: DriftSignals): Set<string> {
+function targetTokens(input: DriftSignals): { all: Set<string>; pathSegs: Set<string> } {
   const all = new Set<string>();
+  const pathSegs = new Set<string>();
   for (const path of input.changedPaths ?? []) {
     for (const t of tokenize(path)) all.add(t);
     for (const t of pathSemanticTokens(path)) all.add(t);
+    for (const t of pathSegmentTokens(path)) {
+      all.add(t);
+      pathSegs.add(t);
+    }
   }
   for (const signal of input.signals ?? []) {
     for (const t of tokenize(signal)) all.add(t);
   }
-  return all;
+  return { all, pathSegs };
 }
 
 /** Tokens describing the agreed work — used to subtract non-discriminating tokens. */
@@ -122,7 +130,7 @@ export function scoreDrift(
   const thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
   const hardBlockCritical = options.hard_block_on_critical_constraints ?? true;
 
-  const target = targetTokens(input);
+  const { all: target, pathSegs } = targetTokens(input);
   const scope = scopeTokens(contract);
 
   // ── Scope creep: work touching explicitly out-of-scope territory ──────────
@@ -135,7 +143,7 @@ export function scoreDrift(
   for (const item of contract.out_of_scope) {
     const discriminating = discriminatingTokens(item, scope);
     if (discriminating.size === 0) continue;
-    const matched = intersectingTokens(discriminating, target);
+    const matched = outOfScopeTouch(discriminating, target, pathSegs);
     if (matched.length > 0) {
       scopeHits += 1;
       findings.push(
@@ -160,6 +168,7 @@ export function scoreDrift(
     if (discriminating.size === 0) continue;
     const matched = intersectingTokens(discriminating, target);
     if (matched.length === 0) continue;
+    if (!hasSignificantConstraintMatch(matched)) continue;
     const severity = PRIORITY_SEVERITY[c.priority] ?? PRIORITY_SEVERITY.low;
     if (severity > constraintViolation) constraintViolation = severity;
     if (c.priority === "critical") criticalViolated = true;
