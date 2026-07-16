@@ -95,4 +95,37 @@ describe("extractConstraintsFromMarkdown precision", () => {
     expect(deduped).toHaveLength(1);
     expect(deduped[0].priority).toBe("critical");
   });
+
+  it("does not capture a bare file-path reference bullet as a rule, even under a rules heading", () => {
+    const md = [
+      "## Workspace rules",
+      "",
+      "When working here, also respect:",
+      "",
+      "- `.cursor/rules/conventions.mdc`",
+      "- `.cursor/rules/security.mdc`",
+    ].join("\n");
+    const rules = extractConstraintsFromMarkdown(md, "AGENTS.md");
+    expect(rules).toHaveLength(0);
+  });
+
+  it("does not treat descriptive prose using bare 'require' as a rule", () => {
+    const md = [
+      "## Implementation Progress",
+      "",
+      "- 23 remaining tests require mock authenticated data",
+    ].join("\n");
+    const rules = extractConstraintsFromMarkdown(md, "CLAUDE.md");
+    expect(rules).toHaveLength(0);
+  });
+
+  it("still treats 'required' as normative language", () => {
+    const rules = extractConstraintsFromMarkdown(
+      "- Approval is required before merging to main",
+      "AGENTS.md",
+    );
+    expect(rules.map((r) => r.rule)).toContain(
+      "Approval is required before merging to main",
+    );
+  });
 });

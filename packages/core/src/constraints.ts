@@ -66,7 +66,7 @@ function cleanRule(line: string): string {
 
 // Normative language that marks a line as an actual rule, not prose/metadata.
 const NORMATIVE =
-  /\b(must not|must|never|do not|don't|dont|shall not|shall|always|required?|avoid|prefer|cannot|can't|should not|should|minimi[sz]e)\b/i;
+  /\b(must not|must|never|do not|don't|dont|shall not|shall|always|required|avoid|prefer|cannot|can't|should not|should|minimi[sz]e)\b/i;
 // A leading prohibition like "No new API endpoints".
 const LEADING_PROHIBITION = /^no\s+\w+/i;
 // Headings under which bullet items are rules even without a keyword.
@@ -75,6 +75,14 @@ const RULE_HEADING =
 
 const BULLET = /^([-*]\s+|\d+\.\s+)/;
 
+// A bullet that's just a code-span reference (e.g. a file path) has no
+// natural-language content and isn't a rule statement on its own, even
+// under a rules-style heading.
+function isBareCodeSpanReference(rule: string): boolean {
+  const withoutCodeSpans = rule.replace(/`[^`]*`/g, "").trim();
+  return withoutCodeSpans.length === 0;
+}
+
 function isRuleLine(
   rule: string,
   wasBullet: boolean,
@@ -82,7 +90,7 @@ function isRuleLine(
 ): boolean {
   if (NORMATIVE.test(rule)) return true;
   if (LEADING_PROHIBITION.test(rule)) return true;
-  if (underRuleHeading && wasBullet) return true;
+  if (underRuleHeading && wasBullet && !isBareCodeSpanReference(rule)) return true;
   return false;
 }
 
