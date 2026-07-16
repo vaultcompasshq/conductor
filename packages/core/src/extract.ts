@@ -300,6 +300,13 @@ function expandProhibitionLists(text: string): string[] {
   return items;
 }
 
+// A clause carrying its own "Done when …" / "Verify …" / "Acceptance:"
+// marker is an acceptance criterion, not a scope item, even when it
+// otherwise looks imperative-shaped.
+function isAcceptanceCriterionClause(text: string): boolean {
+  return /^(done when|verify|acceptance:)\b/i.test(text.trim());
+}
+
 function extractInScope(text: string): string[] {
   const { imperatives } = parseActionClauses(text);
   const bullets = bulletItems(text);
@@ -320,7 +327,9 @@ function extractInScope(text: string): string[] {
   // genuine multi-part imperative sentence.
   const clauses =
     imperatives.length > 1
-      ? imperatives.filter((c) => !isLeadingProhibitionClause(c))
+      ? imperatives.filter(
+          (c) => !isLeadingProhibitionClause(c) && !isAcceptanceCriterionClause(c),
+        )
       : imperatives.filter(
           (c) => ACTION_RE.test(c) && !isLeadingProhibitionClause(c),
         );

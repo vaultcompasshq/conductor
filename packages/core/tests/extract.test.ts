@@ -282,6 +282,7 @@ describe("draftContract", () => {
     });
     expect(contract.in_scope.some((s) => /blend/i.test(s))).toBe(true);
     expect(contract.in_scope.some((s) => /accessibility labels/i.test(s))).toBe(true);
+    expect(contract.in_scope.some((s) => /^done when/i.test(s))).toBe(false);
   });
 
   it("does not bleed acceptance-criteria text into out_of_scope", () => {
