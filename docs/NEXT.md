@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-13
+**Updated:** 2026-07-16
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,7 +11,7 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 143 passing — schema 7 · core 84 · skill 30 · cli 11 · examples/integrations 11.
+- **Tests:** 150 passing (schema 7, core 91, skill 30, cli 11, examples/integrations 11).
   Verify with `pnpm install && pnpm test` (test builds first).
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck →
   portfolio-name guard → test → release smoke, Node 22.
@@ -86,6 +86,10 @@ of truth for "where are we and what's next." For granular tasks see
     [public-content-policy.md](./release/public-content-policy.md)).
 27. **v1.0.7** — hash-only portfolio guard; public hygiene pass on docs/fixtures
     ([#40](https://github.com/vaultcompasshq/conductor/pull/40), [#43](https://github.com/vaultcompasshq/conductor/pull/43)).
+28. **v1.0.8**: extraction/constraint-loader hardening found via local-repo
+    validation (dropped scope clauses, garbled prohibitions, AC bleed into
+    out_of_scope, bare-reference and overbroad "require" rule matches)
+    ([#46](https://github.com/vaultcompasshq/conductor/pull/46)).
 
 ## What's next (priority order)
 
@@ -124,5 +128,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (143 passing baseline).
+Verify: pnpm install && pnpm test && pnpm release:smoke  (150 passing baseline).
 ```
