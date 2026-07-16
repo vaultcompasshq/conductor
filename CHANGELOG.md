@@ -17,6 +17,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Extraction:** a multi-clause "X and Y" imperative ask no longer drops
+  clause X from `in_scope` when its verb isn't in the curated action-verb
+  list (found via local-repo validation).
+- **Extraction:** out-of-scope prohibition matches are now bounded to their
+  own sentence, so a long prohibition clause no longer bleeds into the
+  following acceptance-criteria sentence or gets truncated mid-word.
+- **Extraction:** compound "do not A or B, and do not C" prohibitions no
+  longer produce a fabricated, spliced-together `out_of_scope` entry.
+- **Constraints:** a bare code-span reference bullet (e.g. a file path)
+  under a rules-style heading is no longer captured as a standalone rule.
+- **Constraints:** the constraint loader no longer treats descriptive prose
+  using the bare word "require" (e.g. progress notes like "N tests require
+  X") as normative rule language.
+
 ## [1.0.6] - 2026-07-13
 
 ### Changed

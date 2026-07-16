@@ -274,6 +274,48 @@ describe("draftContract", () => {
       /^ic-20260617-[a-z0-9]{6}$/,
     );
   });
+
+  it("keeps a multi-clause imperative even when the first verb isn't in the curated action list", () => {
+    const contract = draftContract({
+      userText:
+        "Blend the celebration audio cue with the existing background music in audioManager.ts. and fix the related accessibility labels for the Missing Sound station. Do not touch level unlock order or add new levels. Done when the audio blend has test coverage and a11y checks pass.",
+    });
+    expect(contract.in_scope.some((s) => /blend/i.test(s))).toBe(true);
+    expect(contract.in_scope.some((s) => /accessibility labels/i.test(s))).toBe(true);
+    expect(contract.in_scope.some((s) => /^done when/i.test(s))).toBe(false);
+  });
+
+  it("does not bleed acceptance-criteria text into out_of_scope", () => {
+    const contract = draftContract({
+      userText:
+        "Bump github/codeql-action/init and github/codeql-action/analyze to 4.37.0 and actions/checkout to 7.0.0 in the CI workflow files. Do not change the scanning rule set or add new GitHub Actions jobs. Done when CI passes on the bumped action versions.",
+    });
+    expect(contract.out_of_scope.some((s) => /done when/i.test(s))).toBe(false);
+    expect(
+      contract.out_of_scope.some((s) => /^Do not change the scanning rule set/i.test(s)),
+    ).toBe(true);
+  });
+
+  it("does not truncate a long prohibition clause mid-word", () => {
+    const contract = draftContract({
+      userText:
+        "Fix the auth callback bug. Do not change the Google OAuth drive.file scope configuration or the Plaid removeItem ordering. Done when tests pass.",
+    });
+    expect(contract.out_of_scope.some((s) => /removeitem or$/i.test(s))).toBe(false);
+    expect(contract.out_of_scope.some((s) => /removeitem ordering$/i.test(s))).toBe(true);
+  });
+
+  it("does not fabricate a garbled prohibition from a compound do-not clause", () => {
+    const contract = draftContract({
+      userText:
+        "Fix the vulnerabilities in package.json. Do not modify the verification protocol logic in agents/4b or agents/4c, and do not add new agent capabilities.",
+    });
+    expect(contract.out_of_scope.some((s) => /modify do not add/i.test(s))).toBe(false);
+    expect(
+      contract.out_of_scope.some((s) => /^do not add new agent capabilities$/i.test(s)),
+    ).toBe(true);
+    expect(contract.out_of_scope.some((s) => /agents\/4b or agents\/4c/i.test(s))).toBe(true);
+  });
 });
 
 describe("contract store", () => {
