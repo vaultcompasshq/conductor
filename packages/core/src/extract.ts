@@ -263,6 +263,14 @@ function parseActionClauses(text: string): ParsedClause {
   return { imperatives, prohibitions };
 }
 
+// A comma-separated fragment that itself starts a new "and/or do not …"
+// clause is an independent prohibition, not a bare object of the outer
+// verb — gluing the outer prefix onto it fabricates text that never
+// appeared in the input (e.g. "do not modify do not add new agent
+// capabilities").
+const NEW_CLAUSE_PROHIBITION_RE =
+  /^(?:and|or)\s+(do not|don't|must not|should not|shall not|cannot|can't|never|avoid|no)\s+(.+)$/i;
+
 function expandProhibitionLists(text: string): string[] {
   const items: string[] = [];
   const pattern =
@@ -275,7 +283,15 @@ function expandProhibitionLists(text: string): string[] {
     if (!rest.includes(",")) continue;
 
     for (const part of rest.split(",")) {
-      const target = normalizeItem(part.trim().replace(/^(and|or)\s+/i, ""));
+      const trimmedPart = part.trim();
+      const newClause = trimmedPart.match(NEW_CLAUSE_PROHIBITION_RE);
+      if (newClause) {
+        const target = normalizeItem(newClause[2]);
+        if (target.length < 5) continue;
+        items.push(`${newClause[1].toLowerCase()} ${target}`);
+        continue;
+      }
+      const target = normalizeItem(trimmedPart.replace(/^(and|or)\s+/i, ""));
       if (target.length < 5) continue;
       items.push(`${prefix} ${verb} ${target}`);
     }
@@ -295,9 +311,19 @@ function extractInScope(text: string): string[] {
     );
   }
 
-  const clauses = imperatives.filter(
-    (c) => ACTION_RE.test(c) && !isLeadingProhibitionClause(c),
-  );
+  // A multi-clause "X and Y" imperative sentence only needs its *second*
+  // clause to contain a recognized action verb to trigger the split (see
+  // textClauses). Once split, trust every resulting clause instead of
+  // re-filtering each one through the same curated verb list — otherwise a
+  // legitimate first clause phrased with an uncommon verb (e.g. "blend")
+  // is silently dropped even though the split already proved this is a
+  // genuine multi-part imperative sentence.
+  const clauses =
+    imperatives.length > 1
+      ? imperatives.filter((c) => !isLeadingProhibitionClause(c))
+      : imperatives.filter(
+          (c) => ACTION_RE.test(c) && !isLeadingProhibitionClause(c),
+        );
   if (clauses.length > 0) return uniqueItems(clauses, 8);
 
   const fallback = oneSentence(text, 200);
@@ -322,7 +348,7 @@ function isValidOutOfScopeItem(item: string): boolean {
 }
 
 function extractOutOfScope(text: string): string[] {
-  const tail = String.raw`[\w\s/.\-]{3,80}`;
+  const tail = String.raw`[\w\s/.\-]{3,200}`;
   const patterns = [
     new RegExp(String.raw`\bdo\s+not\s+([a-z]${tail})`, "gi"),
     new RegExp(String.raw`\bmust\s+not\s+([a-z]${tail})`, "gi"),
@@ -340,11 +366,19 @@ function extractOutOfScope(text: string): string[] {
   ];
   const items: string[] = [];
   items.push(...expandProhibitionLists(text));
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const item = match[0].trim().replace(/\s+/g, " ");
-      if (item.length >= 5 && item.length <= 200 && isValidOutOfScopeItem(item)) {
-        items.push(item);
+  // Match within one sentence at a time so a prohibition clause can't run
+  // past its own sentence boundary into the next one (e.g. an acceptance
+  // criteria "Done when..." clause), and so the capture isn't capped at a
+  // fixed small character budget that truncates real-world clauses
+  // mid-word — each sentence is already correctly bounded by
+  // splitSentences, including filename-extension periods.
+  for (const sentence of splitSentences(text)) {
+    for (const pattern of patterns) {
+      for (const match of sentence.matchAll(pattern)) {
+        const item = match[0].trim().replace(/\s+/g, " ");
+        if (item.length >= 5 && item.length <= 200 && isValidOutOfScopeItem(item)) {
+          items.push(item);
+        }
       }
     }
   }
