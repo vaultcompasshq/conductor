@@ -17,6 +17,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-07-16
+
 ### Fixed
 
 - **Extraction:** a multi-clause "X and Y" imperative ask no longer drops
