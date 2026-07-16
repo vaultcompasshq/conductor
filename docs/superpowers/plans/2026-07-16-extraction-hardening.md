@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix five concrete extraction/constraint-loader bugs found by running the built `conductor` CLI against real local repos (EngineeringAgents, Sheetful, vault-guard, kitchen-spell-lab) with realistic multi-clause asks, instead of the canned synthetic asks the existing test suite and `scripts/validate-public-repos.mjs` use.
+**Goal:** Fix five concrete extraction/constraint-loader bugs found by running the built `conductor` CLI against real local repos (an agent-orchestration repo, a Next.js app repo, vault-guard, a mobile-game repo) with realistic multi-clause asks, instead of the canned synthetic asks the existing test suite and `scripts/validate-public-repos.mjs` use.
 
 **Architecture:** All five bugs live in two existing pure functions files — `packages/core/src/extract.ts` (contract drafting: in_scope/out_of_scope extraction) and `packages/core/src/constraints.ts` (AGENTS.md/CLAUDE.md rule loading). No new files, no new public API surface — each fix is a targeted change to an existing function plus regression tests reproducing the exact real-world input that triggered it.
 
@@ -555,12 +555,12 @@ Expected: No errors.
 
 - [ ] **Step 4: Run the local-repo validation script again to confirm the original findings are fixed**
 
-Re-run the ad-hoc validation against the same real local repos used to find these bugs (EngineeringAgents, Sheetful, vault-guard, kitchen-spell-lab) and confirm:
-- The "Blend..." clause now appears in kitchen-spell-lab's `in_scope`.
+Re-run the ad-hoc validation against the same real local repos used to find these bugs (an agent-orchestration repo, a Next.js app repo, vault-guard, a mobile-game repo) and confirm:
+- The "Blend..." clause now appears in the mobile-game repo's `in_scope`.
 - No `out_of_scope` entry crosses into "Done when..." text for any of the four repos.
-- EngineeringAgents' `out_of_scope` no longer contains "Do not modify do not add new agent capabilities".
-- EngineeringAgents' `rules audit` no longer lists the two `.cursor/rules/*.mdc` bare-path bullets.
-- Sheetful's `rules audit` no longer lists "23 remaining tests require mock authenticated data".
+- The agent-orchestration repo's `out_of_scope` no longer contains "Do not modify do not add new agent capabilities".
+- The agent-orchestration repo's `rules audit` no longer lists the two `.cursor/rules/*.mdc` bare-path bullets.
+- The Next.js app repo's `rules audit` no longer lists "23 remaining tests require mock authenticated data".
 
 - [ ] **Step 5: Commit**
 
