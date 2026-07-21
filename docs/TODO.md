@@ -1,8 +1,8 @@
 # TODO — detailed task backlog
 
-**Updated:** 2026-07-13 · companion to [NEXT.md](./NEXT.md).
+**Updated:** 2026-07-21 · companion to [NEXT.md](./NEXT.md).
 Tasks are file-level and checkboxed. All work lands on `main` via PR; CI green
-before merge. Baseline: 143 tests passing.
+before merge. Baseline: 152 tests passing (see NEXT.md).
 
 Legend: `[ ]` todo · `[~]` partial · `[x]` done (kept for context).
 
@@ -135,6 +135,10 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 - [x] Codex / Claude Code hook adapter samples and Cursor project rule.
 - [x] Optional vault-guard pairing samples for Git pre-commit and GitHub
       Actions, plus `conductor doctor` awareness.
+- [x] Cursor mechanical-gate dogfood (`pnpm dogfood:cursor-hooks`) — 1.0.9.
+- [x] Claude Code lifecycle dogfood (`pnpm dogfood:claude-hooks`) — 1.0.10.
+- [ ] Codex live session — exercise `integrations/codex` in a real CLI session
+      (shell adapters shared; interactive `/hooks` trust still open).
 - [ ] Gemini: confirm the contract YAML is consumed; no runtime wiring exists
       beyond reading `GEMINI.md` as a constraint file.
 - [ ] Cursor: native extension/MCP status panel, if prioritized. Current
@@ -145,10 +149,10 @@ See [superpowers/specs/2026-06-20-correction-log-and-brief.md](./superpowers/spe
 ## 9. Smaller hygiene
 
 - [x] Deprecation message for removed `conductor-extract --freeze` (points to `conductor-freeze`).
-- [ ] `prompt-coach` product-name list is hardcoded (9 products) — generalize or
-      document as illustrative.
-- [ ] Decide whether to commit a `.conductor/intent-contract.yaml` for this repo
-      (currently gitignored per AGENTS.md "contracts live in app repos").
+- [x] `prompt-coach` product-name list documented as illustrative public-SaaS
+      exemplars (not a portfolio catalog) — 1.0.9.
+- [x] Do **not** commit a frozen root `.conductor/intent-contract.yaml` on
+      `main` (contracts belong in consuming app repos / feature-branch dogfood).
 
 ---
 

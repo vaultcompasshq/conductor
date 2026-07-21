@@ -55,7 +55,7 @@ Lifecycle: coach -> extract (draft) -> freeze (approve) -> check (gate) -> pivot
 
 The Phase 3 core build is complete: frozen contracts archive to `.conductor/contracts/`, `index.md` is generated from real data, resume emits a Session Brief, pivots are logged, and `conductor-check` can surface prior-contract drift.
 
-The unified `conductor` CLI is published to npm at **`1.0.9`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Cursor mechanical-gate dogfood: [docs/validation/cursor-hook-dogfood-2026-07-21.md](./docs/validation/cursor-hook-dogfood-2026-07-21.md). Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md). Public content policy: [docs/release/public-content-policy.md](./docs/release/public-content-policy.md).
+The unified `conductor` CLI is published to npm at **`1.0.10`** (`@vaultcompass/conductor-*`, trusted-publisher OIDC). Host dogfood: [cursor-hook-dogfood-2026-07-21.md](./docs/validation/cursor-hook-dogfood-2026-07-21.md), [claude-hook-dogfood-2026-07-21.md](./docs/validation/claude-hook-dogfood-2026-07-21.md). Stability policy: [docs/release/stability-policy.md](./docs/release/stability-policy.md). Public content policy: [docs/release/public-content-policy.md](./docs/release/public-content-policy.md).
 
 **Skills shipped:** `intent-contract`, `prompt-coach`, `drift-guard`, `capture-correction` (`packages/skill/*/SKILL.md`).
 
@@ -67,7 +67,9 @@ The unified `conductor` CLI is published to npm at **`1.0.9`** (`@vaultcompass/c
 
 ```bash
 pnpm install
-pnpm test      # 143 tests: schema (7), core (84), skill (30), cli (11), examples/integrations (11)
+pnpm test      # 152 tests: schema (7), core (93), skill (30), cli (11), examples/integrations (11)
+pnpm dogfood:cursor-hooks
+pnpm dogfood:claude-hooks
 pnpm build
 pnpm typecheck
 pnpm release:smoke

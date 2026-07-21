@@ -1,6 +1,6 @@
 {
   "name": "@vaultcompass/conductor-cli",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "type": "module",
   "description": "Unified Conductor CLI for intent contracts, drift checks, and session continuity",
   "license": "MIT",

@@ -39,5 +39,7 @@ conductor_changed_paths_csv() {
     return 0
   fi
 
-  paste -sd, <<<"$paths"
+  # BSD paste (macOS) requires a file operand; "-" reads stdin.
+  # Avoid bash here-strings (`<<<`), which BSD paste rejects.
+  printf '%s\n' "$paths" | paste -sd, -
 }

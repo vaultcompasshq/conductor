@@ -75,9 +75,19 @@ Spec Kit and Kiro are not enemies. They are good upstream sources for Conductor.
 out-of-scope block / in-scope commit. `hook install` also localizes a
 machine-wide `core.hooksPath` so the gate actually runs.
 
+### Claude Code lifecycle hooks (1.0.10)
+
+`pnpm dogfood:claude-hooks` proves settings sample install + SessionStart
+brief + Stop-check block/pass using the shared `integrations/hooks` scripts.
+
 ## What Is Missing Next
 
-### 1. Optional Semantic Classifier
+### 1. Codex live session
+
+Shell adapters are shared; exercise the Codex `hooks.json` sample in a real
+CLI session (interactive `/hooks` trust).
+
+### 2. Optional Semantic Classifier (1.1.0+)
 
 The offline rule-based scorer is a good default, but nuanced drift needs an optional semantic path. This should be opt-in and preserve local/offline behavior as the baseline.
 
