@@ -1,10 +1,16 @@
 {
   "name": "@vaultcompass/conductor-skill",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "description": "Superpowers-compatible Conductor skills and helper CLIs",
   "license": "MIT",
-  "keywords": ["conductor", "superpowers", "skills", "ai", "cursor"],
+  "keywords": [
+    "conductor",
+    "superpowers",
+    "skills",
+    "ai",
+    "cursor"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/vaultcompasshq/conductor.git",

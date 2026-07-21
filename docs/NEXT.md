@@ -1,6 +1,6 @@
 # Next - Maintainer Status
 
-**Updated:** 2026-07-16
+**Updated:** 2026-07-21
 **Read this first when resuming work.** It is the single source
 of truth for "where are we and what's next." For granular tasks see
 [TODO.md](./TODO.md); for command usage see [cli-reference.md](./cli-reference.md).
@@ -11,8 +11,9 @@ of truth for "where are we and what's next." For granular tasks see
 
 - **Branch model:** all work lands on `main` **via PR** (never push to main). CI
   must be green before merge. See [[always-pr-to-main]] convention.
-- **Tests:** 150 passing (schema 7, core 91, skill 30, cli 11, examples/integrations 11).
-  Verify with `pnpm install && pnpm test` (test builds first).
+- **Tests:** 152 passing (schema 7, core 93, skill 30, cli 11, examples/integrations 11).
+  Verify with `pnpm install && pnpm test` (test builds first). Also
+  `pnpm dogfood:cursor-hooks` for the Cursor mechanical-gate fixture.
 - **CI:** `.github/workflows/ci.yml` — install → build → typecheck →
   portfolio-name guard → test → release smoke, Node 22.
 
@@ -90,12 +91,18 @@ of truth for "where are we and what's next." For granular tasks see
     validation (dropped scope clauses, garbled prohibitions, AC bleed into
     out_of_scope, bare-reference and overbroad "require" rule matches)
     ([#46](https://github.com/vaultcompasshq/conductor/pull/46)).
+29. **v1.0.9** — Cursor hook dogfood (`pnpm dogfood:cursor-hooks`);
+    `hook install` localizes machine-wide `core.hooksPath`; README leads with
+    approved contract + drift; no frozen root `.conductor/` contract on `main`
+    ([cursor-hook-dogfood-2026-07-21.md](./validation/cursor-hook-dogfood-2026-07-21.md)).
 
 ## What's next (priority order)
 
 1. **Phase 3b (remaining)** — LLM-assisted rule normalization (opt-in); further
    correction decay tuning if brief caps prove insufficient in dogfood.
-2. **Integration hardening** — Codex/Claude Code hook samples in live sessions.
+2. **Optional `drift --semantic`** — keep offline rule scorer as default.
+3. **Codex live session** — exercise `integrations/codex` sample in a real CLI
+   session (mechanical gate already shared via `hook install`).
 
 See [TODO.md](./TODO.md) for the file-level checklist of each.
 
@@ -112,9 +119,10 @@ See [TODO.md](./TODO.md) for the file-level checklist of each.
 - **Drift scorer is rule-based:** good signal, including path-derived API/source
   and manifest controls, but vocabulary-overlap false positives remain possible;
   LLM-assisted classification is a deferred option.
-- **Hook integrations are samples:** Codex and Claude Code hook configs plus a
-  Cursor project rule ship as integration examples. Downstream product wiring
-  should happen in those downstream repos.
+- **Host lifecycle hooks are samples; the Git gate is proven:** Cursor project
+  rules and Claude Code/Codex lifecycle configs are advisory. Mechanical
+  enforcement is `conductor hook install` (dogfooded). Downstream hosts still
+  wire their own lifecycle samples.
 - **Public repo validation learned:** init/extract/freeze/doctor/check run
   against the default public-repo matrix in `scripts/validate-public-repos.mjs`.
   The matrix now includes explicit-signal and path-only negative controls.
@@ -128,5 +136,5 @@ Read docs/NEXT.md, docs/TODO.md, and AGENTS.md.
 All work lands on main via PR (never push to main); CI must be green.
 Pick the top unstarted item in TODO.md unless I say otherwise.
 Use writing-plans before implementing a multi-step task.
-Verify: pnpm install && pnpm test && pnpm release:smoke  (150 passing baseline).
+Verify: pnpm install && pnpm test && pnpm dogfood:cursor-hooks && pnpm release:smoke
 ```

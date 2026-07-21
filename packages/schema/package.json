@@ -1,10 +1,16 @@
 {
   "name": "@vaultcompass/conductor-schema",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "description": "Intent Contract schema, TypeScript types, and AJV validation",
   "license": "MIT",
-  "keywords": ["conductor", "intent-contract", "schema", "ajv", "ai"],
+  "keywords": [
+    "conductor",
+    "intent-contract",
+    "schema",
+    "ajv",
+    "ai"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/vaultcompasshq/conductor.git",
@@ -26,7 +32,11 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src/intent-contract.schema.json", "README.md"],
+  "files": [
+    "dist",
+    "src/intent-contract.schema.json",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

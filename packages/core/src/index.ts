@@ -51,8 +51,10 @@ export {
   CONDUCTOR_HOOK_MARKER,
   installPreCommitHook,
   renderPreCommitHook,
+  resolveGitHooksDir,
   type InstallHookOptions,
   type InstallHookResult,
+  type ResolvedHooksDir,
 } from "./hook.js";
 export { DRIFT_WEIGHTS, DRIFT_THRESHOLDS, driftAction } from "./rubric.js";
 export {

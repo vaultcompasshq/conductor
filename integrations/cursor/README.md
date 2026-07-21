@@ -1,28 +1,48 @@
 # Cursor Integration
 
-**Status:** Project rule + git hook enforcement
+**Status:** Project rule (advisory) + Git pre-commit enforcement  
+**Validated:** [cursor-hook-dogfood-2026-07-21.md](../../docs/validation/cursor-hook-dogfood-2026-07-21.md)
 
 ---
 
-## Manual setup (no extension)
+## Recommended setup (npm)
 
-### 1. Install Conductor skills
+```bash
+npx @vaultcompass/conductor-cli@latest init --project .
+mkdir -p .cursor/rules
+# From a Conductor source checkout, or paste the rule from this folder:
+cp /path/to/conductor/integrations/cursor/conductor.mdc .cursor/rules/conductor.mdc
 
-Copy from `packages/skill/` to `~/.cursor/skills/`:
+npx @vaultcompass/conductor-cli@latest extract --project . --text "<approved task>"
+npx @vaultcompass/conductor-cli@latest freeze --project . --approved-by "<you>"
+npx @vaultcompass/conductor-cli@latest hook install --project .
+```
+
+Re-verify anytime:
+
+```bash
+npx @vaultcompass/conductor-cli@latest doctor --project .
+npx @vaultcompass/conductor-cli@latest check --project . --staged
+```
+
+### Machine-wide `core.hooksPath`
+
+If Git is configured with a global hooks directory (common with vault-guard),
+`conductor hook install` sets **local** `core.hooksPath=.git/hooks` and installs
+there so it does not overwrite the shared hooks dir. Repo-local paths such as
+`.githooks` are left alone and receive the hook directly.
+
+---
+
+## From a Conductor source checkout
+
+### 1. Skills
 
 ```bash
 pnpm conductor:install-skills
 ```
 
-Or from another project after cloning conductor:
-
-```bash
-bash /path/to/conductor/integrations/superpowers/install-skills.sh
-```
-
-### 2. User rule (recommended)
-
-Add the committed sample rules to your project:
+### 2. Project rule
 
 ```bash
 mkdir -p .cursor/rules
@@ -35,46 +55,25 @@ cp integrations/cursor/conductor.mdc .cursor/rules/conductor.mdc
 cp integrations/cursor/no-portfolio-names.mdc .cursor/rules/no-portfolio-names.mdc
 ```
 
-Or paste this into Cursor user rules:
-
-```markdown
-Before any implementation work:
-1. Ensure .conductor/intent-contract.yaml exists
-2. Ensure it is frozen with conductor-freeze
-3. Run conductor-resume at resumed session start
-4. Run conductor-check before completion or commit
-
-Constraint files to respect (priority order):
-- AGENTS.md
-- CLAUDE.md
-- GEMINI.md
-- .cursor/rules/*
-```
-
-### 3. Project skeleton
+### 3. Mechanical gate
 
 ```bash
-pnpm conductor:init
-# creates .conductor/config.yaml, index.md, contracts/
+pnpm conductor -- hook install --project .
+# or: pnpm dogfood:cursor-hooks   # full pass/fail fixture
 ```
 
-Add to `.gitignore` (optional):
+Do **not** copy `integrations/git-hooks/*.sample` by hand for npm users — that
+path is not in the published packages. Use `conductor hook install`.
+
+### 4. Optional gitignore
 
 ```
 .conductor/drift-log.jsonl
 ```
 
-Commit `intent-contract.yaml` for team visibility (recommended).
-
-### 4. Mechanical gate
-
-Cursor project rules are instructions, not lifecycle hooks. For enforcement,
-install the Git pre-commit hook:
-
-```bash
-cp integrations/git-hooks/pre-commit.sample .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
-```
+Commit `intent-contract.yaml` on feature branches when the team should see the
+approved ask. The Conductor OSS repo itself does not keep a frozen root contract
+on `main`.
 
 ---
 
@@ -87,29 +86,25 @@ chmod +x .git/hooks/pre-commit
 | `GEMINI.md` | `source: GEMINI.md` |
 | `.cursor/rules/*.mdc` | `source: cursor-rules` |
 
-Conductor merges into `constraints[]` with priority from config (default: AGENTS > CLAUDE > cursor-rules).
-
 ---
 
 ## Multi-model usage
 
-Conductor is model-agnostic:
-
 | Environment | How Conductor runs |
 |-------------|-------------------|
-| Cursor (Claude) | Skills via skill tool |
-| Codex CLI | Skill equivalent or CLI |
-| Gemini CLI | `activate_skill` mapping per GEMINI.md |
-| Downstream automation | Node imports `@vaultcompass/conductor-core` |
+| Cursor | Project rule + skills; gate via `hook install` |
+| Codex CLI | `integrations/codex` sample + same CLI gate |
+| Claude Code | `integrations/claude-code` sample + same CLI gate |
+| CI | `conductor drift --ci` / `conductor check` |
 
-Same `intent-contract.yaml` — any model reads it.
+Same `intent-contract.yaml` — any model that can read a file can consume it.
 
 ---
 
 ## Future
 
 - Native MCP server for contract status
-- Glass panel showing active contract + drift score
+- Status panel showing active contract + drift score
 
 ---
 
@@ -117,7 +112,7 @@ Same `intent-contract.yaml` — any model reads it.
 
 | Tool | When |
 |------|------|
-| Conductor drift-guard | During session |
+| Conductor drift gate | During session / pre-commit |
 | Bugbot | PR time |
 | Conductor `drift --ci` | CI optional |
 

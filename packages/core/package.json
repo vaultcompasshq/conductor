@@ -1,10 +1,16 @@
 {
   "name": "@vaultcompass/conductor-core",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "description": "Core prompt coaching, drift scoring, gate, correction, and memory-index utilities for Conductor",
   "license": "MIT",
-  "keywords": ["conductor", "drift", "intent", "ai", "governance"],
+  "keywords": [
+    "conductor",
+    "drift",
+    "intent",
+    "ai",
+    "governance"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/vaultcompasshq/conductor.git",
@@ -26,7 +32,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
