@@ -1,5 +1,12 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const CONDUCTOR_HOOK_MARKER = "conductor-managed-pre-commit";
 
@@ -8,6 +15,12 @@ export interface InstallHookOptions {
   withVaultGuard?: boolean;
   /** Overwrite an existing pre-commit hook that Conductor did not write. */
   force?: boolean;
+  /**
+   * When `core.hooksPath` points outside this repository (e.g. a machine-wide
+   * `~/.git-hooks`), set local `core.hooksPath=.git/hooks` and install there
+   * instead of overwriting the shared directory. Default: true.
+   */
+  preferLocalGitHooks?: boolean;
 }
 
 export interface InstallHookResult {
@@ -15,6 +28,69 @@ export interface InstallHookResult {
   path: string;
   reason?: string;
   withVaultGuard: boolean;
+  /** True when install rewrote local core.hooksPath to `.git/hooks`. */
+  localizedHooksPath?: boolean;
+}
+
+export interface ResolvedHooksDir {
+  /** Absolute directory where Git will look for hooks. */
+  hooksDir: string;
+  /** Display path for the pre-commit hook (repo-relative when possible). */
+  displayHookPath: string;
+  /** Raw `core.hooksPath` config value, or null if unset. */
+  hooksPathConfig: string | null;
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Resolve the directory Git uses for hooks in this repo, matching doctor.
+ * Only consults `core.hooksPath` when `projectRoot` is a usable git work tree
+ * (avoids inheriting a machine-wide hooksPath into bare test fixtures).
+ */
+export function resolveGitHooksDir(projectRoot: string): ResolvedHooksDir {
+  const defaultDir = join(projectRoot, ".git", "hooks");
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  if (inside.status !== 0) {
+    return {
+      hooksDir: defaultDir,
+      displayHookPath: ".git/hooks/pre-commit",
+      hooksPathConfig: null,
+    };
+  }
+
+  const result = spawnSync("git", ["config", "--get", "core.hooksPath"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  const hooksPath = result.stdout?.trim() || "";
+  if (!hooksPath) {
+    return {
+      hooksDir: defaultDir,
+      displayHookPath: ".git/hooks/pre-commit",
+      hooksPathConfig: null,
+    };
+  }
+
+  const hooksDir = isAbsolute(hooksPath)
+    ? hooksPath
+    : resolve(projectRoot, hooksPath);
+  const display =
+    hooksPath.endsWith("/") || hooksPath.endsWith(sep)
+      ? `${hooksPath}pre-commit`
+      : `${hooksPath}/pre-commit`;
+
+  return {
+    hooksDir,
+    displayHookPath: display.replace(/\\/g, "/"),
+    hooksPathConfig: hooksPath,
+  };
 }
 
 /**
@@ -76,24 +152,72 @@ export function renderPreCommitHook(withVaultGuard = false): string {
 /**
  * Install the Conductor pre-commit hook into the repository at projectRoot.
  * Refuses to clobber a foreign (non-Conductor) hook unless force is set.
+ *
+ * When a machine-wide `core.hooksPath` points outside this repo, defaults to
+ * setting local `core.hooksPath=.git/hooks` so install does not overwrite a
+ * shared hooks directory (common with global vault-guard installs).
  */
 export function installPreCommitHook(
   projectRoot: string,
   options: InstallHookOptions = {},
 ): InstallHookResult {
   const withVaultGuard = options.withVaultGuard ?? false;
-  const hooksDir = join(projectRoot, ".git", "hooks");
-  const hookPath = join(hooksDir, "pre-commit");
+  const preferLocal = options.preferLocalGitHooks ?? true;
   const gitDir = join(projectRoot, ".git");
 
   if (!existsSync(gitDir)) {
     return {
       installed: false,
-      path: hookPath,
+      path: join(gitDir, "hooks", "pre-commit"),
       reason: "not_a_git_repo",
       withVaultGuard,
     };
   }
+
+  let localizedHooksPath = false;
+  const insideWorkTree = spawnSync(
+    "git",
+    ["rev-parse", "--is-inside-work-tree"],
+    { cwd: projectRoot, encoding: "utf8" },
+  );
+  const usableGit = insideWorkTree.status === 0;
+
+  let resolved: ResolvedHooksDir = usableGit
+    ? resolveGitHooksDir(projectRoot)
+    : {
+        hooksDir: join(gitDir, "hooks"),
+        displayHookPath: ".git/hooks/pre-commit",
+        hooksPathConfig: null,
+      };
+
+  if (
+    usableGit &&
+    preferLocal &&
+    resolved.hooksPathConfig &&
+    !isPathInside(projectRoot, resolved.hooksDir)
+  ) {
+    const localize = spawnSync(
+      "git",
+      ["config", "core.hooksPath", ".git/hooks"],
+      { cwd: projectRoot, encoding: "utf8" },
+    );
+    if (localize.status !== 0) {
+      return {
+        installed: false,
+        path: join(resolved.hooksDir, "pre-commit"),
+        reason: "hooks_path_localize_failed",
+        withVaultGuard,
+      };
+    }
+    localizedHooksPath = true;
+    resolved = {
+      hooksDir: join(gitDir, "hooks"),
+      displayHookPath: ".git/hooks/pre-commit",
+      hooksPathConfig: ".git/hooks",
+    };
+  }
+
+  const hookPath = join(resolved.hooksDir, "pre-commit");
 
   if (existsSync(hookPath) && !options.force) {
     const existing = readFileSync(hookPath, "utf8");
@@ -103,13 +227,19 @@ export function installPreCommitHook(
         path: hookPath,
         reason: "existing_hook_not_managed",
         withVaultGuard,
+        localizedHooksPath,
       };
     }
   }
 
-  mkdirSync(hooksDir, { recursive: true });
+  mkdirSync(resolved.hooksDir, { recursive: true });
   writeFileSync(hookPath, renderPreCommitHook(withVaultGuard), "utf8");
   chmodSync(hookPath, 0o755);
 
-  return { installed: true, path: hookPath, withVaultGuard };
+  return {
+    installed: true,
+    path: hookPath,
+    withVaultGuard,
+    localizedHooksPath,
+  };
 }

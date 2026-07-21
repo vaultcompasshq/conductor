@@ -10,7 +10,13 @@ codes or event-specific JSON decisions.
 mkdir -p .claude
 cp integrations/claude-code/settings.sample.json .claude/settings.json
 chmod +x integrations/hooks/*.sh
+# Mechanical gate (shared with Cursor): also install the Git pre-commit hook
+npx @vaultcompass/conductor-cli@latest hook install --project .
 ```
+
+The lifecycle samples resume/brief and stop-check; the **blocking** gate is the
+same `conductor-check` path proven by
+[cursor-hook-dogfood-2026-07-21.md](../../docs/validation/cursor-hook-dogfood-2026-07-21.md).
 
 ## What It Does
 

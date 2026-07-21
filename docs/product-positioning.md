@@ -1,6 +1,6 @@
 # Product Positioning
 
-**Updated:** 2026-07-07
+**Updated:** 2026-07-21
 
 Conductor should position itself as the portable intent-control layer for AI-assisted development. It should not compete with full spec-driven development systems, coding agents, or PR review tools. Those products help create plans, run agents, or review code. Conductor's job is to preserve and enforce what the human approved.
 
@@ -66,6 +66,14 @@ Lead with:
 Spec Kit and Kiro are not enemies. They are good upstream sources for Conductor.
 
 `conductor import-spec` imports Spec Kit or Kiro-style artifacts into an unfrozen Intent Contract draft. The key boundary remains intact: the imported draft still requires human review and `conductor freeze` before the gate trusts it.
+
+## Recently Proven
+
+### Cursor / Git mechanical gate (1.0.9)
+
+`pnpm dogfood:cursor-hooks` proves project-rule install + `hook install` +
+out-of-scope block / in-scope commit. `hook install` also localizes a
+machine-wide `core.hooksPath` so the gate actually runs.
 
 ## What Is Missing Next
 

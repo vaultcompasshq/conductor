@@ -1,12 +1,15 @@
 # Conductor
 
-**Intent fidelity for AI-assisted development.**
+**Approved Intent Contract + drift gate for AI-assisted development.**
 
-Conductor sits *above* foundation models and *below* your product code. It turns an unstructured request into an approved **Intent Contract**, coaches users when prompts cause scope expansion, and blocks intent drift before misaligned changes reach review.
+Conductor turns an unstructured request into a frozen **Intent Contract**, then
+blocks scope drift in pre-commit and CI before misaligned changes reach review.
+It complements Spec Kit, Kiro, Cursor, Claude Code, Codex, and CodeRabbit — it
+does not replace planning, coding agents, or PR review.
 
-The Intent Contract is a plain YAML file, so any model or coding assistant that can read a file can consume it. Conductor does not replace spec tools, coding agents, or PR review. It gives those tools a shared source of truth for what the human approved, what is out of scope, and whether the current diff has drifted.
-
-Today the shipped surfaces are the unified `conductor` CLI, the legacy `conductor-check` gate for pre-commit and CI, Cursor/Claude skills, hook samples, handoff reports, rules audit, and spec import. Optional vault-guard pairing samples are available for teams that want intent drift and secret scanning as separate gates. See [integrations/](./integrations) for host-specific examples.
+The contract is plain YAML any model can read. Pair with
+[vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) when you
+also want secret scanning as a separate gate. See [integrations/](./integrations).
 
 ```
 User conversation
@@ -20,12 +23,12 @@ User conversation
 
 ## Status
 
-**Phase:** `1.0.0` — stable CLI/API on npm (`@vaultcompass/conductor-*`); see [docs/release/stability-policy.md](./docs/release/stability-policy.md) — July 2026
-**Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)  
+**Version:** `1.0.9` — stable CLI/API on npm (`@vaultcompass/conductor-*`); see [docs/release/stability-policy.md](./docs/release/stability-policy.md) — July 2026  
+**Repository:** https://github.com/vaultcompasshq/conductor (public, MIT)
 
-**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **127 tests passing**
+**Packages:** `packages/schema` · `packages/core` · `packages/skill` · `packages/cli` · **150+ tests** (see [docs/NEXT.md](./docs/NEXT.md))
 
-**Maintainers:** See [docs/NEXT.md](./docs/NEXT.md) (current status), [docs/TODO.md](./docs/TODO.md) (backlog), and [docs/cli-reference.md](./docs/cli-reference.md) (commands).
+**Maintainers:** [docs/NEXT.md](./docs/NEXT.md) · [docs/TODO.md](./docs/TODO.md) · [docs/cli-reference.md](./docs/cli-reference.md)
 
 ## Start here
 
@@ -130,7 +133,8 @@ pnpm conductor -- rules audit --project .
 
 ```bash
 pnpm install
-pnpm test      # 127 tests (builds first, then schema + core + skill + cli + examples/integrations)
+pnpm test      # full suite (builds first; see docs/NEXT.md for current count)
+pnpm dogfood:cursor-hooks   # Cursor rule + hook install pass/fail fixture
 pnpm build
 pnpm release:smoke
 pnpm validate:public-repos

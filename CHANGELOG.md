@@ -4,18 +4,32 @@ All notable changes to Conductor will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.0.7] - 2026-07-13
+## [Unreleased]
+
+## [1.0.9] - 2026-07-21
+
+### Added
+
+- **`pnpm dogfood:cursor-hooks`** — repeatable Cursor integration fixture
+  (project rule + `hook install` + out-of-scope block / in-scope commit).
+  Validation note: [docs/validation/cursor-hook-dogfood-2026-07-21.md](./docs/validation/cursor-hook-dogfood-2026-07-21.md).
+
+### Fixed
+
+- **`conductor hook install` respects machine-wide `core.hooksPath`.** When the
+  configured hooks directory is outside the repo (common with global
+  vault-guard installs), install sets local `core.hooksPath=.git/hooks` and
+  writes the Conductor hook there instead of a no-op install into `.git/hooks`
+  that Git never runs. In-repo paths such as `.githooks` are unchanged.
 
 ### Changed
 
-- **Public hygiene pass:** hash-only portfolio guard; generic fixtures and doc
-  names (`downstream-app-*`, `stub-detection-*`); remove internal jargon from
-  tests; trim decorative source comments; `.cursor/` gitignored.
-- **Portfolio guard:** SHA-256 hash blocklist only (vault-guard pattern); slim
-  maintainer Cursor rule and CONTRIBUTING prose.
-- **Tests:** longer timeouts on spawn-heavy doctor, report, and skill CLI cases.
-
-## [Unreleased]
+- **Messaging:** README leads with approved Intent Contract + drift gate;
+  status line tracks the current 1.0.x release.
+- **Cursor / Claude Code integration docs** point at `hook install` and the
+  dogfood validation note; clarify that project/lifecycle rules are advisory.
+- **Prompt coach:** document the public-SaaS exemplar list used by
+  `product_stack` (not a portfolio catalog).
 
 ## [1.0.8] - 2026-07-16
 
@@ -34,6 +48,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Constraints:** the constraint loader no longer treats descriptive prose
   using the bare word "require" (e.g. progress notes like "N tests require
   X") as normative rule language.
+
+## [1.0.7] - 2026-07-13
+
+### Changed
+
+- **Public hygiene pass:** hash-only portfolio guard; generic fixtures and doc
+  names (`downstream-app-*`, `stub-detection-*`); remove internal jargon from
+  tests; trim decorative source comments; `.cursor/` gitignored.
+- **Portfolio guard:** SHA-256 hash blocklist only (vault-guard pattern); slim
+  maintainer Cursor rule and CONTRIBUTING prose.
+- **Tests:** longer timeouts on spawn-heavy doctor, report, and skill CLI cases.
 
 ## [1.0.6] - 2026-07-13
 

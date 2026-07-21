@@ -12,6 +12,7 @@ import {
 } from "./contract-store.js";
 import { archivedContractPath, contractsDir, listContracts } from "./history.js";
 import { INDEX_FILE, renderIndex } from "./memory-index.js";
+import { resolveGitHooksDir } from "./hook.js";
 
 export type DoctorFindingStatus = "ok" | "info" | "warn" | "error";
 export type DoctorStatus = "ok" | "warn" | "error";
@@ -330,24 +331,13 @@ function resolveGitPreCommitHook(
   const gitDir = join(projectRoot, ".git");
   if (!existsSync(gitDir)) return null;
 
-  const hooksPathResult = spawnSync("git", ["config", "core.hooksPath"], {
-    cwd: projectRoot,
-    encoding: "utf8",
-  });
-  const hooksPath = hooksPathResult.stdout?.trim();
-  if (hooksPath) {
-    const hookPath = join(projectRoot, hooksPath, "pre-commit");
-    if (existsSync(hookPath)) {
-      const display = hooksPath.endsWith("/")
-        ? `${hooksPath}pre-commit`
-        : `${hooksPath}/pre-commit`;
-      return { absolutePath: hookPath, displayPath: display };
-    }
-  }
-
-  const defaultHook = join(gitDir, "hooks", "pre-commit");
-  if (existsSync(defaultHook)) {
-    return { absolutePath: defaultHook, displayPath: ".git/hooks/pre-commit" };
+  const resolved = resolveGitHooksDir(projectRoot);
+  const hookPath = join(resolved.hooksDir, "pre-commit");
+  if (existsSync(hookPath)) {
+    return {
+      absolutePath: hookPath,
+      displayPath: resolved.displayHookPath,
+    };
   }
   return null;
 }

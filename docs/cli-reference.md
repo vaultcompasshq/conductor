@@ -179,6 +179,11 @@ Exits `1` when the target is not a git repo or a foreign hook exists without
 `--force`. Re-installing a Conductor-managed hook is idempotent. Bypass a single
 commit with `git commit --no-verify`.
 
+When `core.hooksPath` points **outside** this repository (machine-wide hooks),
+install sets local `core.hooksPath=.git/hooks` and writes there so Git actually
+runs the gate without overwriting a shared hooks directory. In-repo custom
+paths such as `.githooks` receive the hook directly.
+
 ## conductor drift / conductor-drift
 
 Scores drift for a given contract path (lower-level than `check`; does not gate

@@ -14,7 +14,9 @@ export interface CoachPattern {
   coaching: string;
 }
 
-const PRODUCT_NAMES =
+// Illustrative public SaaS names only — used to detect "like Notion + Figma"
+// comparative overload. Not a portfolio/product catalog; keep this list short.
+const PUBLIC_SAAS_EXEMPLARS =
   /\b(notion|figma|linear|slack|airtable|jira|github|vercel|supabase)\b/i;
 
 const FEATURE_STACK =
@@ -28,7 +30,8 @@ export const COACH_PATTERNS: CoachPattern[] = [
   {
     id: "product_stack",
     detect: (text) => {
-      const matches = text.match(new RegExp(PRODUCT_NAMES.source, "gi")) ?? [];
+      const matches =
+        text.match(new RegExp(PUBLIC_SAAS_EXEMPLARS.source, "gi")) ?? [];
       if (matches.length >= 2) return true;
       if (matches.length >= 1 && /\blike\b/i.test(text)) {
         const features = text.match(new RegExp(FEATURE_STACK.source, "gi")) ?? [];
@@ -37,7 +40,7 @@ export const COACH_PATTERNS: CoachPattern[] = [
       return false;
     },
     coaching:
-      "Multiple product references imply multiple architectures. Pick one workflow.",
+      "Multiple tool or product references imply multiple architectures. Pick one workflow.",
   },
   {
     id: "comparative_overload",
