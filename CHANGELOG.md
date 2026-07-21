@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-07-21
+
+### Added
+
+- **`pnpm dogfood:claude-hooks`** — repeatable Claude Code lifecycle fixture
+  (settings sample + SessionStart brief + Stop-check block/pass + shared Git
+  gate). Validation note:
+  [docs/validation/claude-hook-dogfood-2026-07-21.md](./docs/validation/claude-hook-dogfood-2026-07-21.md).
+
+### Fixed
+
+- **`integrations/hooks/conductor-lib.sh` path CSV on macOS.**
+  `conductor_changed_paths_csv` used `paste <<<`, which BSD paste rejects;
+  it now pipes to `paste -sd, -` so Stop/Session hooks gather staged paths
+  correctly on macOS.
+
 ## [1.0.9] - 2026-07-21
 
 ### Added

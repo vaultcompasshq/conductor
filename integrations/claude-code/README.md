@@ -14,8 +14,19 @@ chmod +x integrations/hooks/*.sh
 npx @vaultcompass/conductor-cli@latest hook install --project .
 ```
 
-The lifecycle samples resume/brief and stop-check; the **blocking** gate is the
-same `conductor-check` path proven by
+The lifecycle samples resume/brief and stop-check; the **blocking** gate is
+`conductor-check` via `integrations/hooks/conductor-stop-check.sh`.
+
+Prove the path locally:
+
+```bash
+pnpm dogfood:claude-hooks
+# or: node scripts/dogfood-claude-hooks.mjs   # after pnpm build
+```
+
+Validation note:
+[claude-hook-dogfood-2026-07-21.md](../../docs/validation/claude-hook-dogfood-2026-07-21.md).
+Shared Git mechanical gate:
 [cursor-hook-dogfood-2026-07-21.md](../../docs/validation/cursor-hook-dogfood-2026-07-21.md).
 
 ## What It Does

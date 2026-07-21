@@ -1,7 +1,7 @@
 {
   "name": "conductor",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Intent fidelity for AI-assisted development",
   "license": "MIT",
   "scripts": {
@@ -33,7 +33,8 @@
     "conductor:pivot": "node packages/skill/dist/pivot-cli.js",
     "conductor:resume": "node packages/skill/dist/resume-cli.js",
     "conductor:install-skills": "bash integrations/superpowers/install-skills.sh",
-    "dogfood:cursor-hooks": "pnpm build && node scripts/dogfood-cursor-hooks.mjs"
+    "dogfood:cursor-hooks": "pnpm build && node scripts/dogfood-cursor-hooks.mjs",
+    "dogfood:claude-hooks": "pnpm build && node scripts/dogfood-claude-hooks.mjs"
   },
   "engines": {
     "node": ">=20"
