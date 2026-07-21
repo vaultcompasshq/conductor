@@ -97,7 +97,8 @@ of truth for "where are we and what's next." For granular tasks see
     approved contract + drift; no frozen root `.conductor/` contract on `main`
     ([cursor-hook-dogfood-2026-07-21.md](./validation/cursor-hook-dogfood-2026-07-21.md)).
 30. **v1.0.10** — Claude Code lifecycle dogfood (`pnpm dogfood:claude-hooks`);
-    macOS fix for hook path CSV (`paste -sd, -`);
+    macOS fix for hook path CSV (`paste -sd, -`); Stop script exits **2** on
+    block (Claude Code hard-block semantics);
     ([claude-hook-dogfood-2026-07-21.md](./validation/claude-hook-dogfood-2026-07-21.md)).
 
 ## What's next (priority order)

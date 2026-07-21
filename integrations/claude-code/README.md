@@ -1,8 +1,9 @@
 # Claude Code Hook Adapter
 
 Claude Code supports project hooks in `.claude/settings.json`. Command hooks
-receive event JSON on stdin and can block lifecycle events with non-zero exit
-codes or event-specific JSON decisions.
+receive event JSON on stdin. For **Stop**, Claude Code hard-blocks only on
+**exit code 2** (exit 1 is a non-blocking error). Conductor's
+`conductor-stop-check.sh` maps a blocked gate to exit 2 for that reason.
 
 ## Install
 
@@ -33,11 +34,16 @@ Shared Git mechanical gate:
 
 - `SessionStart` on `startup|resume`: runs `conductor-session-start.sh` and
   prints the current `conductor-resume` brief when available.
-- `Stop`: runs `conductor-stop-check.sh`; if `conductor-check` blocks, Claude
-  Code receives a failed hook and should continue rather than silently ending.
+- `Stop`: runs `conductor-stop-check.sh`; if `conductor-check` blocks, the
+  script exits **2** so Claude Code treats it as a blocking Stop (not a
+  non-blocking exit 1).
+
+**Hard enforcement** for commits is still `conductor hook install` (Git
+pre-commit). Lifecycle Stop is best-effort host wiring on top of the same gate.
 
 ## Source Notes
 
 Claude Code documents project hooks in `.claude/settings.json`, `SessionStart`
 and `Stop` lifecycle events, command hooks, `${CLAUDE_PROJECT_DIR}` for project
-paths, and `timeout` in seconds.
+paths, and `timeout` in seconds. Stop policy hooks should use exit code **2**
+to block ending the turn.

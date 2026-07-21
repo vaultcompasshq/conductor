@@ -21,6 +21,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   `conductor_changed_paths_csv` used `paste <<<`, which BSD paste rejects;
   it now pipes to `paste -sd, -` so Stop/Session hooks gather staged paths
   correctly on macOS.
+- **Claude Code Stop hard-block:** `conductor-stop-check.sh` exits **2** when
+  the gate blocks (or `conductor-check` is missing). Claude Code treats exit 1
+  as a non-blocking Stop error; exit 2 prevents ending the turn. Git
+  pre-commit still uses `conductor-check` exit 1.
 
 ## [1.0.9] - 2026-07-21
 

@@ -203,9 +203,10 @@ try {
   run("git", ["add", "src/app.ts"]);
 
   r = run("bash", [stopCheck]);
-  if (r.status === 0) {
+  // Claude Code hard-blocks Stop only on exit 2 (exit 1 is non-blocking).
+  if (r.status !== 2) {
     fail(
-      `expected Stop script to block out-of-scope change (stdout=${r.stdout}, stderr=${r.stderr})`,
+      `expected Stop script to block with exit 2 (got ${r.status}, stdout=${r.stdout}, stderr=${r.stderr})`,
     );
   }
   ok(`Stop script blocks out-of-scope change (exit=${r.status})`);
