@@ -1,0 +1,8 @@
+node_modules/
+dist/
+TODO.local.md
+.local/
+docs/sessions/
+docs/plans/
+*.log
+.DS_Store
