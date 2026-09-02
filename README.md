@@ -126,6 +126,22 @@ reason above.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
   does not recognise is never replaced, with or without `--adopt`.
+- `--force`, with `--revert`, removes a file that has changed since init
+  anyway, restoring an adopted hook if there was one.
+
+A revert that cannot remove everything removes nothing that would leave the
+repository half-wired, keeps the manifest describing what is left, and
+exits non-zero. In particular, if the hook has been edited by hand it is
+left alone and so is the policy file, because a hook running the umbrella
+with no policy file to read would refuse every commit.
+
+Two of the three gates write a marker comment into the hook they install,
+so init recognises those exactly. The secret scanner writes no marker, so
+its hook is recognised **by content**: a hook that mentions that tool and
+runs a staged scan. That is the same test its own installer applies to its
+own hook, but it is a heuristic, and a hand-written hook that happens to
+call that tool the same way will be treated as its. Read what `--dry-run`
+reports before running `--adopt` on a hook you did not write.
 
 `compass run` runs every enabled gate and prints one report.
 

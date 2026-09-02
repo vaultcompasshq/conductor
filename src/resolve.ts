@@ -11,13 +11,17 @@
 //     for as long as the old package stayed installed. So the outer loop is
 //     the candidate list and the inner loop is PATH then node_modules.
 //
-//  2. A per-command binary is never asked for its version. `intent-guard`
-//     answers --version; `intent-guard-check` does not parse it at all and
-//     RUNS THE GATE against the current directory instead. A version probe
-//     that runs a gate is not a probe. When the resolved binary is one of
-//     those, the umbrella binary of the same product is resolved separately
-//     and asked instead, and when that is not installed either the version
-//     is reported unknown rather than guessed.
+//  2. Only a unified binary is asked for its version. `intent-guard`
+//     answers --version; the per-command binaries shipped before 1.2.0 did
+//     not parse the flag at all and RAN THE GATE against the current
+//     directory instead. A version probe that runs a gate is not a probe.
+//     The fix for that is merged upstream but unpublished, and an installed
+//     copy is whatever the user has, so probing stays on the unified binary:
+//     when the resolved binary is a per-command one, the unified binary of
+//     the same product is resolved separately and asked instead, and when
+//     that is not installed either the version is reported unknown rather
+//     than guessed. This can be relaxed once the floor is a release that
+//     has the fix, and not before.
 //
 //  3. There is no npx fallback. The draft proposed `npx --no-install` as a
 //     last resort, and it is dropped here on purpose: it makes what ran
@@ -38,8 +42,10 @@ export interface Candidate {
   /** Arguments this binary needs before the umbrella's own. */
   prefix: string[];
   /**
-   * Whether `<name> --version` prints a version instead of doing work.
-   * False for the per-command binaries, which ignore the flag and run.
+   * Whether `<name> --version` can be relied on to print a version instead
+   * of doing work. False for the per-command binaries: those shipped before
+   * 1.2.0 ignore the flag and run the gate, and an installed copy is
+   * whatever the user has rather than whatever is on a branch.
    */
   versionSafe: boolean;
 }
@@ -66,7 +72,9 @@ export const CANDIDATES: Record<Product, Candidate[]> = {
   'vault-guard': [{ name: 'vault-guard', prefix: ['scan'], versionSafe: true }],
   // Current names first, pre-rename names after. A repository installed
   // before the rename keeps working; a repository installed after it never
-  // picks up the old package because someone left it on PATH.
+  // picks up the old package because someone left it on PATH. The two
+  // per-command entries are marked unsafe to ask for a version, per rule 2
+  // above.
   'intent-guard': [
     { name: 'intent-guard', prefix: ['check'], versionSafe: true },
     { name: 'intent-guard-check', prefix: [], versionSafe: false },
