@@ -1,6 +1,6 @@
 node_modules/
 dist/
-TODO.local.md
+*.local.md
 .local/
 docs/sessions/
 docs/plans/
