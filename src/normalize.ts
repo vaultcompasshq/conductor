@@ -373,6 +373,46 @@ const DRIFT_SEVERITY: Record<string, Severity> = {
   proceed: 'info',
 };
 
+/**
+ * The three ways the intent gate can block on the STATE of the contract
+ * rather than on anything in the diff.
+ *
+ * These matter because the gate pushes them into the same `reasons` array as
+ * its budget and drift reasons, and exposes no structured field saying which
+ * is which. So a run with an unfrozen contract AND a budget violation used
+ * to report only the budget violation: the reason the commit could not be
+ * fixed by editing the diff was in neither report.
+ *
+ * The prefixes are copied from intent-guard's own gate.ts. They are matched
+ * as prefixes rather than whole strings because one of the three
+ * interpolates an error message, and they are enumerated in a test against
+ * the real strings, so an upstream rewording turns that test red instead of
+ * silently dropping a reason out of every report.
+ */
+export const GATE_STATE_REASON_KINDS = [
+  'contract-invalid',
+  'contract-missing',
+  'contract-unfrozen',
+] as const;
+
+export type GateStateReasonKind = (typeof GATE_STATE_REASON_KINDS)[number];
+
+const GATE_STATE_REASON_PREFIXES: ReadonlyArray<[string, GateStateReasonKind]> = [
+  ['Intent contract is invalid:', 'contract-invalid'],
+  ['No .conductor/intent-contract.yaml found', 'contract-missing'],
+  ['Intent contract exists but is not frozen', 'contract-unfrozen'],
+];
+
+/** Which gate-state reason this is, or null when it is a budget or drift reason. */
+export function classifyGateStateReason(reason: string): GateStateReasonKind | null {
+  for (const [prefix, kind] of GATE_STATE_REASON_PREFIXES) {
+    if (reason.startsWith(prefix)) {
+      return kind;
+    }
+  }
+  return null;
+}
+
 export function normalizeIntentGuard(raw: unknown, version: string | null): NormalizedGateOutput {
   const product = 'intent-guard';
   const root = needRecord(raw, product, 'the output');
@@ -475,15 +515,19 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
 
   // The gate can block for a reason that is neither a budget violation nor
   // drift: no contract, an unfrozen contract, an unreadable one. Those
-  // arrive only as prose in `reasons`, so rather than parsing prose this
-  // catches the case structurally: a blocked gate with nothing blocking in
-  // the report would read as a bug in the umbrella, and would hide the one
-  // thing the user needs to see.
+  // arrive only as prose in `reasons`, mixed in with the budget and drift
+  // reasons and with no structured field separating them.
+  //
+  // One finding PER gate-state reason, and always, not only when nothing
+  // else blocked. The old rule ("only when nothing else is blocking") meant
+  // a run with both an unfrozen contract and a budget violation reported
+  // only the budget violation, hiding the one problem the user could not fix
+  // by editing the diff.
   const reasons =
     root.reasons === undefined ? [] : needStringArray(root.reasons, product, 'reasons');
 
-  if (root.status === 'blocked' && !findings.some((finding) => finding.blocking)) {
-    findings.push({
+  function gateBlocked(message: string, kind: GateStateReasonKind | 'unattributed'): Finding {
+    return {
       schemaVersion: 1,
       product,
       productVersion: version,
@@ -491,18 +535,46 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
       severity: 'critical',
       severityIsDerived: true,
       blocking: true,
-      message:
-        reasons.length > 0 ? reasons.join(' ') : 'The intent gate blocked without stating a reason.',
+      message,
       subject: { kind: 'none' },
       // No fingerprint: the product mints none for a gate-state block, and
       // inventing one would produce an id no baseline anywhere contains.
       fingerprint: null,
       details: {
+        kind,
         reasons,
         contractFound: root.contractFound ?? null,
         contractFrozen: root.contractFrozen ?? null,
       },
-    });
+    };
+  }
+
+  if (root.status === 'blocked') {
+    const gateStateReasons = reasons
+      .map((reason) => ({ reason, kind: classifyGateStateReason(reason) }))
+      .filter((entry): entry is { reason: string; kind: GateStateReasonKind } => entry.kind !== null);
+
+    for (const entry of gateStateReasons) {
+      findings.push(gateBlocked(entry.reason, entry.kind));
+    }
+
+    // The backstop, unchanged in spirit: a blocked gate with nothing blocking
+    // in the report reads as a bug in the umbrella and hides the one thing
+    // the user needs to see. It fires only when no gate-state reason was
+    // recognised AND nothing else blocked, so it never doubles up with the
+    // findings above, and it never invents a contract complaint the gate did
+    // not make (a contract left unfrozen under --no-require-frozen is not a
+    // reason, and must not become one here).
+    if (gateStateReasons.length === 0 && !findings.some((finding) => finding.blocking)) {
+      findings.push(
+        gateBlocked(
+          reasons.length > 0
+            ? reasons.join(' ')
+            : 'The intent gate blocked without stating a reason.',
+          'unattributed'
+        )
+      );
+    }
   }
 
   return {

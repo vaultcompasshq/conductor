@@ -152,3 +152,103 @@ describe('the CLI never prints a stack trace for a gate failure', () => {
     );
   });
 });
+
+describe('a gate-state reason alongside a budget violation', () => {
+  // Both reasons come out of intent-guard in one array with nothing marking
+  // which is which. Before the fix the unfrozen-contract reason appeared in
+  // neither report.
+  const BOTH = JSON.stringify({
+    status: 'blocked',
+    exitCode: 1,
+    reasons: [
+      'Intent contract exists but is not frozen by user. Approve and freeze before implementing.',
+      'Budget soft_block: Changed 2 files, budget allows 1',
+    ],
+    contractFound: true,
+    contractFrozen: false,
+    budget: {
+      ok: false,
+      action: 'soft_block',
+      violations: [
+        {
+          fingerprint: 'a12fc3e4',
+          rule: 'max_files',
+          severity: 'soft_block',
+          message: 'Changed 2 files, budget allows 1',
+          matched: ['a.js', 'b.js'],
+        },
+      ],
+    },
+  });
+
+  function intentOnly(): { repo: string; bin: string } {
+    const repo = repoWithPolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n'
+    );
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: BOTH, exit: 1 });
+    return { repo, bin };
+  }
+
+  it('names both in the text report', () => {
+    const { repo, bin } = intentOnly();
+
+    const result = runCli(repo, ['run', '--staged'], bin);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toMatch(/intent-guard\/budget\.max_files/);
+    expect(result.stdout).toMatch(/intent-guard\/gate-blocked/);
+    expect(result.stdout).toMatch(/not frozen by user/);
+  });
+
+  it('names both in the SARIF log', () => {
+    const { repo, bin } = intentOnly();
+
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif'], bin);
+
+    const log = JSON.parse(result.stdout) as {
+      runs: Array<{ results: Array<{ ruleId: string; message: { text: string } }> }>;
+    };
+    const ruleIds = log.runs.flatMap((run) => run.results.map((entry) => entry.ruleId));
+    expect(ruleIds).toContain('intent-guard/budget.max_files');
+    expect(ruleIds).toContain('intent-guard/gate-blocked');
+
+    const gateState = log.runs
+      .flatMap((run) => run.results)
+      .find((entry) => entry.ruleId === 'intent-guard/gate-blocked');
+    expect(gateState?.message.text).toMatch(/not frozen by user/);
+  });
+});
+
+describe('sarif output, continued', () => {
+  const DRIFTED = JSON.stringify({
+    findings: [null],
+    suppressed: 0,
+    ignored: 0,
+    run: { failOn: 'medium', blockingMatches: 0, diagnostics: [] },
+    exitCode: 0,
+  });
+
+  it('lists the two gates that ran alongside the umbrella run', () => {
+    const repo = repoWithPolicy();
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: DRIFTED, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif'], bin);
+
+    expect(result.status).toBe(2);
+    const log = JSON.parse(result.stdout) as {
+      runs: Array<{ tool: { driver: { name: string } } }>;
+    };
+    // The gate whose output could not be read produced no tool output, so it
+    // gets no run; the two that answered do, and the umbrella's own run
+    // carries what it has to say about the third.
+    expect(log.runs.map((run) => run.tool.driver.name)).toEqual([
+      'vault-guard',
+      'intent-guard',
+      'compass',
+    ]);
+  });
+});

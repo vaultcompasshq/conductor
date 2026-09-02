@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  GATE_STATE_REASON_KINDS,
+  classifyGateStateReason,
   normalizeDepGuard,
   normalizeIntentGuard,
   normalizeMissingGate,
@@ -251,6 +253,132 @@ describe('intent-guard 1.2.0 normalization', () => {
       driftAction: 'proceed',
       contractFound: true,
       contractFrozen: true,
+    });
+  });
+
+  // intent-guard's checkGate pushes gate-state reasons (no contract, an
+  // unfrozen contract, an unreadable one) into the SAME reasons array as
+  // budget and drift reasons. The old rule only raised a synthetic finding
+  // when nothing else was blocking, so with a budget violation present the
+  // unfrozen-contract reason appeared in neither report.
+  describe('gate-state reasons alongside other findings', () => {
+    const BOTH = {
+      status: 'blocked',
+      exitCode: 1,
+      reasons: [
+        'Intent contract exists but is not frozen by user. Approve and freeze before implementing.',
+        'Budget soft_block: Changed 2 files, budget allows 1',
+      ],
+      contractFound: true,
+      contractFrozen: false,
+      budget: {
+        ok: false,
+        action: 'soft_block',
+        violations: [
+          {
+            fingerprint: 'a12fc3e4',
+            rule: 'max_files',
+            severity: 'soft_block',
+            message: 'Changed 2 files, budget allows 1',
+            matched: ['a.js', 'b.js'],
+          },
+        ],
+      },
+    };
+
+    it('reports the contract state as well as the budget violation', () => {
+      const normalized = normalizeIntentGuard(BOTH, '1.2.0');
+      expect(normalized.findings.map((finding) => finding.ruleId).sort()).toEqual([
+        'intent-guard/budget.max_files',
+        'intent-guard/gate-blocked',
+      ]);
+    });
+
+    it('makes the contract-state finding blocking and names the reason verbatim', () => {
+      const normalized = normalizeIntentGuard(BOTH, '1.2.0');
+      const gateState = normalized.findings.find(
+        (finding) => finding.ruleId === 'intent-guard/gate-blocked'
+      );
+      expect(gateState?.blocking).toBe(true);
+      expect(gateState?.message).toBe(BOTH.reasons[0]);
+      expect(gateState?.details.kind).toBe('contract-unfrozen');
+    });
+
+    it('emits one finding per gate-state reason, not one for all of them', () => {
+      const normalized = normalizeIntentGuard(
+        {
+          ...BOTH,
+          contractFound: false,
+          reasons: [
+            'No .conductor/intent-contract.yaml found. Draft intent with intent-guard-extract, then approve with intent-guard-freeze before implementing.',
+            'Intent contract exists but is not frozen by user. Approve and freeze before implementing.',
+            'Budget soft_block: Changed 2 files, budget allows 1',
+          ],
+        },
+        '1.2.0'
+      );
+      const gateState = normalized.findings.filter(
+        (finding) => finding.ruleId === 'intent-guard/gate-blocked'
+      );
+      expect(gateState).toHaveLength(2);
+      expect(gateState.map((finding) => finding.details.kind)).toEqual([
+        'contract-missing',
+        'contract-unfrozen',
+      ]);
+    });
+
+    it('does not invent a contract-state finding when only a budget rule fired', () => {
+      const normalized = normalizeIntentGuard(
+        {
+          ...BOTH,
+          // A contract present but unfrozen under --no-require-frozen: the
+          // gate deliberately raises no reason about it, so neither does the
+          // umbrella, even though contractFrozen is false.
+          reasons: ['Budget soft_block: Changed 2 files, budget allows 1'],
+        },
+        '1.2.0'
+      );
+      expect(
+        normalized.findings.filter((finding) => finding.ruleId === 'intent-guard/gate-blocked')
+      ).toEqual([]);
+    });
+  });
+
+  // Enumerated from intent-guard's own gate.ts. If upstream rewords one of
+  // these, this test goes red rather than the reason quietly vanishing from
+  // every report.
+  describe('the known gate-state reason strings', () => {
+    const FROM_GATE_TS: Array<[string, string]> = [
+      ['Intent contract is invalid: Unexpected token', 'contract-invalid'],
+      [
+        'No .conductor/intent-contract.yaml found. Draft intent with intent-guard-extract, then approve with intent-guard-freeze before implementing.',
+        'contract-missing',
+      ],
+      [
+        'Intent contract exists but is not frozen by user. Approve and freeze before implementing.',
+        'contract-unfrozen',
+      ],
+    ];
+
+    it.each(FROM_GATE_TS)('classifies the reason starting "%s"', (reason, kind) => {
+      expect(classifyGateStateReason(reason)).toBe(kind);
+    });
+
+    it('does not classify a budget or drift reason as gate state', () => {
+      expect(classifyGateStateReason('Budget soft_block: Changed 2 files, budget allows 1')).toBe(
+        null
+      );
+      expect(
+        classifyGateStateReason('Drift soft_block (score 75/100). Resolve drift or log a pivot.')
+      ).toBe(null);
+    });
+
+    it('lists exactly the three kinds the gate can raise', () => {
+      expect([...GATE_STATE_REASON_KINDS]).toEqual([
+        'contract-invalid',
+        'contract-missing',
+        'contract-unfrozen',
+      ]);
     });
   });
 

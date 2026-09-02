@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import { runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
+import { stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -29,39 +30,6 @@ function tempDir(): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-runner-'));
   temps.push(dir);
   return dir;
-}
-
-/**
- * A stub gate: prints a canned payload on stdout, records the argv it was
- * given, and exits with a canned code. Real subprocess, real argv, real
- * exit code, no real scanner.
- */
-function stubGate(
-  binDir: string,
-  name: string,
-  options: { stdout?: string; stderr?: string; exit?: number; argvLog?: string } = {}
-): void {
-  mkdirSync(binDir, { recursive: true });
-  const file = path.join(binDir, name);
-  // The payloads go in sibling files and are cat-ed. Embedding them in the
-  // script means the shell's own quoting rules get a vote on what the gate
-  // "printed", and a JSON payload is exactly the kind of string that loses
-  // that argument.
-  const outFile = `${file}.stdout`;
-  const errFile = `${file}.stderr`;
-  writeFileSync(outFile, options.stdout ?? '');
-  writeFileSync(errFile, options.stderr ?? '');
-
-  const lines = ['#!/bin/sh'];
-  if (options.argvLog !== undefined) {
-    lines.push(`if [ "$1" != "--version" ]; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
-  }
-  lines.push('if [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi');
-  lines.push(`cat ${JSON.stringify(errFile)} >&2`);
-  lines.push(`cat ${JSON.stringify(outFile)}`);
-  lines.push(`exit ${options.exit ?? 0}`);
-  writeFileSync(file, `${lines.join('\n')}\n`);
-  chmodSync(file, 0o755);
 }
 
 function gate(overrides: Partial<GatePolicy> = {}): GatePolicy {

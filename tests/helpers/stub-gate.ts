@@ -7,8 +7,16 @@
 // on what the gate "printed", and a JSON payload is exactly the kind of
 // string that loses that argument.
 
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+
+// An absolute path to cat, resolved once. The stub is deliberately run with
+// a PATH containing only the stub directory in some tests -- that is how a
+// missing gate binary is simulated -- and a bare "cat" in the script would
+// then not resolve either, so every stub would print nothing and every test
+// would exercise the unparseable-output path by accident.
+const CAT = execFileSync('sh', ['-c', 'command -v cat'], { encoding: 'utf8' }).trim();
 
 export interface StubOptions {
   stdout?: string;
@@ -33,8 +41,8 @@ export function stubGate(binDir: string, name: string, options: StubOptions = {}
     lines.push(`if [ "$1" != "--version" ]; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
   }
   lines.push(`if [ "$1" = "--version" ]; then echo "${options.version ?? '9.9.9'}"; exit 0; fi`);
-  lines.push(`cat ${JSON.stringify(errFile)} >&2`);
-  lines.push(`cat ${JSON.stringify(outFile)}`);
+  lines.push(`${CAT} ${JSON.stringify(errFile)} >&2`);
+  lines.push(`${CAT} ${JSON.stringify(outFile)}`);
   lines.push(`exit ${options.exit ?? 0}`);
   writeFileSync(file, `${lines.join('\n')}\n`);
   chmodSync(file, 0o755);
