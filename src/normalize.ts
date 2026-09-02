@@ -30,6 +30,65 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// Element-level validation.
+//
+// A top-level shape check is not enough, and that was a real defect rather
+// than a hypothetical: `{"findings": [null]}` passed the old check that
+// findings was an array, and then reading a property off null threw a
+// TypeError, which is not a NormalizeError, so it escaped the gate runner,
+// escaped the run, and reached the user as a stack trace carrying a local
+// path, with exit 1 -- which the hook reports as "a gate blocked" -- and the
+// remaining gates never ran.
+//
+// So every field the mapping actually reads is checked before it is read,
+// and every failure is a NormalizeError naming the product and the path to
+// the offending field. Fields the mapping only passes through are NOT
+// required: rejecting output because a gate stopped emitting a field nobody
+// maps would turn a harmless upstream change into a blocked commit.
+
+function fail(product: string, where: string, wanted: string): never {
+  throw new NormalizeError(
+    `${product} output did not have the shape the umbrella knows: ${where} should be ${wanted}.`
+  );
+}
+
+function needRecord(value: unknown, product: string, where: string): Record<string, unknown> {
+  return isRecord(value) ? value : fail(product, where, 'an object');
+}
+
+function needArray(value: unknown, product: string, where: string): unknown[] {
+  return Array.isArray(value) ? value : fail(product, where, 'an array');
+}
+
+function needString(value: unknown, product: string, where: string): string {
+  return typeof value === 'string' ? value : fail(product, where, 'a string');
+}
+
+function needNumber(value: unknown, product: string, where: string): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : fail(product, where, 'a number');
+}
+
+function optionalString(value: unknown, product: string, where: string): string | undefined {
+  return value === undefined ? undefined : needString(value, product, where);
+}
+
+function optionalDetails(
+  value: unknown,
+  product: string,
+  where: string
+): Record<string, unknown> {
+  return value === undefined ? {} : needRecord(value, product, where);
+}
+
+/** A string array, used for the two products that report matched path lists. */
+function needStringArray(value: unknown, product: string, where: string): string[] {
+  return needArray(value, product, where).map((entry, index) =>
+    needString(entry, product, `${where}[${index}]`)
+  );
+}
+
 /**
  * Reconciles per-finding blocking against the count the gate reported.
  *
@@ -82,61 +141,66 @@ function reconcileBlocking(
 
 // -- dep-guard ------------------------------------------------------------
 
-interface DepGuardFinding {
-  ruleId: string;
-  severity: string;
-  packageName: string;
-  message: string;
-  manifestPath: string;
-  lockfilePath?: string;
-  fingerprint: string;
-  details?: Record<string, unknown>;
+/** Diagnostics from a gate, validated element by element like everything else. */
+function readDiagnostics(value: unknown, product: string, where: string): Diagnostic[] {
+  if (value === undefined) {
+    return [];
+  }
+  return needArray(value, product, where).map((entry, index) => {
+    const record = needRecord(entry, product, `${where}[${index}]`);
+    return {
+      code: needString(record.code, product, `${where}[${index}].code`),
+      message: needString(record.message, product, `${where}[${index}].message`),
+    };
+  });
 }
 
 export function normalizeDepGuard(raw: unknown, version: string | null): NormalizedGateOutput {
-  if (!isRecord(raw) || !Array.isArray(raw.findings) || !isRecord(raw.run)) {
-    throw new NormalizeError(
-      'dep-guard output did not have the shape the umbrella knows (findings[] and run{}).'
-    );
-  }
-
-  const run = raw.run as Record<string, unknown>;
-  const threshold = typeof run.failOn === 'string' ? run.failOn : null;
+  const product = 'dep-guard';
+  const root = needRecord(raw, product, 'the output');
+  const run = needRecord(root.run, product, 'run');
+  const threshold = optionalString(run.failOn, product, 'run.failOn') ?? null;
   const diagnostics: Diagnostic[] = [];
 
-  const findings: Finding[] = (raw.findings as DepGuardFinding[]).map((source) => ({
-    schemaVersion: 1 as const,
-    product: 'dep-guard',
-    productVersion: version,
-    ruleId: `dep-guard/${source.ruleId}`,
-    // dep-guard's four levels are the shared ladder exactly, so this is
-    // identity and nothing is derived.
-    severity: source.severity as Severity,
-    severityIsDerived: false,
-    blocking: false,
-    message: source.message,
-    subject: {
-      kind: 'package' as const,
-      name: source.packageName,
-      manifest: source.manifestPath,
-      ...(source.lockfilePath === undefined ? {} : { lockfile: source.lockfilePath }),
-    },
-    fingerprint: {
-      value: source.fingerprint,
-      scope: 'dep-guard',
-      // dep-guard hashes the rule id, the package name, the manifest path,
-      // and the signal. Position-free, so an unrelated edit above a finding
-      // does not mint a new one.
-      stability: 'stable' as const,
-    },
-    details: source.details ?? {},
-  }));
+  const findings: Finding[] = needArray(root.findings, product, 'findings').map((entry, index) => {
+    const where = `findings[${index}]`;
+    const source = needRecord(entry, product, where);
+    return {
+      schemaVersion: 1 as const,
+      product,
+      productVersion: version,
+      ruleId: `dep-guard/${needString(source.ruleId, product, `${where}.ruleId`)}`,
+      // dep-guard's four levels are the shared ladder exactly, so this is
+      // identity and nothing is derived.
+      severity: needString(source.severity, product, `${where}.severity`) as Severity,
+      severityIsDerived: false,
+      blocking: false,
+      message: needString(source.message, product, `${where}.message`),
+      subject: {
+        kind: 'package' as const,
+        name: needString(source.packageName, product, `${where}.packageName`),
+        manifest: needString(source.manifestPath, product, `${where}.manifestPath`),
+        ...(source.lockfilePath === undefined
+          ? {}
+          : { lockfile: needString(source.lockfilePath, product, `${where}.lockfilePath`) }),
+      },
+      fingerprint: {
+        value: needString(source.fingerprint, product, `${where}.fingerprint`),
+        scope: product,
+        // dep-guard hashes the rule id, the package name, the manifest path,
+        // and the signal. Position-free, so an unrelated edit above a finding
+        // does not mint a new one.
+        stability: 'stable' as const,
+      },
+      details: optionalDetails(source.details, product, `${where}.details`),
+    };
+  });
 
   reconcileBlocking(
     findings,
     typeof run.blockingMatches === 'number' ? run.blockingMatches : undefined,
     threshold,
-    'dep-guard',
+    product,
     diagnostics
   );
 
@@ -144,11 +208,11 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
     findings,
     run: {
       failOn: threshold,
-      suppressed: typeof raw.suppressed === 'number' ? raw.suppressed : 0,
-      ignored: typeof raw.ignored === 'number' ? raw.ignored : 0,
+      suppressed: typeof root.suppressed === 'number' ? root.suppressed : 0,
+      ignored: typeof root.ignored === 'number' ? root.ignored : 0,
       // Diagnostics never move dep-guard's own exit code, so they stay out
       // of findings[] here too rather than becoming pseudo-findings.
-      diagnostics: (Array.isArray(run.diagnostics) ? run.diagnostics : []) as Diagnostic[],
+      diagnostics: readDiagnostics(run.diagnostics, product, 'run.diagnostics'),
       details: {
         mode: run.mode ?? null,
         corpusBuiltAt: run.corpusBuiltAt ?? null,
@@ -161,81 +225,85 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
 
 // -- vault-guard ----------------------------------------------------------
 
-interface VaultGuardMatch {
-  type: string;
-  severity: string;
-  line: number;
-  /** 0-based in the source JSON. */
-  column: number;
-  offset: number;
-  value: string;
-  fingerprint: string;
-}
-
 export function normalizeVaultGuard(raw: unknown, version: string | null): NormalizedGateOutput {
-  if (!isRecord(raw) || !Array.isArray(raw.results)) {
-    throw new NormalizeError(
-      'vault-guard output did not have the shape the umbrella knows (results[]).'
-    );
-  }
-
-  const run = isRecord(raw.run) ? raw.run : {};
+  const product = 'vault-guard';
+  const root = needRecord(raw, product, 'the output');
+  const run = root.run === undefined ? {} : needRecord(root.run, product, 'run');
   // run.blocking_matches, never summary.secrets. vault-guard's own type
   // documentation says integrators gating a build must read the former,
   // because the latter ignores the threshold. A sibling tool in this family
   // read summary.secrets and that is the bug not to copy.
-  const threshold = typeof run.fail_on === 'string' ? run.fail_on : null;
+  const threshold = optionalString(run.fail_on, product, 'run.fail_on') ?? null;
   const diagnostics: Diagnostic[] = [];
 
   const findings: Finding[] = [];
-  for (const entry of raw.results as Array<{ file: string; matches: VaultGuardMatch[] }>) {
-    for (const match of entry.matches ?? []) {
-      const known = ['critical', 'high', 'medium', 'low'].includes(match.severity);
+  const results = needArray(root.results, product, 'results');
+  for (const [fileIndex, rawEntry] of results.entries()) {
+    const entryWhere = `results[${fileIndex}]`;
+    const entry = needRecord(rawEntry, product, entryWhere);
+    const file = needString(entry.file, product, `${entryWhere}.file`);
+    const matches =
+      entry.matches === undefined
+        ? []
+        : needArray(entry.matches, product, `${entryWhere}.matches`);
+
+    for (const [matchIndex, rawMatch] of matches.entries()) {
+      const where = `${entryWhere}.matches[${matchIndex}]`;
+      const match = needRecord(rawMatch, product, where);
+      const type = needString(match.type, product, `${where}.type`);
+      const severity = needString(match.severity, product, `${where}.severity`);
+      const line = needNumber(match.line, product, `${where}.line`);
+      const column = needNumber(match.column, product, `${where}.column`);
+      const known = ['critical', 'high', 'medium', 'low'].includes(severity);
+
       findings.push({
         schemaVersion: 1,
-        product: 'vault-guard',
+        product,
         productVersion: version,
         // `type` is an open vocabulary: a user's own extra_patterns choose
         // their own ids, which is exactly why the namespace is not optional.
-        ruleId: `vault-guard/${match.type}`,
+        ruleId: `vault-guard/${type}`,
         // Unknown levels land on info rather than being passed through, so
         // a downstream consumer never sees a level outside the union. An
         // unrecognised level is the umbrella's guess, hence derived.
-        severity: known ? (match.severity as Severity) : 'info',
+        severity: known ? (severity as Severity) : 'info',
         severityIsDerived: !known,
         blocking: false,
         // The JSON output carries no message at all. This is vault-guard's
         // own SARIF template, so the wording comes from the product rather
         // than from here.
-        message: `Possible secret of type '${match.type}'`,
+        message: `Possible secret of type '${type}'`,
         subject: {
           kind: 'location',
-          file: entry.file,
-          line: match.line,
+          file,
+          line,
           // The JSON column is 0-based and the envelope's is 1-based. The
           // product's own SARIF does the same conversion; doing it here too
           // is what makes one shared mapping possible.
-          column: match.column + 1,
+          column: column + 1,
           // No endColumn. The JSON output does not carry matchLength (only
           // the fingerprint's inputs use it), so the end of the match is
           // genuinely unknown from this output and is not guessed.
         },
         fingerprint: {
-          value: match.fingerprint,
-          scope: 'vault-guard',
+          value: needString(match.fingerprint, product, `${where}.fingerprint`),
+          scope: product,
           // Hashed over the relative path, the type, the line, the offset,
           // and the match length. Inserting an unrelated line above a
           // secret changes it, so a baseline entry expires on the next edit.
           stability: 'positional',
         },
+        // The passthrough half. These are not required: they are carried,
+        // not mapped, so a gate that stops emitting one should not turn
+        // into a blocked commit.
         details: {
-          type: match.type,
-          severity: match.severity,
-          line: match.line,
-          column: match.column,
-          offset: match.offset,
+          type,
+          severity,
+          line,
+          column,
+          offset: match.offset ?? null,
           // Already redacted at the source, so it is safe to carry.
-          value: match.value,
+          value: match.value ?? null,
         },
       });
     }
@@ -245,7 +313,7 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
     findings,
     typeof run.blocking_matches === 'number' ? run.blocking_matches : undefined,
     threshold,
-    'vault-guard',
+    product,
     diagnostics
   );
 
@@ -259,15 +327,21 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
       // fact the gate did not state, so the report says "not reported"
       // instead, driven by this null.
       ignored: 0,
-      diagnostics: (Array.isArray(raw.diagnostics) ? raw.diagnostics : []).map(
-        (diagnostic: unknown) => {
-          const record = isRecord(diagnostic) ? diagnostic : {};
-          return {
-            code: String(record.code ?? 'unknown'),
-            message: JSON.stringify(record.ctx ?? {}),
-          };
-        }
-      ),
+      // vault-guard's diagnostics carry a context object rather than a
+      // message, so the context is rendered as one. Validated the same way
+      // as everything else, since a malformed entry here would otherwise
+      // reach String() and produce "[object Object]" in a report.
+      diagnostics:
+        root.diagnostics === undefined
+          ? []
+          : needArray(root.diagnostics, product, 'diagnostics').map((entry, index) => {
+              const where = `diagnostics[${index}]`;
+              const record = needRecord(entry, product, where);
+              return {
+                code: needString(record.code, product, `${where}.code`),
+                message: JSON.stringify(record.ctx ?? {}),
+              };
+            }),
       details: {
         filesScanned: run.files_scanned ?? null,
         patternsActive: run.patterns_active ?? null,
@@ -279,22 +353,6 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
 }
 
 // -- intent-guard ---------------------------------------------------------
-
-interface BudgetViolation {
-  fingerprint: string;
-  rule: string;
-  severity: string;
-  message: string;
-  matched: string[];
-}
-
-interface DriftFinding {
-  fingerprint: string;
-  category: string;
-  rule_id: string;
-  message: string;
-  matched: string[];
-}
 
 /**
  * intent-guard has no per-finding severity, so every level below is the
@@ -316,38 +374,52 @@ const DRIFT_SEVERITY: Record<string, Severity> = {
 };
 
 export function normalizeIntentGuard(raw: unknown, version: string | null): NormalizedGateOutput {
-  if (!isRecord(raw) || (raw.status !== 'blocked' && raw.status !== 'ok')) {
-    throw new NormalizeError(
-      'intent-guard output did not have the shape the umbrella knows (status of "ok" or "blocked").'
-    );
+  const product = 'intent-guard';
+  const root = needRecord(raw, product, 'the output');
+  if (root.status !== 'blocked' && root.status !== 'ok') {
+    fail(product, 'status', 'either "ok" or "blocked"');
   }
 
   const findings: Finding[] = [];
-  const budget = isRecord(raw.budget) ? raw.budget : undefined;
-  const drift = isRecord(raw.drift) ? raw.drift : undefined;
+  const budget = root.budget === undefined ? undefined : needRecord(root.budget, product, 'budget');
+  const drift = root.drift === undefined ? undefined : needRecord(root.drift, product, 'drift');
 
   // Budget violations. The gate raises one reason per violation and blocks
   // when it has any reason at all, so every violation is blocking. That is
   // read off the gate's own composition rule, not off a severity ladder.
-  for (const violation of (budget?.violations ?? []) as BudgetViolation[]) {
+  const violations =
+    budget?.violations === undefined
+      ? []
+      : needArray(budget.violations, product, 'budget.violations');
+
+  for (const [index, rawViolation] of violations.entries()) {
+    const where = `budget.violations[${index}]`;
+    const violation = needRecord(rawViolation, product, where);
+    const rule = needString(violation.rule, product, `${where}.rule`);
+    const severity = needString(violation.severity, product, `${where}.severity`);
+    const matched =
+      violation.matched === undefined
+        ? []
+        : needStringArray(violation.matched, product, `${where}.matched`);
+
     findings.push({
       schemaVersion: 1,
-      product: 'intent-guard',
+      product,
       productVersion: version,
-      ruleId: `intent-guard/budget.${violation.rule}`,
-      severity: BUDGET_SEVERITY[violation.severity] ?? 'info',
+      ruleId: `intent-guard/budget.${rule}`,
+      severity: BUDGET_SEVERITY[severity] ?? 'info',
       severityIsDerived: true,
       blocking: true,
-      message: violation.message,
-      subject: { kind: 'paths', paths: violation.matched ?? [] },
+      message: needString(violation.message, product, `${where}.message`),
+      subject: { kind: 'paths', paths: matched },
       fingerprint: {
-        value: violation.fingerprint,
-        scope: 'intent-guard',
+        value: needString(violation.fingerprint, product, `${where}.fingerprint`),
+        scope: product,
         // Hashed over the contract id, the rule, and the sorted normalized
         // matched paths. Order-independent and position-free.
         stability: 'stable',
       },
-      details: { rule: violation.rule, severity: violation.severity, matched: violation.matched },
+      details: { rule, severity, matched },
     });
   }
 
@@ -359,28 +431,45 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
   // The blocking decision is the SCORE's, not the finding's: the gate
   // raises one drift reason for the overall action and none per finding, so
   // a finding is blocking exactly when the overall action blocks.
-  const driftAction = typeof drift?.action === 'string' ? drift.action : 'proceed';
+  const driftAction = optionalString(drift?.action, product, 'drift.action') ?? 'proceed';
   const driftBlocks = driftAction === 'soft_block' || driftAction === 'hard_block';
 
-  for (const detail of (drift?.finding_details ?? []) as DriftFinding[]) {
+  const driftDetails =
+    drift?.finding_details === undefined
+      ? []
+      : needArray(drift.finding_details, product, 'drift.finding_details');
+
+  for (const [index, rawDetail] of driftDetails.entries()) {
+    const where = `drift.finding_details[${index}]`;
+    const detail = needRecord(rawDetail, product, where);
+    const category = needString(detail.category, product, `${where}.category`);
+
     findings.push({
       schemaVersion: 1,
-      product: 'intent-guard',
+      product,
       productVersion: version,
       // The category, not rule_id: rule_id can carry contract prose, and a
       // rule id that contains a user's sentence is not a rule id. The full
       // value goes in details.
-      ruleId: `intent-guard/drift.${detail.category}`,
+      ruleId: `intent-guard/drift.${category}`,
       severity: DRIFT_SEVERITY[driftAction] ?? 'info',
       severityIsDerived: true,
       blocking: driftBlocks,
-      message: detail.message,
+      message: needString(detail.message, product, `${where}.message`),
       // No paths subject: `matched` here is "tokens or paths", so treating
       // it as a path list would sometimes point at a file that does not
       // exist. It stays in details, where it is not claiming to be a location.
-      subject: { kind: 'contract', category: detail.category },
-      fingerprint: { value: detail.fingerprint, scope: 'intent-guard', stability: 'stable' },
-      details: { ruleId: detail.rule_id, category: detail.category, matched: detail.matched },
+      subject: { kind: 'contract', category },
+      fingerprint: {
+        value: needString(detail.fingerprint, product, `${where}.fingerprint`),
+        scope: product,
+        stability: 'stable',
+      },
+      details: {
+        ruleId: detail.rule_id ?? null,
+        category,
+        matched: detail.matched ?? [],
+      },
     });
   }
 
@@ -390,11 +479,13 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
   // catches the case structurally: a blocked gate with nothing blocking in
   // the report would read as a bug in the umbrella, and would hide the one
   // thing the user needs to see.
-  if (raw.status === 'blocked' && !findings.some((finding) => finding.blocking)) {
-    const reasons = (Array.isArray(raw.reasons) ? raw.reasons : []) as string[];
+  const reasons =
+    root.reasons === undefined ? [] : needStringArray(root.reasons, product, 'reasons');
+
+  if (root.status === 'blocked' && !findings.some((finding) => finding.blocking)) {
     findings.push({
       schemaVersion: 1,
-      product: 'intent-guard',
+      product,
       productVersion: version,
       ruleId: 'intent-guard/gate-blocked',
       severity: 'critical',
@@ -408,8 +499,8 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
       fingerprint: null,
       details: {
         reasons,
-        contractFound: raw.contractFound ?? null,
-        contractFrozen: raw.contractFrozen ?? null,
+        contractFound: root.contractFound ?? null,
+        contractFrozen: root.contractFrozen ?? null,
       },
     });
   }
@@ -425,20 +516,61 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
       ignored: 0,
       diagnostics: [],
       details: {
-        contractFound: raw.contractFound ?? null,
-        contractFrozen: raw.contractFrozen ?? null,
+        contractFound: root.contractFound ?? null,
+        contractFrozen: root.contractFrozen ?? null,
         driftOverall: typeof drift?.overall === 'number' ? drift.overall : null,
         driftAction,
         driftCategories: drift?.categories ?? null,
         budgetAction: budget?.action ?? null,
-        reasons: raw.reasons ?? [],
+        reasons,
       },
     },
     diagnostics: [],
   };
 }
 
-// -- the umbrella's own finding -------------------------------------------
+// -- the umbrella's own findings ------------------------------------------
+//
+// Every way a gate can fail to produce a usable result gets a finding here.
+// Not for symmetry: a gate that could not run is invisible in the SARIF log
+// otherwise, because a gate that never ran gets no SARIF run of its own, so
+// without one of these the published report would carry no trace of the
+// most important thing that happened.
+
+export type GateProblemRule =
+  | 'compass/gate-missing'
+  | 'compass/gate-output-unparseable'
+  | 'compass/gate-failed';
+
+function gateProblem(
+  ruleId: GateProblemRule,
+  role: GateRole,
+  product: Product,
+  message: string,
+  details: Record<string, unknown>
+): Finding {
+  return {
+    schemaVersion: 1,
+    product: 'compass',
+    productVersion: null,
+    ruleId,
+    severity: 'critical',
+    severityIsDerived: true,
+    blocking: true,
+    message,
+    // No location: none of these is somewhere in the tree.
+    subject: { kind: 'none' },
+    fingerprint: {
+      // Deterministic over the rule, the role, and the product, and NOT over
+      // the message: a repeat run is the same alert rather than a new one
+      // every commit, and a reworded detail is not a new problem.
+      value: createHash('sha256').update(`${ruleId}|${role}|${product}`).digest('hex'),
+      scope: 'compass',
+      stability: 'stable',
+    },
+    details: { role, product, ...details },
+  };
+}
 
 /**
  * The finding raised when an ENABLED gate's binary cannot be found.
@@ -453,26 +585,49 @@ export function normalizeMissingGate(
   product: Product,
   candidates: string[]
 ): Finding {
-  return {
-    schemaVersion: 1,
-    product: 'compass',
-    productVersion: null,
-    ruleId: 'compass/gate-missing',
-    severity: 'critical',
-    severityIsDerived: true,
-    blocking: true,
-    message:
-      `The "${role}" gate is enabled but no ${product} binary was found. ` +
+  return gateProblem(
+    'compass/gate-missing',
+    role,
+    product,
+    `The "${role}" gate is enabled but no ${product} binary was found. ` +
       `Looked for: ${candidates.join(', ')}. Install it, point the gate at a build with an ` +
       `absolute "command:", or set enabled: false to switch the gate off on purpose.`,
-    subject: { kind: 'none' },
-    fingerprint: {
-      // Deterministic over the role and product so a repeat run is the same
-      // alert rather than a new one every commit.
-      value: createHash('sha256').update(`compass/gate-missing|${role}|${product}`).digest('hex'),
-      scope: 'compass',
-      stability: 'stable',
-    },
-    details: { role, product, candidates },
-  };
+    { candidates }
+  );
+}
+
+/**
+ * The finding raised when a gate answered but the umbrella could not read
+ * the answer: invalid JSON, a shape the normalizer does not know, or any
+ * unexpected error thrown while normalizing.
+ *
+ * `detail` is an error MESSAGE, never a stack. A stack would put a local
+ * filesystem path into a report that gets uploaded, and it would tell the
+ * user nothing they can act on.
+ */
+export function normalizeUnparseableGate(
+  role: GateRole,
+  product: Product,
+  detail: string
+): Finding {
+  return gateProblem(
+    'compass/gate-output-unparseable',
+    role,
+    product,
+    `The "${role}" gate ran but the umbrella could not read its output: ${detail} ` +
+      'This is the umbrella being out of date with that gate, not a problem in your code. ' +
+      'Nothing was verified by this gate.',
+    { detail }
+  );
+}
+
+/** The finding raised when a gate could not be run or did not complete. */
+export function normalizeFailedGate(role: GateRole, product: Product, detail: string): Finding {
+  return gateProblem(
+    'compass/gate-failed',
+    role,
+    product,
+    `The "${role}" gate did not complete: ${detail} Nothing was verified by this gate.`,
+    { detail }
+  );
 }

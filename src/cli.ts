@@ -158,11 +158,15 @@ export function buildProgram(): Command {
         );
         process.exitCode = result.exitCode;
       } catch (err) {
-        if (err instanceof PolicyError) {
-          process.exitCode = fail(err.message);
-          return;
-        }
-        throw err;
+        // One line, never a stack. runGate is total, so nothing from a gate
+        // reaches here; anything that does is the umbrella's own problem and
+        // still must not put a local filesystem path in front of a user who
+        // cannot act on it, or into a pre-commit hook's output.
+        process.exitCode = fail(
+          err instanceof PolicyError
+            ? err.message
+            : `compass: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     });
 
@@ -180,7 +184,10 @@ async function main(): Promise<void> {
       process.exitCode = err.exitCode === 0 ? 0 : EXIT_COULD_NOT_RUN;
       return;
     }
-    throw err;
+    // The last backstop. Still one line, still no stack: an unhandled throw
+    // printing a stack into a pre-commit hook's output is how a local path
+    // ends up pasted into an issue.
+    process.exitCode = fail(`compass: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

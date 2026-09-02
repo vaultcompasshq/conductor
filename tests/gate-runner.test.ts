@@ -180,7 +180,13 @@ describe('running one gate', () => {
     });
 
     expect(outcome.couldNotRun?.reason).toBe('unparseable-output');
-    expect(outcome.findings).toEqual([]);
+    // Not an empty finding list. A gate that could not run gets no SARIF run
+    // of its own, so without a finding here the published report would carry
+    // no trace of the most important thing that happened.
+    expect(outcome.findings.map((finding) => finding.ruleId)).toEqual([
+      'compass/gate-output-unparseable',
+    ]);
+    expect(outcome.findings[0].blocking).toBe(true);
   });
 
   it('treats output it does not recognise as could-not-run, and says which side is at fault', () => {

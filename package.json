@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "build": "tsc -b && chmod +x dist/cli.js",
+    "pretest": "pnpm build",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "typecheck": "tsc -b && tsc --noEmit -p tsconfig.test.json",
     "lint": "pnpm check:public-hygiene",
