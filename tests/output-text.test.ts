@@ -127,6 +127,43 @@ describe('the combined text report', () => {
     expect(text).not.toMatch(/\bnull\b/);
   });
 
+  it('leaves out a structured run fact rather than rendering it as [object Object]', () => {
+    // Caught in a real dogfood run: the intent gate's category breakdown
+    // printed as "[object Object]" and its empty reasons list printed as a
+    // key with no value. Both belong in the SARIF details bag, not in a
+    // one-line terminal summary.
+    const structured = renderText(
+      result(
+        [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            run: {
+              failOn: null,
+              suppressed: 0,
+              ignored: 0,
+              diagnostics: [],
+              details: {
+                contractFound: true,
+                driftCategories: { scope_creep: 0 },
+                reasons: [],
+                driftAction: 'proceed',
+              },
+            },
+          }),
+        ],
+        0
+      )
+    );
+
+    expect(structured).not.toMatch(/\[object Object\]/);
+    expect(structured).not.toMatch(/driftCategories/);
+    expect(structured).not.toMatch(/reasons/);
+    // The scalars beside them still render.
+    expect(structured).toMatch(/contractFound true/);
+    expect(structured).toMatch(/driftAction proceed/);
+  });
+
   it('shows a gate diagnostic without turning it into a finding', () => {
     expect(text).toMatch(/lockfile-missing/);
     expect(text.match(/dep-guard\//g)).toHaveLength(2);

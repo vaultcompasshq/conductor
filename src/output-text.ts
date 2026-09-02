@@ -94,12 +94,23 @@ function gateSection(gate: GateOutcome): string[] {
     lines.push(`  ${threshold}   suppressed ${gate.run.suppressed}   ${ignored}`);
 
     // The gate's own run facts: what it scanned, with what, against what.
-    // These were being collected and then dropped. Nulls are left out,
-    // because a null is an absence rather than a value and "corpusBuiltAt
-    // null" is noise; `ignoredReported` drives the line above rather than
-    // being a fact about the run, so it is not printed twice.
+    // These were being collected and then dropped.
+    //
+    // Scalars only. String() on an object gives "[object Object]", and on an
+    // empty array gives nothing at all, so a naive render produced both a
+    // line of noise and a key with no value. The structured members of this
+    // bag (a category breakdown, a reason list) are already in the SARIF
+    // details and, for the reasons, in a finding of their own; a terminal
+    // summary line is not where they belong.
     const facts = Object.entries(gate.run.details)
-      .filter(([key, value]) => key !== 'ignoredReported' && value !== null && value !== undefined)
+      .filter(
+        ([key, value]) =>
+          // ignoredReported drives the line above rather than being a fact
+          // about the run, so it is not printed twice.
+          key !== 'ignoredReported' &&
+          (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') &&
+          value !== ''
+      )
       .map(([key, value]) => `${key} ${String(value)}`);
     if (facts.length > 0) {
       lines.push(`  ${facts.join('   ')}`);
