@@ -295,17 +295,30 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     expect(result.stdout).toMatch(/verdict: exit 2/);
   });
 
-  it('reverts to exactly the state before init', () => {
+  it('reverts the hook but leaves the hand-edited policy file, and says so', () => {
     git(['reset', '--quiet']);
     rmSync(path.join(clone, 'leak.js'), { force: true });
     git(['checkout', '--', 'package.json']);
-    // The policy file was rewritten by hand above, so revert should leave
-    // it alone and say so rather than deleting an edited file.
+
+    // The policy file was rewritten by hand earlier in this file, so this is
+    // a PARTIAL revert: the hook goes, the edited file stays, and the exit
+    // code says something was left behind rather than reporting success.
     const result = compass(['init', '--revert']);
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(2);
     expect(existsSync(path.join(clone, '.git', 'hooks', 'pre-commit'))).toBe(false);
-    expect(result.stdout).toMatch(/changed since init, left alone/);
+    expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(true);
+    expect(result.stderr).toMatch(/changed since init, left alone/);
+    // The manifest survives, still describing what is left.
+    expect(existsSync(path.join(clone, '.guardrails', 'manifest.json'))).toBe(true);
+  });
+
+  it('finishes the job under --force', () => {
+    const result = compass(['init', '--revert', '--force']);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(false);
+    expect(existsSync(path.join(clone, '.guardrails', 'manifest.json'))).toBe(false);
   });
 });
 

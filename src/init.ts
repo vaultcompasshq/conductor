@@ -114,6 +114,7 @@ export type ConflictReason =
   | 'gate-hook'
   | 'hooks-path-outside-repository'
   | 'no-manifest'
+  | 'changed-since-init'
   | 'write-failed';
 
 export interface InitConflict {
@@ -144,7 +145,12 @@ export interface InitResult {
   repoRoot: string;
   adoptedFrom: AdoptedHook | null;
   /** Contents to write, keyed by absolute path. Empty on a dry run's apply. */
-  writes: Array<{ path: string; content: string; executable: boolean }>;
+  writes: Array<{
+    path: string;
+    content: string;
+    executable: boolean;
+    kind: 'hook' | 'policy';
+  }>;
 }
 
 export interface InitOptions {
@@ -154,11 +160,19 @@ export interface InitOptions {
   dryRun?: boolean;
   /** Replace a per-gate hook with the umbrella's. Never replaces a foreign one. */
   adopt?: boolean;
+  /** Revert only: remove a file that has changed since init anyway. */
+  force?: boolean;
 }
 
 interface ManifestFile {
   path: string;
   sha256: string;
+  /**
+   * What this file is to the umbrella. Recorded rather than inferred from
+   * the path, because revert's whole decision turns on whether the HOOK
+   * survived, and sniffing that from a filename is a guess.
+   */
+  kind: 'hook' | 'policy';
 }
 
 interface Manifest {
@@ -395,14 +409,14 @@ export function planInit(options: InitOptions): InitResult {
       path: relHook,
       detail: `adopt: replace ${gateProduct}'s own hook (restored by --revert)`,
     });
-    writes.push({ path: hookPath, content: HOOK, executable: true });
+    writes.push({ path: hookPath, content: HOOK, executable: true, kind: 'hook' });
   } else {
     actions.push({
       kind: 'write',
       path: relHook,
       detail: existingHook === undefined ? 'create' : 'replace an empty file',
     });
-    writes.push({ path: hookPath, content: HOOK, executable: true });
+    writes.push({ path: hookPath, content: HOOK, executable: true, kind: 'hook' });
   }
 
   const existingPolicy = readIfExists(policyPath);
@@ -411,6 +425,7 @@ export function planInit(options: InitOptions): InitResult {
       path: policyPath,
       content: renderPolicy(detectGates(root, options.pathValue)),
       executable: false,
+      kind: 'policy',
     });
     actions.push({ kind: 'write', path: POLICY_FILE_NAME, detail: 'create' });
   } else {
@@ -468,7 +483,7 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
         // runs is indistinguishable from no gate at all.
         chmodSync(write.path, (statSync(write.path).mode & 0o777) | 0o755);
       }
-      manifest.files.push({ path: write.path, sha256: sha256(write.content) });
+      manifest.files.push({ path: write.path, sha256: sha256(write.content), kind: write.kind });
     }
 
     const manifestPath = path.join(plan.repoRoot, MANIFEST_RELATIVE_PATH);
@@ -503,12 +518,33 @@ export interface RevertResult {
  * Removes exactly what init wrote, and nothing else.
  *
  * A file whose contents no longer match what the manifest recorded is left
- * alone and reported. That file is now the user's, whatever it started as,
- * and a revert that deletes edited work is a revert nobody runs twice.
+ * alone and reported, because that file is now the user's whatever it
+ * started as, and a revert that deletes edited work is a revert nobody runs
+ * twice. Three rules follow from that, and all three were bugs here first:
+ *
+ *  1. IF THE HOOK SURVIVES, NOTHING IS REMOVED. Removing the policy file
+ *     while leaving an edited hook in place leaves that hook running the
+ *     umbrella with nothing to read, so every commit afterwards is refused
+ *     with exit 2 -- while revert reported success. The hook is the piece
+ *     that depends on the rest, so it decides whether a revert can proceed
+ *     at all.
+ *
+ *  2. THE MANIFEST OUTLIVES A PARTIAL REVERT. It is deleted only once it
+ *     holds nothing, because it is the only record of what is left AND, after
+ *     an --adopt, the only copy of the gate hook that was replaced. Deleting
+ *     it while that content was still needed made the gate's own hook
+ *     unrecoverable.
+ *
+ *  3. A PARTIAL REVERT IS NOT A SUCCESS. It returns ok: false, so the exit
+ *     code is non-zero and a script does not read "some of it" as "all of it".
+ *
+ * `--force` removes a changed file anyway, restoring adopted content if
+ * there is any. It is the deliberate way out of every state above.
  */
 export function revertInit(options: InitOptions): RevertResult {
   const actions: InitAction[] = [];
   const conflicts: InitConflict[] = [];
+  const force = Boolean(options.force);
 
   const root = repoRootOf(options.cwd);
   if (root === null) {
@@ -534,50 +570,117 @@ export function revertInit(options: InitOptions): RevertResult {
   }
 
   const manifest = JSON.parse(raw) as Manifest;
+  const relative = (file: string): string => path.relative(root, file).split(path.sep).join('/');
+
+  // Classify first, act second. Deciding as it goes is what let the old
+  // version remove the policy file before discovering it could not remove
+  // the hook.
+  type State = 'gone' | 'match' | 'changed';
+  const planned = manifest.files.map((file) => {
+    const current = readIfExists(file.path);
+    const state: State =
+      current === undefined ? 'gone' : sha256(current) === file.sha256 ? 'match' : 'changed';
+    return { file, state };
+  });
+
+  const blockedHook = planned.find(
+    (entry) => entry.file.kind === 'hook' && entry.state === 'changed'
+  );
+
+  if (blockedHook !== undefined && !force) {
+    const rel = relative(blockedHook.file.path);
+    conflicts.push({
+      path: rel,
+      reason: 'changed-since-init',
+      guidance:
+        `${rel} has changed since init wrote it, so nothing was removed. Removing the policy ` +
+        'file while this hook stays in place would leave it running the umbrella with nothing ' +
+        `to read, and every commit would be refused. Re-run with --force to remove ${rel} anyway ` +
+        '(any adopted hook is restored), or delete it by hand and re-run.',
+    });
+    for (const entry of planned) {
+      actions.push({
+        kind: 'skip',
+        path: relative(entry.file.path),
+        detail: entry.state === 'changed' ? 'changed since init, left alone' : 'left alone',
+      });
+    }
+    return { ok: false, actions, conflicts };
+  }
+
+  const remaining: ManifestFile[] = [];
   let hookRemoved = false;
 
-  for (const file of manifest.files) {
-    const rel = path.relative(root, file.path).split(path.sep).join('/');
-    const current = readIfExists(file.path);
-    if (current === undefined) {
+  for (const { file, state } of planned) {
+    const rel = relative(file.path);
+    if (state === 'gone') {
       actions.push({ kind: 'skip', path: rel, detail: 'already gone' });
+      if (file.kind === 'hook') {
+        hookRemoved = true;
+      }
       continue;
     }
-    if (sha256(current) !== file.sha256) {
+    if (state === 'changed' && !force) {
       actions.push({ kind: 'skip', path: rel, detail: 'changed since init, left alone' });
+      conflicts.push({
+        path: rel,
+        reason: 'changed-since-init',
+        guidance: `${rel} has changed since init wrote it and was left alone. Re-run with --force to remove it anyway.`,
+      });
+      remaining.push(file);
       continue;
     }
     rmSync(file.path, { force: true });
-    actions.push({ kind: 'remove', path: rel, detail: 'removed' });
-    if (file.path.endsWith('pre-commit')) {
+    actions.push({
+      kind: 'remove',
+      path: rel,
+      detail: state === 'changed' ? 'removed (--force, it had changed)' : 'removed',
+    });
+    if (file.kind === 'hook') {
       hookRemoved = true;
     }
   }
 
-  // Only restore an adopted hook if the umbrella hook that replaced it was
-  // actually removed just now. Putting the old hook back next to a hook the
-  // user has since edited would give them two.
-  if (manifest.adopted !== null && hookRemoved) {
-    mkdirSync(path.dirname(manifest.adopted.path), { recursive: true });
-    writeFileSync(manifest.adopted.path, manifest.adopted.content, 'utf8');
-    chmodSync(manifest.adopted.path, 0o755);
+  // Only restore an adopted hook once the umbrella hook that replaced it is
+  // actually gone. Putting the old hook back next to a hook the user has
+  // since edited would give them two.
+  let adopted = manifest.adopted;
+  if (adopted !== null && hookRemoved) {
+    mkdirSync(path.dirname(adopted.path), { recursive: true });
+    writeFileSync(adopted.path, adopted.content, 'utf8');
+    chmodSync(adopted.path, 0o755);
     actions.push({
       kind: 'restore',
-      path: path.relative(root, manifest.adopted.path).split(path.sep).join('/'),
-      detail: `restored ${manifest.adopted.product}'s own hook`,
+      path: relative(adopted.path),
+      detail: `restored ${adopted.product}'s own hook`,
     });
+    adopted = null;
   }
 
-  rmSync(manifestPath, { force: true });
-  actions.push({ kind: 'remove', path: MANIFEST_RELATIVE_PATH, detail: 'removed' });
-  try {
-    rmSync(path.dirname(manifestPath), { recursive: false });
-  } catch {
-    // The directory holds something else. Leaving it is the correct
-    // "nothing else" behaviour.
+  if (remaining.length === 0 && adopted === null) {
+    rmSync(manifestPath, { force: true });
+    actions.push({ kind: 'remove', path: MANIFEST_RELATIVE_PATH, detail: 'removed' });
+    try {
+      rmSync(path.dirname(manifestPath), { recursive: false });
+    } catch {
+      // The directory holds something else. Leaving it is the correct
+      // "nothing else" behaviour.
+    }
+    return { ok: true, actions, conflicts };
   }
 
-  return { ok: true, actions, conflicts };
+  // Something is left, so the manifest stays and keeps describing it.
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify({ ...manifest, files: remaining, adopted }, null, 2)}\n`,
+    'utf8'
+  );
+  actions.push({
+    kind: 'skip',
+    path: MANIFEST_RELATIVE_PATH,
+    detail: 'kept: it still records what was left behind',
+  });
+  return { ok: false, actions, conflicts };
 }
 
 export function renderInitHuman(result: InitResult): string {
@@ -607,18 +710,26 @@ export function renderInitHuman(result: InitResult): string {
 }
 
 export function renderRevertHuman(result: RevertResult): string {
-  const lines: string[] = [];
-  if (result.conflicts.length > 0) {
-    lines.push('compass init --revert: nothing was removed.');
-    for (const conflict of result.conflicts) {
-      lines.push(`  ${conflict.path} (${conflict.reason})`);
-      lines.push(`    ${conflict.guidance}`);
-    }
-    return lines.join('\n');
+  const removed = result.actions.filter((action) => action.kind === 'remove').length;
+  const lines: string[] = [
+    removed === 0
+      ? 'compass init --revert: nothing was removed.'
+      : 'compass init --revert: partly done, see below.',
+  ];
+
+  if (result.ok) {
+    lines[0] = 'compass init --revert:';
   }
-  lines.push('compass init --revert:');
+
   for (const action of result.actions) {
     lines.push(`  ${action.kind} ${action.path} (${action.detail})`);
+  }
+
+  // The conflicts go LAST rather than first, so the thing the user has to
+  // act on is the last line on their terminal rather than scrolled off the
+  // top behind a list of what did work.
+  for (const conflict of result.conflicts) {
+    lines.push('', `  ${conflict.path} (${conflict.reason})`, `    ${conflict.guidance}`);
   }
   return lines.join('\n');
 }

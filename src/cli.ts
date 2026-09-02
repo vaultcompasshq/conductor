@@ -92,37 +92,57 @@ export function buildProgram(): Command {
     .option('--dry-run', 'print every file that would be written or changed, and write nothing')
     .option('--adopt', "replace a gate's own pre-commit hook with the umbrella hook")
     .option('--revert', 'remove exactly what a previous init wrote')
+    .option(
+      '--force',
+      'with --revert: remove a file that has changed since init anyway, restoring any adopted hook'
+    )
     .option('--json', 'print the result as JSON')
     .exitOverride()
-    .action((options: { dryRun?: boolean; adopt?: boolean; revert?: boolean; json?: boolean }) => {
-      const cwd = process.cwd();
-      const shared = { cwd, pathValue: process.env.PATH ?? '' };
+    .action(
+      (options: {
+        dryRun?: boolean;
+        adopt?: boolean;
+        revert?: boolean;
+        force?: boolean;
+        json?: boolean;
+      }) => {
+        const cwd = process.cwd();
+        const shared = { cwd, pathValue: process.env.PATH ?? '' };
 
-      if (options.revert) {
-        const result = revertInit(shared);
-        process.stdout.write(
-          options.json ? `${JSON.stringify(result)}\n` : `${renderRevertHuman(result)}\n`
-        );
+        if (options.revert) {
+          const result = revertInit({ ...shared, force: Boolean(options.force) });
+          const rendered = `${renderRevertHuman(result)}\n`;
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(result)}\n`);
+          } else if (result.ok) {
+            process.stdout.write(rendered);
+          } else {
+            // A partial revert left something behind, so it is not success
+            // output. Writing it to stdout would let a script pipe it past a
+            // reader who needed to see it.
+            process.stderr.write(rendered);
+          }
+          process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
+          return;
+        }
+
+        const initOptions = {
+          ...shared,
+          ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+          ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
+        };
+        const result = applyInit(planInit(initOptions), initOptions);
+
+        if (options.json) {
+          process.stdout.write(`${JSON.stringify(result)}\n`);
+        } else if (result.ok) {
+          process.stdout.write(`${renderInitHuman(result)}\n`);
+        } else {
+          process.stderr.write(`${renderInitHuman(result)}\n`);
+        }
         process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
-        return;
       }
-
-      const initOptions = {
-        ...shared,
-        ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
-        ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
-      };
-      const result = applyInit(planInit(initOptions), initOptions);
-
-      if (options.json) {
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } else if (result.ok) {
-        process.stdout.write(`${renderInitHuman(result)}\n`);
-      } else {
-        process.stderr.write(`${renderInitHuman(result)}\n`);
-      }
-      process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
-    });
+    );
 
   program
     .command('run')

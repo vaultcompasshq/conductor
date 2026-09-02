@@ -184,7 +184,7 @@ describe('revert', () => {
     expect(existsSync(path.join(repo, 'unrelated.txt'))).toBe(true);
   });
 
-  it('leaves a file the user changed after init, rather than deleting their work', () => {
+  it('leaves a policy file the user changed after init, rather than deleting their work', () => {
     const repo = gitRepo();
     init(repo);
     writeFileSync(path.join(repo, POLICY_FILE_NAME), 'version: 1\ngates:\n  secrets:\n    product: vault-guard\n');
@@ -193,7 +193,130 @@ describe('revert', () => {
 
     expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
     expect(result.actions.some((action) => action.detail.includes('changed since init'))).toBe(true);
+    // Something was left behind, so this is not a success.
+    expect(result.ok).toBe(false);
+    // The hook is gone, so an edited policy file left behind is inert.
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+    // And the manifest survives, still holding the entry it could not act on.
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
   });
+});
+
+// The reviewer's scratch sequences. Before the fix, revert deleted the
+// manifest unconditionally and returned ok: true even when it had skipped a
+// file, which produced two states nobody could get out of.
+describe('revert with a hook the user edited', () => {
+  function editedHook(repo: string): void {
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hookPath, `${readFileSync(hookPath, 'utf8')}\n# a local tweak\n`);
+  }
+
+  it('leaves the policy file in place too, so no hook is left running without one', () => {
+    const repo = gitRepo();
+    init(repo);
+    editedHook(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    // The proven consequence: removing the policy file here leaves an edited
+    // hook running compass with nothing to read, so every commit after this
+    // is refused with exit 2 while revert reported success.
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
+  });
+
+  it('keeps the manifest, so a second revert still knows what it is looking at', () => {
+    const repo = gitRepo();
+    init(repo);
+    editedHook(repo);
+
+    revertInit({ cwd: repo, pathValue: '' });
+
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { files: unknown[] };
+    expect(manifest.files.length).toBeGreaterThan(0);
+  });
+
+  it('says what was left and why', () => {
+    const repo = gitRepo();
+    init(repo);
+    editedHook(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.conflicts[0].reason).toBe('changed-since-init');
+    expect(result.conflicts[0].guidance).toMatch(/--force/);
+  });
+
+  it('cleans up on a second revert with --force', () => {
+    const repo = gitRepo();
+    init(repo);
+    editedHook(repo);
+    revertInit({ cwd: repo, pathValue: '' });
+
+    const forced = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(forced.ok).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(false);
+  });
+});
+
+describe('revert after adopting a gate hook', () => {
+  const ORIGINAL = `#!/bin/sh\n# ${DEP_GUARD_HOOK_MARKER}\ndep-guard scan --staged\n`;
+
+  function adopted(): string {
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), ORIGINAL);
+    init(repo, { adopt: true });
+    return repo;
+  }
+
+  it('keeps the adopted content in the manifest when the hook was edited', () => {
+    const repo = adopted();
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hookPath, `${readFileSync(hookPath, 'utf8')}\n# a local tweak\n`);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    // The manifest holds the only copy of the gate's own hook. Deleting it
+    // here makes that hook unrecoverable.
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { adopted: { content: string } | null };
+    expect(manifest.adopted?.content).toBe(ORIGINAL);
+  });
+
+  it('restores the gate own hook byte for byte under --force', () => {
+    const repo = adopted();
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hookPath, `${readFileSync(hookPath, 'utf8')}\n# a local tweak\n`);
+    revertInit({ cwd: repo, pathValue: '' });
+
+    const forced = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(forced.ok).toBe(true);
+    expect(readFileSync(hookPath, 'utf8')).toBe(ORIGINAL);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(false);
+  });
+
+  it('restores it without --force when the umbrella hook was left untouched', () => {
+    const repo = adopted();
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(ORIGINAL);
+  });
+});
+
+describe('revert, continued', () => {
 
   it('refuses when there is no manifest, rather than guessing what to delete', () => {
     const result = revertInit({ cwd: gitRepo(), pathValue: '' });
