@@ -198,6 +198,39 @@ function makeRun(
 }
 
 /**
+ * The umbrella's own diagnostics, as SARIF results.
+ *
+ * These are not findings about the code, so they are note level, do not
+ * block, and carry no location. They still belong in the published log: a
+ * blocking-count mismatch means the umbrella and the gate disagree about
+ * what blocked, which is precisely the thing a consumer reading only the
+ * SARIF would otherwise never learn. They are synthesized here rather than
+ * added to the envelope's findings list, so they never count toward a
+ * summary or an exit code.
+ */
+function diagnosticFindings(result: RunResult): Finding[] {
+  return result.gates.flatMap((gate) =>
+    gate.diagnostics.map((diagnostic) => ({
+      schemaVersion: 1 as const,
+      product: UMBRELLA_DRIVER_NAME,
+      productVersion: null,
+      // The diagnostic codes are already umbrella-namespaced.
+      ruleId: diagnostic.code,
+      severity: 'info' as const,
+      severityIsDerived: true,
+      blocking: false,
+      message: diagnostic.message,
+      subject: { kind: 'none' as const },
+      fingerprint: null,
+      // Which gate it is about. The run it lands in is the umbrella's, so
+      // without this a reader cannot tell which gate the disagreement was
+      // with.
+      details: { role: gate.role, product: gate.product },
+    }))
+  );
+}
+
+/**
  * Renders a whole run as one SARIF log.
  *
  * `umbrellaVersion` names this package's own version, used only for the
@@ -217,9 +250,12 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     runs.push(makeRun(gate.product, gate.productVersion, own));
   }
 
-  const umbrellaFindings = result.gates
-    .flatMap((gate) => gate.findings)
-    .filter((finding) => finding.product === UMBRELLA_DRIVER_NAME);
+  const umbrellaFindings = [
+    ...result.gates
+      .flatMap((gate) => gate.findings)
+      .filter((finding) => finding.product === UMBRELLA_DRIVER_NAME),
+    ...diagnosticFindings(result),
+  ];
 
   if (umbrellaFindings.length > 0) {
     runs.push(makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings));

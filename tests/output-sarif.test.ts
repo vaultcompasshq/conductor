@@ -347,6 +347,56 @@ describe('the umbrella own findings', () => {
     );
   });
 
+  it('carries the umbrella own diagnostics as note-level results', () => {
+    // A blocking-count mismatch means the umbrella and the gate disagree
+    // about what blocked. That is exactly the signal a published report has
+    // to carry: it says the report may be understating what the gate did.
+    const withDiagnostic = result([
+      outcome({
+        findings: depGuard.findings,
+        diagnostics: [
+          {
+            code: 'compass/blocking-count-mismatch',
+            message: 'dep-guard reported 1 blocking finding(s) but the umbrella reconstructed 2.',
+          },
+        ],
+      }),
+    ]);
+
+    const log = sarif(withDiagnostic);
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'compass'
+    );
+    const entry = (umbrella?.results as Array<Record<string, unknown>>)[0];
+
+    expect(entry.ruleId).toBe('compass/blocking-count-mismatch');
+    expect(entry.level).toBe('note');
+    expect((entry.message as Record<string, string>).text).toMatch(/reconstructed 2/);
+    // A diagnostic is not a finding: it does not block, and it has no
+    // location, because it is about the run rather than about the code.
+    expect((entry.properties as Record<string, unknown>).blocking).toBe(false);
+    expect(entry).not.toHaveProperty('locations');
+  });
+
+  it('names the gate a diagnostic came from, since the run it lands in is not that gate', () => {
+    const withDiagnostic = result([
+      outcome({
+        role: 'secrets',
+        product: 'vault-guard',
+        findings: [],
+        diagnostics: [{ code: 'compass/blocking-threshold-unknown', message: 'no threshold' }],
+      }),
+    ]);
+    const log = sarif(withDiagnostic);
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'compass'
+    );
+    const entry = (umbrella?.results as Array<Record<string, unknown>>)[0];
+    const details = (entry.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.role).toBe('secrets');
+    expect(details.product).toBe('vault-guard');
+  });
+
   it('still emits a gate run for a gate that ran and found nothing', () => {
     const log = sarif(result([outcome({ exitCode: 0, findings: [] })]));
     expect(log.runs).toHaveLength(1);
