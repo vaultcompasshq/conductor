@@ -35,11 +35,28 @@
 //    fingerprint inputs ships as "/v2" and a consumer can tell the two
 //    apart instead of silently comparing hashes of different things.
 //
-//  - Paths are RELATIVE, forward-slashed, under `%SRCROOT%`. An absolute
-//    path breaks %SRCROOT% resolution on the consumer side and leaks a
-//    local directory layout into an artifact that gets uploaded. Both
-//    spellings of absolute are stripped: a leading slash and a Windows
-//    drive prefix.
+//  - A PATH IS ONLY PUT UNDER `%SRCROOT%` WHEN IT IS ACTUALLY UNDER IT.
+//    A uri with `%SRCROOT%` on it is a claim that the file sits inside the
+//    scanned source root, and a consumer resolves it that way. Two kinds of
+//    path are not:
+//
+//      An ABSOLUTE path. One of the gates keeps a path absolute exactly when
+//      the file is outside the directory it scanned, so an absolute path is
+//      positive evidence the file is NOT under the source root. Stripping
+//      the leading slash off it, which is what this file used to do, does
+//      not make it relative to anything: it fabricates a source-root-
+//      relative path that points at a different file, or at no file, and
+//      %SRCROOT% then vouches for it. Those get a `file:` uri and no
+//      uriBaseId, which is the spec's own way of saying "elsewhere".
+//
+//      A path that still contains a `..` segment after normalizing. It
+//      escapes the root and cannot be resolved without knowing where the
+//      root is, so the physical location is DROPPED and the raw path is kept
+//      in the properties bag instead. No location is honest; a wrong one is
+//      not, and is indistinguishable from a right one once uploaded.
+//
+//    Everything genuinely inside keeps the relative, forward-slashed,
+//    `%SRCROOT%`-based spelling that GitHub code scanning wants.
 //
 //  - A REGION ONLY WHEN A REAL POSITION IS KNOWN. One of the three gates
 //    reports a line and a column; the other two report no position at all.
@@ -75,40 +92,114 @@ export function fingerprintKey(scope: string): string {
   return `${scope}/v1`;
 }
 
-function toUri(rawPath: string): string {
-  let uri = rawPath.split('\\').join('/');
-  // A Windows drive prefix is absolute exactly as a leading slash is.
-  // Removed before the slash loop so "C:/x" reduces the whole way rather
-  // than to "/x".
-  uri = uri.replace(/^[A-Za-z]:\/*/, '');
+/** Both spellings of absolute: a leading slash, and a Windows drive prefix. */
+function isAbsolutePath(forwardSlashed: string): boolean {
+  return forwardSlashed.startsWith('/') || /^[A-Za-z]:\//.test(forwardSlashed);
+}
+
+export type ArtifactPlacement =
+  /** Inside the source root: relative uri under %SRCROOT%. */
+  | { placement: 'in-root'; uri: string }
+  /** Known to be elsewhere: an absolute file uri with no uriBaseId. */
+  | { placement: 'outside-root'; uri: string }
+  /** Unresolvable from here: no physical location at all. */
+  | { placement: 'unresolvable' };
+
+/**
+ * Decides how one path can honestly be named in SARIF.
+ *
+ * Exported so the rules above can be tested directly rather than only
+ * through a whole rendered log.
+ */
+export function placeArtifact(rawPath: string): ArtifactPlacement {
+  const forwardSlashed = rawPath.split('\\').join('/');
+
+  if (isAbsolutePath(forwardSlashed)) {
+    // Encode each segment, keeping the separators. A path can legitimately
+    // contain a space or a hash, and neither is legal raw in a uri.
+    const encoded = forwardSlashed
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return {
+      placement: 'outside-root',
+      uri: forwardSlashed.startsWith('/') ? `file://${encoded}` : `file:///${encoded}`,
+    };
+  }
+
+  let uri = forwardSlashed;
   while (uri.startsWith('./')) {
     uri = uri.slice(2);
   }
-  while (uri.startsWith('/')) {
-    uri = uri.slice(1);
+
+  // A ".." segment escapes the root. Not "starts with", because "a/../../b"
+  // escapes too and only the second one is visible after normalizing.
+  const segments = uri.split('/').filter((segment) => segment !== '.' && segment !== '');
+  const resolved: string[] = [];
+  for (const segment of segments) {
+    if (segment !== '..') {
+      resolved.push(segment);
+      continue;
+    }
+    if (resolved.length === 0) {
+      return { placement: 'unresolvable' };
+    }
+    resolved.pop();
   }
-  return uri;
+  if (resolved.length === 0) {
+    return { placement: 'unresolvable' };
+  }
+
+  return { placement: 'in-root', uri: resolved.join('/') };
 }
 
-function artifact(rawPath: string): Record<string, unknown> {
-  return { artifactLocation: { uri: toUri(rawPath), uriBaseId: '%SRCROOT%' } };
+function artifact(rawPath: string): Record<string, unknown> | null {
+  const placed = placeArtifact(rawPath);
+  switch (placed.placement) {
+    case 'in-root':
+      return { artifactLocation: { uri: placed.uri, uriBaseId: '%SRCROOT%' } };
+    case 'outside-root':
+      // No uriBaseId. Attaching %SRCROOT% to an absolute uri is a claim the
+      // file is inside the scanned root when the gate said the opposite.
+      return { artifactLocation: { uri: placed.uri } };
+    case 'unresolvable':
+      return null;
+  }
+}
+
+/** Paths this finding named that could not be placed honestly. */
+function unplaceablePaths(finding: Finding): string[] {
+  const subject = finding.subject;
+  const paths =
+    subject.kind === 'package'
+      ? [subject.manifest]
+      : subject.kind === 'location'
+        ? [subject.file]
+        : subject.kind === 'paths'
+          ? subject.paths
+          : [];
+  return paths.filter((entry) => placeArtifact(entry).placement === 'unresolvable');
 }
 
 function locationsFor(finding: Finding): Array<Record<string, unknown>> | undefined {
   const subject = finding.subject;
   switch (subject.kind) {
-    case 'package':
+    case 'package': {
       // The manifest is a real file, so it gets a physical location, and
       // the package itself is a logical one. No region: no rule in the
       // dependency gate records a line number today, and guessing one would
       // annotate an unrelated line of the user's manifest.
-      return [
-        {
-          physicalLocation: artifact(subject.manifest),
-          logicalLocations: [{ kind: 'package', fullyQualifiedName: subject.name }],
-        },
-      ];
+      const logicalLocations = [{ kind: 'package', fullyQualifiedName: subject.name }];
+      const physicalLocation = artifact(subject.manifest);
+      // The package is still worth naming even when its manifest cannot be
+      // placed, so the logical location survives on its own.
+      return [physicalLocation === null ? { logicalLocations } : { physicalLocation, logicalLocations }];
+    }
     case 'location': {
+      const physicalLocation = artifact(subject.file);
+      if (physicalLocation === null) {
+        return undefined;
+      }
       const region: Record<string, number> = {
         startLine: subject.line,
         startColumn: subject.column,
@@ -116,10 +207,15 @@ function locationsFor(finding: Finding): Array<Record<string, unknown>> | undefi
       if (subject.endColumn !== undefined) {
         region.endColumn = subject.endColumn;
       }
-      return [{ physicalLocation: { ...artifact(subject.file), region } }];
+      return [{ physicalLocation: { ...physicalLocation, region } }];
     }
-    case 'paths':
-      return subject.paths.map((entry) => ({ physicalLocation: artifact(entry) }));
+    case 'paths': {
+      const placed = subject.paths
+        .map((entry) => artifact(entry))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+        .map((physicalLocation) => ({ physicalLocation }));
+      return placed.length === 0 ? undefined : placed;
+    }
     case 'contract':
       return [
         {
@@ -140,6 +236,11 @@ function locationsFor(finding: Finding): Array<Record<string, unknown>> | undefi
 }
 
 function toResult(finding: Finding): Record<string, unknown> {
+  // A path that escapes the source root gets no physical location, so the
+  // path itself is carried here instead. Dropping a location is honest;
+  // dropping the information as well would just lose the finding's subject.
+  const unplaceable = unplaceablePaths(finding);
+
   const entry: Record<string, unknown> = {
     ruleId: finding.ruleId,
     level: SARIF_LEVELS[finding.severity],
@@ -149,6 +250,7 @@ function toResult(finding: Finding): Record<string, unknown> {
       severity: finding.severity,
       severityIsDerived: finding.severityIsDerived,
       fingerprintStability: finding.fingerprint?.stability ?? 'none',
+      ...(unplaceable.length === 0 ? {} : { unresolvablePaths: unplaceable }),
       // The details bag verbatim. Not reshaped, not filtered: it is where
       // each gate puts what it actually established.
       details: finding.details,

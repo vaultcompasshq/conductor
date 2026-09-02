@@ -248,38 +248,112 @@ describe('locations', () => {
     ]);
   });
 
-  it('normalizes a path to a forward-slash relative reference under %SRCROOT%', () => {
-    const windowsish: Finding = {
+  it('normalizes backslashes and a leading dot-slash to a relative reference', () => {
+    const nested: Finding = {
       ...depGuard.findings[0],
-      subject: { kind: 'package', name: 'x', manifest: 'C:\\repo\\packages\\app\\package.json' },
+      subject: { kind: 'package', name: 'x', manifest: '.\\packages\\app\\package.json' },
     };
-    const log2 = sarif(result([outcome({ findings: [windowsish] })]));
+    const log2 = sarif(result([outcome({ findings: [nested] })]));
     const location = (
       (log2.runs[0].results as Array<Record<string, unknown>>)[0].locations as Array<
         Record<string, Record<string, Record<string, unknown>>>
       >
     )[0];
-    expect(location.physicalLocation.artifactLocation.uri).toBe('repo/packages/app/package.json');
+    expect(location.physicalLocation.artifactLocation).toEqual({
+      uri: 'packages/app/package.json',
+      uriBaseId: '%SRCROOT%',
+    });
   });
 
-  it('strips a leading slash and a leading dot-slash', () => {
-    const odd: Finding = {
+  it('does not put %SRCROOT% on an absolute path, since that path is not under it', () => {
+    // One of the gates keeps a path absolute exactly when the file is
+    // OUTSIDE the directory it scanned, so an absolute path is evidence the
+    // file is not in the source root. Stripping the leading slash would
+    // fabricate a source-root-relative path pointing at a different file,
+    // and %SRCROOT% would then vouch for it.
+    const posix: Finding = {
       ...depGuard.findings[0],
-      subject: { kind: 'package', name: 'x', manifest: './sub/package.json' },
+      subject: { kind: 'package', name: 'x', manifest: '/elsewhere/app/package.json' },
     };
-    const absolute: Finding = {
+    const windows: Finding = {
       ...depGuard.findings[0],
-      subject: { kind: 'package', name: 'x', manifest: '/sub/package.json' },
+      subject: { kind: 'package', name: 'y', manifest: 'C:\\elsewhere\\app\\package.json' },
     };
-    const log2 = sarif(result([outcome({ findings: [odd, absolute] })]));
-    const uris = (log2.runs[0].results as Array<Record<string, unknown>>).map(
+    const log2 = sarif(result([outcome({ findings: [posix, windows] })]));
+    const locations = (log2.runs[0].results as Array<Record<string, unknown>>).map(
       (entry) =>
-        (
-          (entry.locations as Array<Record<string, Record<string, Record<string, unknown>>>>)[0]
-            .physicalLocation.artifactLocation as Record<string, unknown>
-        ).uri
+        (entry.locations as Array<Record<string, Record<string, Record<string, unknown>>>>)[0]
+          .physicalLocation.artifactLocation
     );
-    expect(uris).toEqual(['sub/package.json', 'sub/package.json']);
+    expect(locations[0]).toEqual({ uri: 'file:///elsewhere/app/package.json' });
+    expect(locations[1]).toEqual({ uri: 'file:///C%3A/elsewhere/app/package.json' });
+    for (const location of locations) {
+      expect(location).not.toHaveProperty('uriBaseId');
+    }
+  });
+
+  it('drops the physical location for a path that escapes the source root', () => {
+    const escaping: Finding = {
+      ...depGuard.findings[0],
+      subject: { kind: 'package', name: 'x', manifest: '../outside/package.json' },
+    };
+    const log2 = sarif(result([outcome({ findings: [escaping] })]));
+    const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
+    const locations = entry.locations as Array<Record<string, unknown>>;
+
+    // No physical location at all: a uri of "outside/package.json" under
+    // %SRCROOT% would point at a file that is not the one the gate found.
+    expect(locations[0]).not.toHaveProperty('physicalLocation');
+    // The package is still named.
+    expect(locations[0].logicalLocations).toEqual([
+      { kind: 'package', fullyQualifiedName: 'x' },
+    ]);
+    // And the path itself is not lost.
+    expect((entry.properties as Record<string, unknown>).unresolvablePaths).toEqual([
+      '../outside/package.json',
+    ]);
+  });
+
+  it('catches a .. that only escapes after the segments cancel out', () => {
+    const sneaky: Finding = {
+      ...depGuard.findings[0],
+      subject: { kind: 'package', name: 'x', manifest: 'a/../../outside/package.json' },
+    };
+    const log2 = sarif(result([outcome({ findings: [sneaky] })]));
+    const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
+    expect((entry.locations as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
+      'physicalLocation'
+    );
+  });
+
+  it('resolves an inner .. that stays inside the root', () => {
+    const inner: Finding = {
+      ...depGuard.findings[0],
+      subject: { kind: 'package', name: 'x', manifest: 'packages/app/../lib/package.json' },
+    };
+    const log2 = sarif(result([outcome({ findings: [inner] })]));
+    const location = (
+      (log2.runs[0].results as Array<Record<string, unknown>>)[0].locations as Array<
+        Record<string, Record<string, Record<string, unknown>>>
+      >
+    )[0];
+    expect(location.physicalLocation.artifactLocation.uri).toBe('packages/lib/package.json');
+  });
+
+  it('drops a secret finding location entirely when its file escapes the root', () => {
+    const escaping: Finding = {
+      ...vaultGuard.findings[0],
+      subject: { kind: 'location', file: '../outside/config.js', line: 2, column: 23 },
+    };
+    const log2 = sarif(
+      result([outcome({ role: 'secrets', product: 'vault-guard', findings: [escaping] })])
+    );
+    const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
+    // A region without a resolvable file would annotate line 2 of nothing.
+    expect(entry).not.toHaveProperty('locations');
+    expect((entry.properties as Record<string, unknown>).unresolvablePaths).toEqual([
+      '../outside/config.js',
+    ]);
   });
 });
 
