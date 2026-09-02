@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "scannedAt": "2026-09-02T21:11:21.539Z",
+  "summary": {
+    "files": 1,
+    "secrets": 1
+  },
+  "run": {
+    "duration_ms": 34,
+    "files_scanned": 2,
+    "bytes_scanned": 351,
+    "patterns_active": 59,
+    "diagnostics_count": 0,
+    "fail_on": "medium",
+    "blocking_matches": 1
+  },
+  "results": [
+    {
+      "file": "src/config.js",
+      "matches": [
+        {
+          "type": "github-token",
+          "severity": "critical",
+          "line": 2,
+          "column": 22,
+          "offset": 93,
+          "value": "ghp_…(40c)",
+          "fingerprint": "85ce78fecbada885e18040c4ef1299a29367a1d2eec35fec239ab556a0172c79"
+        }
+      ]
+    }
+  ]
+}

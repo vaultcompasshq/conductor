@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vaultcompass.io/schema/guardrails-1.json",
+  "title": "Guardrail policy file",
+  "description": "One policy file for a repository's guardrail gates. Gates are keyed by the ROLE they fill, not by the product that currently fills it, so replacing or renaming a product is a one-line edit rather than a schema break.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "gates"],
+  "properties": {
+    "version": {
+      "description": "Policy schema version. Only 1 exists.",
+      "const": 1
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "dependencies": { "$ref": "#/$defs/gate" },
+        "secrets": { "$ref": "#/$defs/gate" },
+        "intent": { "$ref": "#/$defs/gate" }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "Default output format for `compass run`. The --format flag overrides it.",
+          "enum": ["text", "sarif"]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product"],
+      "properties": {
+        "product": {
+          "description": "Which product currently fills this role.",
+          "enum": ["dep-guard", "vault-guard", "intent-guard"]
+        },
+        "enabled": {
+          "description": "Whether this gate runs. Defaults to true. A gate that is enabled but whose binary cannot be found is a blocking finding, never a silent skip.",
+          "type": "boolean",
+          "default": true
+        },
+        "command": {
+          "description": "Absolute path to the gate's executable, overriding binary resolution. Use it to point at a build that is not on PATH.",
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "description": "Argument prefix placed before the arguments the umbrella adds. Only meaningful alongside `command`; without it the prefix is inferred from the resolved binary's name.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "options": {
+          "description": "Handed to this gate unchanged. Each key is one of that gate's own long-flag spellings without the leading dashes; true renders as --key, false as --no-key, a scalar as --key value, and an array as one --key value pair per entry. The umbrella does not interpret any of them. Per-gate thresholds live here; there is deliberately no shared threshold, because the three products do not share one severity scale.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              {
+                "type": "array",
+                "items": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

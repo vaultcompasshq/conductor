@@ -1,0 +1,40 @@
+{
+  "name": "@vaultcompass/compass",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Umbrella installer and combined report over the independently installable guardrail gates.",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "compass": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsc -b && chmod +x dist/cli.js",
+    "pretest": "pnpm build",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "typecheck": "tsc -b && tsc --noEmit -p tsconfig.test.json",
+    "lint": "pnpm check:public-hygiene",
+    "check:public-hygiene": "node scripts/check-public-hygiene.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "commander": "^12.1.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.4.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.19.0",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.12",
+    "typescript": "^5.9.3"
+  }
+}

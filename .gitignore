@@ -1,5 +1,9 @@
 node_modules/
 dist/
+# tsc's incremental build state. It holds absolute paths from whichever
+# machine last ran a build, so it is both noise in a diff and a small leak
+# of a local layout into a repository meant to go public.
+*.tsbuildinfo
 *.local.md
 .local/
 docs/sessions/

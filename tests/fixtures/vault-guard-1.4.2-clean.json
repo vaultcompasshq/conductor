@@ -1,0 +1,18 @@
+{
+  "version": "1",
+  "scannedAt": "2026-09-02T21:14:45.456Z",
+  "summary": {
+    "files": 0,
+    "secrets": 0
+  },
+  "run": {
+    "duration_ms": 37,
+    "files_scanned": 1,
+    "bytes_scanned": 74,
+    "patterns_active": 59,
+    "diagnostics_count": 0,
+    "fail_on": "medium",
+    "blocking_matches": 0
+  },
+  "results": []
+}
