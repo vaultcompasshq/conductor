@@ -107,6 +107,26 @@ describe('the combined text report', () => {
     expect(text).toMatch(/ignored 0/);
   });
 
+  it('says "ignored not reported" for a gate that reports no ignore count', () => {
+    // vault-guard drops ignored files before they reach its output, so it
+    // has no count to give. Printing "ignored 0" states a fact the gate
+    // never stated, and reads as "nothing was ignored".
+    const secretsSection = text.slice(text.indexOf('secrets'));
+    expect(secretsSection).toMatch(/ignored not reported/);
+    expect(secretsSection).not.toMatch(/ignored 0/);
+  });
+
+  it('renders the per-gate run facts rather than collecting them and dropping them', () => {
+    expect(text).toMatch(/mode staged/);
+    expect(text).toMatch(/lockfileFormat none/);
+    expect(text).toMatch(/patternsActive 59/);
+  });
+
+  it('leaves out a run fact the gate did not report', () => {
+    // A null is an absence, not a value: "corpusBuiltAt null" is noise.
+    expect(text).not.toMatch(/\bnull\b/);
+  });
+
   it('shows a gate diagnostic without turning it into a finding', () => {
     expect(text).toMatch(/lockfile-missing/);
     expect(text.match(/dep-guard\//g)).toHaveLength(2);
@@ -163,5 +183,26 @@ describe('a clean run', () => {
     const last = text.trimEnd().split('\n').pop() as string;
     expect(last).toMatch(/exit 0/);
     expect(last).toMatch(/none blocked/);
+  });
+});
+
+describe('a run with no enabled gates', () => {
+  const text = renderText(result([], 0));
+
+  it('says no gate ran rather than reporting a clean pass', () => {
+    // Exit 0 with an empty report is indistinguishable from a clean run at a
+    // glance, and a policy file with every gate switched off is exactly the
+    // state somebody needs told about.
+    const last = text.trimEnd().split('\n').pop() as string;
+    expect(last).toMatch(/no gate ran/);
+    expect(last).not.toMatch(/none blocked/);
+  });
+
+  it('still exits 0, because nothing was asked for and nothing failed', () => {
+    expect(result([], 0).exitCode).toBe(0);
+  });
+
+  it('says where to turn one on', () => {
+    expect(text).toMatch(/\.guardrails\.yaml/);
   });
 });

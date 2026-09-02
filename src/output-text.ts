@@ -82,10 +82,29 @@ function gateSection(gate: GateOutcome): string[] {
   }
 
   if (gate.couldNotRun === null) {
-    const threshold = gate.run.failOn === null ? 'threshold not reported' : `threshold ${gate.run.failOn}`;
-    lines.push(
-      `  ${threshold}   suppressed ${gate.run.suppressed}   ignored ${gate.run.ignored}`
-    );
+    const threshold =
+      gate.run.failOn === null ? 'threshold not reported' : `threshold ${gate.run.failOn}`;
+    // "ignored 0" would state a fact the gate never stated for a gate that
+    // drops ignored files before they reach its output, and it reads as
+    // "nothing was ignored". The normalizer records which is which.
+    const ignored =
+      gate.run.details.ignoredReported === false
+        ? 'ignored not reported'
+        : `ignored ${gate.run.ignored}`;
+    lines.push(`  ${threshold}   suppressed ${gate.run.suppressed}   ${ignored}`);
+
+    // The gate's own run facts: what it scanned, with what, against what.
+    // These were being collected and then dropped. Nulls are left out,
+    // because a null is an absence rather than a value and "corpusBuiltAt
+    // null" is noise; `ignoredReported` drives the line above rather than
+    // being a fact about the run, so it is not printed twice.
+    const facts = Object.entries(gate.run.details)
+      .filter(([key, value]) => key !== 'ignoredReported' && value !== null && value !== undefined)
+      .map(([key, value]) => `${key} ${String(value)}`);
+    if (facts.length > 0) {
+      lines.push(`  ${facts.join('   ')}`);
+    }
+
     for (const diagnostic of gate.run.diagnostics) {
       lines.push(`  note ${diagnostic.code}: ${diagnostic.message}`);
     }
@@ -100,6 +119,16 @@ function gateSection(gate: GateOutcome): string[] {
 
 function verdict(result: RunResult): string {
   const blocking = result.findings.filter((finding) => finding.blocking).length;
+  if (result.gates.length === 0) {
+    // Exit 0 with an empty report is indistinguishable from a clean run at a
+    // glance, and a policy file with every gate switched off is exactly the
+    // state somebody needs told about. Still 0: nothing was asked for and
+    // nothing failed, so this is not the umbrella's decision to overturn.
+    return (
+      'verdict: exit 0, no gate ran because none is enabled. ' +
+      'Nothing was checked. Set enabled: true on a gate in .guardrails.yaml.'
+    );
+  }
   if (result.exitCode === EXIT_COULD_NOT_RUN) {
     const names = result.gates
       .filter((gate) => gate.couldNotRun !== null)
