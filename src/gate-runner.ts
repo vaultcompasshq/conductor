@@ -24,6 +24,7 @@ import {
   normalizeDepGuard,
   normalizeFailedGate,
   normalizeIntentGuard,
+  normalizeMisconfiguredGate,
   normalizeMissingGate,
   normalizeUnparseableGate,
   normalizeVaultGuard,
@@ -222,7 +223,14 @@ function runGateInner(
       ...base,
       durationMs: Date.now() - started,
       couldNotRun: { reason: 'configured-command-missing', detail },
-      findings: [normalizeMissingGate(gate.role, gate.product, candidateNames(gate.product))],
+      // Only reachable when the policy named a command, since that is the
+      // only thing resolution throws over. So the finding names that path
+      // and not the candidate list, which was never searched.
+      findings: [
+        gate.command === undefined
+          ? normalizeMissingGate(gate.role, gate.product, candidateNames(gate.product))
+          : normalizeMisconfiguredGate(gate.role, gate.product, gate.command, detail),
+      ],
       run: EMPTY_RUN,
       diagnostics: [],
     };

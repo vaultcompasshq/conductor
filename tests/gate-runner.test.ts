@@ -110,6 +110,29 @@ describe('running one gate', () => {
     expect(realpathSync(readFileSync(log, 'utf8').trim())).toBe(realpathSync(repo));
   });
 
+  it('names only the configured path when a configured command does not exist', () => {
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: '{}' });
+
+    const outcome = runGate(
+      gate({
+        role: 'intent',
+        product: 'intent-guard',
+        command: '/nowhere/at/all/my-build.js',
+      }),
+      { repoRoot: tempDir(), staged: true, pathValue: bin }
+    );
+
+    expect(outcome.couldNotRun?.reason).toBe('configured-command-missing');
+    expect(outcome.findings[0].message).toMatch(/\/nowhere\/at\/all\/my-build\.js/);
+    // The candidate list is about resolution, and resolution did not happen:
+    // the user named one file. Listing the names the umbrella would have
+    // searched for suggests it looked for them, which it did not.
+    expect(outcome.findings[0].message).not.toMatch(/conductor/);
+    expect(outcome.findings[0].details.candidates).toBeUndefined();
+    expect(outcome.findings[0].details.command).toBe('/nowhere/at/all/my-build.js');
+  });
+
   it('raises the umbrella own blocking finding when an enabled gate binary is missing', () => {
     const outcome = runGate(gate(), {
       repoRoot: tempDir(),

@@ -669,6 +669,31 @@ export function normalizeMissingGate(
 }
 
 /**
+ * The finding raised when a gate's `command:` names a file that is not
+ * there.
+ *
+ * It names ONLY that path. The candidate list belongs to resolution, and
+ * resolution never happened here: the user pointed at one specific file, so
+ * listing the names the umbrella would otherwise have searched for suggests
+ * it looked for them and implies the fix is to install one of them, when
+ * the fix is in their policy file.
+ */
+export function normalizeMisconfiguredGate(
+  role: GateRole,
+  product: Product,
+  command: string,
+  detail: string
+): Finding {
+  return gateProblem(
+    'compass/gate-missing',
+    role,
+    product,
+    `The "${role}" gate points at "${command}", which the umbrella could not run: ${detail}`,
+    { command }
+  );
+}
+
+/**
  * The finding raised when a gate answered but the umbrella could not read
  * the answer: invalid JSON, a shape the normalizer does not know, or any
  * unexpected error thrown while normalizing.
