@@ -294,6 +294,39 @@ describe('a git failure while working out what the branch changed', () => {
   });
 });
 
+describe('a changed path the --paths encoding cannot carry', () => {
+  it('is could-not-run and exit 2 for an enforced gate, naming the path', () => {
+    const result = run(repo({ changed: ['src/widget/a,b.ts'] }), binWith(CHECK_PASSING), {
+      base: 'main',
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+    expect(result.gates[0].couldNotRun?.detail).toContain('src/widget/a,b.ts');
+    // The step, so nobody debugs the spec import over a filename.
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/base step/);
+  });
+
+  it('is a note and exit 0 for an unenforced gate', () => {
+    const result = run(repo({ changed: ['src/widget/a,b.ts'] }), binWith(CHECK_PASSING), {
+      base: 'main',
+      enforce: false,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+  });
+
+  it('lets a space in the middle of a filename through to the gate unchanged', () => {
+    const result = run(repo({ changed: ['src/widget/my cache.ts'] }), binWith(CHECK_PASSING), {
+      base: 'main',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.gates[0].argv).toContain('src/widget/my cache.ts');
+  });
+});
+
 describe('the report says where the contract came from', () => {
   it('names the spec and the plan and the base ref in the text report', () => {
     const text = renderText(run(repo(), binWith(CHECK_PASSING), { base: 'main' }));

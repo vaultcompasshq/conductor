@@ -124,9 +124,38 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
     };
   }
 
-  const paths = (child.stdout ?? '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  // Split on newlines and NOTHING else. Trimming each line was corrupting a
+  // filename with leading or trailing whitespace into a different filename,
+  // which is worse than refusing it: the gate would then check a path that
+  // does not exist and never check the one that changed.
+  const paths = (child.stdout ?? '').split('\n').filter((line) => line.length > 0);
+
+  for (const entry of paths) {
+    // Fail closed rather than hand over a path the encoding cannot carry.
+    // `--paths` is comma-joined, which is the only shape intent-guard 1.2.1
+    // accepts, so a comma in a filename arrives as two paths: a phantom that
+    // can be reported as outside allowed_paths, and a real path that quietly
+    // stops being measured against a protected one. It invents a breach and
+    // hides one, and neither half is visible in the report.
+    if (entry.includes(',')) {
+      return {
+        ok: false,
+        detail:
+          `the changed path "${entry}" contains a comma, and the intent gate takes its ` +
+          'path list comma-joined, so it cannot be passed without splitting into two paths. ' +
+          'Nothing was checked, rather than checking a path that does not exist.',
+      };
+    }
+    if (entry !== entry.trim()) {
+      return {
+        ok: false,
+        detail:
+          `the changed path "${entry}" has leading or trailing whitespace, which cannot ` +
+          'survive the gate path list intact. Nothing was checked, rather than checking a ' +
+          'path that does not exist. A space inside a path is fine.',
+      };
+    }
+  }
+
   return { ok: true, paths };
 }

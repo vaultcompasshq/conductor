@@ -132,6 +132,45 @@ describe('changedPathsSince', () => {
     expect(changed).toEqual({ ok: true, paths: ['src/café.ts'] });
   });
 
+  it('keeps a space in the middle of a path, which is an ordinary filename', () => {
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/spaces']);
+    write(root, 'src/my widget.ts', 'export const w = 1;\n');
+    commit(root, 'spaced');
+
+    expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: ['src/my widget.ts'] });
+  });
+
+  it('fails closed on a path containing a comma, naming the path', () => {
+    // The only shape intent-guard's --paths accepts is comma-joined, so a
+    // comma in a filename splits one path into two: a phantom entry that can
+    // be reported outside allowed_paths, and a real path that silently stops
+    // being checked against a protected one. Refusing to answer is the only
+    // honest option, because both halves of that failure are invisible.
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/commas']);
+    write(root, 'src/a,b.ts', 'export const ab = 1;\n');
+    commit(root, 'comma');
+
+    const changed = changedPathsSince(root, 'main');
+
+    expect(changed.ok).toBe(false);
+    expect(changed.ok === false && changed.detail).toContain('src/a,b.ts');
+    expect(changed.ok === false && changed.detail).toMatch(/comma/);
+  });
+
+  it('fails closed on a path with leading whitespace, naming the path', () => {
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/leading']);
+    write(root, ' leading.ts', 'export const l = 1;\n');
+    commit(root, 'leading space');
+
+    const changed = changedPathsSince(root, 'main');
+
+    expect(changed.ok).toBe(false);
+    expect(changed.ok === false && changed.detail).toContain('leading.ts');
+  });
+
   it('reports an empty change set as an empty list rather than as a failure', () => {
     const root = repoWithMain();
     git(root, ['checkout', '--quiet', '-b', 'feat/nothing']);
