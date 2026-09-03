@@ -166,6 +166,24 @@ describe('a repository whose own contract is frozen', () => {
     expect(existsSync(log)).toBe(false);
   });
 
+  it('imports the spec when a contract has an approval block but no frozen_by', () => {
+    // frozen_by is the marker the GATE reads. Accepting an approval block on
+    // its own meant a half-written or hand-edited contract was treated as the
+    // repository's own frozen one, the import was skipped, and the gate then
+    // blocked every pull request with "exists but is not frozen by user":
+    // the exact failure this check exists to prevent.
+    const root = repoWithSpec();
+    write(
+      root,
+      '.conductor/intent-contract.yaml',
+      'contract_id: ic-1\napproval:\n  approved_by: a person\n'
+    );
+
+    const result = prepare(root, stubbedBin());
+
+    expect(result.kind === 'ready' && result.preparation.contractSource.kind).toBe('imported');
+  });
+
   it('imports the spec anyway when the contract is present but not frozen', () => {
     // "Exists" is not the test, "frozen" is. An unfrozen contract is a draft
     // somebody left behind, and running the gate against it makes every pull

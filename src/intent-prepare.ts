@@ -87,11 +87,16 @@ export interface IntentPrepareOptions {
 /**
  * Whether a contract on disk has been approved.
  *
- * Both markers are checked because they are written by the same step and
- * either one alone would be a guess: `frozen_by: user` is what the gate
- * reads, and the `approval` block is what carries the name. A file that
- * cannot be parsed is treated as not frozen, which sends the run down the
- * import path rather than handing the gate something it will reject.
+ * `frozen_by: user` and nothing else, because that is the marker THE GATE
+ * ITSELF reads. Accepting an `approval` block as an alternative was a guess
+ * dressed up as tolerance: a real 1.2.1 freeze writes both, so the only
+ * contracts the second test admitted were hand-edited or half-written ones,
+ * and admitting those skipped the import and then let the gate block every
+ * pull request with "exists but is not frozen by user" -- the exact failure
+ * this function exists to prevent.
+ *
+ * A file that cannot be parsed is treated as not frozen, which sends the run
+ * down the import path rather than handing the gate something it will reject.
  */
 function nativeContractIsFrozen(repoRoot: string): boolean {
   let parsed: unknown;
@@ -103,11 +108,7 @@ function nativeContractIsFrozen(repoRoot: string): boolean {
   if (parsed === null || typeof parsed !== 'object') {
     return false;
   }
-  const document = parsed as { frozen_by?: unknown; approval?: unknown };
-  if (document.frozen_by === 'user') {
-    return true;
-  }
-  return document.approval !== null && typeof document.approval === 'object';
+  return (parsed as { frozen_by?: unknown }).frozen_by === 'user';
 }
 
 /**
