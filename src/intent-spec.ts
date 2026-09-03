@@ -1,0 +1,209 @@
+// Finding the spec that stands in for a frozen intent contract.
+//
+// The intent gate's native flow wants a contract approved before the work
+// starts. That is a per-task human step, and it is the one piece of ceremony
+// the whole v0.2 design exists to remove from a pull request. So when a
+// repository has no frozen contract of its own, the umbrella looks for the
+// document the work was actually approved from, which in this org is a
+// superpowers spec under docs/superpowers/specs.
+//
+// Everything here is READ-ONLY and does no subprocess work: it decides which
+// file to import, and nothing else. That is what makes the discovery rules
+// testable against a directory of empty files instead of against a running
+// gate.
+//
+// Three sources, in order, and the order is the whole decision:
+//
+//  1. `--spec` on the umbrella's command line. Somebody typed this just now,
+//     so it outranks everything, including a checked-in contract. A path
+//     here that does not exist is REPORTED rather than replaced by a
+//     discovered one: running a different contract than the one a person
+//     just named is the wrong kindness.
+//
+//  2. A `Spec:` line in the pull request body. Written by whoever opened the
+//     pull request, which is a weaker claim than a command line typed now,
+//     and a path here that does not exist FALLS THROUGH to the convention. A
+//     typo in a pull request description must not be able to fail a build.
+//
+//  3. The convention: a markdown file directly under docs/superpowers/specs
+//     whose name relates to the branch. Directly under, not nested, because
+//     that is the layout intent-guard's own importer discovers and an
+//     archive subdirectory is not a candidate for this branch's contract.
+
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+
+export const SPEC_DIR = 'docs/superpowers/specs';
+export const PLAN_DIR = 'docs/superpowers/plans';
+
+export type SpecDiscovery =
+  /** Found, with the source that won. Paths are repository-relative. */
+  | { kind: 'flag' | 'pr-body' | 'convention'; spec: string; plan: string | null }
+  /** `--spec` named a file that is not there. Never silently replaced. */
+  | { kind: 'missing-flag'; spec: string }
+  | { kind: 'none' };
+
+export interface SpecDiscoveryOptions {
+  repoRoot: string;
+  /** `--spec` on the umbrella's command line, repository-relative or absolute. */
+  spec?: string;
+  /** The pull request body, when this run has one. */
+  prBody?: string;
+  /** The branch name the slug is derived from. */
+  branch?: string;
+}
+
+/**
+ * The branch name with its prefix removed.
+ *
+ * Only the FIRST segment goes. Dropping everything but the last would turn
+ * `feat/online/widget-cache` into `widget-cache` and match a spec about a
+ * different feature, and the prefix convention (`feat/`, `fix/`) is exactly
+ * one segment deep.
+ */
+export function branchSlug(branch: string): string {
+  const slash = branch.indexOf('/');
+  return slash === -1 ? branch : branch.slice(slash + 1);
+}
+
+/**
+ * A spec or plan filename reduced to the part that identifies the feature.
+ *
+ * The date prefix and the `-design` suffix are the two pieces of the
+ * superpowers naming convention that carry no identity: the same feature's
+ * spec and plan differ by exactly those, which is how intent-guard's own
+ * importer pairs them.
+ */
+export function normalizeStem(fileName: string): string {
+  const stem = fileName.replace(/\.md$/i, '');
+  return stem.replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-design$/, '');
+}
+
+/** Whether a normalized stem and a slug name the same work. */
+export function stemMatches(stem: string, slug: string): boolean {
+  if (stem === '' || slug === '') {
+    return false;
+  }
+  return stem.includes(slug) || slug.includes(stem);
+}
+
+/**
+ * The path named by a `Spec:` line in a pull request body.
+ *
+ * Anchored to the start of a line on purpose: a sentence that happens to
+ * contain "the Spec: value" in prose is not somebody naming a file, and
+ * treating it as one would silently swap the contract a pull request is
+ * checked against.
+ */
+export function specFromPrBody(body: string): string | null {
+  const match = /^Spec:\s*(\S+)/m.exec(body);
+  return match === null ? null : match[1];
+}
+
+/** `pull_request.body` out of a GitHub event payload, or null. */
+export function prBodyFromEvent(eventPath: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(eventPath, 'utf8'));
+  } catch {
+    // A missing, unreadable or malformed payload is not an error here. It
+    // means this run has no pull request body to read, which is the ordinary
+    // case outside a pull request.
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    return null;
+  }
+  const pull = (parsed as { pull_request?: unknown }).pull_request;
+  if (pull === null || typeof pull !== 'object') {
+    return null;
+  }
+  const body = (pull as { body?: unknown }).body;
+  return typeof body === 'string' ? body : null;
+}
+
+/** Markdown files directly under `dir`, sorted lexically. Never throws. */
+function markdownFilesIn(repoRoot: string, dir: string): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(path.join(repoRoot, dir), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.md$/i.test(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  return entries.sort();
+}
+
+function exists(repoRoot: string, relative: string): boolean {
+  try {
+    readFileSync(path.join(repoRoot, relative));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The plan belonging to a spec, by the same stem rule.
+ *
+ * Applied to any spec, however it was chosen, rather than only to a
+ * conventionally discovered one: a spec named in a pull request body has a
+ * plan beside it just as often, and its budget block is the half of the
+ * contract that actually blocks.
+ */
+function planFor(repoRoot: string, specPath: string): string | null {
+  const specStem = normalizeStem(path.basename(specPath));
+  const matches = markdownFilesIn(repoRoot, PLAN_DIR).filter((name) =>
+    stemMatches(normalizeStem(name), specStem)
+  );
+  const newest = matches[matches.length - 1];
+  return newest === undefined ? null : `${PLAN_DIR}/${newest}`;
+}
+
+/** Normalizes a user-supplied path to a repository-relative one. */
+function relativeToRoot(repoRoot: string, candidate: string): string {
+  const relative = path.isAbsolute(candidate)
+    ? path.relative(repoRoot, candidate)
+    : path.normalize(candidate);
+  return relative.split(path.sep).join('/');
+}
+
+export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
+  const { repoRoot } = options;
+
+  if (options.spec !== undefined) {
+    const relative = relativeToRoot(repoRoot, options.spec);
+    if (!exists(repoRoot, relative)) {
+      return { kind: 'missing-flag', spec: relative };
+    }
+    return { kind: 'flag', spec: relative, plan: planFor(repoRoot, relative) };
+  }
+
+  if (options.prBody !== undefined) {
+    const named = specFromPrBody(options.prBody);
+    if (named !== null) {
+      const relative = relativeToRoot(repoRoot, named);
+      if (exists(repoRoot, relative)) {
+        return { kind: 'pr-body', spec: relative, plan: planFor(repoRoot, relative) };
+      }
+    }
+  }
+
+  if (options.branch !== undefined) {
+    const slug = branchSlug(options.branch);
+    const matches = markdownFilesIn(repoRoot, SPEC_DIR).filter((name) =>
+      stemMatches(normalizeStem(name), slug)
+    );
+    // Lexically newest. The names carry an ISO date prefix, so lexical order
+    // is date order, and a second attempt at the same feature sorts after the
+    // first without anybody having to remember to delete the old one.
+    const newest = matches[matches.length - 1];
+    if (newest !== undefined) {
+      const relative = `${SPEC_DIR}/${newest}`;
+      return { kind: 'convention', spec: relative, plan: planFor(repoRoot, relative) };
+    }
+  }
+
+  return { kind: 'none' };
+}

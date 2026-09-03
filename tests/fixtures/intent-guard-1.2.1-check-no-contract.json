@@ -1,0 +1,1 @@
+{"status":"blocked","exitCode":1,"reasons":["No .conductor/intent-contract.yaml found. Draft intent with intent-guard-extract, then approve with intent-guard-freeze before implementing."],"contractFound":false,"contractFrozen":false,"crossSessionDrift":null}
