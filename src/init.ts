@@ -42,13 +42,14 @@
 //     repository, which is the only way it could have been found: every
 //     fixture in the suite agreed with the code.
 //
-//     The recognition rule is three conditions, all required: the hooks
-//     directory is named `_`, its parent is named `.husky`, and husky's own
-//     shim (`h`, or `husky.sh`) is in that directory. See huskyDirectoryFor
-//     for why the content of the executed file is deliberately not a
-//     fourth, weaker signal: under husky 8 that file is the tracked hook,
-//     and reading its preamble as a dispatcher pointed init at the
-//     repository root.
+//     The recognition rule is structural and nothing else: the hooks
+//     directory is named `_` and its parent is named `.husky`. Only husky
+//     creates that path. See huskyDirectoryFor for why neither the content
+//     of the executed file nor the presence of husky's shim is allowed to
+//     join the rule: the first fires against husky 8's tracked hook and
+//     points init at the repository root, and the second fails exactly
+//     after a `git clean -xdf` has removed the gitignored generated
+//     directory, which is the state this whole property exists to survive.
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -100,29 +101,41 @@ export type HookManager = 'native' | 'husky' | 'lefthook' | 'precommit';
  * The `.husky` directory whose generated subdirectory git has been pointed
  * at, or null when this is not that arrangement.
  *
- * Three conditions, ALL required, and the reason all three are required is
- * a regression this function shipped with. An earlier version also accepted
- * the hooks directory on the CONTENT of the pre-commit file in it, matching
- * the line that sources husky's shim. That line appears in two completely
- * different places:
+ * The rule is STRUCTURAL and nothing else: the hooks directory is named
+ * `_`, and its parent is named `.husky`. Only husky creates that path, so
+ * the shape alone identifies it, and both halves are required.
  *
- *   husky 9  core.hooksPath = .husky/_   .husky/_/pre-commit sources _/h
- *            and IS a dispatcher; the tracked hook is .husky/pre-commit.
+ * Two things are deliberately NOT part of the rule, each for a reason that
+ * cost a bug:
  *
- *   husky 8  core.hooksPath = .husky     .husky/pre-commit sources
- *            _/husky.sh as a PREAMBLE and IS the tracked hook already.
+ *  - THE CONTENT of the pre-commit file git executes. The line that sources
+ *    husky's shim appears in two completely different places:
  *
- * So on husky 8 the content signal fired against the tracked hook itself,
- * and the "one directory up" rule then pointed at the parent of .husky,
- * which is the repository root. Init wrote a pre-commit file there, saw no
- * gate hook because it never read the real one, reported success, and left
- * every commit ungated. Content of the pre-commit file is never sufficient
- * on its own, and the tracked target is this `.husky` directory rather than
- * a computed parent of whatever directory git happens to point at.
+ *      husky 9  core.hooksPath = .husky/_   .husky/_/pre-commit sources
+ *               _/h and IS a dispatcher; the tracked hook is one up.
+ *      husky 8  core.hooksPath = .husky     .husky/pre-commit sources
+ *               _/husky.sh as a PREAMBLE and IS the tracked hook already.
  *
- * The confirming file is `h` (husky 9) or `husky.sh` (husky 8 kept one
- * there too), beside the dispatcher in the generated directory. It is what
- * makes this an installed husky rather than a directory named `_`.
+ *    Reading content therefore fired against husky 8's tracked hook, and
+ *    "one directory up" then pointed at the parent of `.husky`, which is
+ *    the repository root. Init wrote a hook there, never read the real one
+ *    so never saw the gate hook in it, reported success, and left every
+ *    commit ungated. The structural rule excludes husky 8 on its own,
+ *    because there the hooks directory is `.husky` and not `_`.
+ *
+ *  - THE PRESENCE OF THE SHIM (`h`, or husky 8's `husky.sh`). Requiring it
+ *    looks like useful confirmation and quietly reintroduces the original
+ *    trap. husky gitignores `.husky/_`, so `git clean -xdf` deletes the
+ *    whole directory while `core.hooksPath=.husky/_` sits in `.git/config`
+ *    and survives. In that state there is no shim, no dispatcher, and
+ *    nothing whatever to confirm, so a shim requirement sends init down the
+ *    ordinary path to write `.husky/_/pre-commit` -- which is exactly the
+ *    file husky's next prepare step wipes. The shim is evidence that husky
+ *    ran recently, not evidence about whose directory this is, so it is
+ *    reported and never tested against.
+ *
+ * The tracked target is this `.husky` directory's own hook, never a
+ * computed parent of whatever directory git happens to point at.
  */
 function huskyDirectoryFor(hooksDir: string): string | null {
   if (path.basename(hooksDir) !== '_') {
@@ -132,10 +145,12 @@ function huskyDirectoryFor(hooksDir: string): string | null {
   if (path.basename(huskyDir) !== '.husky') {
     return null;
   }
-  if (!isFile(path.join(hooksDir, 'h')) && !isFile(path.join(hooksDir, 'husky.sh'))) {
-    return null;
-  }
   return huskyDir;
+}
+
+/** Whether husky's shim is in place, which is worth SAYING but never testing. */
+function huskyShimPresent(hooksDir: string): boolean {
+  return isFile(path.join(hooksDir, 'h')) || isFile(path.join(hooksDir, 'husky.sh'));
 }
 
 /**
@@ -543,12 +558,14 @@ export function planInit(options: InitOptions): InitResult {
   const executedHookPath = path.join(hooks.dir, 'pre-commit');
   const executedHook = readIfExists(executedHookPath);
 
-  // The redirect fires only on husky's OWN generated directory, confirmed
-  // by the shim husky leaves in it. The tracked hook is then that .husky
-  // directory's own pre-commit, which is what husky's shim runs:
+  // The redirect fires on husky's OWN generated directory, recognised by
+  // its shape alone. The tracked hook is then that .husky directory's own
+  // pre-commit, which is what husky's shim runs:
   // `s=$(dirname "$(dirname "$0")")/$n`. Never a computed parent of an
-  // arbitrary hooks directory, and never decided by the content of the file
-  // git executes: on husky 8 that file IS the tracked hook.
+  // arbitrary hooks directory, never decided by the content of the file git
+  // executes (on husky 8 that file IS the tracked hook), and never
+  // conditional on husky's shim being present (a clean deletes it, and the
+  // repository is still husky's).
   const huskyDir = huskyDirectoryFor(hooks.dir);
   const husky = huskyDir !== null;
 
@@ -609,12 +626,18 @@ export function planInit(options: InitOptions): InitResult {
       path: relHook,
       // Say the redirect out loud in --dry-run: somebody reading it in a
       // husky repository is entitled to know why the path on screen is not
-      // the one core.hooksPath points at.
+      // the one core.hooksPath points at. The shim's state is reported
+      // here, where it informs, rather than tested in the rule, where it
+      // would send a cleaned repository back into the trap.
       detail: husky
         ? `${created}: husky runs ${path
             .relative(root, executedHookPath)
             .split(path.sep)
-            .join('/')}, which execs this tracked file`
+            .join('/')}, which execs this tracked file${
+            huskyShimPresent(hooks.dir)
+              ? ''
+              : ' (husky is not installed right now: its generated directory is empty or gone, and the next install restores it)'
+          }`
         : created,
     });
     writes.push({ path: hookPath, content: HOOK, executable: true, kind: 'hook' });

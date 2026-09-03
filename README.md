@@ -209,16 +209,26 @@ dispatcher puts the hook where the next install deletes it without saying
 so. Both were found by running this tool against a real husky 9
 repository rather than against a fixture.
 
-Recognition needs all three of: the hooks directory is named `_`, its
-parent is named `.husky`, and husky's own shim (`h`, or `husky.sh`) sits
-in that directory beside the dispatcher. The contents of the file git
-executes are deliberately not a signal, because under husky 8 that file is
-the tracked hook itself: husky 8 points `core.hooksPath` at `.husky`, and
-every tracked hook there opens by sourcing `_/husky.sh` as a preamble.
-Reading that preamble as a dispatcher sends init one directory above
-`.husky`, which is the repository root. husky 8 therefore takes the
-ordinary path, where `.husky/pre-commit` is already both the file git runs
-and the file init reads.
+Recognition is structural: the hooks directory is named `_` and its parent
+is named `.husky`. Only husky creates that path, so the shape alone
+identifies it, and two things that look like useful corroboration are
+deliberately excluded.
+
+The **contents** of the file git executes are not a signal, because under
+husky 8 that file is the tracked hook itself: husky 8 points
+`core.hooksPath` at `.husky`, and every tracked hook there opens by
+sourcing `_/husky.sh` as a preamble. Reading that preamble as a dispatcher
+sends init one directory above `.husky`, which is the repository root.
+husky 8 therefore takes the ordinary path, where `.husky/pre-commit` is
+already both the file git runs and the file init reads.
+
+The **presence of husky's shim** is not a signal either. husky gitignores
+`.husky/_`, so `git clean -xdf` deletes that directory while
+`core.hooksPath=.husky/_` sits in `.git/config` and survives. A repository
+in that state has no shim and no dispatcher to find, and requiring one
+would send init back to writing `.husky/_/pre-commit`, the very file the
+next install wipes. The shim says whether husky ran recently, not whose
+directory this is, so `--dry-run` reports it and the rule ignores it.
 
 lefthook and the pre-commit framework also install a generated script
 where git looks, and neither has a tracked counterpart to write instead,

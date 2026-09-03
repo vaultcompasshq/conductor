@@ -751,10 +751,10 @@ describe('a husky 9 repository', () => {
     expect(`${commit.stdout}${commit.stderr}`).toMatch(/the umbrella ran: run --staged/);
   });
 
-  it('needs the shim beside the dispatcher, not just a dispatcher-shaped file', () => {
-    // The generated directory by name only, with no h and no husky.sh in
-    // it. Content alone must never move where init writes: a file that
-    // looks like a dispatcher is not proof that anything will dispatch.
+  it('redirects on the path alone, with no shim in the generated directory', () => {
+    // The shim says husky is installed RIGHT NOW. It is not what makes the
+    // directory husky's: only husky creates .husky/_, so a repository that
+    // has one is husky's whether or not an install has run recently.
     const repo = gitRepo();
     const generated = path.join(repo, '.husky', '_');
     mkdirSync(generated, { recursive: true });
@@ -764,10 +764,54 @@ describe('a husky 9 repository', () => {
 
     const result = init(repo);
 
-    expect(result.hookManager).toBe('native');
-    expect(result.ok).toBe(false);
-    expect(result.conflicts[0].reason).toBe('foreign-hook');
-    expect(existsSync(path.join(repo, '.husky', 'pre-commit'))).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.hookManager).toBe('husky');
+    expect(existsSync(path.join(repo, '.husky', 'pre-commit'))).toBe(true);
+    expect(readFileSync(path.join(generated, 'pre-commit'), 'utf8')).toBe(HUSKY_DISPATCHER);
+  });
+
+  // The case a shim requirement excluded, and the original trap in its
+  // purest form: "git clean -xdf" removes .husky/_ because husky gitignores
+  // it, while core.hooksPath=.husky/_ lives in .git/config and survives. So
+  // there is no shim, no dispatcher, and nothing in that directory to
+  // detect at all, and the next install puts every bit of it back.
+  it('redirects when the generated directory has been wiped by a clean', () => {
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.husky'), { recursive: true });
+    execFileSync('git', ['config', 'core.hooksPath', '.husky/_'], { cwd: repo });
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.hookManager).toBe('husky');
+    expect(existsSync(path.join(repo, '.husky', 'pre-commit'))).toBe(true);
+    // Nothing is created in husky's own directory, least of all a hook.
+    expect(existsSync(path.join(repo, '.husky', '_'))).toBe(false);
+  });
+
+  it('survives the install that repopulates a wiped generated directory', () => {
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.husky'), { recursive: true });
+    execFileSync('git', ['config', 'core.hooksPath', '.husky/_'], { cwd: repo });
+    init(repo);
+
+    // The install that follows the clean. Under a shim requirement the
+    // umbrella hook would be sitting in .husky/_/pre-commit by now, and
+    // this line would delete it.
+    writeHuskyGenerated(repo);
+
+    const bin = shimDirWithGit();
+    shim(bin, 'conductor', '#!/bin/sh\necho "the umbrella ran: $*" >&2\nexit 1\n');
+    writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const commit = spawnSync(GIT, ['commit', '-m', 'gated after a clean and a reinstall'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathLedBy(bin) },
+    });
+
+    expect(commit.status).not.toBe(0);
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(/the umbrella ran: run --staged/);
   });
 
   it('does not redirect out of a generated directory that is not husky own', () => {
