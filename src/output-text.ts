@@ -275,6 +275,14 @@ function verdict(result: RunResult): string {
 }
 
 export function renderText(result: RunResult): string {
+  // Counted over EVERY gate, unenforced ones included, and deliberately not
+  // the same number the verdict prints. This line is an inventory of what
+  // follows it: a reader counting the finding lines on screen has to arrive
+  // at this number, and narrowing it to the enforced gates would make the
+  // header disagree with the report under it. The verdict is the other
+  // question, what failed the run, and that one is enforced gates only. Two
+  // different questions, so two numbers, and the section headers and the
+  // "not enforced" lines are what connect them.
   const lines: string[] = [
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];

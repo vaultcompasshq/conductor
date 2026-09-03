@@ -376,6 +376,25 @@ describe('the verdict when enforced and unenforced gates are mixed', () => {
     expect(last).not.toMatch(/across 2 gate\(s\)/);
   });
 
+  it('lets the header count everything on screen while the verdict counts what failed', () => {
+    // Two different questions. The header is an inventory of the report
+    // under it, so a reader counting finding lines has to reach its number;
+    // the verdict is about what failed the run. Narrowing the header would
+    // make it disagree with the lines it introduces.
+    const text = renderText(
+      result(
+        [
+          outcome({ exitCode: 1, findings: depGuard.findings, run: depGuard.run }),
+          brokenGate('intent', false),
+        ],
+        1
+      )
+    );
+
+    expect(text).toMatch(/^conductor run: 2 gate\(s\), 3 finding\(s\)/m);
+    expect(text).toMatch(/verdict: exit 1, 2 blocking finding\(s\) across 1 gate\(s\)/);
+  });
+
   it('still says the unenforced gate broke, in the same exit 1 verdict', () => {
     // Dropping it from the count must not drop it from the sentence: a gate
     // that verified nothing is worth a line whatever the exit code was.
