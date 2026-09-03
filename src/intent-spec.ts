@@ -94,6 +94,11 @@ export function stemMatches(stem: string, slug: string): boolean {
  * contain "the Spec: value" in prose is not somebody naming a file, and
  * treating it as one would silently swap the contract a pull request is
  * checked against.
+ *
+ * The FIRST such line wins when a body carries two. Not a deep decision, but
+ * it has to be a decision rather than whatever the regex happened to do: a
+ * pull request edited to add a second line above the first would otherwise
+ * change contract without the diff showing it.
  */
 export function specFromPrBody(body: string): string | null {
   const match = /^Spec:\s*(\S+)/m.exec(body);
@@ -213,6 +218,24 @@ function relativeToRoot(repoRoot: string, candidate: string): string {
   return relative.split(path.sep).join('/');
 }
 
+/**
+ * Whether a repository-relative path leaves the repository.
+ *
+ * Only the pull request body is held to this. That body is written by
+ * whoever opened the pull request, and on a FORK pull request that is
+ * somebody with no write access to the repository at all: without the check,
+ * a `Spec: ../../etc/something` line imports an arbitrary readable file from
+ * the runner into a contract, and its path then appears in `contractSource`
+ * and in the `--approved-by` string.
+ *
+ * `--spec` is deliberately NOT held to it. A person typed that on the command
+ * line just now, and pointing at a spec kept outside the checkout is a real
+ * thing to want.
+ */
+function escapesRoot(relative: string): boolean {
+  return relative === '..' || relative.startsWith('../') || path.isAbsolute(relative);
+}
+
 export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
   const { repoRoot } = options;
 
@@ -228,7 +251,10 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
     const named = specFromPrBody(options.prBody);
     if (named !== null) {
       const relative = relativeToRoot(repoRoot, named);
-      if (exists(repoRoot, relative)) {
+      // A path out of the tree is treated exactly as a path that is not
+      // there: fall through to the convention. Same posture, same reason, and
+      // it keeps an unusable Spec: line from being able to silence the gate.
+      if (!escapesRoot(relative) && exists(repoRoot, relative)) {
         return { kind: 'pr-body', spec: relative, plan: planFor(repoRoot, relative) };
       }
     }

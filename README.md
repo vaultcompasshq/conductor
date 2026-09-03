@@ -299,10 +299,16 @@ gate looks like. In Actions this is almost always a shallow checkout, so
    than present: an unfrozen contract is a draft somebody left behind, and
    running the gate against it fails every pull request on "not frozen by
    user" without checking anything.
-3. A `Spec: <path>` line in the pull request body, read from the event
-   payload at `GITHUB_EVENT_PATH`. Written by whoever opened the pull
+3. The **first** `Spec: <path>` line in the pull request body, read from the
+   event payload at `GITHUB_EVENT_PATH`. Written by whoever opened the pull
    request, which is a weaker claim, so a path here that is not on disk falls
-   through to the next rule: a typo in a description must not fail a build.
+   through to the next rule: a typo in a description must not fail a build. A
+   path that leaves the repository falls through the same way, because on a
+   fork pull request that body is written by somebody with no write access,
+   and an unchecked `../` there imports an arbitrary readable file from the
+   runner and puts its path in the contract. `--spec` is deliberately not held
+   to that rule: a person typed it, and a spec kept outside the checkout is a
+   real thing to want.
 4. A markdown file **directly under** `docs/superpowers/specs` whose name
    relates to the branch. The branch slug is the branch name with its first
    segment (`feat/`, `fix/`) removed; a filename is reduced by stripping a

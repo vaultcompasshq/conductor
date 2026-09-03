@@ -103,6 +103,10 @@ describe('specFromPrBody', () => {
     expect(specFromPrBody('Some prose about a spec, in passing.')).toBeNull();
   });
 
+  it('takes the first line when a body names two, rather than the last', () => {
+    expect(specFromPrBody('Spec: docs/a.md\nand later\nSpec: docs/b.md\n')).toBe('docs/a.md');
+  });
+
   it('ignores a Spec: that is not at the start of a line', () => {
     // Otherwise a sentence mentioning "the Spec: value" in prose names a file.
     expect(specFromPrBody('See the Spec: docs/a.md in the other PR.')).toBeNull();
@@ -270,6 +274,67 @@ describe('discoverSpec', () => {
     expect(found).toMatchObject({
       kind: 'convention',
       spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+    });
+  });
+
+  describe('a PR body naming a path outside the repository', () => {
+    /** A repository root with a readable file sitting beside it. */
+    function rootWithOutsideFile(specs: string[]): { root: string; outside: string } {
+      const parent = tempDir();
+      const root = path.join(parent, 'repo');
+      const specDir = path.join(root, 'docs', 'superpowers', 'specs');
+      mkdirSync(specDir, { recursive: true });
+      for (const name of specs) {
+        writeFileSync(path.join(specDir, name), '# spec\n');
+      }
+      const outside = path.join(parent, 'outside-spec.md');
+      writeFileSync(outside, '# not this repository\n');
+      return { root, outside };
+    }
+
+    it('falls through to the convention rather than importing it', () => {
+      // On a fork pull request the body is attacker-controlled, and the path
+      // it names reaches the drafted contract and the approved-by string.
+      const { root } = rootWithOutsideFile(['2026-09-03-widget-cache-design.md']);
+
+      const found = discoverSpec({
+        repoRoot: root,
+        branch: 'feat/widget-cache',
+        prBody: 'Spec: ../outside-spec.md\n',
+      });
+
+      expect(found).toMatchObject({
+        kind: 'convention',
+        spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      });
+    });
+
+    it('finds nothing at all when there is no convention match to fall through to', () => {
+      const { root } = rootWithOutsideFile([]);
+
+      expect(
+        discoverSpec({
+          repoRoot: root,
+          branch: 'feat/widget-cache',
+          prBody: 'Spec: ../outside-spec.md\n',
+        })
+      ).toEqual({ kind: 'none' });
+    });
+
+    it('refuses an absolute path out of the tree the same way', () => {
+      const { root, outside } = rootWithOutsideFile([]);
+
+      expect(
+        discoverSpec({ repoRoot: root, branch: 'feat/widget-cache', prBody: `Spec: ${outside}\n` })
+      ).toEqual({ kind: 'none' });
+    });
+
+    it('still lets --spec point outside, because a person typed it', () => {
+      const { root, outside } = rootWithOutsideFile([]);
+
+      expect(discoverSpec({ repoRoot: root, branch: 'feat/widget-cache', spec: outside })).toMatchObject(
+        { kind: 'flag' }
+      );
     });
   });
 
