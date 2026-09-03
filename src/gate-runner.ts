@@ -242,7 +242,10 @@ function runGateInner(
       durationMs: Date.now() - started,
       couldNotRun: {
         reason: 'binary-missing',
-        detail: `no ${gate.product} binary on PATH or in node_modules/.bin`,
+        // Named in resolution order, which is the repository's own copy
+        // first. Saying PATH first points a reader at the location this
+        // tool prefers second, which is the wrong place to install it.
+        detail: `no ${gate.product} binary in node_modules/.bin or on PATH`,
       },
       // A missing enabled gate is a finding of the umbrella's own, never a
       // silent skip. Skipping is how a gate ends up switched on in the
