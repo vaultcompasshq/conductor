@@ -21,7 +21,10 @@ inputs:
       request body and the branch-name convention.
     default: ''
   output:
-    description: Where to write the SARIF log.
+    description: >-
+      Where to write the SARIF log, relative to working-directory. The sarif
+      output reports it relative to the workspace, which is where the caller's
+      upload step runs.
     default: conductor.sarif
   working-directory:
     description: The repository root, when the checkout is not at the workspace root.
@@ -29,8 +32,10 @@ inputs:
 
 outputs:
   sarif:
-    description: The SARIF log this action wrote, for the caller's upload step.
-    value: ${{ inputs.output }}
+    description: >-
+      The SARIF log this action wrote, relative to the workspace rather than to
+      working-directory, since that is where the caller's upload step runs.
+    value: ${{ steps.gates.outputs.sarif }}
 
 runs:
   using: composite
@@ -53,6 +58,7 @@ runs:
         fi
 
     - name: Run the gates
+      id: gates
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -67,16 +73,36 @@ runs:
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         OUTPUT: ${{ inputs.output }}
+        WORKDIR: ${{ inputs.working-directory }}
       run: |
         set -eu
-        ARGS="run --stage $STAGE --format sarif --output $OUTPUT"
-        # Only when a ref was actually named. github.base_ref is empty outside
-        # a pull request, so an unconditional --base would hand the gate the
-        # ref "origin/" on every push build and fail it closed for no reason.
+
+        # The path the caller uploads, resolved from the WORKSPACE rather than
+        # from working-directory, which is where this step runs but not where
+        # the upload step does. Published BEFORE the gates run: the log is
+        # most worth having on the run that failed, and the caller's upload
+        # step is the one carrying if: always().
+        if [ "$WORKDIR" = "." ] || [ -z "$WORKDIR" ]; then
+          SARIF_PATH="$OUTPUT"
+        else
+          SARIF_PATH="${WORKDIR%/}/$OUTPUT"
+        fi
+        printf 'sarif=%s\n' "$SARIF_PATH" >> "$GITHUB_OUTPUT"
+
+        # An ARRAY, not a string. A string built by appending and expanded
+        # bare is word-split and then glob-expanded by the shell, so an
+        # output or spec containing a space becomes two arguments and one
+        # containing a bracket or a star is matched against the workspace,
+        # handing the gate whatever happens to be checked out.
+        ARGS=(run --stage "$STAGE" --format sarif --output "$OUTPUT")
+        # Only when the base-ref input actually named one. Left empty, the
+        # umbrella reads GITHUB_BASE_REF itself and treats an empty value as
+        # "not a pull request", which is what a push build wants; passing
+        # --base unconditionally would hand it the literal ref "origin/".
         if [ -n "$BASE_REF" ]; then
-          ARGS="$ARGS --base $BASE_REF"
+          ARGS+=(--base "$BASE_REF")
         fi
         if [ -n "$SPEC" ]; then
-          ARGS="$ARGS --spec $SPEC"
+          ARGS+=(--spec "$SPEC")
         fi
-        node_modules/.bin/conductor $ARGS
+        node_modules/.bin/conductor "${ARGS[@]}"

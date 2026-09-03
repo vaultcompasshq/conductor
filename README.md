@@ -367,10 +367,15 @@ naming the contract source and the base ref; the gate's SARIF run carries
 It **installs nothing**. The package is unpublished, so an install step would
 either fail or fetch something else under a name it does not own; instead the
 action checks for `node_modules/.bin/conductor` and fails with a sentence
-saying to add it as a devDependency. `--base` is passed only when a ref was
-actually named, because `github.base_ref` is empty outside a pull request and
-an unconditional `--base origin/` would fail every push build closed; left
-empty, the umbrella reads `GITHUB_BASE_REF` itself.
+saying to add it as a devDependency. `--base` is passed only when the
+`base-ref` input names one; left empty, the umbrella reads `GITHUB_BASE_REF`
+itself and treats an empty value as "not a pull request", which is what a
+push build wants.
+
+`output` is relative to `working-directory`, and the `sarif` output reports
+it relative to the **workspace**, which is where the caller's upload step
+runs. It is published before the gates run, because the log is most worth
+having on the run that failed.
 
 ```yaml
 name: guardrails
