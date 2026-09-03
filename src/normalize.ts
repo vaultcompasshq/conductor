@@ -23,8 +23,8 @@ import {
 } from './envelope.js';
 import type { GateRole, Product } from './policy.js';
 
-const BLOCKING_MISMATCH = 'compass/blocking-count-mismatch';
-const THRESHOLD_UNKNOWN = 'compass/blocking-threshold-unknown';
+const BLOCKING_MISMATCH = 'conductor/blocking-count-mismatch';
+const THRESHOLD_UNKNOWN = 'conductor/blocking-threshold-unknown';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -610,9 +610,9 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
 // most important thing that happened.
 
 export type GateProblemRule =
-  | 'compass/gate-missing'
-  | 'compass/gate-output-unparseable'
-  | 'compass/gate-failed';
+  | 'conductor/gate-missing'
+  | 'conductor/gate-output-unparseable'
+  | 'conductor/gate-failed';
 
 function gateProblem(
   ruleId: GateProblemRule,
@@ -623,7 +623,7 @@ function gateProblem(
 ): Finding {
   return {
     schemaVersion: 1,
-    product: 'compass',
+    product: 'conductor',
     productVersion: null,
     ruleId,
     severity: 'critical',
@@ -637,7 +637,7 @@ function gateProblem(
       // the message: a repeat run is the same alert rather than a new one
       // every commit, and a reworded detail is not a new problem.
       value: createHash('sha256').update(`${ruleId}|${role}|${product}`).digest('hex'),
-      scope: 'compass',
+      scope: 'conductor',
       stability: 'stable',
     },
     details: { role, product, ...details },
@@ -658,7 +658,7 @@ export function normalizeMissingGate(
   candidates: string[]
 ): Finding {
   return gateProblem(
-    'compass/gate-missing',
+    'conductor/gate-missing',
     role,
     product,
     `The "${role}" gate is enabled but no ${product} binary was found. ` +
@@ -685,7 +685,7 @@ export function normalizeMisconfiguredGate(
   detail: string
 ): Finding {
   return gateProblem(
-    'compass/gate-missing',
+    'conductor/gate-missing',
     role,
     product,
     `The "${role}" gate points at "${command}", which the umbrella could not run: ${detail}`,
@@ -708,7 +708,7 @@ export function normalizeUnparseableGate(
   detail: string
 ): Finding {
   return gateProblem(
-    'compass/gate-output-unparseable',
+    'conductor/gate-output-unparseable',
     role,
     product,
     `The "${role}" gate ran but the umbrella could not read its output: ${detail} ` +
@@ -721,7 +721,7 @@ export function normalizeUnparseableGate(
 /** The finding raised when a gate could not be run or did not complete. */
 export function normalizeFailedGate(role: GateRole, product: Product, detail: string): Finding {
   return gateProblem(
-    'compass/gate-failed',
+    'conductor/gate-failed',
     role,
     product,
     `The "${role}" gate did not complete: ${detail} Nothing was verified by this gate.`,

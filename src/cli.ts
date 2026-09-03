@@ -78,7 +78,7 @@ export function buildProgram(): Command {
   const program = new Command();
 
   program
-    .name('compass')
+    .name('conductor')
     .description('One policy file, one hook, and one report over independently installed gates.')
     .version(pkg.version)
     // Without this, commander calls process.exit() itself on any usage
@@ -185,7 +185,7 @@ export function buildProgram(): Command {
         process.exitCode = fail(
           err instanceof PolicyError
             ? err.message
-            : `compass: ${err instanceof Error ? err.message : String(err)}`
+            : `conductor: ${err instanceof Error ? err.message : String(err)}`
         );
       }
     });
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
     // The last backstop. Still one line, still no stack: an unhandled throw
     // printing a stack into a pre-commit hook's output is how a local path
     // ends up pasted into an issue.
-    process.exitCode = fail(`compass: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = fail(`conductor: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

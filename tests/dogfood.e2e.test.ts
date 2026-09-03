@@ -18,18 +18,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const COMPASS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const COMPASS_CLI = path.join(COMPASS_ROOT, 'dist', 'cli.js');
+const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CONDUCTOR_CLI = path.join(CONDUCTOR_ROOT, 'dist', 'cli.js');
 
 // Sibling checkouts, resolved relative to this repository rather than from
 // an absolute path, so no machine layout is written down here.
-const SIBLINGS = path.resolve(COMPASS_ROOT, '..');
+const SIBLINGS = path.resolve(CONDUCTOR_ROOT, '..');
 const DEP_GUARD_REPO = path.join(SIBLINGS, 'dep-guard');
 const DEP_GUARD_CLI = path.join(DEP_GUARD_REPO, 'packages', 'cli', 'dist', 'cli.js');
 const DEP_GUARD_CORPUS = path.join(DEP_GUARD_REPO, '.corpus-work', 'corpus');
 const INTENT_GUARD_CLI = path.join(
   SIBLINGS,
-  'conductor',
+  'intent-guard',
   'packages',
   'cli',
   'dist',
@@ -44,7 +44,7 @@ function vaultGuardOnPath(): string | null {
 const VAULT_GUARD = vaultGuardOnPath();
 
 const missing = [
-  existsSync(COMPASS_CLI) ? null : 'the umbrella is not built (run pnpm build)',
+  existsSync(CONDUCTOR_CLI) ? null : 'the umbrella is not built (run pnpm build)',
   existsSync(DEP_GUARD_REPO) ? null : 'no dep-guard checkout beside this repository',
   existsSync(DEP_GUARD_CLI) ? null : 'dep-guard is not built',
   existsSync(DEP_GUARD_CORPUS) ? null : 'dep-guard has no locally built corpus',
@@ -57,7 +57,7 @@ const describeE2E = missing.length === 0 ? describe : describe.skip;
 // The scratch parent is overridable so a session can point it at its own
 // scratch area; the default is the OS temp directory, never anywhere near
 // the checkouts being read.
-const SCRATCH_PARENT = process.env.COMPASS_SCRATCH_DIR ?? os.tmpdir();
+const SCRATCH_PARENT = process.env.CONDUCTOR_SCRATCH_DIR ?? os.tmpdir();
 
 let clone = '';
 let binDir = '';
@@ -77,8 +77,8 @@ function git(args: string[], options: { cwd?: string } = {}): string {
   });
 }
 
-function compass(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [COMPASS_CLI, ...args], {
+function conductor(args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
     cwd: clone,
     encoding: 'utf8',
     env,
@@ -89,7 +89,7 @@ function compass(args: string[]): { status: number | null; stdout: string; stder
 describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
   beforeAll(() => {
     mkdirSync(SCRATCH_PARENT, { recursive: true });
-    const scratch = mkdtempSync(path.join(SCRATCH_PARENT, 'compass-dogfood-'));
+    const scratch = mkdtempSync(path.join(SCRATCH_PARENT, 'conductor-dogfood-'));
     clone = path.join(scratch, 'clone');
     binDir = path.join(scratch, 'bin');
 
@@ -102,7 +102,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     git(['config', 'user.email', 'dogfood@example.com']);
     git(['config', 'user.name', 'Dogfood']);
 
-    shim(binDir, 'compass', `#!/bin/sh\nexec ${process.execPath} ${COMPASS_CLI} "$@"\n`);
+    shim(binDir, 'conductor', `#!/bin/sh\nexec ${process.execPath} ${CONDUCTOR_CLI} "$@"\n`);
     shim(binDir, 'dep-guard', `#!/bin/sh\nexec ${process.execPath} ${DEP_GUARD_CLI} "$@"\n`);
     shim(binDir, 'vault-guard', `#!/bin/sh\nexec ${VAULT_GUARD as string} "$@"\n`);
     // intent-guard is deliberately NOT shimmed. It is the unpublished one,
@@ -119,7 +119,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
   });
 
   it('init writes one policy file and one hook, and enables what it found', () => {
-    const result = compass(['init']);
+    const result = conductor(['init']);
 
     expect(result.status).toBe(0);
     expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(true);
@@ -128,9 +128,12 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     const policy = readFileSync(path.join(clone, '.guardrails.yaml'), 'utf8');
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: true/);
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
-    // Not on PATH and not in node_modules/.bin, so init leaves it off and
-    // says why rather than silently switching on a gate that is not there.
-    expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
+    // The umbrella's own binary is shimmed on PATH as "conductor", and that
+    // is also the pre-rename fallback name intent-guard's candidate table
+    // still matches on (see resolve.ts). Detection has no way to tell those
+    // apart from a name alone, so it reports the intent gate as found even
+    // though the real intent-guard binary is not on this PATH.
+    expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: true/);
   });
 
   it('reaches the unpublished gate through an absolute command in the policy', () => {
@@ -191,7 +194,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
       )
     );
 
-    const result = compass(['run']);
+    const result = conductor(['run']);
     // Not a clean run, but it ran: every gate resolved and answered.
     expect(result.stdout).toMatch(/dep-guard/);
     expect(result.stdout).toMatch(/vault-guard/);
@@ -223,11 +226,11 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
 
     expect(commit.status).not.toBe(0);
     // The hook ran the umbrella, and the umbrella refused.
-    expect(`${commit.stdout}${commit.stderr}`).toMatch(/compass: commit blocked/);
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(/conductor: commit blocked/);
   });
 
   it('names the right findings in the text report', () => {
-    const result = compass(['run', '--staged']);
+    const result = conductor(['run', '--staged']);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toMatch(/dep-guard\/typosquat/);
@@ -239,7 +242,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
   });
 
   it('names the right findings in the SARIF log, one run per gate', () => {
-    const result = compass(['run', '--staged', '--format', 'sarif']);
+    const result = conductor(['run', '--staged', '--format', 'sarif']);
 
     expect(result.status).toBe(1);
     const log = JSON.parse(result.stdout) as {
@@ -283,14 +286,14 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     // the whole failure mode this umbrella exists to avoid.
     const emptyDir = path.join(path.dirname(binDir), 'empty');
     mkdirSync(emptyDir, { recursive: true });
-    const result = spawnSync(process.execPath, [COMPASS_CLI, 'run', '--staged'], {
+    const result = spawnSync(process.execPath, [CONDUCTOR_CLI, 'run', '--staged'], {
       cwd: clone,
       encoding: 'utf8',
       env: { ...env, PATH: emptyDir },
     });
 
     expect(result.status).toBe(2);
-    expect(result.stdout).toMatch(/compass\/gate-missing/);
+    expect(result.stdout).toMatch(/conductor\/gate-missing/);
     expect(result.stdout).toMatch(/DID NOT RUN/);
     expect(result.stdout).toMatch(/verdict: exit 2/);
   });
@@ -303,7 +306,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     // The policy file was rewritten by hand earlier in this file, so this is
     // a PARTIAL revert: the hook goes, the edited file stays, and the exit
     // code says something was left behind rather than reporting success.
-    const result = compass(['init', '--revert']);
+    const result = conductor(['init', '--revert']);
 
     expect(result.status).toBe(2);
     expect(existsSync(path.join(clone, '.git', 'hooks', 'pre-commit'))).toBe(false);
@@ -314,7 +317,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
   });
 
   it('finishes the job under --force', () => {
-    const result = compass(['init', '--revert', '--force']);
+    const result = conductor(['init', '--revert', '--force']);
 
     expect(result.status).toBe(0);
     expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(false);

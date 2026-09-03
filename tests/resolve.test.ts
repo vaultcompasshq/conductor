@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-resolve-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-resolve-'));
   temps.push(dir);
   return dir;
 }

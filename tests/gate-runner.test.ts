@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-runner-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-runner-'));
   temps.push(dir);
   return dir;
 }
@@ -142,7 +142,7 @@ describe('running one gate', () => {
 
     expect(outcome.couldNotRun?.reason).toBe('binary-missing');
     expect(outcome.findings).toHaveLength(1);
-    expect(outcome.findings[0].ruleId).toBe('compass/gate-missing');
+    expect(outcome.findings[0].ruleId).toBe('conductor/gate-missing');
     expect(outcome.findings[0].blocking).toBe(true);
   });
 
@@ -175,7 +175,7 @@ describe('running one gate', () => {
     // of its own, so without a finding here the published report would carry
     // no trace of the most important thing that happened.
     expect(outcome.findings.map((finding) => finding.ruleId)).toEqual([
-      'compass/gate-output-unparseable',
+      'conductor/gate-output-unparseable',
     ]);
     expect(outcome.findings[0].blocking).toBe(true);
   });

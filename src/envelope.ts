@@ -70,7 +70,7 @@ export type Subject =
 
 export interface Finding {
   schemaVersion: 1;
-  /** The gate that produced it, or "compass" for the umbrella's own findings. */
+  /** The gate that produced it, or "conductor" for the umbrella's own findings. */
   product: string;
   /** Read from the binary's --version, or null when it could not be asked. */
   productVersion: string | null;

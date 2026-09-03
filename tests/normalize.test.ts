@@ -53,7 +53,7 @@ describe('dep-guard 0.2.0 normalization', () => {
     tampered.run.blockingMatches = 1;
     const disagreed = normalizeDepGuard(tampered, '0.2.0');
     expect(disagreed.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
-      'compass/blocking-count-mismatch'
+      'conductor/blocking-count-mismatch'
     );
     // The gate said one. The umbrella does not get to say two.
     expect(disagreed.findings.every((finding) => finding.blocking === false)).toBe(true);
@@ -407,9 +407,9 @@ describe('the umbrella own missing-gate finding', () => {
   const finding = normalizeMissingGate('dependencies', 'dep-guard', ['dep-guard']);
 
   it('is a blocking finding of the umbrella, not a silent skip', () => {
-    expect(finding.ruleId).toBe('compass/gate-missing');
+    expect(finding.ruleId).toBe('conductor/gate-missing');
     expect(finding.blocking).toBe(true);
-    expect(finding.product).toBe('compass');
+    expect(finding.product).toBe('conductor');
   });
 
   it('has no subject, because a missing binary is not somewhere in the tree', () => {
