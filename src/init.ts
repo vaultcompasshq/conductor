@@ -482,7 +482,7 @@ function foreignGuidance(relPath: string): string {
   return (
     `${relPath} already exists and was not written by conductor init. Merge "conductor run --staged" ` +
     'into it yourself, or move it aside and re-run init. Init never replaces a hook it does not ' +
-    'recognise, because that hook is somebody working setup.'
+    "recognise, because that hook is somebody's working setup."
   );
 }
 
@@ -766,7 +766,7 @@ export function revertInit(options: InitOptions): RevertResult {
       reason: 'no-manifest',
       guidance:
         `No ${MANIFEST_RELATIVE_PATH}, so there is no record of what init wrote. Nothing was ` +
-        'removed: guessing which files were ours is how a revert deletes somebody work.',
+        "removed: guessing which files were ours is how a revert deletes somebody's work.",
     });
     return { ok: false, actions, conflicts };
   }

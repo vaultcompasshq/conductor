@@ -245,8 +245,9 @@ by the gate, how durable that fingerprint is, and the gate's own details
 bag with its values unchanged. A value in that bag is never converted, so
 where a gate's own units differ from SARIF's the key says so:
 `columnZeroBased` is the secret scanner's own 0-based column, sitting
-beside the 1-based `startColumn` mapped from it. No location is invented: a finding with no known line gets
-no region, and a finding about a missing binary gets no location at all.
+beside the 1-based `startColumn` mapped from it. No location is invented:
+a finding with no known line gets no region, and a finding about a missing
+binary gets no location at all.
 
 ## Scope of v0.1
 
