@@ -52,15 +52,28 @@ const INTERNAL_PATH = /\/Users\/[^/\s]+\/(?:[^/\s]+\/)*[Pp]rojects\/[^/\s]+/;
 // directories live. Two of the hook fixtures in this repository arrived
 // carrying one, and only a person reading the diff would have caught it.
 //
-// Built from a source string rather than a literal so this file does not
+// Built from source strings rather than a literal so this file does not
 // contain the shapes it looks for. Segments stop at quotes as well as at
 // whitespace, so a path inside a quoted string ends where the string does.
 //
-// At least two segments are required after the root, so naming a root
-// directory in prose is not a finding: a guard that cannot describe its own
-// rule is a guard everybody allowlists.
+// EXACTLY TWO segments under the root are required, and the same rule
+// applies to all four roots. It was two for the home directories and one for
+// the temporary ones, which flagged prose saying /private/tmp while the
+// comment beside it and CONTRIBUTING.md both said two. A guard that cannot
+// describe its own rule is a guard everybody allowlists.
+//
+// The lookbehind is what keeps a URL out of it: https://example.com/home/...
+// has a path that starts with a root directory name, and it is not a
+// filesystem path. Only a start of input, whitespace, an equals sign or a
+// quote may precede the leading slash. It is a LOOKBEHIND rather than a
+// consumed character on purpose: consuming a preceding newline would report
+// a path at the start of a line as being on the line above it.
+const MACHINE_ROOTS = ['/Users', '/home', '/var/folders', '/private'];
 const MACHINE_PATH = new RegExp(
-  `(?:/Users/[^/\\s'"]+|/home/[^/\\s'"]+|/var/folders|/private)/[^\\s'"]+`
+  '(?<![^\\s=\'"`])' +
+    `(?:${MACHINE_ROOTS.join('|')})` +
+    '/[^/\\s\'"`]+' +
+    '/[^\\s\'"`]+'
 );
 
 // Em dash (code point 0x2014) and en dash (code point 0x2013), built from

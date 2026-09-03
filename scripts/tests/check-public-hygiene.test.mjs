@@ -121,19 +121,59 @@ describe('check-public-hygiene (temp-directory fixtures)', () => {
     expect(result.stderr).toMatch(/log\.txt:1: internal workspace path/);
   });
 
+  // The leading slash is the ONLY thing held apart from the path literals
+  // below, and only so this test file does not itself carry the shapes the
+  // guard looks for. Everything after it is written out whole, the way a
+  // leaked path really appears, so the fixture content is a genuine
+  // contiguous path rather than a decomposition that mirrors the pattern.
+  const S = '/';
+
   it('fails when a tracked file contains a temporary-directory path', () => {
     // The shape a scratch repository, a captured fixture or an agent
     // scratchpad actually leaves behind. It has no "projects" segment, so
     // the older pattern walked straight past it.
-    const root = ['', 'private', 'tmp'].join('/');
     const dir = buildFixtureRepo({
-      'capture.sh': `INSTALL=${root}/claude-502/session-id/probe/bin/tool\n`,
+      'capture.sh': `INSTALL=${S}private/tmp/claude-502/session-id/probe/bin/tool\n`,
     });
 
     const result = runGuard(dir);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/capture\.sh:1: machine-specific absolute path/);
+  });
+
+  it('fails on a real per-user temporary directory path', () => {
+    const dir = buildFixtureRepo({
+      'log.txt': `wrote ${S}var/folders/ab/cd/T/out\n`,
+    });
+
+    const result = runGuard(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/log\.txt:1: machine-specific absolute path/);
+  });
+
+  it('passes on a URL whose path happens to start with a root directory name', () => {
+    // https://example.com/home/docs/page is not a filesystem path, and a
+    // guard that fires on one trains everybody to allowlist.
+    const dir = buildFixtureRepo({
+      'links.md': `See https:${S}${S}example.com/home/docs/page for the guide.\n`,
+    });
+
+    const result = runGuard(dir);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('passes on prose naming a root directory with one segment under it', () => {
+    const dir = buildFixtureRepo({
+      'notes.md': `Scratch work goes under ${S}private/tmp on this platform.\n`,
+    });
+
+    const result = runGuard(dir);
+
+    expect(result.status).toBe(0);
   });
 
   it('passes silently on a clean tree', () => {
@@ -176,32 +216,60 @@ describe('scanFile (unit)', () => {
     expect(findings).toEqual(['fixture.md:1: internal workspace path']);
   });
 
+  // As above: only the leading slash is held apart, so each path below is
+  // otherwise a whole literal.
+  const S = '/';
+
   it.each([
-    ['a macOS temporary directory', ['', 'private', 'tmp'].join('/'), 'agent-scratch/probe/hook'],
-    ['a macOS per-user temporary directory', ['', 'var', 'folders'].join('/'), 'k9/abc123/T/out'],
-    ['a Linux home directory', ['', 'home', 'runner'].join('/'), 'work/repo/dist/index.js'],
-    ['a macOS home directory with no projects segment', ['', 'Users', 'someone'].join('/'), 'Desktop/scratch/notes.txt'],
-  ])('flags an absolute path under %s', (_name, root, rest) => {
-    const findings = scanFile('fixture.md', `built at ${root}/${rest}\n`, {
+    ['a macOS temporary directory', `${S}private/tmp/agent-scratch/probe/hook`],
+    ['a macOS per-user temporary directory', `${S}var/folders/ab/cd/T/out`],
+    ['a Linux home directory', `${S}home/runner/work/repo/dist/index.js`],
+    ['a macOS home directory with no projects segment', `${S}Users/someone/Desktop/notes.txt`],
+  ])('flags an absolute path under %s', (_name, leaked) => {
+    const findings = scanFile('fixture.md', `built at ${leaked}\n`, {
       allowlisted: false,
       bannedHashes: new Set(),
     });
     expect(findings).toEqual(['fixture.md:1: machine-specific absolute path']);
   });
 
-  it('does not flag the name of a root directory on its own', () => {
-    // This repository's own prose names these roots when it explains the
-    // rule. A pattern that fired on the bare name would make the guard
-    // unable to describe itself, and would train everybody to allowlist.
-    const roots = [['', 'private'].join('/'), ['', 'Users'].join('/'), ['', 'home'].join('/')];
-    for (const root of roots) {
-      expect(
-        scanFile('fixture.md', `paths under ${root} are machine specific\n`, {
-          allowlisted: false,
-          bannedHashes: new Set(),
-        })
-      ).toEqual([]);
-    }
+  it.each([
+    ['a macOS temporary directory', `${S}private/tmp`],
+    ['a per-user temporary directory', `${S}var/folders`],
+    ['a macOS home directory', `${S}Users/someone`],
+    ['a Linux home directory', `${S}home/runner`],
+  ])('does not flag %s named in prose, with one segment under the root', (_name, root) => {
+    // This repository's own prose names these when it explains the rule.
+    // Every root takes the same two-segment requirement, so none of them is
+    // stricter than the sentence describing it.
+    expect(
+      scanFile('fixture.md', `work goes under ${root} on this platform\n`, {
+        allowlisted: false,
+        bannedHashes: new Set(),
+      })
+    ).toEqual([]);
+  });
+
+  it.each([
+    ['a URL path', `https:${S}${S}example.com/home/docs/page`],
+    ['a URL under a temporary-looking path', `https:${S}${S}cdn.example.com/private/tmp/a/b`],
+  ])('does not flag %s, which is not a filesystem path', (_name, url) => {
+    expect(
+      scanFile('fixture.md', `see ${url} for details\n`, {
+        allowlisted: false,
+        bannedHashes: new Set(),
+      })
+    ).toEqual([]);
+  });
+
+  it('reports the line the path is on, not the line before it', () => {
+    // The rule fires on what precedes the path, and consuming that
+    // character would put a path at the start of a line on the previous
+    // one.
+    const text = `first line\n${S}private/tmp/scratch/probe/out\n`;
+    expect(scanFile('fixture.md', text, { allowlisted: false, bannedHashes: new Set() })).toEqual([
+      'fixture.md:2: machine-specific absolute path',
+    ]);
   });
 
   it('reports a home-directory projects path once, under its own more specific name', () => {

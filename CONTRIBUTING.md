@@ -44,11 +44,14 @@ file. It fails on four things:
 - an absolute home-directory path that runs through a `projects` directory,
   which is a local machine layout and has no business in a public tree.
 - any other absolute path rooted somewhere per-machine: a home directory on
-  either platform, or a temporary directory. The rule above needs a
-  `projects` segment, so it missed the shape that actually turns up, which
-  is a scratch repository or a captured fixture carrying the path it was
-  made in. Naming one of those root directories in prose is fine; a path
-  with two or more segments under one is not.
+  either platform (`/Users`, `/home`), or a temporary directory
+  (`/var/folders`, `/private`). The rule above needs a `projects` segment,
+  so it missed the shape that actually turns up, which is a scratch
+  repository or a captured fixture carrying the path it was made in. Every
+  one of the four roots takes the same rule: two or more segments under the
+  root is a finding, one is not, so naming a root in prose is fine. A URL
+  never is, however its path starts, because only a start of line,
+  whitespace, an equals sign or a quote may come before the leading slash.
 - an em dash or an en dash. Prose and commit messages here are plain ASCII.
 
 To add a blocklist entry, hash the lowercased token with SHA-256 and paste
