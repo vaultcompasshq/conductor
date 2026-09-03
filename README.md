@@ -317,10 +317,15 @@ gate looks like. In Actions this is almost always a shallow checkout, so
 
    Several candidates are ranked: a stem **equal** to the slug first, then
    the **longest** stem, and only then the newest name. Newest alone was the
-   rule and it was wrong twice over: a vaguer spec with a later date beat the
-   one named for the branch, and an undated name beat everything, because it
-   sorts after every date. Both put a pull request against another feature's
-   requirements.
+   rule, and it put a pull request against another feature's requirements: a
+   vaguer spec carrying a later date beat the one named for the branch.
+
+   The newest-name tie-break is still a lexical one, so **date every spec**.
+   Where two names reduce to the same stem and one has no `YYYY-MM-DD-`
+   prefix, the undated one sorts last and wins. That is a different revision
+   of the right feature's spec rather than a different feature's, which is
+   why the ranking leaves it alone, but it is not necessarily the revision
+   you meant.
 
    The plan under `docs/superpowers/plans` is paired only when its stem is
    **equal** to the chosen spec's, and passed as `--plan`. Equal rather than
@@ -413,9 +418,20 @@ jobs:
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
+        # The sarif path is published BEFORE the gates run, so on the exit 2
+        # cases that fail before anything is written (a policy error, an
+        # unknown stage, an unwritable output path) it names a file that was
+        # never created. Publishing early is the right trade for the common
+        # case, which is exit 1 with a real log; this step just has to
+        # tolerate the file being missing rather than failing the job a second
+        # time over it.
+        continue-on-error: true
         with:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
 ```
+
+`continue-on-error` there hides nothing: a gate that blocked has already
+failed the job through `conductor`'s own exit code, before this step runs.
 
 The intent gate starts at `enforce: false` in the policy file while a
 repository reads a few pull requests' worth of drift before letting it refuse

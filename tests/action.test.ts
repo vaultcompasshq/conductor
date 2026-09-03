@@ -35,10 +35,16 @@ const action = parseYaml(readFileSync(path.join(ROOT, 'action.yml'), 'utf8')) as
 const steps = action.runs?.steps ?? [];
 const script = steps.map((step) => step.run ?? '').join('\n');
 
-// The step that actually runs the gates, by id. Not "the step mentioning
-// conductor": the guard step above it names the same binary, and asserting
-// against that one silently proved nothing about this one.
+// Each step's own script, by id. Not "the step mentioning conductor": the
+// guard step names the same binary as the gates step, so a search like that
+// returns the wrong one and proves nothing about the one under test.
+//
+// `script` (every step joined) is for claims that are genuinely about the
+// whole file, such as "no step installs anything". A claim about what the
+// gates are RUN with belongs to gatesScript, or it passes on a line in
+// another step that happens to look similar.
 const gatesScript = steps.find((step) => step.id === 'gates')?.run ?? '';
+const guardScript = steps.find((step) => step.id !== 'gates')?.run ?? '';
 
 describe('action.yml', () => {
   it('is a composite action, so it adds no container and no second runner', () => {
@@ -54,12 +60,12 @@ describe('action.yml', () => {
 
   it('runs the ci stage by default, so every enabled gate runs', () => {
     expect(action.inputs?.stage?.default).toBe('ci');
-    expect(script).toMatch(/--stage "\$STAGE"/);
+    expect(gatesScript).toMatch(/--stage "\$STAGE"/);
   });
 
   it('asks for SARIF into a file the caller can upload', () => {
-    expect(script).toMatch(/--format sarif/);
-    expect(script).toMatch(/--output/);
+    expect(gatesScript).toMatch(/--format sarif/);
+    expect(gatesScript).toMatch(/--output/);
   });
 
   it('exposes that path as an output rather than making the caller guess it', () => {
@@ -75,8 +81,8 @@ describe('action.yml', () => {
   });
 
   it('fails with a message rather than skipping when conductor is not installed', () => {
-    expect(script).toMatch(/exit 1/);
-    expect(script).toMatch(/devDependency/);
+    expect(guardScript).toMatch(/exit 1/);
+    expect(guardScript).toMatch(/devDependency/);
   });
 
   it('plumbs through the three variables the pull-request flow reads', () => {
@@ -87,14 +93,15 @@ describe('action.yml', () => {
   });
 
   it('passes --base only when a ref was actually named', () => {
-    // github.base_ref is empty outside a pull request, so an unconditional
-    // --base would hand the gate the ref "origin/" on every push build and
-    // fail it closed for no reason.
-    expect(script).toMatch(/if \[ -n "\$BASE_REF" \]/);
+    // The base-ref input, not github.base_ref: left empty, the umbrella reads
+    // GITHUB_BASE_REF itself and treats an empty value as "not a pull
+    // request". Passing --base unconditionally would hand it the literal ref
+    // "origin/" on every push build and fail it closed for no reason.
+    expect(gatesScript).toMatch(/if \[ -n "\$BASE_REF" \]/);
   });
 
   it('takes the exit code from conductor rather than from the last thing in the script', () => {
-    expect(script).toMatch(/set -eu/);
+    expect(gatesScript).toMatch(/set -eu/);
   });
 
   it('builds its arguments as an array and expands it quoted', () => {
@@ -103,10 +110,10 @@ describe('action.yml', () => {
     // becomes two arguments, and one containing a bracket or a star is
     // matched against the workspace, so the gate is handed whatever happens
     // to be checked out.
-    expect(script).toMatch(/ARGS=\(/);
-    expect(script).toMatch(/"\$\{ARGS\[@\]\}"/);
-    expect(script).not.toMatch(/conductor \$ARGS/);
-    expect(script).not.toMatch(/ARGS="\$ARGS/);
+    expect(gatesScript).toMatch(/ARGS=\(/);
+    expect(gatesScript).toMatch(/"\$\{ARGS\[@\]\}"/);
+    expect(gatesScript).not.toMatch(/conductor \$ARGS/);
+    expect(gatesScript).not.toMatch(/ARGS="\$ARGS/);
   });
 
   it('quotes every input it puts into the argument list', () => {
