@@ -730,6 +730,99 @@ describe('the generated hook', () => {
     expect(commit.stderr).toMatch(/NOT checked/);
   });
 
+  // DOGFOOD 1, finding 3. The hook ran a bare "command -v conductor", so a
+  // conductor installed only as a devDependency of the repository was
+  // invisible to its own hook and every commit reported the umbrella
+  // missing. husky's dispatcher prepends node_modules/.bin for exactly this
+  // reason; this hook has to do it for itself, since it also runs under
+  // plain .git/hooks where nothing prepends anything.
+  it('finds a conductor installed only as a project devDependency', () => {
+    const repo = gitRepo();
+    init(repo);
+    shim(
+      path.join(repo, 'node_modules', '.bin'),
+      'conductor',
+      '#!/bin/sh\necho "the umbrella ran: $*" >&2\nexit 1\n'
+    );
+
+    writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const commit = spawnSync(GIT, ['commit', '-m', 'blocked by the local install'], {
+      cwd: repo,
+      encoding: 'utf8',
+      // No conductor anywhere on PATH. The only copy is the project's own.
+      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+    });
+
+    expect(commit.status).not.toBe(0);
+    expect(commit.stderr).toMatch(/the umbrella ran: run --staged/);
+    expect(commit.stderr).toMatch(/conductor: commit blocked \(conductor exit 1\)/);
+    // The fail-closed branch must not be what refused this commit: that
+    // would be the right exit code for the wrong reason.
+    expect(commit.stderr).not.toMatch(/command not found/);
+  });
+
+  it('asks git for the root rather than assuming the hook runs from it', () => {
+    const repo = gitRepo();
+    init(repo);
+    shim(path.join(repo, 'node_modules', '.bin'), 'conductor', '#!/bin/sh\nexit 1\n');
+    mkdirSync(path.join(repo, 'packages', 'app'), { recursive: true });
+
+    // A relative "node_modules/.bin" points at nothing from here. git runs
+    // a pre-commit hook from the top level today, but a hook invoked by
+    // hand or by another manager can start anywhere.
+    const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
+      cwd: path.join(repo, 'packages', 'app'),
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+    });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/conductor: commit blocked/);
+    expect(run.stderr).not.toMatch(/command not found/);
+  });
+
+  it('still fails closed when there is no conductor in node_modules either', () => {
+    const repo = gitRepo();
+    init(repo);
+    mkdirSync(path.join(repo, 'node_modules', '.bin'), { recursive: true });
+
+    writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const commit = spawnSync(GIT, ['commit', '-m', 'no conductor anywhere'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+    });
+
+    expect(commit.status).not.toBe(0);
+    expect(commit.stderr).toMatch(/NOT checked/);
+  });
+
+  it('says why a commit was blocked even when run under sh -e, as husky runs it', () => {
+    const repo = huskyRepo();
+    init(repo);
+    shim(path.join(repo, 'node_modules', '.bin'), 'conductor', '#!/bin/sh\nexit 2\n');
+
+    writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const commit = spawnSync(GIT, ['commit', '-m', 'a gate could not run'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+    });
+
+    expect(commit.status).not.toBe(0);
+    // husky's shim runs the tracked hook as "sh -e", under which a hook
+    // that captures $? after the failing command exits before it can print
+    // anything. The exit code survives that; the explanation does not, and
+    // a blocked commit with no reason on screen is the failure this line
+    // exists to prevent.
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(
+      /conductor: commit blocked \(conductor exit 2\)/
+    );
+  });
+
   it('passes the umbrella exit code through unchanged', () => {
     const repo = gitRepo();
     init(repo);

@@ -152,21 +152,37 @@ const HOOK = `#!/bin/sh
 # Guardrail pre-commit hook. ${MANAGED_HOOK_MARKER}
 # Installed by "conductor init". Remove it with "conductor init --revert".
 #
-# No "set -e" on purpose: under it the shell would exit at the failing
-# command before the status could be captured, which loses the explanatory
-# line, so a blocked commit would print nothing about why.
+# No "set -e" of its own, and written to survive somebody else's. Under
+# "set -e" a shell exits at the failing command before its status can be
+# captured, which keeps the exit code but loses the explanatory line, so a
+# blocked commit prints nothing about why. husky's dispatcher runs this
+# file as "sh -e", so every command allowed to fail is in a condition
+# context rather than standing alone.
 #
 # "command -v" rather than "which": "which" is not in POSIX, is absent from
 # some minimal images, and reports success in some shells for a builtin
 # that is not an executable.
+
+# A conductor installed only as a devDependency of this repository is not
+# on PATH, and was invisible to its own hook until this line existed: every
+# commit reported the umbrella missing and blocked, which is the right
+# answer to the wrong question. The root comes from git rather than from
+# the working directory: git runs a pre-commit hook from the top level
+# today, but a hook invoked by hand or by another manager can start in a
+# subdirectory, where a relative "node_modules/.bin" points at nothing.
+conductor_root=$(git rev-parse --show-toplevel 2>/dev/null) || conductor_root=""
+if [ -n "$conductor_root" ] && [ -d "$conductor_root/node_modules/.bin" ]; then
+  PATH="$conductor_root/node_modules/.bin:$PATH"
+  export PATH
+fi
 
 if ! command -v conductor >/dev/null 2>&1; then
   echo "conductor: command not found, so this commit was NOT checked by any guardrail gate. Install the umbrella, or run 'conductor init --revert' to remove this hook." >&2
   exit 1
 fi
 
-conductor run --staged
-conductor_status=$?
+conductor_status=0
+conductor run --staged || conductor_status=$?
 
 if [ "$conductor_status" -ne 0 ]; then
   echo "conductor: commit blocked (conductor exit $conductor_status). Review the report above; 'git commit --no-verify' bypasses this hook at your own risk." >&2

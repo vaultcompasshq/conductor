@@ -176,6 +176,17 @@ turns off by making the tool missing. It passes the exit code straight
 through, so 2 does not collapse into 1 and report findings that were never
 looked for.
 
+The hook prepends the repository's own `node_modules/.bin` to `PATH`
+before looking for the binary, so a conductor installed only as a project
+devDependency is visible to its own hook. The root comes from
+`git rev-parse --show-toplevel` rather than from the working directory,
+because a hook invoked from a subdirectory would otherwise prepend a path
+that does not exist. Fail-closed is unchanged: no conductor there and none
+on `PATH` still blocks the commit. The hook also survives being run under
+`sh -e`, which is what husky's dispatcher does, so the line explaining a
+blocked commit is printed there too rather than being cut off by the
+shell.
+
 A relative `core.hooksPath` is resolved against the working-tree root,
 which is where git actually looks. An absolute one pointing outside the
 repository is refused rather than written to, since that directory serves
