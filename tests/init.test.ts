@@ -139,6 +139,46 @@ function huskyRepoWithGateHook(): string {
   return repo;
 }
 
+// husky 8, which is a DIFFERENT layout and must not take the redirect.
+// It points core.hooksPath at .husky itself, so the file git executes is
+// already the tracked one; the generated shim it keeps under _ is called
+// husky.sh, and every tracked hook SOURCES it as a preamble. That preamble
+// is a line in the tracked hook, not a dispatcher, and reading it as one
+// sent the umbrella looking for a tracked file one directory above .husky,
+// which is the repository root.
+const HUSKY_8_SHIM = [
+  '#!/usr/bin/env sh',
+  'if [ -z "$husky_skip_init" ]; then',
+  '  readonly hook_name="$(basename -- "$0")"',
+  '  export husky_skip_init=1',
+  '  sh -e "$0" "$@"',
+  '  exit $?',
+  'fi',
+  '',
+].join('\n');
+
+const HUSKY_8_TRACKED_HOOK = [
+  '#!/usr/bin/env sh',
+  '. "$(dirname -- "$0")/_/husky.sh"',
+  '',
+  'vault-guard scan --staged',
+  '',
+].join('\n');
+
+/** A repository wired the way husky 8 wires one. */
+function husky8Repo(): string {
+  const repo = gitRepo();
+  const generated = path.join(repo, '.husky', '_');
+  mkdirSync(generated, { recursive: true });
+  writeFileSync(path.join(generated, '.gitignore'), '*');
+  writeFileSync(path.join(generated, 'husky.sh'), HUSKY_8_SHIM);
+  chmodSync(path.join(generated, 'husky.sh'), 0o755);
+  writeFileSync(path.join(repo, '.husky', 'pre-commit'), HUSKY_8_TRACKED_HOOK);
+  chmodSync(path.join(repo, '.husky', 'pre-commit'), 0o755);
+  execFileSync('git', ['config', 'core.hooksPath', '.husky'], { cwd: repo });
+  return repo;
+}
+
 // lefthook and the pre-commit framework both install a GENERATED script
 // into the hooks directory too. Neither has a tracked counterpart the
 // umbrella could write instead, so both are refused rather than redirected.
@@ -685,12 +725,32 @@ describe('a husky-managed repository', () => {
     expect(`${commit.stdout}${commit.stderr}`).toMatch(/the umbrella ran: run --staged/);
   });
 
-  it('recognises husky by the dispatcher content even outside the .husky/_ path', () => {
+  it('needs the shim beside the dispatcher, not just a dispatcher-shaped file', () => {
+    // The generated directory by name only, with no h and no husky.sh in
+    // it. Content alone must never move where init writes: a file that
+    // looks like a dispatcher is not proof that anything will dispatch.
     const repo = gitRepo();
-    const generated = path.join(repo, 'hooks', '_');
+    const generated = path.join(repo, '.husky', '_');
     mkdirSync(generated, { recursive: true });
     writeFileSync(path.join(generated, 'pre-commit'), HUSKY_DISPATCHER);
     chmodSync(path.join(generated, 'pre-commit'), 0o755);
+    execFileSync('git', ['config', 'core.hooksPath', '.husky/_'], { cwd: repo });
+
+    const result = init(repo);
+
+    expect(result.hookManager).toBe('native');
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('foreign-hook');
+    expect(existsSync(path.join(repo, '.husky', 'pre-commit'))).toBe(false);
+  });
+
+  it('does not redirect out of a generated directory that is not husky own', () => {
+    // basename _ is not enough either: the parent has to be .husky. Any
+    // other hooks directory ending in _ is somebody else's arrangement, and
+    // writing to its parent is writing somewhere nobody asked for.
+    const repo = gitRepo();
+    const generated = path.join(repo, 'hooks', '_');
+    mkdirSync(generated, { recursive: true });
     writeFileSync(path.join(generated, 'h'), HUSKY_SHIM);
     chmodSync(path.join(generated, 'h'), 0o755);
     execFileSync('git', ['config', 'core.hooksPath', 'hooks/_'], { cwd: repo });
@@ -698,8 +758,97 @@ describe('a husky-managed repository', () => {
     const result = init(repo);
 
     expect(result.ok).toBe(true);
-    expect(existsSync(path.join(repo, 'hooks', 'pre-commit'))).toBe(true);
-    expect(readFileSync(path.join(generated, 'pre-commit'), 'utf8')).toBe(HUSKY_DISPATCHER);
+    expect(result.hookManager).toBe('native');
+    expect(existsSync(path.join(repo, 'hooks', '_', 'pre-commit'))).toBe(true);
+    expect(existsSync(path.join(repo, 'hooks', 'pre-commit'))).toBe(false);
+  });
+});
+
+// husky 8 is the layout the redirect must NOT fire on, and the one that
+// proved content alone is not a safe signal. core.hooksPath is .husky, so
+// the file git executes is ALREADY the tracked hook; the `. _/husky.sh`
+// line inside it is a preamble, not a dispatcher. Reading it as one made
+// init write <repository root>/pre-commit, report success, miss the
+// vault-guard hook sitting right there, and let a commit through
+// completely ungated.
+describe('a husky 8 repository', () => {
+  it('takes the native path, so the tracked hook is where init looks', () => {
+    const repo = husky8Repo();
+
+    const result = init(repo);
+
+    expect(result.hookManager).toBe('native');
+    expect(result.conflicts[0].reason).toBe('gate-hook');
+    expect(result.conflicts[0].path).toBe('.husky/pre-commit');
+    expect(result.conflicts[0].guidance).toMatch(/vault-guard/);
+    // The repository root is not a hooks directory and never gets a hook.
+    expect(existsSync(path.join(repo, 'pre-commit'))).toBe(false);
+  });
+
+  it('adopts the tracked hook and restores it on revert', () => {
+    const repo = husky8Repo();
+
+    const result = init(repo, { adopt: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.adoptedFrom?.product).toBe('vault-guard');
+    expect(readFileSync(path.join(repo, '.husky', 'pre-commit'), 'utf8')).toContain(
+      MANAGED_HOOK_MARKER
+    );
+    expect(existsSync(path.join(repo, 'pre-commit'))).toBe(false);
+
+    revertInit({ cwd: repo, pathValue: '' });
+
+    expect(readFileSync(path.join(repo, '.husky', 'pre-commit'), 'utf8')).toBe(
+      HUSKY_8_TRACKED_HOOK
+    );
+  });
+
+  it('installs a hook git actually runs, proven by a real commit', () => {
+    const repo = husky8Repo();
+    rmSync(path.join(repo, '.husky', 'pre-commit'));
+
+    init(repo);
+
+    const bin = shimDirWithGit();
+    shim(bin, 'conductor', '#!/bin/sh\necho "the umbrella ran: $*" >&2\nexit 1\n');
+    writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const commit = spawnSync(GIT, ['commit', '-m', 'should be refused'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathLedBy(bin) },
+    });
+
+    expect(commit.status).not.toBe(0);
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(/the umbrella ran: run --staged/);
+  });
+});
+
+describe('a dispatcher-shaped hook in the ordinary hooks directory', () => {
+  it('is a foreign hook, not a reason to write somewhere else', () => {
+    // No core.hooksPath at all, so hooks live in .git/hooks. A file there
+    // that happens to source a sibling named h is somebody's own script:
+    // the parent of .git/hooks is .git, and nothing may be written there.
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), HUSKY_DISPATCHER);
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(false);
+    expect(result.hookManager).toBe('native');
+    expect(result.conflicts[0].reason).toBe('foreign-hook');
+    // Suffix, not equality: with no core.hooksPath set, the hooks directory
+    // is resolved against cwd while the root comes from git, and on a
+    // machine whose temp directory is behind a symlink those disagree, so
+    // the reported path walks back out through the symlink. Pre-existing
+    // and cosmetic, reported rather than changed here.
+    expect(result.conflicts[0].path.endsWith('.git/hooks/pre-commit')).toBe(true);
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(
+      HUSKY_DISPATCHER
+    );
+    expect(existsSync(path.join(repo, '.git', 'pre-commit'))).toBe(false);
   });
 });
 

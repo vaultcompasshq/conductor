@@ -201,14 +201,24 @@ every repository on the machine.
 `core.hooksPath` at `.husky/_`, a generated and gitignored directory it
 rewrites on every install; the file git executes there is a dispatcher
 that adds `node_modules/.bin` to `PATH` and runs the tracked hook one
-directory up. Init recognises that arrangement, by the `.husky/_`
-convention or by the dispatcher's own contents, either alone being enough,
-and then reads, detects, adopts, writes and reverts `.husky/pre-commit`
-and never anything under `.husky/_`. Reading the dispatcher instead
-reports the repository's real gate hook as foreign, so `--adopt` cannot
-adopt it, and writing the dispatcher puts the hook where the next install
-deletes it without saying so. Both were found by running this tool against
-a real husky 9 repository rather than against a fixture.
+directory up. Init recognises that arrangement and then reads, detects,
+adopts, writes and reverts `.husky/pre-commit`, never anything under
+`.husky/_`. Reading the dispatcher instead reports the repository's real
+gate hook as foreign, so `--adopt` cannot adopt it, and writing the
+dispatcher puts the hook where the next install deletes it without saying
+so. Both were found by running this tool against a real husky 9
+repository rather than against a fixture.
+
+Recognition needs all three of: the hooks directory is named `_`, its
+parent is named `.husky`, and husky's own shim (`h`, or `husky.sh`) sits
+in that directory beside the dispatcher. The contents of the file git
+executes are deliberately not a signal, because under husky 8 that file is
+the tracked hook itself: husky 8 points `core.hooksPath` at `.husky`, and
+every tracked hook there opens by sourcing `_/husky.sh` as a preamble.
+Reading that preamble as a dispatcher sends init one directory above
+`.husky`, which is the repository root. husky 8 therefore takes the
+ordinary path, where `.husky/pre-commit` is already both the file git runs
+and the file init reads.
 
 lefthook and the pre-commit framework also install a generated script
 where git looks, and neither has a tracked counterpart to write instead,

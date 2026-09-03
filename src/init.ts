@@ -89,18 +89,45 @@ export const INTENT_GUARD_HOOK_MARKER = 'conductor-managed-pre-commit';
 export type HookManager = 'native' | 'husky' | 'lefthook' | 'precommit';
 
 /**
- * husky 9's generated dispatcher, matched on the line that sources the `h`
- * shim beside it. husky writes `. "$(dirname "$0")/h"`; the `${0%/*}` form
- * is the same thing spelled without a subshell, and `_/husky.sh` is husky
- * 8's name for it. Anchored to a whole line so a hook that merely mentions
- * husky in a comment is not swept up.
+ * The `.husky` directory whose generated subdirectory git has been pointed
+ * at, or null when this is not that arrangement.
+ *
+ * Three conditions, ALL required, and the reason all three are required is
+ * a regression this function shipped with. An earlier version also accepted
+ * the hooks directory on the CONTENT of the pre-commit file in it, matching
+ * the line that sources husky's shim. That line appears in two completely
+ * different places:
+ *
+ *   husky 9  core.hooksPath = .husky/_   .husky/_/pre-commit sources _/h
+ *            and IS a dispatcher; the tracked hook is .husky/pre-commit.
+ *
+ *   husky 8  core.hooksPath = .husky     .husky/pre-commit sources
+ *            _/husky.sh as a PREAMBLE and IS the tracked hook already.
+ *
+ * So on husky 8 the content signal fired against the tracked hook itself,
+ * and the "one directory up" rule then pointed at the parent of .husky,
+ * which is the repository root. Init wrote a pre-commit file there, saw no
+ * gate hook because it never read the real one, reported success, and left
+ * every commit ungated. Content of the pre-commit file is never sufficient
+ * on its own, and the tracked target is this `.husky` directory rather than
+ * a computed parent of whatever directory git happens to point at.
+ *
+ * The confirming file is `h` (husky 9) or `husky.sh` (husky 8 kept one
+ * there too), beside the dispatcher in the generated directory. It is what
+ * makes this an installed husky rather than a directory named `_`.
  */
-const HUSKY_DISPATCHER_LINE =
-  /^[ \t]*\.[ \t]+["']?(?:\$\(dirname[ \t]+(?:--[ \t]+)?["']?\$0["']?\)|\$\{0%\/\*\})\/(?:h|_\/husky\.sh)["']?[ \t]*$/m;
-
-/** husky's own convention: the generated directory is `_` inside `.husky`. */
-function looksLikeHuskyGeneratedDir(dir: string): boolean {
-  return path.basename(dir) === '_' && path.basename(path.dirname(dir)) === '.husky';
+function huskyDirectoryFor(hooksDir: string): string | null {
+  if (path.basename(hooksDir) !== '_') {
+    return null;
+  }
+  const huskyDir = path.dirname(hooksDir);
+  if (path.basename(huskyDir) !== '.husky') {
+    return null;
+  }
+  if (!isFile(path.join(hooksDir, 'h')) && !isFile(path.join(hooksDir, 'husky.sh'))) {
+    return null;
+  }
+  return huskyDir;
 }
 
 /**
@@ -367,6 +394,20 @@ function isExecutable(file: string): boolean {
   }
 }
 
+/**
+ * Existence as a plain file, with no opinion about the executable bit.
+ * husky's shim is copied out of the package with whatever mode the tarball
+ * carried, and it is sourced rather than executed, so requiring +x here
+ * would make detection depend on something husky does not guarantee.
+ */
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const ROLE_DESCRIPTION: Record<GateRole, string> = {
   dependencies: 'what comes in: hallucinated names, typosquats, tampered lockfile entries',
   secrets: 'what goes out: credentials about to be committed',
@@ -480,19 +521,14 @@ export function planInit(options: InitOptions): InitResult {
   const executedHookPath = path.join(hooks.dir, 'pre-commit');
   const executedHook = readIfExists(executedHookPath);
 
-  // Either signal alone is enough. The path convention catches a husky
-  // repository whose generated directory has not been written yet (a fresh
-  // clone before install), and the dispatcher content catches a husky
-  // repository whose hooks directory has been pointed somewhere else.
-  const huskyByPath = looksLikeHuskyGeneratedDir(hooks.dir);
-  const huskyByContent = executedHook !== undefined && HUSKY_DISPATCHER_LINE.test(executedHook);
-  // The tracked hook is one directory up, which is what husky's own shim
-  // computes: `s=$(dirname "$(dirname "$0")")/$n`. Refuse the redirect if
-  // that lands outside the repository, rather than following a hooks path
-  // out of the working tree by way of a dispatcher.
-  const trackedHookPath = path.join(path.dirname(hooks.dir), 'pre-commit');
-  const trackedInsideRepo = !path.relative(root, trackedHookPath).startsWith('..');
-  const husky = (huskyByPath || huskyByContent) && trackedInsideRepo;
+  // The redirect fires only on husky's OWN generated directory, confirmed
+  // by the shim husky leaves in it. The tracked hook is then that .husky
+  // directory's own pre-commit, which is what husky's shim runs:
+  // `s=$(dirname "$(dirname "$0")")/$n`. Never a computed parent of an
+  // arbitrary hooks directory, and never decided by the content of the file
+  // git executes: on husky 8 that file IS the tracked hook.
+  const huskyDir = huskyDirectoryFor(hooks.dir);
+  const husky = huskyDir !== null;
 
   if (!husky && executedHook !== undefined) {
     const generatedBy = detectGeneratedHook(executedHook);
@@ -508,7 +544,7 @@ export function planInit(options: InitOptions): InitResult {
   }
 
   const hookManager: HookManager = husky ? 'husky' : 'native';
-  const hookPath = husky ? trackedHookPath : executedHookPath;
+  const hookPath = huskyDir === null ? executedHookPath : path.join(huskyDir, 'pre-commit');
   const relHook = path.relative(root, hookPath).split(path.sep).join('/');
   const policyPath = path.join(root, POLICY_FILE_NAME);
   const manifestPath = path.join(root, MANIFEST_RELATIVE_PATH);
