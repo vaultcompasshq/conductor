@@ -862,6 +862,7 @@ export function revertInit(options: InitOptions): RevertResult {
   if (remaining.length === 0 && adopted === null) {
     rmSync(manifestPath, { force: true });
     actions.push({ kind: 'remove', path: MANIFEST_RELATIVE_PATH, detail: 'removed' });
+    const manifestDir = path.dirname(MANIFEST_RELATIVE_PATH);
     try {
       // rmdirSync, not rmSync: rmSync on a directory without recursive: true
       // throws before it removes anything, so this swallowed its own error
@@ -869,9 +870,17 @@ export function revertInit(options: InitOptions): RevertResult {
       // said it had removed everything. rmdirSync removes an empty directory
       // and refuses a non-empty one, which is exactly the rule wanted here.
       rmdirSync(path.dirname(manifestPath));
+      actions.push({ kind: 'remove', path: manifestDir, detail: 'removed, it was empty' });
     } catch {
-      // The directory holds something else. Leaving it is the correct
-      // "nothing else" behaviour.
+      // The directory holds something else, so it stays. Reported rather
+      // than passed over: a directory this tool created and then left
+      // behind, with nothing said about it, reads as something revert
+      // forgot rather than as something it decided.
+      actions.push({
+        kind: 'skip',
+        path: manifestDir,
+        detail: 'kept: it holds something else, which is not ours to remove',
+      });
     }
     return { ok: true, actions, conflicts };
   }

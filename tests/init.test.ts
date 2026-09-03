@@ -339,11 +339,30 @@ describe('revert', () => {
     init(repo);
     writeFileSync(path.join(repo, '.guardrails', 'notes.txt'), 'somebody else put this here\n');
 
-    revertInit({ cwd: repo, pathValue: '' });
+    const result = revertInit({ cwd: repo, pathValue: '' });
 
     // "Removes exactly what init wrote, and nothing else" includes the
     // directory: it is only ours while it holds only our files.
     expect(existsSync(path.join(repo, '.guardrails', 'notes.txt'))).toBe(true);
+
+    // And it says so. A directory the tool created and then left behind,
+    // with no line about it, reads as something revert forgot rather than
+    // as something it decided.
+    const kept = result.actions.find((action) => action.path === '.guardrails');
+    expect(kept?.kind).toBe('skip');
+    expect(kept?.detail).toMatch(/something else/);
+    // Still a clean revert: everything of ours is gone.
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not report the directory at all when it went with the manifest', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    const directory = result.actions.find((action) => action.path === '.guardrails');
+    expect(directory?.kind).toBe('remove');
   });
 
   it('leaves a policy file the user changed after init, rather than deleting their work', () => {
