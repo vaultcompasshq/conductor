@@ -226,10 +226,17 @@ describe('conductor run --stage', () => {
     );
 
     const log = JSON.parse(result.stdout) as {
-      runs: Array<{ tool: { driver: { name: string } }; results: Array<{ ruleId: string }> }>;
+      runs: Array<{
+        tool: { driver: { name: string } };
+        invocations?: Array<{
+          toolExecutionNotifications: Array<{ descriptor: { id: string } }>;
+        }>;
+      }>;
     };
     const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
-    expect(umbrella?.results.map((entry) => entry.ruleId)).toContain('conductor/gate-deferred');
+    expect(
+      umbrella?.invocations?.[0].toolExecutionNotifications.map((entry) => entry.descriptor.id)
+    ).toContain('conductor/gate-deferred');
     // And the gate that did not run got no run of its own.
     expect(log.runs.map((run) => run.tool.driver.name)).not.toContain('intent-guard');
   });
@@ -419,6 +426,9 @@ describe('a gate with enforce: false', () => {
         tool: { driver: { name: string } };
         properties?: { enforced?: boolean };
         results: Array<{ ruleId: string; level: string; properties: { blocking: boolean } }>;
+        invocations?: Array<{
+          toolExecutionNotifications: Array<{ descriptor: { id: string } }>;
+        }>;
       }>;
     };
 
@@ -428,9 +438,9 @@ describe('a gate with enforce: false', () => {
     expect(gateRun?.results[0].properties.blocking).toBe(true);
 
     const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
-    expect(umbrella?.results.map((entry) => entry.ruleId)).toContain(
-      'conductor/gate-not-enforced'
-    );
+    expect(
+      umbrella?.invocations?.[0].toolExecutionNotifications.map((entry) => entry.descriptor.id)
+    ).toContain('conductor/gate-not-enforced');
   });
 
   it('exits 0 with a note when an unenforced gate could not run at all', () => {
@@ -528,7 +538,7 @@ describe('a stage-deferred gate beside an unenforced blocking one', () => {
     expect(result.stdout).not.toMatch(/conductor\/gate-missing/);
   });
 
-  it('carries both facts into the SARIF log as separate notes', () => {
+  it('carries both facts into the SARIF log as separate notifications', () => {
     const repo = repoWithPolicy(
       [
         'version: 1',
@@ -548,12 +558,19 @@ describe('a stage-deferred gate beside an unenforced blocking one', () => {
 
     expect(result.status).toBe(0);
     const log = JSON.parse(result.stdout) as {
-      runs: Array<{ tool: { driver: { name: string } }; results: Array<{ ruleId: string }> }>;
+      runs: Array<{
+        tool: { driver: { name: string } };
+        invocations?: Array<{
+          toolExecutionNotifications: Array<{ descriptor: { id: string } }>;
+        }>;
+      }>;
     };
     const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
-    const ruleIds = umbrella?.results.map((entry) => entry.ruleId) ?? [];
-    expect(ruleIds).toContain('conductor/gate-deferred');
-    expect(ruleIds).toContain('conductor/gate-not-enforced');
+    const ids =
+      umbrella?.invocations?.[0].toolExecutionNotifications.map((entry) => entry.descriptor.id) ??
+      [];
+    expect(ids).toContain('conductor/gate-deferred');
+    expect(ids).toContain('conductor/gate-not-enforced');
   });
 });
 

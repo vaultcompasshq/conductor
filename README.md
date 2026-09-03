@@ -111,7 +111,7 @@ them.
 
 A gate held back by the stage filter is never silent. It is one line in the
 text report naming the stage it is waiting for, and a `conductor/gate-deferred`
-note in the SARIF log's `conductor` run. It gets no SARIF run of its own,
+notification in the SARIF log's `conductor` run. It gets no SARIF run of its own,
 for the same reason a gate that could not run gets none: it produced no tool
 output, and an empty run named for that product would put its name on
 something it never did. Its binary is not even looked for, so a gate
@@ -133,8 +133,8 @@ finding itself. What changes is that the text report says in words that the
 gate blocked and was not enforced, on the same screen as the findings, so a
 green exit next to red findings is never a surprise. In SARIF that gate's
 own run carries `properties.enforced: false`, and the `conductor` run
-carries a `conductor/gate-not-enforced` note as well, because a gate that
-could not run has no run of its own to hang the property on and that is
+carries a `conductor/gate-not-enforced` notification as well, because a gate
+that could not run has no run of its own to hang the property on and that is
 exactly the case worth saying out loud. That run's properties bag also
 carries the `stage` the gate ran at, so a log from a commit-stage run is
 distinguishable from a full one rather than looking like the same run with
@@ -363,7 +363,7 @@ all there is to tell a shallow checkout from a spec the importer choked on.
 
 **A branch with neither** is a third state beside deferred and could-not-run:
 the gate is switched on, it ran, and it had nothing to check. It gets one
-line in the text report and one note-level `intent-guard/no-contract` result
+line in the text report and one `intent-guard/no-contract` notification
 in the `conductor` run, and it **never** reaches the exit code, enforced or
 not. A branch with no spec is a branch this gate has no opinion about, and
 turning that into a failed build is how a gate gets switched off across a
@@ -593,6 +593,24 @@ where a gate's own units differ from SARIF's the key says so:
 beside the 1-based `startColumn` mapped from it. No location is invented:
 a finding with no known line gets no region, and a finding about a missing
 binary gets no location at all.
+
+**A statement about coverage or configuration is a notification, not a
+finding.** Three of the umbrella's own statements are about how much of the
+policy a run represents rather than about anybody's code: a gate deferred to
+a later stage, a gate the policy told not to decide anything, and a branch
+with no contract for the intent gate to check against. They live in
+`invocations[0].toolExecutionNotifications` on the `conductor` run, keeping
+their rule ids as descriptor ids and their text unchanged. As results they
+were fingerprint-less note alerts that came back on every single run, so a
+repository on the adoption ramp accrued permanent alerts about the tool's own
+configuration, which is alert fatigue manufactured by the thing that exists
+to reduce it.
+
+`conductor/gate-missing` and `conductor/gate-failed` stay **results**, and
+the asymmetry is deliberate. A gate that could not run is the fail-closed
+posture made visible: a class of problem went unlooked-for on this change,
+and a reviewer scanning a pull request's alerts has to meet that as an alert
+rather than as tool status.
 
 ## Scope of v0.1
 
