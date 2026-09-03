@@ -55,14 +55,17 @@ gates:
   dependencies:
     product: dep-guard
     enabled: true
+    stage: commit
     options:
       fail-on: high
   secrets:
     product: vault-guard
     enabled: true
+    stage: commit
   intent:
     product: intent-guard
     enabled: true
+    stage: ci
     options:
       require-frozen: false
 
@@ -80,6 +83,49 @@ role to arrive without the schema moving.
 cannot be found is a blocking finding of the umbrella's own
 (`conductor/gate-missing`), never a silent skip. A gate that is switched on
 and quietly absent is the failure this whole family exists to prevent.
+
+**`stage`** says when a gate runs: `commit`, `push`, or `ci`. Stages are
+**cumulative** in that order, so a gate runs at its own stage and at every
+later one, and a run at `ci` runs everything that is enabled. The defaults
+are `commit` for `dependencies` and `secrets` and `ci` for `intent`.
+
+Runtime is not what decides that split. All three gates together take under
+a second on a staged commit. Ceremony is the cost, and only the intent gate
+has any: it wants a contract approved before the work starts, which is a
+per-task human step and belongs at a pull request. The other two are silent
+until they find something, and a secret that reaches a pull request is
+already on a remote, so the earliest stage is the only honest place for
+them.
+
+A gate held back by the stage filter is never silent. It is one line in the
+text report naming the stage it is waiting for, and a `conductor/gate-deferred`
+note in the SARIF log's `conductor` run. It gets no SARIF run of its own,
+for the same reason a gate that could not run gets none: it produced no tool
+output, and an empty run named for that product would put its name on
+something it never did. Its binary is not even looked for, so a gate
+installed only on the CI image does not fail a developer's commit.
+
+**`enforce`** defaults to true. A gate with `enforce: false` runs, reports,
+and appears in the text report and the SARIF log exactly as an enforced gate
+does. The only thing it cannot do is change the exit code: its blocking
+findings do not raise it, and its failing to run at all is a note rather
+than exit 2. That is the adoption ramp, so a gate can be switched on and
+read for a few weeks before it is allowed to refuse anybody's commit.
+
+It is not a downgrade of what the gate said. Findings keep their own
+severities and their own `blocking` flags, in both formats, because
+rewriting a critical finding to a note would put this repository's
+enforcement policy into the field a code-scanning UI uses to describe the
+finding itself. What changes is that the text report says in words that the
+gate blocked and was not enforced, on the same screen as the findings, so a
+green exit next to red findings is never a surprise. In SARIF that gate's
+own run carries `properties.enforced: false`, and the `conductor` run
+carries a `conductor/gate-not-enforced` note as well, because a gate that
+could not run has no run of its own to hang the property on and that is
+exactly the case worth saying out loud. That run's properties bag also
+carries the `stage` the gate ran at, so a log from a commit-stage run is
+distinguishable from a full one rather than looking like the same run with
+fewer findings in it.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
@@ -132,8 +178,33 @@ reason above.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
   does not recognise is never replaced, with or without `--adopt`.
-- `--force`, with `--revert`, removes a file that has changed since init
-  anyway, restoring an adopted hook if there was one.
+- `--force` acts on a file **conductor itself wrote** and that has changed
+  since: on its own it replaces a managed hook somebody has edited, and with
+  `--revert` it removes one, restoring an adopted hook if there was one. It
+  never overrides a foreign-hook or gate-hook refusal, with or without
+  `--adopt`: those hooks were never conductor's, and no flag here turns
+  somebody else's file into one this tool may overwrite.
+
+Re-running init over a hook a **previous version of conductor** wrote
+replaces it, rather than reporting it already installed. The marker in the
+hook says whose it is, not which version, so the decision is the hook's
+digest: identical to what this version writes means nothing to do;
+identical to the digest the manifest recorded means an older conductor
+wrote it and it is updated in place; anything else means it has been edited
+by hand, and it is refused with the same guidance a changed file gets under
+`--revert`. A marked hook with no manifest to check against is treated as
+edited. Skipping an old hook left it running a command line this version no
+longer writes, and left it out of the new manifest, so a later `--revert`
+walked past it.
+
+The manifest is rebuilt when it is the part that has gone missing. A hook
+that is already byte for byte what this version writes, in a repository
+whose manifest no longer records it, is left alone on disk and entered in
+the manifest. Nothing is written to the hook, because nothing is wrong with
+it; without the entry, `--revert` has no record that the hook is the
+umbrella's, reports success, and leaves it running. A `git clean`, a
+deleted `.guardrails` directory, and an install from before there were
+manifests all reach that state.
 
 A revert that cannot remove everything removes nothing that would leave the
 repository half-wired, keeps the manifest describing what is left, and
@@ -153,6 +224,11 @@ reports before running `--adopt` on a hook you did not write.
 
 - `--staged` gates the git index against HEAD, which is what the hook does.
 - `--format text|sarif`.
+- `--stage commit|push|ci` runs the gates at that stopping point and every
+  earlier one. With no `--stage` at all, every enabled gate runs, whatever
+  its stage. An unknown value is a usage error and exits 2 rather than
+  quietly running everything or nothing: a typo in a CI file that runs every
+  gate and one that runs none both look like a passing build.
 - `--gate <role>`, repeatable.
 
 ### Exit codes
@@ -164,6 +240,11 @@ reports before running `--adopt` on a hook you did not write.
   stdout, which is what a rejected config file looks like from two of the
   three.
 
+A gate carrying `enforce: false` is left out of that composition entirely,
+and a gate the stage filter deferred never gets as far as it. Both are the
+policy file's own decisions, written down in the repository; nothing here
+reads a gate's output and decides on its own to ignore it.
+
 This is not the numeric maximum of the children's exit codes, because the
 codes do not mean the same thing in each product. One of the three uses 2
 for "could not run the checks at all"; the other two have only 0 and 1 and
@@ -174,9 +255,12 @@ looked is worse than one that says it failed.
 
 ## The hook
 
-One hook, running `conductor run --staged`. It fails closed: a missing
-umbrella binary blocks the commit with one line saying so, because a
-guardrail that is off when the tool is missing is a guardrail an attacker
+One hook, running `conductor run --staged --stage commit`. It names the
+stage rather than running everything, because a pre-commit hook is the
+commit stopping point, and a hook that runs the per-task ceremony of the
+intent gate on every commit is a hook a team switches off. It fails closed:
+a missing umbrella binary blocks the commit with one line saying so, because
+a guardrail that is off when the tool is missing is a guardrail an attacker
 turns off by making the tool missing. It passes the exit code straight
 through, so 2 does not collapse into 1 and report findings that were never
 looked for.

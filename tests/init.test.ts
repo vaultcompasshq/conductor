@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -11,6 +12,7 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   DEP_GUARD_HOOK_MARKER,
@@ -22,6 +24,13 @@ import {
   planInit,
   revertInit,
 } from '../src/init.js';
+
+/** Pre-commit hooks captured from real hook-manager installs. */
+const HOOK_FIXTURES = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+  'hooks'
+);
 
 const temps: string[] = [];
 
@@ -182,6 +191,12 @@ function husky8Repo(): string {
 // lefthook and the pre-commit framework both install a GENERATED script
 // into the hooks directory too. Neither has a tracked counterpart the
 // umbrella could write instead, so both are refused rather than redirected.
+//
+// This lefthook constant is HAND-WRITTEN and does not match what lefthook
+// generates: no released version writes a "lefthook_version:" line. It is
+// kept only to cover the spare alternative in detectGeneratedHook. The
+// file lefthook really produces is captured in tests/fixtures/hooks and
+// exercised further down.
 const LEFTHOOK_GENERATED = [
   '#!/bin/sh',
   '# lefthook_version: 0b7c1f0f0b2b4a8e',
@@ -227,6 +242,32 @@ describe('what init writes', () => {
     expect(hook).not.toMatch(/vault-guard scan/);
   });
 
+  it('writes a hook that runs the commit stage, not every stage', () => {
+    // A pre-commit hook is the commit stopping point, so it asks for that
+    // stage by name rather than for everything. Without it the hook would
+    // run the intent gate on every commit, which is the per-task ceremony
+    // the stage split exists to keep out of a commit.
+    const repo = gitRepo();
+    init(repo);
+    const hook = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+
+    expect(hook).toMatch(/conductor run --staged --stage commit/);
+  });
+
+  it('records the hook it actually wrote, so revert still recognises it', () => {
+    // The manifest hashes the hook's contents. A hook text change that did
+    // not reach the manifest would make every revert report the hook as
+    // edited by hand and refuse to remove anything.
+    const repo = gitRepo();
+    init(repo);
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(revert.conflicts).toEqual([]);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
   it('enables gates it found and lists the rest disabled rather than omitting them', () => {
     const repo = gitRepo();
     const bin = tempDir();
@@ -238,6 +279,33 @@ describe('what init writes', () => {
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: false/);
     expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
+  });
+
+  it('writes each gate stage explicitly, so the file explains when each one runs', () => {
+    // The generated policy file is where a user discovers the vocabulary.
+    // A default that exists only in the parser is a default nobody can see,
+    // and the intent gate sitting at a different stage from the other two is
+    // exactly the thing that needs saying out loud.
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(policy).toMatch(/dependencies:\n(?:.*\n)*?\s+stage: commit/);
+    expect(policy).toMatch(/secrets:\n(?:.*\n)*?\s+stage: commit/);
+    expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+stage: ci/);
+  });
+
+  it('mentions the enforce ramp in the file, without switching it on for anyone', () => {
+    // Written as a comment rather than as a key. The default is true, and a
+    // file that spells out enforce: true on every gate reads as three
+    // decisions somebody made rather than as the one state a gate is in
+    // unless told otherwise. The comment is what makes the ramp findable.
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(policy).toMatch(/# enforce/);
+    expect(policy).not.toMatch(/^\s+enforce:/m);
   });
 
   it('says in the file why a gate is switched off, so the file explains itself', () => {
@@ -288,6 +356,264 @@ describe('idempotence', () => {
     init(repo);
 
     expect(readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8')).toBe(edited);
+  });
+});
+
+// A hook carrying the umbrella's own marker used to be skipped whatever it
+// said, so the hook an OLDER conductor wrote survived every re-init: it kept
+// running the old command line, and it was never entered in the new
+// manifest, so a later --revert walked past it and left it behind.
+describe('re-init over a hook a previous conductor wrote', () => {
+  const OLD_HOOK = [
+    '#!/bin/sh',
+    `# Guardrail pre-commit hook. ${MANAGED_HOOK_MARKER}`,
+    'conductor_status=0',
+    'conductor run --staged || conductor_status=$?',
+    'exit "$conductor_status"',
+    '',
+  ].join('\n');
+
+  function manifestOf(repo: string): {
+    files: Array<{ path: string; sha256: string; kind: string }>;
+    adopted: { path: string; content: string; product: string } | null;
+  } {
+    return JSON.parse(readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8'));
+  }
+
+  /**
+   * A repository as an older conductor would have left it: the hook it wrote
+   * on disk, and the manifest recording that hook's own digest. Nobody has
+   * touched either since.
+   */
+  function repoFromOlderConductor(): string {
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hookPath, OLD_HOOK);
+
+    const manifest = manifestOf(repo);
+    for (const file of manifest.files) {
+      if (file.kind === 'hook') {
+        file.sha256 = createHash('sha256').update(OLD_HOOK).digest('hex');
+      }
+    }
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+    return repo;
+  }
+
+  it('replaces it, because the manifest says it is ours and nobody edited it', () => {
+    const repo = repoFromOlderConductor();
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.alreadyInstalled).toBe(false);
+    const hook = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+    expect(hook).toMatch(/conductor run --staged --stage commit/);
+    expect(
+      result.actions.some((action) => action.path.endsWith('pre-commit') && action.kind === 'write')
+    ).toBe(true);
+    expect(
+      result.actions.find((action) => action.path.endsWith('pre-commit'))?.detail
+    ).toMatch(/older conductor/);
+  });
+
+  it('records the new digest, so a later revert actually removes the hook', () => {
+    // The half of the bug nobody sees until they try to uninstall: the old
+    // hook was never entered in the manifest, so revert walked past it.
+    const repo = repoFromOlderConductor();
+    init(repo);
+
+    const hookEntry = manifestOf(repo).files.find((file) => file.kind === 'hook');
+    expect(hookEntry?.sha256).toBe(
+      createHash('sha256').update(
+        readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')
+      ).digest('hex')
+    );
+    // Not the old digest still sitting there because nothing was replaced:
+    // that state also satisfies "the manifest matches the file on disk".
+    expect(hookEntry?.sha256).not.toBe(createHash('sha256').update(OLD_HOOK).digest('hex'));
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('reports the update under --dry-run and writes nothing', () => {
+    const repo = repoFromOlderConductor();
+
+    const result = init(repo, { dryRun: true });
+
+    expect(result.ok).toBe(true);
+    expect(
+      result.actions.find((action) => action.path.endsWith('pre-commit'))?.detail
+    ).toMatch(/older conductor/);
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(OLD_HOOK);
+  });
+
+  it('keeps the policy file in the manifest rather than dropping it on the upgrade', () => {
+    // applyInit rebuilds the manifest from what it wrote, and on an upgrade
+    // that is the hook alone. Dropping the policy entry would make revert
+    // stop knowing about a file init had written.
+    const repo = repoFromOlderConductor();
+    init(repo);
+
+    const paths = manifestOf(repo).files.map((file) => path.basename(file.path));
+    expect(paths).toContain(POLICY_FILE_NAME);
+  });
+
+  it('keeps an adopted gate hook recoverable across the upgrade', () => {
+    // The manifest is the only copy of the hook --adopt replaced. An
+    // upgrade that rebuilt the manifest without it would make the gate's own
+    // hook unrestorable, which is the failure the revert rules already name.
+    const repo = gitRepo();
+    const original = `#!/bin/sh\n# ${DEP_GUARD_HOOK_MARKER}\ndep-guard scan --staged\n`;
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), original);
+    init(repo, { adopt: true });
+
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), OLD_HOOK);
+    const manifest = manifestOf(repo);
+    for (const file of manifest.files) {
+      if (file.kind === 'hook') {
+        file.sha256 = createHash('sha256').update(OLD_HOOK).digest('hex');
+      }
+    }
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+
+    init(repo);
+
+    expect(manifestOf(repo).adopted?.content).toBe(original);
+  });
+});
+
+// The hook is already exactly right, so there is nothing to write. The
+// manifest is the part that has gone missing, and without it --revert has
+// no record that the hook is the umbrella's, so it reports success and
+// leaves a hook behind that runs a tool the repository no longer wants.
+describe('re-init when the hook is current but the manifest is gone', () => {
+  function repoWithLostManifest(): string {
+    const repo = gitRepo();
+    init(repo);
+    // What a "git clean", a deleted .guardrails directory, or an install
+    // from before there were manifests leaves behind.
+    rmSync(path.join(repo, path.dirname(MANIFEST_RELATIVE_PATH)), {
+      recursive: true,
+      force: true,
+    });
+    return repo;
+  }
+
+  it('records the hook it found, rather than writing a manifest without it', () => {
+    const repo = repoWithLostManifest();
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { files: Array<{ path: string; sha256: string; kind: string }> };
+    const hookEntry = manifest.files.find((file) => file.kind === 'hook');
+    expect(hookEntry).toBeDefined();
+    expect(hookEntry?.sha256).toBe(
+      createHash('sha256')
+        .update(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8'))
+        .digest('hex')
+    );
+  });
+
+  it('leaves the hook byte for byte alone while doing it', () => {
+    const repo = repoWithLostManifest();
+    const before = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+
+    init(repo);
+
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(before);
+  });
+
+  it('makes a later revert actually remove the hook', () => {
+    const repo = repoWithLostManifest();
+    init(repo);
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('writes nothing under --dry-run', () => {
+    const repo = repoWithLostManifest();
+
+    const result = init(repo, { dryRun: true });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(false);
+  });
+
+  it('still does nothing at all when the manifest already records the hook', () => {
+    // The ordinary second run. Nothing is missing, so nothing is rebuilt.
+    const repo = gitRepo();
+    init(repo);
+
+    const second = init(repo);
+
+    expect(second.alreadyInstalled).toBe(true);
+    expect(second.actions.every((action) => action.kind === 'skip')).toBe(true);
+  });
+});
+
+describe('re-init over a managed hook somebody edited', () => {
+  const EDITED = [
+    '#!/bin/sh',
+    `# Guardrail pre-commit hook. ${MANAGED_HOOK_MARKER}`,
+    '# and one line of my own',
+    'exit 0',
+    '',
+  ].join('\n');
+
+  it('refuses rather than silently discarding the edit', () => {
+    const repo = gitRepo();
+    init(repo);
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), EDITED);
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('changed-since-init');
+    expect(result.conflicts[0].guidance).toMatch(/--force/);
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(EDITED);
+  });
+
+  it('replaces it under --force', () => {
+    const repo = gitRepo();
+    init(repo);
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), EDITED);
+
+    const result = init(repo, { force: true });
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toMatch(
+      /conductor run --staged --stage commit/
+    );
+  });
+
+  it('treats a marked hook with no manifest at all the same way', () => {
+    // Nothing on disk says this hook is the one conductor wrote, so it is
+    // not the umbrella's to overwrite on its own say-so.
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), EDITED);
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('changed-since-init');
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
   });
 });
 
@@ -954,6 +1280,57 @@ describe('other hook managers that install a generated hook', () => {
 
     expect(result.ok).toBe(false);
     expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(content);
+  });
+});
+
+// The two cases above use hand-written approximations of what these tools
+// generate, which proves only that the code agrees with whoever wrote the
+// approximation. These use the file each tool actually produced on a real
+// install, captured in a scratch repository. See tests/fixtures/hooks.
+describe('generated hooks captured from a real install', () => {
+  function capturedHook(name: string): string {
+    return readFileSync(path.join(HOOK_FIXTURES, name), 'utf8');
+  }
+
+  it.each([
+    ['lefthook 2.1.12', 'lefthook-2.1.12-pre-commit.sh', 'lefthook', /lefthook-local\.yml/],
+    ['lefthook 1.7.18', 'lefthook-1.7.18-pre-commit.sh', 'lefthook', /lefthook-local\.yml/],
+    [
+      'pre-commit 4.6.2',
+      'pre-commit-4.6.2-pre-commit.sh',
+      'precommit',
+      /\.pre-commit-config\.yaml/,
+    ],
+  ])('classifies the hook %s really wrote', (_name, fixture, manager, guidance) => {
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), capturedHook(fixture));
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(false);
+    expect(result.hookManager).toBe(manager);
+    expect(result.conflicts[0].reason).toBe('generated-hook');
+    expect(result.conflicts[0].guidance).toMatch(guidance);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('recognises lefthook without the version stamp, which no live version writes', () => {
+    // The finding this whole describe block exists for. init.ts matched on
+    // "lefthook_version:" OR "call_lefthook", and the first of those appears
+    // in neither version's generated hook, nor anywhere in the 2.1.12
+    // binary. Only the second is doing any work, so it has to keep working
+    // on its own.
+    for (const fixture of ['lefthook-2.1.12-pre-commit.sh', 'lefthook-1.7.18-pre-commit.sh']) {
+      expect(capturedHook(fixture)).not.toMatch(/lefthook_version:/);
+      expect(capturedHook(fixture)).toMatch(/call_lefthook/);
+    }
+  });
+
+  it('finds the pre-commit framework marker line exactly as init.ts spells it', () => {
+    expect(capturedHook('pre-commit-4.6.2-pre-commit.sh')).toContain(
+      'File generated by pre-commit: https://pre-commit.com'
+    );
   });
 });
 

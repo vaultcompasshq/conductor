@@ -45,6 +45,39 @@ export const PRODUCTS = ['dep-guard', 'vault-guard', 'intent-guard'] as const;
 export type Product = (typeof PRODUCTS)[number];
 
 /**
+ * When a gate runs, in order, earliest first.
+ *
+ * Stages are CUMULATIVE: a gate runs at its own stage and at every later
+ * one, so a run at `ci` runs everything that is enabled. The order of this
+ * array is the whole rule, which is why it is one array rather than three
+ * booleans: adding a fourth stopping point is an entry here and nothing
+ * else.
+ */
+export const GATE_STAGES = ['commit', 'push', 'ci'] as const;
+export type GateStage = (typeof GATE_STAGES)[number];
+
+/**
+ * Where each gate sits when the policy file does not say.
+ *
+ * Runtime is not what decides this. All three gates together take under a
+ * second on a staged commit; the cost is CEREMONY, and only the intent gate
+ * has any, because it wants a contract approved before the work starts.
+ * The other two are silent until they find something, and a secret that
+ * reaches a pull request is already on a remote, so the earliest stage is
+ * the only honest place for them.
+ */
+export const DEFAULT_STAGE_FOR_ROLE: Record<GateRole, GateStage> = {
+  dependencies: 'commit',
+  secrets: 'commit',
+  intent: 'ci',
+};
+
+/** Whether a gate at `gateStage` runs during a run asked for at `requested`. */
+export function runsAtStage(gateStage: GateStage, requested: GateStage): boolean {
+  return GATE_STAGES.indexOf(gateStage) <= GATE_STAGES.indexOf(requested);
+}
+
+/**
  * Which product fills which role today. Enforced on load: a policy that
  * puts dep-guard in the `secrets` role is a mistake with a confusing
  * failure mode (the secrets section of the report would carry dependency
@@ -78,6 +111,15 @@ export interface GatePolicy {
   role: GateRole;
   product: Product;
   enabled: boolean;
+  /** Resolved, never absent: the file's own value or this role's default. */
+  stage: GateStage;
+  /**
+   * Whether this gate's verdict reaches the composed exit code. Defaults to
+   * true. An unenforced gate runs, reports, and appears in both output
+   * formats exactly as an enforced one does; the only thing it cannot do is
+   * change the exit code.
+   */
+  enforce: boolean;
   /** Absolute path to the gate's executable, overriding resolution. */
   command?: string;
   /** Argument prefix used with `command` when it cannot be inferred. */
@@ -217,6 +259,13 @@ export function parsePolicy(text: string, source: string): Policy {
       role,
       product,
       enabled: entry.enabled === undefined ? true : Boolean(entry.enabled),
+      // The schema has already refused anything outside the enum, so the
+      // only two cases left are "the file said one" and "it did not".
+      stage: (entry.stage as GateStage | undefined) ?? DEFAULT_STAGE_FOR_ROLE[role],
+      // Defaults to true, and the schema has already refused anything that
+      // is not a boolean. Enforcement is the state a gate is in unless
+      // somebody wrote down that it is not.
+      enforce: entry.enforce === undefined ? true : Boolean(entry.enforce),
       ...(command === undefined ? {} : { command }),
       ...(entry.args === undefined ? {} : { args: entry.args as string[] }),
       options,

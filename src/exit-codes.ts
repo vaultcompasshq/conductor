@@ -30,6 +30,16 @@
 // per-finding `blocking` flag can only ADD to that, never subtract: it
 // exists so a gate whose exit code somehow said clean while its own report
 // carried a blocking finding still fails the run.
+//
+// The ONE exception, and it is the repository's own written decision rather
+// than a judgment made here: a gate carrying `enforce: false` in the policy
+// file is left out of this composition entirely. That is the adoption ramp,
+// so a gate can be switched on and read for a few weeks before it is
+// allowed to refuse anybody's commit. It is not a downgrade: the gate still
+// runs, its findings keep their own levels, its blocking flags are
+// untouched, and both output formats say plainly that it blocked and was
+// not enforced. Nothing here reads a gate's output and decides to ignore
+// it; it reads a line somebody wrote in their own policy file.
 
 export const EXIT_OK = 0;
 export const EXIT_BLOCKED = 1;
@@ -42,13 +52,29 @@ export interface ExitInput {
   exitCode: number | null;
   /** Whether any finding from this gate is one the gate itself blocks on. */
   hasBlockingFinding: boolean;
+  /**
+   * Whether this gate's verdict counts here at all.
+   *
+   * REQUIRED rather than defaulted, deliberately. A caller that forgets it
+   * should not compile, because the two possible mistakes are not
+   * symmetrical: silently defaulting to false would drop a real gate's
+   * verdict on the floor, and even the safe default would hide the fact
+   * that a call site had never thought about the question.
+   *
+   * An unenforced gate is filtered out of this decision entirely. It is not
+   * downgraded, and its findings are not marked non-blocking: the report
+   * still says exactly what the gate said. The only thing enforce: false
+   * changes is which number this function returns.
+   */
+  enforce: boolean;
 }
 
 export function composeExitCode(gates: ExitInput[]): number {
-  if (gates.some((gate) => gate.couldNotRun !== null)) {
+  const enforced = gates.filter((gate) => gate.enforce);
+  if (enforced.some((gate) => gate.couldNotRun !== null)) {
     return EXIT_COULD_NOT_RUN;
   }
-  if (gates.some((gate) => (gate.exitCode ?? 0) !== 0 || gate.hasBlockingFinding)) {
+  if (enforced.some((gate) => (gate.exitCode ?? 0) !== 0 || gate.hasBlockingFinding)) {
     return EXIT_BLOCKED;
   }
   return EXIT_OK;

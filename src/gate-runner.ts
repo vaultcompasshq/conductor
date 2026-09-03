@@ -29,7 +29,7 @@ import {
   normalizeUnparseableGate,
   normalizeVaultGuard,
 } from './normalize.js';
-import type { GatePolicy, GateRole, Product } from './policy.js';
+import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
 import { ResolveError, candidateNames, resolveGateBinary } from './resolve.js';
 import type { ResolvedBinary } from './resolve.js';
@@ -49,6 +49,14 @@ export interface CouldNotRun {
 export interface GateOutcome {
   role: GateRole;
   product: Product;
+  /** The stage this gate is configured for, carried so the report can say it. */
+  stage: GateStage;
+  /**
+   * Whether this gate's verdict reaches the exit code. Carried on the
+   * outcome rather than looked up again from the policy, so a report never
+   * has to be handed the policy file to explain its own exit code.
+   */
+  enforce: boolean;
   /** From the binary's --version, or null when there was no safe way to ask. */
   productVersion: string | null;
   /** The command line actually run, for the report header. */
@@ -176,6 +184,8 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
   const progress: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'> = {
     role: gate.role,
     product: gate.product,
+    stage: gate.stage,
+    enforce: gate.enforce,
     productVersion: null,
     argv: [],
     binary: null,

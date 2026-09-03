@@ -55,11 +55,43 @@ function findingLines(finding: Finding): string[] {
 
 function header(gate: GateOutcome): string {
   const version = gate.productVersion === null ? '(version unknown)' : gate.productVersion;
+  // On the header line rather than only at the bottom of the section: a
+  // reader scanning headers for the gate that refused their commit has to
+  // be able to see, in the same glance, that this one did not.
+  const enforcement = gate.enforce ? '' : '  [not enforced]';
   if (gate.couldNotRun !== null) {
-    return `${gate.role}  ${gate.product} ${version}  DID NOT RUN (${gate.couldNotRun.reason})`;
+    return `${gate.role}  ${gate.product} ${version}  DID NOT RUN (${gate.couldNotRun.reason})${enforcement}`;
   }
   const source = gate.binary === null ? '' : `  via ${gate.binary.candidate} on ${gate.binary.source}`;
-  return `${gate.role}  ${gate.product} ${version}  exit ${gate.exitCode ?? '?'}  ${gate.durationMs}ms${source}`;
+  return `${gate.role}  ${gate.product} ${version}  exit ${gate.exitCode ?? '?'}  ${gate.durationMs}ms${source}${enforcement}`;
+}
+
+/**
+ * The line that keeps a green exit from being a surprise.
+ *
+ * A report with BLOCKING on it and exit 0 at the bottom reads as a bug in
+ * the umbrella unless the reason is on the same screen, in words rather
+ * than in a flag somebody has to go and look up in the policy file.
+ */
+function enforcementNote(gate: GateOutcome): string | null {
+  if (gate.enforce) {
+    return null;
+  }
+  if (gate.couldNotRun !== null) {
+    return (
+      `  not enforced: this gate could not run, and enforce is false for it in .guardrails.yaml, ` +
+      'so it is a note here rather than a failed run. Nothing was checked by it.'
+    );
+  }
+  const blocking = gate.findings.filter((finding) => finding.blocking).length;
+  if (blocking > 0 || (gate.exitCode ?? 0) !== 0) {
+    return (
+      `  not enforced: this gate reported ${blocking} blocking finding(s) and exited ` +
+      `${gate.exitCode ?? '?'}, and enforce is false for it in .guardrails.yaml, so the commit ` +
+      'proceeds. Set enforce: true there to make it block.'
+    );
+  }
+  return '  not enforced: enforce is false for this gate in .guardrails.yaml. It found nothing to block on here.';
 }
 
 function gateSection(gate: GateOutcome): string[] {
@@ -125,11 +157,79 @@ function gateSection(gate: GateOutcome): string[] {
     lines.push(`  ! ${diagnostic.code}: ${diagnostic.message}`);
   }
 
+  // Last in the section, so it is the line under the findings it explains.
+  const enforcement = enforcementNote(gate);
+  if (enforcement !== null) {
+    lines.push(enforcement);
+  }
+
   return lines;
 }
 
+/**
+ * One line per gate the stage filter held back.
+ *
+ * Deliberately not a section: nothing ran, so there is no header, no exit
+ * code and no duration to put in one. It still has to be on screen, because
+ * a run at the commit stage otherwise reads exactly like a run that checked
+ * everything, and the whole point of a stage is that some gates did not.
+ */
+function deferredLines(result: RunResult): string[] {
+  return result.deferred.map(
+    (gate) =>
+      `  deferred  ${gate.role}  ${gate.product}  did not run here; it runs from stage ${gate.stage} onwards`
+  );
+}
+
+/**
+ * What an unenforced gate did, as clauses for a verdict line.
+ *
+ * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
+ * of the count and out of the reason either way, but it still gets a
+ * sentence. A gate that verified nothing is worth a line whatever the exit
+ * code turned out to be.
+ */
+function unenforcedClauses(result: RunResult): string[] {
+  const unenforced = result.gates.filter((gate) => !gate.enforce);
+  // A gate that could not run is only that. Its findings list carries the
+  // umbrella's own blocking gate-missing finding, so a naive test for "has a
+  // blocking finding" reports the same gate as having blocked AND as having
+  // failed to run, which are opposite claims.
+  const blocked = unenforced.filter(
+    (gate) =>
+      gate.couldNotRun === null &&
+      ((gate.exitCode ?? 0) !== 0 || gate.findings.some((finding) => finding.blocking))
+  );
+  const broken = unenforced.filter((gate) => gate.couldNotRun !== null);
+
+  const clauses: string[] = [];
+  if (blocked.length > 0) {
+    clauses.push(`${blocked.map((gate) => gate.role).join(', ')} blocked`);
+  }
+  if (broken.length > 0) {
+    clauses.push(`${broken.map((gate) => gate.role).join(', ')} could not run`);
+  }
+  return clauses;
+}
+
 function verdict(result: RunResult): string {
-  const blocking = result.findings.filter((finding) => finding.blocking).length;
+  // Counted over ENFORCED gates only. The exit code came from those alone,
+  // so a count taken over all of them describes a different run from the one
+  // the number at the front of the line is about, and the umbrella's own
+  // findings about an unenforced broken gate inflate it further.
+  const enforcedGates = result.gates.filter((gate) => gate.enforce);
+  const blocking = enforcedGates
+    .flatMap((gate) => gate.findings)
+    .filter((finding) => finding.blocking).length;
+
+  if (result.gates.length === 0 && result.deferred.length > 0) {
+    // Distinct from "none is enabled" below. A policy file with everything
+    // switched off and a stage with nothing to do at it are two different
+    // states, and telling somebody to set enabled: true is the wrong advice
+    // for the second one.
+    const names = result.deferred.map((gate) => `${gate.role} at stage ${gate.stage}`).join(', ');
+    return `verdict: exit 0, nothing ran at this stage: every enabled gate is deferred (${names}).`;
+  }
   if (result.gates.length === 0) {
     // Exit 0 with an empty report is indistinguishable from a clean run at a
     // glance, and a policy file with every gate switched off is exactly the
@@ -140,26 +240,60 @@ function verdict(result: RunResult): string {
       'Nothing was checked. Set enabled: true on a gate in .guardrails.yaml.'
     );
   }
+  const clauses = unenforcedClauses(result);
+  const aside =
+    clauses.length === 0
+      ? ''
+      : ` ${clauses.join(' and ')}, but those gates have enforce: false in .guardrails.yaml, ` +
+        'so that is not why.';
+
   if (result.exitCode === EXIT_COULD_NOT_RUN) {
-    const names = result.gates
+    // Only the ENFORCED gates. An unenforced gate that could not run is not
+    // why this run failed, and naming it here sends somebody off to install
+    // a gate that would not have changed the answer.
+    const names = enforcedGates
       .filter((gate) => gate.couldNotRun !== null)
       .map((gate) => gate.role)
       .join(', ');
-    return `verdict: exit 2, a gate could not run (${names}), so nothing here is a clean result.`;
+    return `verdict: exit 2, a gate could not run (${names}), so nothing here is a clean result.${aside}`;
   }
   if (result.exitCode === EXIT_BLOCKED) {
-    return `verdict: exit 1, ${blocking} blocking finding(s) across ${result.gates.length} gate(s).`;
+    return `verdict: exit 1, ${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
   }
+
+  // Exit 0 with red on the screen above it. The verdict is the one line
+  // somebody reads when they read nothing else, so it is the line that has
+  // to carry the reason rather than leaving it to the sections.
+  if (clauses.length > 0) {
+    return (
+      `verdict: exit 0, but ${clauses.join(' and ')}. ` +
+      'Those gates have enforce: false in .guardrails.yaml, so nothing here failed the run.'
+    );
+  }
+
   return `verdict: exit 0, every enabled gate ran and none blocked.`;
 }
 
 export function renderText(result: RunResult): string {
+  // Counted over EVERY gate, unenforced ones included, and deliberately not
+  // the same number the verdict prints. This line is an inventory of what
+  // follows it: a reader counting the finding lines on screen has to arrive
+  // at this number, and narrowing it to the enforced gates would make the
+  // header disagree with the report under it. The verdict is the other
+  // question, what failed the run, and that one is enforced gates only. Two
+  // different questions, so two numbers, and the section headers and the
+  // "not enforced" lines are what connect them.
   const lines: string[] = [
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];
 
   for (const gate of result.gates) {
     lines.push(...gateSection(gate));
+  }
+
+  const deferred = deferredLines(result);
+  if (deferred.length > 0) {
+    lines.push('', ...deferred);
   }
 
   // A derived severity is marked with a trailing asterisk above; say what

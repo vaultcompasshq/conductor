@@ -171,6 +171,168 @@ describe('a gate that could not run for a reason other than its output', () => {
   });
 });
 
+describe('stage filtering', () => {
+  // Every gate present, every gate installed, and only the stage deciding
+  // which of them runs. The defaults are the interesting part: dependencies
+  // and secrets at commit, intent at ci.
+  const DEFAULT_STAGES = parsePolicy(
+    [
+      'version: 1',
+      'gates:',
+      '  dependencies:',
+      '    product: dep-guard',
+      '  secrets:',
+      '    product: vault-guard',
+      '  intent:',
+      '    product: intent-guard',
+    ].join('\n'),
+    POLICY_FILE_NAME
+  );
+
+  function allThreeInstalled(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return bin;
+  }
+
+  function rolesAt(stage: 'commit' | 'push' | 'ci' | undefined) {
+    const result = runAll(DEFAULT_STAGES, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: allThreeInstalled(),
+      ...(stage === undefined ? {} : { stage }),
+    });
+    return {
+      ran: result.gates.map((gate) => gate.role),
+      deferred: result.deferred.map((gate) => gate.role),
+      exitCode: result.exitCode,
+    };
+  }
+
+  it('runs every enabled gate when no stage was asked for, exactly as v0.1 did', () => {
+    expect(rolesAt(undefined).ran).toEqual(['dependencies', 'secrets', 'intent']);
+    expect(rolesAt(undefined).deferred).toEqual([]);
+  });
+
+  it('runs only the commit gates at commit, and defers the rest', () => {
+    expect(rolesAt('commit').ran).toEqual(['dependencies', 'secrets']);
+    expect(rolesAt('commit').deferred).toEqual(['intent']);
+  });
+
+  it('still runs the commit gates at push, because stages are cumulative', () => {
+    expect(rolesAt('push').ran).toEqual(['dependencies', 'secrets']);
+    expect(rolesAt('push').deferred).toEqual(['intent']);
+  });
+
+  it('runs everything at ci, which is the last stage', () => {
+    expect(rolesAt('ci').ran).toEqual(['dependencies', 'secrets', 'intent']);
+    expect(rolesAt('ci').deferred).toEqual([]);
+  });
+
+  it('says which stage a deferred gate is waiting for', () => {
+    const result = runAll(DEFAULT_STAGES, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: allThreeInstalled(),
+      stage: 'commit',
+    });
+    expect(result.deferred).toEqual([{ role: 'intent', product: 'intent-guard', stage: 'ci' }]);
+  });
+
+  it('honours an explicit stage over the role default in both directions', () => {
+    const policy = parsePolicy(
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '    stage: ci',
+        '  intent:',
+        '    product: intent-guard',
+        '    stage: commit',
+      ].join('\n'),
+      POLICY_FILE_NAME
+    );
+    const result = runAll(policy, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: allThreeInstalled(),
+      stage: 'commit',
+    });
+    expect(result.gates.map((gate) => gate.role)).toEqual(['intent']);
+    expect(result.deferred.map((gate) => gate.role)).toEqual(['dependencies']);
+  });
+
+  it('never lets a deferred gate reach the exit code, since it was not asked to run', () => {
+    // The gate that would have blocked is the deferred one. A stage filter
+    // that leaked its verdict would fail a commit over a check nobody ran.
+    const policy = parsePolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n    stage: ci\n',
+      POLICY_FILE_NAME
+    );
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', {
+      stdout: JSON.stringify({
+        status: 'blocked',
+        exitCode: 1,
+        reasons: ['Budget hard_block: too many files'],
+        contractFound: true,
+        contractFrozen: true,
+      }),
+      exit: 1,
+    });
+
+    const result = runAll(policy, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+      stage: 'commit',
+    });
+
+    expect(result.gates).toEqual([]);
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('does not treat a deferred gate as a missing one', () => {
+    // A gate switched on and absent is exit 2. A gate switched on and
+    // deferred is not the same thing, and the binary is never even looked
+    // for: an intent gate installed only on the CI image must not fail a
+    // developer's commit.
+    const policy = parsePolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n    stage: ci\n',
+      POLICY_FILE_NAME
+    );
+    const result = runAll(policy, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: tempDir(),
+      stage: 'commit',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.findings).toEqual([]);
+    expect(result.deferred.map((gate) => gate.role)).toEqual(['intent']);
+  });
+
+  it('leaves a disabled gate out of the deferred list rather than reporting it twice', () => {
+    const policy = parsePolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n    enabled: false\n',
+      POLICY_FILE_NAME
+    );
+    const result = runAll(policy, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: tempDir(),
+      stage: 'commit',
+    });
+    expect(result.gates).toEqual([]);
+    expect(result.deferred).toEqual([]);
+  });
+});
+
 describe('a run with no enabled gates', () => {
   it('exits 0 and reports nothing rather than pretending to be clean', () => {
     const policy = parsePolicy(

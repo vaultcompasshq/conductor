@@ -24,6 +24,8 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
     binary: null,
     exitCode: 1,
     durationMs: 10,
+    stage: 'commit',
+    enforce: true,
     couldNotRun: null,
     findings: [],
     run: { failOn: 'medium', suppressed: 0, ignored: 0, diagnostics: [], details: {} },
@@ -33,12 +35,13 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
   } as GateOutcome;
 }
 
-function result(gates: GateOutcome[]): RunResult {
+function result(gates: GateOutcome[], deferred: RunResult['deferred'] = []): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
     schemaVersion: 1,
     generatedAt: '2026-09-02T00:00:00.000Z',
     gates,
+    deferred,
     findings,
     summary: { blocking: 0, byProduct: {}, bySeverity: {} },
     exitCode: 1,
@@ -469,6 +472,130 @@ describe('the umbrella own findings', () => {
     const details = (entry.properties as Record<string, Record<string, unknown>>).details;
     expect(details.role).toBe('secrets');
     expect(details.product).toBe('vault-guard');
+  });
+
+  it('keeps an unenforced gate results at their own level rather than downgrading them', () => {
+    // A critical finding is critical whoever decided not to block on it.
+    // Rewriting the level would put the umbrella's enforcement policy into
+    // the field a code-scanning UI uses to describe the finding itself.
+    const log = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
+    const gateRun = log.runs[0];
+    const levels = (gateRun.results as Array<Record<string, unknown>>).map((entry) => entry.level);
+
+    expect(levels).toContain('error');
+    expect(levels).not.toContain('note');
+  });
+
+  it('marks the gate own run as unenforced, and an enforced one as enforced', () => {
+    const unenforced = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
+    const enforced = sarif(result([outcome({ findings: depGuard.findings })]));
+
+    // Always present, so an absent property never has to be read as either
+    // answer.
+    expect((unenforced.runs[0].properties as Record<string, unknown>).enforced).toBe(false);
+    expect((enforced.runs[0].properties as Record<string, unknown>).enforced).toBe(true);
+  });
+
+  it('records which stage the gate ran at, beside whether it was enforced', () => {
+    // A log from a commit-stage run and one from a ci run are otherwise
+    // indistinguishable for a gate that appears in both, and a consumer
+    // comparing two uploads cannot tell a narrower run from a full one.
+    const log = sarif(
+      result([outcome({ stage: 'push', findings: depGuard.findings })])
+    );
+    expect(log.runs[0].properties).toEqual({ enforced: true, stage: 'push' });
+  });
+
+  it('also names an unenforced gate in the umbrella run, where a gate with no run still fits', () => {
+    const log = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    const entry = (umbrella?.results as Array<Record<string, unknown>>).find(
+      (candidate) => candidate.ruleId === 'conductor/gate-not-enforced'
+    );
+
+    expect(entry).toBeDefined();
+    expect(entry?.level).toBe('note');
+    expect((entry?.properties as Record<string, unknown>).blocking).toBe(false);
+    const details = (entry?.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.role).toBe('dependencies');
+    expect(details.product).toBe('dep-guard');
+  });
+
+  it('keeps saying a gate is unenforced when it could not run and so has no run of its own', () => {
+    // The case the run-level property alone cannot carry, and the one where
+    // it matters most: exit 0 with a gate that verified nothing.
+    const missing = outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: null,
+      exitCode: null,
+      enforce: false,
+      couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+      findings: [
+        {
+          schemaVersion: 1,
+          product: 'conductor',
+          productVersion: null,
+          ruleId: 'conductor/gate-missing',
+          severity: 'high',
+          severityIsDerived: true,
+          blocking: true,
+          message: 'the intent gate is enabled but no intent-guard binary was found',
+          subject: { kind: 'none' },
+          fingerprint: null,
+          details: {},
+        } satisfies Finding,
+      ],
+    });
+
+    const log = sarif(result([missing]));
+
+    expect(
+      log.runs.map((run) => (run.tool as Record<string, Record<string, unknown>>).driver.name)
+    ).toEqual(['conductor']);
+    const ruleIds = (log.runs[0].results as Array<Record<string, unknown>>).map(
+      (entry) => entry.ruleId
+    );
+    expect(ruleIds).toContain('conductor/gate-not-enforced');
+  });
+
+  it('records a stage-deferred gate as a note in the umbrella run, with no run of its own', () => {
+    // Same rule as a gate that could not run: the gate produced no tool
+    // output, so putting its name on a SARIF run would attribute an empty
+    // run to a tool that never executed. The umbrella is the honest owner
+    // of a statement about a gate that did not run.
+    const log = sarif(
+      result([outcome({ exitCode: 0, findings: [] })], [
+        { role: 'intent', product: 'intent-guard', stage: 'ci' },
+      ])
+    );
+
+    expect(
+      log.runs.map((run) => (run.tool as Record<string, Record<string, unknown>>).driver.name)
+    ).toEqual(['dep-guard', 'conductor']);
+
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    const entry = (umbrella?.results as Array<Record<string, unknown>>)[0];
+    expect(entry.ruleId).toBe('conductor/gate-deferred');
+    expect(entry.level).toBe('note');
+    expect((entry.properties as Record<string, unknown>).blocking).toBe(false);
+    expect(entry).not.toHaveProperty('locations');
+
+    const details = (entry.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.role).toBe('intent');
+    expect(details.product).toBe('intent-guard');
+    expect(details.stage).toBe('ci');
+  });
+
+  it('emits no umbrella run at all when nothing was deferred and nothing went wrong', () => {
+    const log = sarif(result([outcome({ exitCode: 0, findings: [] })]));
+    expect(
+      log.runs.map((run) => (run.tool as Record<string, Record<string, unknown>>).driver.name)
+    ).toEqual(['dep-guard']);
   });
 
   it('still emits a gate run for a gate that ran and found nothing', () => {
