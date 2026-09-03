@@ -615,7 +615,12 @@ describe('core.hooksPath', () => {
 // the TRACKED hook one directory up. Reading the dispatcher reported a real
 // vault-guard hook as foreign; writing the dispatcher put the umbrella hook
 // somewhere the next install deletes.
-describe('a husky-managed repository', () => {
+//
+// Recognition takes all three of: hooks directory named _, parent named
+// .husky, and husky's own shim in that directory. The husky 8 suite below
+// is the case that says why the third one is required and why the executed
+// file's content is not a signal at all.
+describe('a husky 9 repository', () => {
   it('detects the tracked hook, not the generated dispatcher, when deciding what is there', () => {
     const repo = huskyRepoWithGateHook();
 

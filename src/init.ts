@@ -41,6 +41,14 @@
 //     without a word. Found by running this tool against a real husky 9
 //     repository, which is the only way it could have been found: every
 //     fixture in the suite agreed with the code.
+//
+//     The recognition rule is three conditions, all required: the hooks
+//     directory is named `_`, its parent is named `.husky`, and husky's own
+//     shim (`h`, or `husky.sh`) is in that directory. See huskyDirectoryFor
+//     for why the content of the executed file is deliberately not a
+//     fourth, weaker signal: under husky 8 that file is the tracked hook,
+//     and reading its preamble as a dispatcher pointed init at the
+//     repository root.
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
