@@ -589,7 +589,9 @@ describe('core.hooksPath', () => {
       cwd: repo,
       encoding: 'utf8',
       // No conductor on PATH, so the fail-closed branch is what refuses it.
-      env: { ...process.env, PATH: tempDir() },
+      // git IS on it, so the refusal is about conductor and not about the
+      // hook's own inability to look.
+      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
     });
 
     expect(commit.status).not.toBe(0);
@@ -902,11 +904,41 @@ describe('the generated hook', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'no conductor installed'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: tempDir() },
+      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
     });
 
     expect(commit.status).not.toBe(0);
     expect(commit.stderr).toMatch(/NOT checked/);
+    expect(commit.stderr).toMatch(/conductor: command not found/);
+  });
+
+  it('says git is missing rather than blaming conductor, when git is missing', () => {
+    const repo = gitRepo();
+    init(repo);
+    // Present, and unreachable without git: the hook has to find the root
+    // before it can look here.
+    shim(path.join(repo, 'node_modules', '.bin'), 'conductor', '#!/bin/sh\nexit 0\n');
+
+    // The hook is run directly rather than through a commit, and that is
+    // the only way to reach this case: git prepends its own exec-path to a
+    // hook's PATH and there is a git binary in it, so a hook git itself
+    // invokes can always find git no matter what PATH says. A hook invoked
+    // by hand, or by a runner that is not git, has no such guarantee.
+    const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: tempDir() },
+    });
+
+    // Without git the hook cannot find the repository root, so it cannot
+    // look in node_modules/.bin, so the conductor sitting right there is
+    // invisible. Reporting that as "conductor not found" names a symptom
+    // and sends the reader off to reinstall a tool they already have.
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/conductor: git is not on this hook's PATH/);
+    expect(run.stderr).toMatch(/NOT checked/);
+    // One line, so a hook's output stays readable in a terminal.
+    expect(run.stderr.trim().split('\n')).toHaveLength(1);
   });
 
   // DOGFOOD 1, finding 3. The hook ran a bare "command -v conductor", so a

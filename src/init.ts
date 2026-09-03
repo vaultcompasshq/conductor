@@ -206,14 +206,28 @@ const HOOK = `#!/bin/sh
 # the working directory: git runs a pre-commit hook from the top level
 # today, but a hook invoked by hand or by another manager can start in a
 # subdirectory, where a relative "node_modules/.bin" points at nothing.
-conductor_root=$(git rev-parse --show-toplevel 2>/dev/null) || conductor_root=""
-if [ -n "$conductor_root" ] && [ -d "$conductor_root/node_modules/.bin" ]; then
-  PATH="$conductor_root/node_modules/.bin:$PATH"
-  export PATH
+conductor_no_git=0
+if command -v git >/dev/null 2>&1; then
+  conductor_root=$(git rev-parse --show-toplevel 2>/dev/null) || conductor_root=""
+  if [ -n "$conductor_root" ] && [ -d "$conductor_root/node_modules/.bin" ]; then
+    PATH="$conductor_root/node_modules/.bin:$PATH"
+    export PATH
+  fi
+else
+  # Without git the root cannot be found, so node_modules/.bin cannot be
+  # looked in, so a conductor installed only there is invisible. That is a
+  # different fact from "conductor is not installed", and saying the second
+  # one sends the reader off to reinstall a tool that may already be sitting
+  # in the repository.
+  conductor_no_git=1
 fi
 
 if ! command -v conductor >/dev/null 2>&1; then
-  echo "conductor: command not found, so this commit was NOT checked by any guardrail gate. Install the umbrella, or run 'conductor init --revert' to remove this hook." >&2
+  if [ "$conductor_no_git" -eq 1 ]; then
+    echo "conductor: git is not on this hook's PATH, so the repository's node_modules/.bin could not be located and no conductor was found there or on PATH. This commit was NOT checked by any guardrail gate." >&2
+  else
+    echo "conductor: command not found, so this commit was NOT checked by any guardrail gate. Install the umbrella, or run 'conductor init --revert' to remove this hook." >&2
+  fi
   exit 1
 fi
 
