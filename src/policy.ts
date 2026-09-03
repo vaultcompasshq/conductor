@@ -102,7 +102,14 @@ export const PRODUCT_FOR_ROLE: Record<GateRole, Product> = {
 export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   'dep-guard': ['format', 'staged', 'base'],
   'vault-guard': ['format', 'f', 'staged'],
-  'intent-guard': ['json', 'staged', 'project', 'paths'],
+  // `base` is reserved even though the umbrella never passes it to this gate,
+  // and that is the point. The umbrella works the changed-path set out itself
+  // and hands over `--paths`, because `--project` may be a temporary
+  // directory holding nothing but a contract. A policy that also sets `base`
+  // sends intent-guard looking for git THERE, and the run exits 2 blaming git
+  // for a line in the policy file. Rejecting the key at load time is the only
+  // place that failure can be explained by the thing that caused it.
+  'intent-guard': ['json', 'staged', 'project', 'paths', 'base'],
 };
 
 export type OptionValue = string | number | boolean | Array<string | number>;
