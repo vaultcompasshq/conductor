@@ -1,0 +1,82 @@
+name: Conductor
+description: >-
+  Run every enabled guardrail gate at the ci stage and write one SARIF log for
+  the calling workflow to upload.
+
+inputs:
+  stage:
+    description: >-
+      Which stopping point this job is. Stages are cumulative, so ci runs
+      everything that is enabled.
+    default: ci
+  base-ref:
+    description: >-
+      The ref the intent gate measures the branch against. Leave it empty on a
+      pull request and conductor uses origin/$GITHUB_BASE_REF itself; set it to
+      run the pull-request flow somewhere that variable is not set.
+    default: ''
+  spec:
+    description: >-
+      An explicit spec for the intent gate, outranking a Spec: line in the pull
+      request body and the branch-name convention.
+    default: ''
+  output:
+    description: Where to write the SARIF log.
+    default: conductor.sarif
+  working-directory:
+    description: The repository root, when the checkout is not at the workspace root.
+    default: .
+
+outputs:
+  sarif:
+    description: The SARIF log this action wrote, for the caller's upload step.
+    value: ${{ inputs.output }}
+
+runs:
+  using: composite
+  steps:
+    # No install step, on purpose. This package is unpublished, so an install
+    # here would either fail or fetch something else entirely under a name it
+    # does not own. A repository that wants this action depends on conductor
+    # the ordinary way, and this step says so in a sentence rather than
+    # failing later with a command-not-found.
+    - name: Check conductor is installed
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -eu
+        if [ ! -x node_modules/.bin/conductor ]; then
+          echo "conductor: no node_modules/.bin/conductor in ${{ inputs.working-directory }}." >&2
+          echo "This action runs the conductor your repository already depends on and installs nothing." >&2
+          echo "Add it as a devDependency and run your install step before this one." >&2
+          exit 1
+        fi
+
+    - name: Run the gates
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        # Read by the intent gate's pull-request flow: the event payload for a
+        # Spec: line in the pull request body, the base ref for the change set,
+        # and the head ref for the branch slug, since a pull request build is
+        # on a detached head and git cannot answer that one.
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        GITHUB_HEAD_REF: ${{ github.head_ref }}
+        BASE_REF: ${{ inputs.base-ref }}
+        SPEC: ${{ inputs.spec }}
+        STAGE: ${{ inputs.stage }}
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        set -eu
+        ARGS="run --stage $STAGE --format sarif --output $OUTPUT"
+        # Only when a ref was actually named. github.base_ref is empty outside
+        # a pull request, so an unconditional --base would hand the gate the
+        # ref "origin/" on every push build and fail it closed for no reason.
+        if [ -n "$BASE_REF" ]; then
+          ARGS="$ARGS --base $BASE_REF"
+        fi
+        if [ -n "$SPEC" ]; then
+          ARGS="$ARGS --spec $SPEC"
+        fi
+        node_modules/.bin/conductor $ARGS

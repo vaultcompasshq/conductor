@@ -229,6 +229,15 @@ reports before running `--adopt` on a hook you did not write.
   its stage. An unknown value is a usage error and exits 2 rather than
   quietly running everything or nothing: a typo in a CI file that runs every
   gate and one that runs none both look like a passing build.
+- `--base <ref>` measures the intent gate against what this branch changed
+  since `<ref>`, rather than against the index. See "Intent at a pull
+  request" below.
+- `--spec <path>` names the spec the intent gate imports its contract from.
+- `--output <path>` writes the report to a file instead of to stdout, for a
+  CI step that uploads it. One line still goes to stdout, because a job whose
+  only product is an uploaded artifact otherwise reads as a job that did
+  nothing. A path that cannot be written is exit 2, not a green run beside a
+  report nobody can read.
 - `--gate <role>`, repeatable.
 
 ### Exit codes
@@ -252,6 +261,144 @@ use 1 both for a real finding and for a broken config. So the composed code
 can differ from the maximum of its children's, and a gate that could not
 run outranks a gate that blocked. A report that reads clean because nothing
 looked is worse than one that says it failed.
+
+## Intent at a pull request
+
+The intent gate is the only one of the three with any ceremony: its native
+flow wants a contract approved before the work starts, which is a per-task
+human step. That step is exactly what a pull request cannot carry, so at the
+`ci` stage the umbrella stands in for it.
+
+**What it measures.** With `--base <ref>`, the changed-path set is what this
+branch changed since it forked, from
+`git diff --name-only --no-renames <base>...HEAD` in the repository root. The
+three-dot form is the point: two-dot would attribute every commit that landed
+on the base branch after this branch forked to this branch, so somebody else's
+merge would breach this pull request's change budget. A rename lists both its
+old and its new path, so moving a file out of a protected directory still
+blocks; the cost is that a rename counts as two paths against `max_files`.
+
+With no `--base`, `GITHUB_BASE_REF` is used as `origin/<value>` when it is
+set, and the text report says so. With neither, the intent gate runs exactly
+as it did in v0.1.
+
+A git failure here is **fail-closed**: could-not-run, so exit 2 for an
+enforced gate and a note for an unenforced one. There is deliberately no
+fallback to an empty path set, because an empty path set is what a passing
+gate looks like. In Actions this is almost always a shallow checkout, so
+**`actions/checkout` needs `fetch-depth: 0`** for the merge base to exist.
+
+**Where the contract comes from**, in order:
+
+1. `--spec <path>` on the umbrella's own command line. Typed just now, so it
+   outranks everything, and a path here that is not on disk is reported
+   rather than replaced: running a different contract than the one somebody
+   named is the wrong kindness.
+2. `<repo>/.conductor/intent-contract.yaml`, when it is **frozen**. The
+   native flow wins wherever a team has done it. Frozen is the test rather
+   than present: an unfrozen contract is a draft somebody left behind, and
+   running the gate against it fails every pull request on "not frozen by
+   user" without checking anything.
+3. A `Spec: <path>` line in the pull request body, read from the event
+   payload at `GITHUB_EVENT_PATH`. Written by whoever opened the pull
+   request, which is a weaker claim, so a path here that is not on disk falls
+   through to the next rule: a typo in a description must not fail a build.
+4. A markdown file **directly under** `docs/superpowers/specs` whose name
+   relates to the branch. The branch slug is the branch name with its first
+   segment (`feat/`, `fix/`) removed; a filename is reduced by stripping a
+   `YYYY-MM-DD-` prefix and a trailing `-design`; the two match when either
+   contains the other. If several match, the lexically newest wins, which for
+   these names is the newest date. The plan under `docs/superpowers/plans` is
+   paired by the same rule and passed as `--plan`, and its budget block is
+   the half of a contract that actually blocks.
+
+**How it is frozen.** `intent-guard import-spec --from superpowers
+--dry-run` drafts a contract, that YAML is written into a **temporary**
+directory, `intent-guard freeze` approves it there with an `--approved-by`
+naming the spec and the short commit, and the gate runs with `--project`
+pointed at that directory. Nothing is ever written under the repository's own
+`.conductor`: a contract is a committed artifact with an approver's name on
+it, and one dropped into a working tree by a CI run is either committed by
+accident or read by the next run as though a person had approved it. Any
+failure in that chain is could-not-run for the gate, and the report names the
+step it failed at, because the gate itself said nothing and that sentence is
+all there is to tell a shallow checkout from a spec the importer choked on.
+
+**A branch with neither** is a third state beside deferred and could-not-run:
+the gate is switched on, it ran, and it had nothing to check. It gets one
+line in the text report and one note-level `intent-guard/no-contract` result
+in the `conductor` run, and it **never** reaches the exit code, enforced or
+not. A branch with no spec is a branch this gate has no opinion about, and
+turning that into a failed build is how a gate gets switched off across a
+repository.
+
+**What blocks is unchanged.** Blocking stays where intent-guard puts it:
+budget breaches block, subject to `enforce`. Drift on its own is reported and
+not blocked, which is already intent-guard's own behaviour. The umbrella adds
+no severity threshold of its own here either.
+
+Both reports say what the verdict is about. The text report carries one line
+naming the contract source and the base ref; the gate's SARIF run carries
+`contractSource` and `baseRef` in its properties bag, beside `enforced` and
+`stage`.
+
+## The Action
+
+`action.yml` at the root is a composite action that runs the gates at the
+`ci` stage and writes one SARIF log for the caller to upload.
+
+It **installs nothing**. The package is unpublished, so an install step would
+either fail or fetch something else under a name it does not own; instead the
+action checks for `node_modules/.bin/conductor` and fails with a sentence
+saying to add it as a devDependency. `--base` is passed only when a ref was
+actually named, because `github.base_ref` is empty outside a pull request and
+an unconditional `--base origin/` would fail every push build closed; left
+empty, the umbrella reads `GITHUB_BASE_REF` itself.
+
+```yaml
+name: guardrails
+on: pull_request
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Required. Without it there is no merge base to diff against, and
+          # the intent gate fails closed rather than checking an empty set.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: conductor
+        uses: ./
+        with:
+          output: conductor.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        # Always: the log is most worth having on the run that failed.
+        if: always()
+        with:
+          sarif_file: ${{ steps.conductor.outputs.sarif }}
+```
+
+The intent gate starts at `enforce: false` in the policy file while a
+repository reads a few pull requests' worth of drift before letting it refuse
+anybody's merge:
+
+```yaml
+gates:
+  intent:
+    product: intent-guard
+    stage: ci
+    enforce: false
+```
 
 ## The hook
 
@@ -351,9 +498,20 @@ composed exit code.
 
 Out, deliberately: a unified baseline (each gate keeps its own, and their
 fingerprints are not equally durable, so one shared file would expire
-entries silently for one product and not another), an MCP registration, a
-GitHub Action, running the gates concurrently, and any finding of the
-umbrella's own beyond `conductor/gate-missing`.
+entries silently for one product and not another), an MCP registration,
+running the gates concurrently, and any finding of the umbrella's own beyond
+`conductor/gate-missing`.
+
+## Scope of v0.2
+
+In: per-gate `stage` and `enforce`, `run --stage`, the intent gate at a pull
+request (`--base`, `--spec`, the imported contract, the no-contract
+advisory), and the composite Action.
+
+Still out: intent at the cohesion level, which is what a merge or a
+promotion would want and which the audits do by hand today; anything that
+runs inside an agent session or on save, which intent-guard's own optional
+session hooks already cover; and a unified baseline or ledger.
 
 Also out: a published package. The gates are the product; this is the
 convenience layer over them, and it stays unpublished until it has earned a

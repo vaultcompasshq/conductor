@@ -8,7 +8,7 @@
 
 import { Command, CommanderError } from 'commander';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,6 +51,7 @@ interface RunCliOptions {
   stage?: string;
   base?: string;
   spec?: string;
+  output?: string;
 }
 
 function parseFormat(value: string): 'text' | 'sarif' {
@@ -180,6 +181,10 @@ export function buildProgram(): Command {
       'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to origin/<GITHUB_BASE_REF> when it is set.'
     )
     .option(
+      '--output <path>',
+      'write the report to this file instead of to stdout, for a CI step that uploads it'
+    )
+    .option(
       '--spec <path>',
       'the spec the intent gate imports its contract from, outranking a Spec: line in the pull request body and the branch-name convention'
     )
@@ -212,9 +217,25 @@ export function buildProgram(): Command {
           ...(options.spec === undefined ? {} : { spec: options.spec }),
         });
 
-        process.stdout.write(
-          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderText(result)
-        );
+        const rendered =
+          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderText(result);
+
+        if (options.output === undefined) {
+          process.stdout.write(rendered);
+        } else {
+          // A failure to write is the umbrella not carrying out what it was
+          // asked, so it takes the could-not-run code rather than the run's
+          // own. Reporting exit 0 next to a report nobody can read is the
+          // worst of the available answers: the upload step downstream would
+          // fail on a missing file with no explanation here.
+          writeFileSync(options.output, rendered);
+          // One line, so a CI job whose only product is an uploaded artifact
+          // does not read as a job that did nothing.
+          process.stdout.write(
+            `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s); ` +
+              `${format} report written to ${options.output}\n`
+          );
+        }
         process.exitCode = result.exitCode;
       } catch (err) {
         // One line, never a stack. runGate is total, so nothing from a gate
