@@ -168,7 +168,11 @@ describe('conductor run --stage', () => {
   }
 
   it('runs the commit gates and defers the intent gate at --stage commit', () => {
-    const result = runCli(repoWithPolicy(), ['run', '--staged', '--stage', 'commit'], allThreeStubbed());
+    const result = runCli(
+      repoWithPolicy(),
+      ['run', '--staged', '--stage', 'commit', '--verbose'],
+      allThreeStubbed()
+    );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/dep-guard/);
@@ -178,7 +182,11 @@ describe('conductor run --stage', () => {
   });
 
   it('runs every gate at --stage ci', () => {
-    const result = runCli(repoWithPolicy(), ['run', '--staged', '--stage', 'ci'], allThreeStubbed());
+    const result = runCli(
+      repoWithPolicy(),
+      ['run', '--staged', '--stage', 'ci', '--verbose'],
+      allThreeStubbed()
+    );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/^conductor run: 3 gate\(s\)/m);
@@ -186,7 +194,7 @@ describe('conductor run --stage', () => {
   });
 
   it('runs every gate with no --stage at all, exactly as v0.1 did', () => {
-    const result = runCli(repoWithPolicy(), ['run', '--staged'], allThreeStubbed());
+    const result = runCli(repoWithPolicy(), ['run', '--staged', '--verbose'], allThreeStubbed());
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/^conductor run: 3 gate\(s\)/m);
@@ -224,6 +232,49 @@ describe('conductor run --stage', () => {
     expect(umbrella?.results.map((entry) => entry.ruleId)).toContain('conductor/gate-deferred');
     // And the gate that did not run got no run of its own.
     expect(log.runs.map((run) => run.tool.driver.name)).not.toContain('intent-guard');
+  });
+});
+
+describe('a clean run through the CLI', () => {
+  function allThreeStubbed(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return bin;
+  }
+
+  it('prints one line, not a screenful, when nothing was found', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], allThreeStubbed());
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trimEnd().split('\n')).toHaveLength(1);
+    expect(result.stdout).toMatch(/clean, nothing blocked/);
+    expect(result.stdout).toMatch(/dependencies/);
+    expect(result.stdout).toMatch(/secrets/);
+    expect(result.stdout).toMatch(/intent/);
+    expect(result.stdout).toMatch(/--verbose/);
+  });
+
+  it('prints the full report under --verbose', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged', '--verbose'], allThreeStubbed());
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^conductor run: 3 gate\(s\)/m);
+    expect(result.stdout).toMatch(/^verdict: exit 0/m);
+  });
+
+  it('leaves the SARIF log alone, with or without --verbose', () => {
+    const bin = allThreeStubbed();
+    const quiet = runCli(repoWithPolicy(), ['run', '--staged', '--format', 'sarif'], bin);
+    const loud = runCli(
+      repoWithPolicy(),
+      ['run', '--staged', '--format', 'sarif', '--verbose'],
+      bin
+    );
+
+    expect(quiet.stdout).toBe(loud.stdout);
+    expect(quiet.stdout.trimEnd().split('\n').length).toBeGreaterThan(1);
   });
 });
 

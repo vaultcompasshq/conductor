@@ -224,11 +224,142 @@ describe('a gate that could not run', () => {
 });
 
 describe('a clean run', () => {
-  it('says every gate ran and none blocked', () => {
-    const text = renderText(result([outcome({ exitCode: 0 })], 0));
+  it('says every gate ran and none blocked, under --verbose', () => {
+    const text = renderText(result([outcome({ exitCode: 0 })], 0), { verbose: true });
     const last = text.trimEnd().split('\n').pop() as string;
     expect(last).toMatch(/exit 0/);
     expect(last).toMatch(/none blocked/);
+  });
+});
+
+describe('a fully clean run, which is most runs', () => {
+  // The whole v0.2 design constraint is that the gates must not slow
+  // development down, and the cost it names is CEREMONY rather than runtime.
+  // Twelve lines of per-gate detail on a commit that found nothing is that
+  // cost being paid on every commit, so a clean run says one line.
+  const clean = result(
+    [
+      outcome({ exitCode: 0 }),
+      outcome({ role: 'secrets', product: 'vault-guard', productVersion: '1.4.2', exitCode: 0 }),
+    ],
+    0
+  );
+
+  it('prints exactly one line', () => {
+    const text = renderText(clean);
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('names the gates that ran', () => {
+    const text = renderText(clean);
+    expect(text).toMatch(/dependencies/);
+    expect(text).toMatch(/secrets/);
+  });
+
+  it('prints none of the per-gate detail', () => {
+    const text = renderText(clean);
+    expect(text).not.toMatch(/threshold/);
+    expect(text).not.toMatch(/suppressed/);
+    expect(text).not.toMatch(/^verdict:/m);
+  });
+
+  it('says how to see the detail', () => {
+    expect(renderText(clean)).toMatch(/--verbose/);
+  });
+
+  it('prints the full report under --verbose', () => {
+    const text = renderText(clean, { verbose: true });
+    expect(text).toMatch(/threshold medium/);
+    expect(text).toMatch(/^verdict: exit 0/m);
+  });
+
+  it('names a gate the stage filter deferred, on the same line', () => {
+    // A deferred gate is the one thing a summary line must never swallow: a
+    // commit-stage run otherwise reads exactly like a run that checked
+    // everything.
+    const text = renderText(
+      result([outcome({ exitCode: 0 })], 0, [
+        { role: 'intent', product: 'intent-guard', stage: 'ci' },
+      ])
+    );
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+    expect(text).toMatch(/Deferred to a later stage/);
+    expect(text).toMatch(/intent/);
+    expect(text).toMatch(/stage ci/);
+  });
+
+  it('counts the notes rather than hiding them or printing them all', () => {
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 0,
+            run: {
+              failOn: 'medium',
+              suppressed: 0,
+              ignored: 0,
+              diagnostics: [{ code: 'dep-guard/lockfile-missing', message: 'no lockfile found' }],
+              details: {},
+            },
+            diagnostics: [{ code: 'conductor/blocking-mismatch', message: 'counts disagree' }],
+          }),
+        ],
+        0
+      )
+    );
+
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+    expect(text).toMatch(/2 note\(s\)/);
+    expect(text).not.toMatch(/lockfile-missing/);
+  });
+});
+
+describe('a run that is not fully clean prints the full report', () => {
+  it('prints it when a gate blocked', () => {
+    const text = renderText(result([outcome({ exitCode: 1, findings: depGuard.findings, run: depGuard.run })], 1));
+    expect(text).toMatch(/^conductor run: /m);
+    expect(text).toMatch(/^verdict: exit 1/m);
+  });
+
+  it('prints it when an unenforced gate blocked, even though the run exits 0', () => {
+    // The exit code alone is not the test. A gate with enforce: false that
+    // blocked found something real, and a one-line "clean" would swallow the
+    // only report of it anybody sees.
+    const text = renderText(
+      result([outcome({ exitCode: 1, enforce: false, findings: depGuard.findings, run: depGuard.run })], 0)
+    );
+    expect(text).toMatch(/BLOCKING/);
+    expect(text).toMatch(/dep-guard\/typosquat/);
+    expect(text).toMatch(/^verdict: exit 0/m);
+  });
+
+  it('prints it when a gate could not run, even though the run exits 0', () => {
+    const text = renderText(
+      result(
+        [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: null,
+            exitCode: null,
+            binary: null,
+            enforce: false,
+            couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+            findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+          }),
+        ],
+        0
+      )
+    );
+    expect(text).toMatch(/DID NOT RUN/);
+  });
+
+  it('prints it when no gate ran at all, so the three empty-run verdicts survive', () => {
+    // Nothing blocked and nothing broke, so the clean predicate holds, but
+    // "no gate ran because none is enabled" is exactly the state somebody
+    // needs told about and it is not a clean commit.
+    const text = renderText(result([], 0));
+    expect(text).toMatch(/no gate ran/);
   });
 });
 
@@ -417,10 +548,14 @@ describe('the verdict when enforced and unenforced gates are mixed', () => {
 });
 
 describe('a gate the stage filter deferred', () => {
+  // Verbose, because the run below is otherwise fully clean and would print
+  // the one-line summary. The summary line's own deferred clause is covered
+  // in the fully-clean block above.
   const text = renderText(
     result([outcome({ exitCode: 0 })], 0, [
       { role: 'intent', product: 'intent-guard', stage: 'ci' },
-    ])
+    ]),
+    { verbose: true }
   );
 
   it('says the gate was deferred and names the stage it is waiting for', () => {

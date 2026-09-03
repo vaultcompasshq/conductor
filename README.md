@@ -238,6 +238,8 @@ reports before running `--adopt` on a hook you did not write.
   only product is an uploaded artifact otherwise reads as a job that did
   nothing. A path that cannot be written is exit 2, not a green run beside a
   report nobody can read.
+- `--verbose` prints the full per-gate report even when the run is clean.
+  Text output only; the SARIF log never changes shape with it.
 - `--gate <role>`, repeatable.
 
 ### Exit codes
@@ -516,7 +518,32 @@ why init names the file rather than editing it.
 
 ## The report
 
-The text report is one section per gate, blocking findings first, with each
+**A clean run prints one line.** Most runs are clean, and the design
+constraint on all of this is that the gates must not slow development down,
+with ceremony rather than runtime named as the cost. A screenful of per-gate
+detail on a commit that found nothing is that cost, paid on every commit, and
+it is what makes a team switch a hook off. The line names the gates that ran,
+names any gate deferred to a later stage or left with nothing to check,
+counts any notes, and says to re-run with `--verbose` for the rest.
+
+Clean means all three of: the composed exit code is 0, no gate blocked, and
+no gate could not run. The second and third are not implied by the first. A
+gate with `enforce: false` is left out of the composed code entirely, so one
+that blocked, or one that could not run at all, still leaves the run at exit
+0, and those are exactly the runs whose report must not be collapsed to a
+line. A run where no gate ran at all prints the full report too, so the
+distinct verdicts for "none is enabled", "every gate was deferred" and
+"nothing had a contract to check" survive. Notes and diagnostics on their own
+do not force the full report; they are counted on the summary line, because a
+standing note about a lockfile format is a permanent property of that format
+rather than news about this commit.
+
+This is a text-format decision and nothing else. The SARIF log is unchanged
+either way, and there is deliberately no policy key for it: the schema
+describes what a repository gates on, and how loud one developer wants their
+own terminal to be is not that.
+
+The full text report is one section per gate, blocking findings first, with each
 gate's own threshold, its own suppressed and ignored counts, and its own
 exit code and duration in the header. The counts are printed even at zero,
 because they are the user's earlier decisions and hiding them makes a

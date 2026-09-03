@@ -328,7 +328,109 @@ function verdict(result: RunResult): string {
   return `verdict: exit 0, every enabled gate ran and none blocked.`;
 }
 
-export function renderText(result: RunResult): string {
+export interface TextOptions {
+  /**
+   * Print the full report even when the run is fully clean.
+   *
+   * A flag on the command line rather than a key in the policy file. The
+   * schema describes what a repository gates on, and how loud one developer
+   * wants their own terminal to be is not that.
+   */
+  verbose?: boolean;
+}
+
+/**
+ * Whether this run has nothing at all to report.
+ *
+ * Three conditions, and the second and third are why this is not just a test
+ * of the exit code. A gate with enforce: false is left out of the composed
+ * code entirely, so a run where such a gate blocked, or could not run at
+ * all, still exits 0; collapsing those to one "clean" line would silently
+ * swallow the only report of them anybody sees. Notes and diagnostics are
+ * deliberately NOT in here: they are counted on the summary line instead,
+ * because a standing note about a lockfile format is a permanent property of
+ * that format rather than news about this commit.
+ *
+ * A run where no gate ran at all is not clean either, whatever the exit code
+ * says. "No gate ran because none is enabled", "every gate was deferred" and
+ * "nothing had a contract to check" are three distinct states somebody needs
+ * telling about, and a summary line that named no gates would be the exact
+ * confusion this family exists to prevent.
+ */
+function isFullyClean(result: RunResult): boolean {
+  if (result.exitCode !== 0 || result.gates.length === 0) {
+    return false;
+  }
+  return result.gates.every(
+    (gate) =>
+      gate.couldNotRun === null &&
+      (gate.exitCode ?? 0) === 0 &&
+      !gate.findings.some((finding) => finding.blocking)
+  );
+}
+
+/** Gate notes plus umbrella diagnostics: everything the report prints as a note. */
+function noteCount(result: RunResult): number {
+  return result.gates.reduce(
+    (total, gate) => total + gate.run.diagnostics.length + gate.diagnostics.length,
+    0
+  );
+}
+
+/**
+ * The whole report of a clean run, on one line.
+ *
+ * The v0.2 design constraint is that the gates must not slow development
+ * down, and the cost it names is ceremony rather than runtime. Twelve lines
+ * of per-gate detail on a commit that found nothing is that cost, paid on
+ * every commit, and it is what makes a team switch a hook off. What it must
+ * still carry: which gates actually ran, which ones did not run here, and
+ * that there is more to read. Everything else waits for --verbose.
+ */
+function summaryLine(result: RunResult): string {
+  const ran = result.gates.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+  const parts = [`conductor: clean, nothing blocked. ${result.gates.length} gate(s) ran: ${ran}.`];
+
+  if (result.deferred.length > 0) {
+    const names = result.deferred
+      .map((gate) => `${gate.role} (${gate.product}) from stage ${gate.stage}`)
+      .join(', ');
+    parts.push(`Deferred to a later stage: ${names}.`);
+  }
+
+  // Same reasoning as the deferred clause. A gate that ran and had nothing to
+  // check covered none of this commit, and silence there makes a branch with
+  // no spec read as a branch that passed the intent gate.
+  if (result.skipped.length > 0) {
+    const names = result.skipped.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+    parts.push(`Nothing to check against: ${names}.`);
+  }
+
+  // Non-blocking findings are counted rather than hidden, for the same reason
+  // the full report prints the suppressed and ignored counts at zero: they
+  // are things the gates actually said, and a summary that omitted them would
+  // let a repository accumulate them unread.
+  const counts: string[] = [];
+  if (result.findings.length > 0) {
+    counts.push(`${result.findings.length} non-blocking finding(s)`);
+  }
+  const notes = noteCount(result);
+  if (notes > 0) {
+    counts.push(`${notes} note(s)`);
+  }
+  if (counts.length > 0) {
+    parts.push(`${counts.join(', ')}.`);
+  }
+
+  parts.push('Re-run with --verbose for the full report.');
+  return parts.join(' ');
+}
+
+export function renderText(result: RunResult, options: TextOptions = {}): string {
+  if (!options.verbose && isFullyClean(result)) {
+    return `${summaryLine(result)}\n`;
+  }
+
   // Counted over EVERY gate, unenforced ones included, and deliberately not
   // the same number the verdict prints. This line is an inventory of what
   // follows it: a reader counting the finding lines on screen has to arrive

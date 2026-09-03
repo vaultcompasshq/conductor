@@ -81,6 +81,50 @@ function sarif(runResult: RunResult): Record<string, never> & {
   return JSON.parse(renderSarif(runResult, '0.1.0'));
 }
 
+describe('a clean run, whose text report is now one summary line', () => {
+  // The summary line is a text-format decision and nothing else. SARIF is
+  // read by machines, and a published log that got quieter because a run
+  // happened to be clean would make a clean scan and a scan that found
+  // nothing to say indistinguishable to whatever consumes it. This pins the
+  // whole document, byte for byte, against a literal written out by hand
+  // rather than against whatever the renderer currently produces.
+  const clean = result([
+    outcome({ role: 'dependencies', product: 'dep-guard', exitCode: 0 }),
+    outcome({
+      role: 'secrets',
+      product: 'vault-guard',
+      productVersion: '1.4.2',
+      exitCode: 0,
+    }),
+  ]);
+
+  it('renders exactly the log it rendered before the summary line existed', () => {
+    const expected = JSON.stringify(
+      {
+        $schema:
+          'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json',
+        version: '2.1.0',
+        runs: [
+          {
+            tool: { driver: { name: 'dep-guard', version: '0.2.0', rules: [] } },
+            results: [],
+            properties: { enforced: true, stage: 'commit' },
+          },
+          {
+            tool: { driver: { name: 'vault-guard', version: '1.4.2', rules: [] } },
+            results: [],
+            properties: { enforced: true, stage: 'commit' },
+          },
+        ],
+      },
+      null,
+      2
+    );
+
+    expect(renderSarif(clean, '0.1.0')).toBe(expected);
+  });
+});
+
 describe('one SARIF log, one run per gate', () => {
   const log = sarif(THREE_GATES);
 

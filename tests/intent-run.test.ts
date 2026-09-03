@@ -329,7 +329,12 @@ describe('a changed path the --paths encoding cannot carry', () => {
 
 describe('the report says where the contract came from', () => {
   it('names the spec and the plan and the base ref in the text report', () => {
-    const text = renderText(run(repo(), binWith(CHECK_PASSING), { base: 'main' }));
+    // Verbose, because this run is clean and a clean run prints one summary
+    // line. The contract line is per-gate detail, which is what --verbose is
+    // for.
+    const text = renderText(run(repo(), binWith(CHECK_PASSING), { base: 'main' }), {
+      verbose: true,
+    });
 
     expect(text).toMatch(/contract: spec docs\/superpowers\/specs\/2026-09-03-widget-cache-design\.md/);
     expect(text).toMatch(/plus plan docs\/superpowers\/plans\/2026-09-03-widget-cache\.md/);
