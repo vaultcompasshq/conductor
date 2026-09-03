@@ -94,8 +94,39 @@ function enforcementNote(gate: GateOutcome): string | null {
   return '  not enforced: enforce is false for this gate in .guardrails.yaml. It found nothing to block on here.';
 }
 
+/**
+ * Where the intent gate's contract came from, and what it measured against.
+ *
+ * Both halves are on one line and both are always printed when there is a
+ * prepared run, including the base. A reader looking at a drift finding has
+ * to be able to tell "checked the branch against main using the spec" from
+ * "checked the index against a contract in the repository" without opening
+ * the policy file or the CI configuration, because those are two different
+ * claims and only one of them is about the pull request.
+ */
+function contractLine(gate: GateOutcome): string | null {
+  if (gate.intent === undefined) {
+    return null;
+  }
+  const source = gate.intent.contractSource;
+  const where =
+    source.kind === 'native'
+      ? `the repository's own frozen ${source.path}`
+      : source.kind === 'imported'
+        ? `spec ${source.spec}${source.plan === null ? '' : ` plus plan ${source.plan}`}`
+        : 'none';
+  const base =
+    gate.intent.baseRef === null ? 'base: none, the git index' : `base: ${gate.intent.baseRef}`;
+  return `  contract: ${where}   ${base}`;
+}
+
 function gateSection(gate: GateOutcome): string[] {
   const lines: string[] = ['', header(gate)];
+
+  const contract = contractLine(gate);
+  if (contract !== null) {
+    lines.push(contract);
+  }
 
   if (gate.couldNotRun !== null) {
     lines.push(`    ${gate.couldNotRun.detail}`);
@@ -182,6 +213,22 @@ function deferredLines(result: RunResult): string[] {
 }
 
 /**
+ * One line per gate that had nothing to check.
+ *
+ * A line rather than silence, and a line rather than a finding. Silence makes
+ * a branch with no spec read as a branch that passed the intent gate, which
+ * is the confusion this family exists to prevent. A finding would put the
+ * absence of a spec on the same footing as a drift, and it is not one: it is
+ * the ordinary state of most branches in a repository that has not adopted
+ * the flow yet.
+ */
+function skippedLines(result: RunResult): string[] {
+  return result.skipped.map(
+    (gate) => `  skipped   ${gate.role}  ${gate.product}  no contract: ${gate.detail}`
+  );
+}
+
+/**
  * What an unenforced gate did, as clauses for a verdict line.
  *
  * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
@@ -229,6 +276,13 @@ function verdict(result: RunResult): string {
     // for the second one.
     const names = result.deferred.map((gate) => `${gate.role} at stage ${gate.stage}`).join(', ');
     return `verdict: exit 0, nothing ran at this stage: every enabled gate is deferred (${names}).`;
+  }
+  if (result.gates.length === 0 && result.skipped.length > 0) {
+    // A third distinct state, and telling somebody to switch a gate on is
+    // wrong advice here too: the gate IS on, it ran, and it had nothing to
+    // check. The fix is a spec, which the skipped line above names.
+    const names = result.skipped.map((gate) => gate.role).join(', ');
+    return `verdict: exit 0, nothing was checked: ${names} had no contract to check against.`;
   }
   if (result.gates.length === 0) {
     // Exit 0 with an empty report is indistinguishable from a clean run at a
@@ -291,9 +345,9 @@ export function renderText(result: RunResult): string {
     lines.push(...gateSection(gate));
   }
 
-  const deferred = deferredLines(result);
-  if (deferred.length > 0) {
-    lines.push('', ...deferred);
+  const aside = [...deferredLines(result), ...skippedLines(result)];
+  if (aside.length > 0) {
+    lines.push('', ...aside);
   }
 
   // A derived severity is marked with a trailing asterisk above; say what

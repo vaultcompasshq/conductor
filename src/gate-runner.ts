@@ -29,6 +29,7 @@ import {
   normalizeUnparseableGate,
   normalizeVaultGuard,
 } from './normalize.js';
+import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
 import { ResolveError, candidateNames, resolveGateBinary } from './resolve.js';
@@ -39,7 +40,13 @@ export type CouldNotRunReason =
   | 'configured-command-missing'
   | 'spawn-failed'
   | 'gate-error'
-  | 'unparseable-output';
+  | 'unparseable-output'
+  /**
+   * The gate was never spawned because the run could not be set up for it:
+   * an unresolvable base ref, or a spec that would not import. Distinct from
+   * gate-error on purpose, since the gate itself said nothing at all.
+   */
+  | 'preparation-failed';
 
 export interface CouldNotRun {
   reason: CouldNotRunReason;
@@ -71,6 +78,12 @@ export interface GateOutcome {
   diagnostics: Diagnostic[];
   /** Kept so the report can show why a gate that could not run said no. */
   stderr: string;
+  /**
+   * Present only on the intent gate, and only for a pull-request shaped run.
+   * Where its contract came from and what the change set was measured
+   * against: the two facts that decide what the gate's verdict is even about.
+   */
+  intent?: { contractSource: ContractSource; baseRef: string | null };
 }
 
 export interface RunGateOptions {
@@ -80,6 +93,36 @@ export interface RunGateOptions {
   pathValue: string;
   /** Wall-clock limit per gate. */
   timeoutMs?: number;
+  /** The contract and change set prepared for the intent gate, when there is one. */
+  intent?: IntentPreparation;
+}
+
+/**
+ * A gate that never got as far as being spawned.
+ *
+ * The preparation for the intent gate happens before any child process, and
+ * a failure there has to compose exactly like any other could-not-run: exit 2
+ * for an enforced gate and a note for an unenforced one. So it is expressed
+ * as an ordinary GateOutcome rather than as a fourth kind of thing the report
+ * would have to learn about.
+ */
+export function preparationFailed(gate: GatePolicy, detail: string): GateOutcome {
+  return {
+    role: gate.role,
+    product: gate.product,
+    stage: gate.stage,
+    enforce: gate.enforce,
+    productVersion: null,
+    argv: [],
+    binary: null,
+    exitCode: null,
+    durationMs: 0,
+    stderr: '',
+    couldNotRun: { reason: 'preparation-failed', detail },
+    findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+    run: EMPTY_RUN,
+    diagnostics: [],
+  };
 }
 
 const EMPTY_RUN: RunSummary = {
@@ -98,7 +141,11 @@ const EMPTY_RUN: RunSummary = {
  * goes last so a gate's own flags are visible at the end of the command
  * line in the report, where they read as the user's own additions.
  */
-function gateArgs(gate: GatePolicy, staged: boolean): string[] {
+function gateArgs(
+  gate: GatePolicy,
+  staged: boolean,
+  intent: IntentPreparation | undefined
+): string[] {
   const passthrough = renderOptionFlags(gate.options);
   switch (gate.product) {
     case 'dep-guard':
@@ -108,14 +155,30 @@ function gateArgs(gate: GatePolicy, staged: boolean): string[] {
       // with cwd at the repository root anyway. Passing one would also risk
       // a passthrough value being read as the positional.
       return [...(staged ? ['--staged'] : []), '-f', 'json', ...passthrough];
-    case 'intent-guard':
+    case 'intent-guard': {
+      if (intent === undefined) {
+        return ['--project', '.', ...(staged ? ['--staged'] : []), '--json', ...passthrough];
+      }
+      // A prepared run replaces --staged entirely rather than adding to it.
+      // The two path sources are ADDITIVE in intent-guard, so leaving
+      // --staged on would silently widen a pull request's change set with
+      // whatever happens to be in the index of the machine running it.
+      //
+      // --paths is passed even when the branch changed nothing, so the empty
+      // set is stated rather than left for the gate to fill in from the
+      // index.
       return [
         '--project',
-        '.',
-        ...(staged ? ['--staged'] : []),
+        intent.projectDir,
+        ...(intent.paths === null
+          ? staged
+            ? ['--staged']
+            : []
+          : ['--paths', intent.paths.join(',')]),
         '--json',
         ...passthrough,
       ];
+    }
   }
 }
 
@@ -192,6 +255,17 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
     exitCode: null,
     durationMs: 0,
     stderr: '',
+    // Carried on every return path below, including the failures: which
+    // contract a gate WOULD have used is exactly as interesting when it could
+    // not run as when it could.
+    ...(options.intent === undefined
+      ? {}
+      : {
+          intent: {
+            contractSource: options.intent.contractSource,
+            baseRef: options.intent.baseRef,
+          },
+        }),
   };
   const started = Date.now();
 
@@ -267,7 +341,7 @@ function runGateInner(
   }
 
   const version = probeVersion(binary, options.repoRoot, timeoutMs);
-  const argv = [...binary.argvPrefix, ...gateArgs(gate, options.staged)];
+  const argv = [...binary.argvPrefix, ...gateArgs(gate, options.staged, options.intent)];
 
   const child = spawnSync(binary.command, argv, {
     cwd: options.repoRoot,

@@ -1,0 +1,1 @@
+{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true,"drift":{"overall":0,"action":"proceed","categories":{"scope_creep":0,"constraint_violation":0,"ac_divergence":0,"undocumented_pivot":0},"findings":[],"finding_details":[]},"budget":{"ok":true,"action":"ok","violations":[]},"crossSessionDrift":null}

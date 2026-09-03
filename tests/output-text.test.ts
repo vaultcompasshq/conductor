@@ -43,7 +43,8 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
 function result(
   gates: GateOutcome[],
   exitCode: number,
-  deferred: RunResult['deferred'] = []
+  deferred: RunResult['deferred'] = [],
+  skipped: RunResult['skipped'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -51,6 +52,7 @@ function result(
     generatedAt: '2026-09-02T00:00:00.000Z',
     gates,
     deferred,
+    skipped,
     findings,
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,

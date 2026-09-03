@@ -362,6 +362,38 @@ function deferredFindings(result: RunResult): Finding[] {
 }
 
 /**
+ * The gates that had nothing to check, as SARIF results.
+ *
+ * The rule id is the GATE'S namespace rather than the umbrella's, because the
+ * statement is about that gate's coverage of this branch and a consumer
+ * filtering on `intent-guard/` should see it. The run it lands in is still
+ * the umbrella's, by the rule at the top of this file: a gate that produced
+ * no tool output gets no run of its own, whatever the results in it say.
+ *
+ * Note level and non-blocking, and it is deliberately consistent with
+ * gate-deferred and gate-not-enforced rather than with a
+ * toolExecutionNotification. All three are the same kind of statement, so
+ * they are the same kind of object; whether that whole family should be
+ * notifications instead is one decision to take once, not three.
+ */
+function skippedFindings(result: RunResult): Finding[] {
+  return result.skipped.map((gate) => ({
+    schemaVersion: 1 as const,
+    product: UMBRELLA_DRIVER_NAME,
+    productVersion: null,
+    ruleId: `${gate.product}/no-contract`,
+    severity: 'info' as const,
+    severityIsDerived: true,
+    blocking: false,
+    message:
+      `The ${gate.role} gate (${gate.product}) checked nothing on this branch. ${gate.detail}`,
+    subject: { kind: 'none' as const },
+    fingerprint: null,
+    details: { role: gate.role, product: gate.product, reason: gate.reason },
+  }));
+}
+
+/**
  * The gates the policy file told not to decide anything, as SARIF results.
  *
  * These are written in TWO places on purpose, and neither one is redundant:
@@ -441,10 +473,19 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     // same question about a published log: how much of the policy this run
     // actually represents. Without it a commit-stage log and a full one are
     // indistinguishable for any gate that appears in both.
+    // contractSource and baseRef sit beside the enforcement flag and the
+    // stage for the same reason those two do: they say what this run's
+    // results are ABOUT. A drift finding measured against an imported spec
+    // and one measured against a contract somebody approved by hand are
+    // different claims, and so are one over a branch diff and one over an
+    // index.
     runs.push(
       makeRun(gate.product, gate.productVersion, own, {
         enforced: gate.enforce,
         stage: gate.stage,
+        ...(gate.intent === undefined
+          ? {}
+          : { contractSource: gate.intent.contractSource, baseRef: gate.intent.baseRef }),
       })
     );
   }
@@ -455,6 +496,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
       .filter((finding) => finding.product === UMBRELLA_DRIVER_NAME),
     ...diagnosticFindings(result),
     ...deferredFindings(result),
+    ...skippedFindings(result),
     ...unenforcedFindings(result),
   ];
 

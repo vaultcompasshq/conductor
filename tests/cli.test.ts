@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -224,6 +224,75 @@ describe('conductor run --stage', () => {
     expect(umbrella?.results.map((entry) => entry.ruleId)).toContain('conductor/gate-deferred');
     // And the gate that did not run got no run of its own.
     expect(log.runs.map((run) => run.tool.driver.name)).not.toContain('intent-guard');
+  });
+});
+
+describe('conductor run --output', () => {
+  function allThreeStubbed(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return bin;
+  }
+
+  it('writes the report to the file instead of to stdout', () => {
+    const repo = repoWithPolicy();
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', target],
+      allThreeStubbed()
+    );
+
+    expect(result.status).toBe(0);
+    const log = JSON.parse(readFileSync(target, 'utf8')) as { version: string };
+    expect(log.version).toBe('2.1.0');
+    expect(result.stdout).not.toMatch(/"version": "2\.1\.0"/);
+  });
+
+  it('still says on stdout that it ran and where the report went', () => {
+    // A CI job whose only output is an uploaded artifact reads as a job that
+    // did nothing. One line keeps the log honest.
+    const repo = repoWithPolicy();
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', target],
+      allThreeStubbed()
+    );
+
+    expect(result.stdout).toContain(target);
+  });
+
+  it('keeps the exit code the run earned', () => {
+    const repo = repoWithPolicy();
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', target],
+      tempDir()
+    );
+
+    expect(result.status).toBe(2);
+  });
+
+  it('reports an unwritable path as a run that could not be carried out', () => {
+    const repo = repoWithPolicy();
+    const target = path.join(tempDir(), 'no-such-directory', 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', target],
+      allThreeStubbed()
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/conductor\.sarif/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
   });
 });
 
