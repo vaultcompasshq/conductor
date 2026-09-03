@@ -181,8 +181,47 @@ function deferredLines(result: RunResult): string[] {
   );
 }
 
+/**
+ * What an unenforced gate did, as clauses for a verdict line.
+ *
+ * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
+ * of the count and out of the reason either way, but it still gets a
+ * sentence. A gate that verified nothing is worth a line whatever the exit
+ * code turned out to be.
+ */
+function unenforcedClauses(result: RunResult): string[] {
+  const unenforced = result.gates.filter((gate) => !gate.enforce);
+  // A gate that could not run is only that. Its findings list carries the
+  // umbrella's own blocking gate-missing finding, so a naive test for "has a
+  // blocking finding" reports the same gate as having blocked AND as having
+  // failed to run, which are opposite claims.
+  const blocked = unenforced.filter(
+    (gate) =>
+      gate.couldNotRun === null &&
+      ((gate.exitCode ?? 0) !== 0 || gate.findings.some((finding) => finding.blocking))
+  );
+  const broken = unenforced.filter((gate) => gate.couldNotRun !== null);
+
+  const clauses: string[] = [];
+  if (blocked.length > 0) {
+    clauses.push(`${blocked.map((gate) => gate.role).join(', ')} blocked`);
+  }
+  if (broken.length > 0) {
+    clauses.push(`${broken.map((gate) => gate.role).join(', ')} could not run`);
+  }
+  return clauses;
+}
+
 function verdict(result: RunResult): string {
-  const blocking = result.findings.filter((finding) => finding.blocking).length;
+  // Counted over ENFORCED gates only. The exit code came from those alone,
+  // so a count taken over all of them describes a different run from the one
+  // the number at the front of the line is about, and the umbrella's own
+  // findings about an unenforced broken gate inflate it further.
+  const enforcedGates = result.gates.filter((gate) => gate.enforce);
+  const blocking = enforcedGates
+    .flatMap((gate) => gate.findings)
+    .filter((finding) => finding.blocking).length;
+
   if (result.gates.length === 0 && result.deferred.length > 0) {
     // Distinct from "none is enabled" below. A policy file with everything
     // switched off and a stage with nothing to do at it are two different
@@ -201,38 +240,30 @@ function verdict(result: RunResult): string {
       'Nothing was checked. Set enabled: true on a gate in .guardrails.yaml.'
     );
   }
+  const clauses = unenforcedClauses(result);
+  const aside =
+    clauses.length === 0
+      ? ''
+      : ` ${clauses.join(' and ')}, but those gates have enforce: false in .guardrails.yaml, ` +
+        'so that is not why.';
+
   if (result.exitCode === EXIT_COULD_NOT_RUN) {
-    const names = result.gates
+    // Only the ENFORCED gates. An unenforced gate that could not run is not
+    // why this run failed, and naming it here sends somebody off to install
+    // a gate that would not have changed the answer.
+    const names = enforcedGates
       .filter((gate) => gate.couldNotRun !== null)
       .map((gate) => gate.role)
       .join(', ');
-    return `verdict: exit 2, a gate could not run (${names}), so nothing here is a clean result.`;
+    return `verdict: exit 2, a gate could not run (${names}), so nothing here is a clean result.${aside}`;
   }
   if (result.exitCode === EXIT_BLOCKED) {
-    return `verdict: exit 1, ${blocking} blocking finding(s) across ${result.gates.length} gate(s).`;
+    return `verdict: exit 1, ${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
   }
 
   // Exit 0 with red on the screen above it. The verdict is the one line
   // somebody reads when they read nothing else, so it is the line that has
   // to carry the reason rather than leaving it to the sections.
-  const unenforced = result.gates.filter((gate) => !gate.enforce);
-  // A gate that could not run is only that. Its findings list carries the
-  // umbrella's own blocking gate-missing finding, so a naive test for "has a
-  // blocking finding" reports the same gate as having blocked AND as having
-  // failed to run, which are opposite claims.
-  const blocked = unenforced.filter(
-    (gate) =>
-      gate.couldNotRun === null &&
-      ((gate.exitCode ?? 0) !== 0 || gate.findings.some((finding) => finding.blocking))
-  );
-  const broken = unenforced.filter((gate) => gate.couldNotRun !== null);
-  const clauses: string[] = [];
-  if (blocked.length > 0) {
-    clauses.push(`${blocked.map((gate) => gate.role).join(', ')} blocked`);
-  }
-  if (broken.length > 0) {
-    clauses.push(`${broken.map((gate) => gate.role).join(', ')} could not run`);
-  }
   if (clauses.length > 0) {
     return (
       `verdict: exit 0, but ${clauses.join(' and ')}. ` +

@@ -315,6 +315,86 @@ describe('a gate that could not run and is not enforced', () => {
   });
 });
 
+describe('the verdict when enforced and unenforced gates are mixed', () => {
+  function brokenGate(role: 'secrets' | 'intent', enforce: boolean) {
+    return outcome({
+      role,
+      product: role === 'secrets' ? 'vault-guard' : 'intent-guard',
+      productVersion: null,
+      exitCode: null,
+      binary: null,
+      enforce,
+      couldNotRun: { reason: 'binary-missing', detail: 'binary missing' },
+      findings: [
+        normalizeMissingGate(
+          role,
+          role === 'secrets' ? 'vault-guard' : 'intent-guard',
+          [role === 'secrets' ? 'vault-guard' : 'intent-guard']
+        ),
+      ],
+    });
+  }
+
+  it('names only the enforced gate as the reason for exit 2', () => {
+    // The unenforced one could not run either, but it is not why this run
+    // failed, and listing it among the reasons sends somebody to install a
+    // gate that would not have changed the answer.
+    const text = renderText(result([brokenGate('secrets', true), brokenGate('intent', false)], 2));
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/exit 2/);
+    // The parenthesised list is the reason. Exactly one gate is in it.
+    expect(last).toMatch(/a gate could not run \(secrets\)/);
+    expect(last).not.toMatch(/\([^)]*intent[^)]*\)/);
+  });
+
+  it('still mentions the unenforced gate, as something that is not the reason', () => {
+    const text = renderText(result([brokenGate('secrets', true), brokenGate('intent', false)], 2));
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/intent could not run/);
+    expect(last).toMatch(/that is not why/);
+  });
+
+  it('counts only enforced gates in the exit 1 verdict', () => {
+    // One enforced gate blocked. The unenforced one contributed a finding of
+    // the umbrella's own, and counting it made the verdict claim two
+    // blocking findings across two gates for a run that failed over one.
+    const text = renderText(
+      result(
+        [
+          outcome({ exitCode: 1, findings: depGuard.findings, run: depGuard.run }),
+          brokenGate('intent', false),
+        ],
+        1
+      )
+    );
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/exit 1/);
+    expect(last).toMatch(/2 blocking finding\(s\) across 1 gate\(s\)/);
+    expect(last).not.toMatch(/across 2 gate\(s\)/);
+  });
+
+  it('still says the unenforced gate broke, in the same exit 1 verdict', () => {
+    // Dropping it from the count must not drop it from the sentence: a gate
+    // that verified nothing is worth a line whatever the exit code was.
+    const text = renderText(
+      result(
+        [
+          outcome({ exitCode: 1, findings: depGuard.findings, run: depGuard.run }),
+          brokenGate('intent', false),
+        ],
+        1
+      )
+    );
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/intent could not run/);
+    expect(last).toMatch(/enforce: false/);
+  });
+});
+
 describe('a gate the stage filter deferred', () => {
   const text = renderText(
     result([outcome({ exitCode: 0 })], 0, [
