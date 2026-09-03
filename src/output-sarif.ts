@@ -437,7 +437,16 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     if (gate.couldNotRun !== null && own.length === 0) {
       continue;
     }
-    runs.push(makeRun(gate.product, gate.productVersion, own, { enforced: gate.enforce }));
+    // The stage sits beside the enforcement flag because the two answer the
+    // same question about a published log: how much of the policy this run
+    // actually represents. Without it a commit-stage log and a full one are
+    // indistinguishable for any gate that appears in both.
+    runs.push(
+      makeRun(gate.product, gate.productVersion, own, {
+        enforced: gate.enforce,
+        stage: gate.stage,
+      })
+    );
   }
 
   const umbrellaFindings = [

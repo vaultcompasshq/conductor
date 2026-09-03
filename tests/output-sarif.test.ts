@@ -496,6 +496,16 @@ describe('the umbrella own findings', () => {
     expect((enforced.runs[0].properties as Record<string, unknown>).enforced).toBe(true);
   });
 
+  it('records which stage the gate ran at, beside whether it was enforced', () => {
+    // A log from a commit-stage run and one from a ci run are otherwise
+    // indistinguishable for a gate that appears in both, and a consumer
+    // comparing two uploads cannot tell a narrower run from a full one.
+    const log = sarif(
+      result([outcome({ stage: 'push', findings: depGuard.findings })])
+    );
+    expect(log.runs[0].properties).toEqual({ enforced: true, stage: 'push' });
+  });
+
   it('also names an unenforced gate in the umbrella run, where a gate with no run still fits', () => {
     const log = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
     const umbrella = log.runs.find(

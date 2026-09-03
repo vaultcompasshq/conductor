@@ -122,7 +122,10 @@ green exit next to red findings is never a surprise. In SARIF that gate's
 own run carries `properties.enforced: false`, and the `conductor` run
 carries a `conductor/gate-not-enforced` note as well, because a gate that
 could not run has no run of its own to hang the property on and that is
-exactly the case worth saying out loud.
+exactly the case worth saying out loud. That run's properties bag also
+carries the `stage` the gate ran at, so a log from a commit-stage run is
+distinguishable from a full one rather than looking like the same run with
+fewer findings in it.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
@@ -243,9 +246,9 @@ looked is worse than one that says it failed.
 One hook, running `conductor run --staged --stage commit`. It names the
 stage rather than running everything, because a pre-commit hook is the
 commit stopping point, and a hook that runs the per-task ceremony of the
-intent gate on every commit is a hook a team switches off. It fails closed: a missing
-umbrella binary blocks the commit with one line saying so, because a
-guardrail that is off when the tool is missing is a guardrail an attacker
+intent gate on every commit is a hook a team switches off. It fails closed:
+a missing umbrella binary blocks the commit with one line saying so, because
+a guardrail that is off when the tool is missing is a guardrail an attacker
 turns off by making the tool missing. It passes the exit code straight
 through, so 2 does not collapse into 1 and report findings that were never
 looked for.
