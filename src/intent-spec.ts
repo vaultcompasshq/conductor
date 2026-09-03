@@ -30,7 +30,7 @@
 //     that is the layout intent-guard's own importer discovers and an
 //     archive subdirectory is not a candidate for this branch's contract.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 export const SPEC_DIR = 'docs/superpowers/specs';
@@ -219,21 +219,48 @@ function relativeToRoot(repoRoot: string, candidate: string): string {
 }
 
 /**
- * Whether a repository-relative path leaves the repository.
+ * Whether a repository-relative path names a file that is really inside the
+ * repository.
  *
- * Only the pull request body is held to this. That body is written by
- * whoever opened the pull request, and on a FORK pull request that is
- * somebody with no write access to the repository at all: without the check,
- * a `Spec: ../../etc/something` line imports an arbitrary readable file from
- * the runner into a contract, and its path then appears in `contractSource`
- * and in the `--approved-by` string.
+ * Only the pull request body is held to this. That body is written by whoever
+ * opened the pull request, and on a FORK pull request that is somebody with
+ * no write access at all: without the check, a `Spec: ../../etc/something`
+ * line imports an arbitrary readable file from the runner into a contract,
+ * and its path then appears in `contractSource` and in the `--approved-by`
+ * string.
  *
- * `--spec` is deliberately NOT held to it. A person typed that on the command
- * line just now, and pointing at a spec kept outside the checkout is a real
- * thing to want.
+ * The test is on the RESOLVED path, not on the spelling. Testing the string
+ * left a two-step route to the same escape, and one pull request can take
+ * both steps: on a `pull_request` event `actions/checkout` checks out the
+ * merge ref, so a fork's own commits are in the tree, and the same pull
+ * request can add a symlink pointing outside AND the `Spec:` line naming it.
+ * To a string test that line is an ordinary relative path.
+ *
+ * A path that will not resolve at all -- a dangling symlink, a missing file,
+ * a directory nothing may read -- is not contained either, which lands it in
+ * the same place as a path that is simply not there: fall through to the
+ * convention.
+ *
+ * This is containment, NOT a ban on symlinks. One pointing at a file inside
+ * the repository resolves inside it and is used, because a repository that
+ * keeps its specs behind a link is doing something ordinary.
+ *
+ * `--spec` is deliberately NOT held to any of this. A person typed that on
+ * the command line just now, and pointing at a spec kept outside the checkout
+ * is a real thing to want.
  */
-function escapesRoot(relative: string): boolean {
-  return relative === '..' || relative.startsWith('../') || path.isAbsolute(relative);
+function resolvesInsideRoot(repoRoot: string, relative: string): boolean {
+  try {
+    // The root is resolved too. On macOS a temporary directory reaches the
+    // caller through a symlink, so comparing a resolved candidate against an
+    // unresolved root would report every path in such a tree as an escape.
+    const root = realpathSync(repoRoot);
+    const resolved = realpathSync(path.join(repoRoot, relative));
+    const inside = path.relative(root, resolved);
+    return inside !== '' && !inside.startsWith(`..${path.sep}`) && inside !== '..' && !path.isAbsolute(inside);
+  } catch {
+    return false;
+  }
 }
 
 export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
@@ -254,7 +281,9 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
       // A path out of the tree is treated exactly as a path that is not
       // there: fall through to the convention. Same posture, same reason, and
       // it keeps an unusable Spec: line from being able to silence the gate.
-      if (!escapesRoot(relative) && exists(repoRoot, relative)) {
+      // Containment subsumes existence here, since a path that does not
+      // resolve is not contained.
+      if (resolvesInsideRoot(repoRoot, relative)) {
         return { kind: 'pr-body', spec: relative, plan: planFor(repoRoot, relative) };
       }
     }

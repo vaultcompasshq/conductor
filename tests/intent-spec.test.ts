@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -327,6 +327,66 @@ describe('discoverSpec', () => {
       expect(
         discoverSpec({ repoRoot: root, branch: 'feat/widget-cache', prBody: `Spec: ${outside}\n` })
       ).toEqual({ kind: 'none' });
+    });
+
+    it('refuses a committed symlink that points out of the tree', () => {
+      // The two-step route back to the same escape, and one pull request can
+      // take both steps. On a pull_request event actions/checkout checks out
+      // the merge ref, so a fork's own commits are in the tree: the same pull
+      // request adds the symlink AND the Spec: line naming it, and a
+      // containment test done on the path as a STRING sees an ordinary
+      // relative path.
+      const { root, outside } = rootWithOutsideFile(['2026-09-03-widget-cache-design.md']);
+      symlinkSync(outside, path.join(root, 'docs', 'superpowers', 'specs', 'link-design.md'));
+
+      const found = discoverSpec({
+        repoRoot: root,
+        branch: 'feat/widget-cache',
+        prBody: 'Spec: docs/superpowers/specs/link-design.md\n',
+      });
+
+      expect(found).toMatchObject({
+        kind: 'convention',
+        spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      });
+    });
+
+    it('still follows a symlink that stays inside the tree', () => {
+      // The check is containment, not a ban on symlinks. A repository that
+      // keeps its specs behind one is doing something ordinary.
+      const { root } = rootWithOutsideFile([]);
+      const specDir = path.join(root, 'docs', 'superpowers', 'specs');
+      const real = path.join(root, 'real-spec.md');
+      writeFileSync(real, '# inside the repository\n');
+      symlinkSync(real, path.join(specDir, 'linked-design.md'));
+
+      const found = discoverSpec({
+        repoRoot: root,
+        branch: 'feat/anything',
+        prBody: 'Spec: docs/superpowers/specs/linked-design.md\n',
+      });
+
+      expect(found).toMatchObject({
+        kind: 'pr-body',
+        spec: 'docs/superpowers/specs/linked-design.md',
+      });
+    });
+
+    it('treats a dangling symlink as a path that is not there', () => {
+      const { root } = rootWithOutsideFile(['2026-09-03-widget-cache-design.md']);
+      const specDir = path.join(root, 'docs', 'superpowers', 'specs');
+      symlinkSync(path.join(root, 'gone.md'), path.join(specDir, 'dangling-design.md'));
+
+      const found = discoverSpec({
+        repoRoot: root,
+        branch: 'feat/widget-cache',
+        prBody: 'Spec: docs/superpowers/specs/dangling-design.md\n',
+      });
+
+      expect(found).toMatchObject({
+        kind: 'convention',
+        spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      });
     });
 
     it('still lets --spec point outside, because a person typed it', () => {
