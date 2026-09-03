@@ -150,6 +150,16 @@ describe('changedPathsSince', () => {
     expect(changed.ok === false && changed.detail).toMatch(/origin\/does-not-exist/);
   });
 
+  it('does not double the full stop when git own message already ends in one', () => {
+    const root = repoWithMain();
+
+    const changed = changedPathsSince(root, 'origin/does-not-exist');
+
+    // Two dots then a space. Not two dots on their own: the three-dot range
+    // is in this message too, and it is spelled correctly.
+    expect(changed.ok === false && changed.detail).not.toMatch(/\.\.\s/);
+  });
+
   it('fails when the directory is not a git repository at all', () => {
     const changed = changedPathsSince(tempDir(), 'main');
 

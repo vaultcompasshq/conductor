@@ -110,7 +110,10 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
     return { ok: false, detail: `git could not be run: ${child.error.message}` };
   }
   if (child.status !== 0) {
-    const stderr = (child.stderr ?? '').trim().split('\n')[0] ?? '';
+    // git's own first line usually ends in a full stop, and this message
+    // continues after it. Two in a row reads as a typo in a message somebody
+    // is already reading because something went wrong.
+    const stderr = ((child.stderr ?? '').trim().split('\n')[0] ?? '').replace(/\.+$/, '');
     return {
       ok: false,
       detail:
