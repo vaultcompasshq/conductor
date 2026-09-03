@@ -280,6 +280,19 @@ describe('what init writes', () => {
     expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+stage: ci/);
   });
 
+  it('mentions the enforce ramp in the file, without switching it on for anyone', () => {
+    // Written as a comment rather than as a key. The default is true, and a
+    // file that spells out enforce: true on every gate reads as three
+    // decisions somebody made rather than as the one state a gate is in
+    // unless told otherwise. The comment is what makes the ramp findable.
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(policy).toMatch(/# enforce/);
+    expect(policy).not.toMatch(/^\s+enforce:/m);
+  });
+
   it('says in the file why a gate is switched off, so the file explains itself', () => {
     const repo = gitRepo();
     init(repo);

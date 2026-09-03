@@ -29,6 +29,8 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
     },
     exitCode: 1,
     durationMs: 75,
+    stage: 'commit',
+    enforce: true,
     couldNotRun: null,
     findings: [],
     run: { failOn: 'medium', suppressed: 0, ignored: 0, diagnostics: [], details: {} },
@@ -225,6 +227,91 @@ describe('a clean run', () => {
     const last = text.trimEnd().split('\n').pop() as string;
     expect(last).toMatch(/exit 0/);
     expect(last).toMatch(/none blocked/);
+  });
+});
+
+describe('a gate that blocked but is not enforced', () => {
+  const text = renderText(
+    result(
+      [
+        outcome({
+          exitCode: 1,
+          enforce: false,
+          findings: depGuard.findings,
+          run: depGuard.run,
+        }),
+      ],
+      0
+    )
+  );
+
+  it('still prints every finding, with the gate own blocking marker intact', () => {
+    // enforce: false is about the exit code and nothing else. Quieting the
+    // findings would make the report agree with the exit code by hiding what
+    // the gate actually said.
+    expect(text).toMatch(/BLOCKING/);
+    expect(text).toMatch(/dep-guard\/typosquat/);
+  });
+
+  it('says in plain words that the gate blocked and enforce is false', () => {
+    // A green exit next to red findings has to explain itself on the same
+    // screen, or the next reader assumes the report is broken.
+    expect(text).toMatch(/enforce/);
+    expect(text).toMatch(/not enforced/);
+  });
+
+  it('marks the gate header, so the section is not read as an ordinary failure', () => {
+    const header = text.split('\n').find((line) => line.startsWith('dependencies')) as string;
+    expect(header).toMatch(/not enforced/);
+  });
+
+  it('does not claim in the verdict that none blocked', () => {
+    const last = text.trimEnd().split('\n').pop() as string;
+    expect(last).toMatch(/exit 0/);
+    expect(last).not.toMatch(/none blocked/);
+    expect(last).toMatch(/enforce/);
+  });
+});
+
+describe('a gate that could not run and is not enforced', () => {
+  const text = renderText(
+    result(
+      [
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          binary: null,
+          enforce: false,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+        }),
+      ],
+      0
+    )
+  );
+
+  it('still says loudly that the gate did not run', () => {
+    expect(text).toMatch(/DID NOT RUN/);
+    expect(text).toMatch(/binary-missing/);
+  });
+
+  it('records it as a note rather than as the exit 2 it would otherwise be', () => {
+    expect(text).toMatch(/not enforced/);
+    const last = text.trimEnd().split('\n').pop() as string;
+    expect(last).toMatch(/exit 0/);
+    expect(last).not.toMatch(/^verdict: exit 2/);
+  });
+
+  it('does not also call it a gate that blocked', () => {
+    // Its findings list holds the umbrella's own blocking gate-missing
+    // finding, so a naive "has a blocking finding" test reports the same
+    // gate as having blocked AND as having failed to run, which are
+    // opposite claims about the same gate.
+    const last = text.trimEnd().split('\n').pop() as string;
+    expect(last).toMatch(/intent could not run/);
+    expect(last).not.toMatch(/intent blocked/);
   });
 });
 

@@ -82,6 +82,32 @@ describe('policy file', () => {
     ).toThrow(/stage/);
   });
 
+  it('defaults enforce to true, so a gate blocks unless the file says otherwise', () => {
+    const policy = parsePolicy(MINIMAL, POLICY_FILE_NAME);
+    expect(policy.gates.dependencies?.enforce).toBe(true);
+    expect(policy.gates.intent?.enforce).toBe(true);
+  });
+
+  it('keeps an explicit enforce: false', () => {
+    const policy = parsePolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n    enforce: false\n',
+      POLICY_FILE_NAME
+    );
+    expect(policy.gates.intent?.enforce).toBe(false);
+  });
+
+  it('rejects an enforce that is not a boolean, rather than reading a string as true', () => {
+    // "enforce: maybe" reading as enforced would be the safe direction, and
+    // "enforce: no" reading as enforced would be the surprising one. Neither
+    // is worth guessing at.
+    expect(() =>
+      parsePolicy(
+        'version: 1\ngates:\n  secrets:\n    product: vault-guard\n    enforce: maybe\n',
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/enforce/);
+  });
+
   it('rejects an unknown gate role', () => {
     expect(() =>
       parsePolicy('version: 1\ngates:\n  tests:\n    product: dep-guard\n', POLICY_FILE_NAME)

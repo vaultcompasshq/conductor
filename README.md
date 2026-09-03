@@ -105,6 +105,25 @@ output, and an empty run named for that product would put its name on
 something it never did. Its binary is not even looked for, so a gate
 installed only on the CI image does not fail a developer's commit.
 
+**`enforce`** defaults to true. A gate with `enforce: false` runs, reports,
+and appears in the text report and the SARIF log exactly as an enforced gate
+does. The only thing it cannot do is change the exit code: its blocking
+findings do not raise it, and its failing to run at all is a note rather
+than exit 2. That is the adoption ramp, so a gate can be switched on and
+read for a few weeks before it is allowed to refuse anybody's commit.
+
+It is not a downgrade of what the gate said. Findings keep their own
+severities and their own `blocking` flags, in both formats, because
+rewriting a critical finding to a note would put this repository's
+enforcement policy into the field a code-scanning UI uses to describe the
+finding itself. What changes is that the text report says in words that the
+gate blocked and was not enforced, on the same screen as the findings, so a
+green exit next to red findings is never a surprise. In SARIF that gate's
+own run carries `properties.enforced: false`, and the `conductor` run
+carries a `conductor/gate-not-enforced` note as well, because a gate that
+could not run has no run of its own to hang the property on and that is
+exactly the case worth saying out loud.
+
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
 becomes `--fail-on high`, `online: true` becomes `--online`,
@@ -192,6 +211,11 @@ reports before running `--adopt` on a hook you did not write.
   its own could-not-run code, or it exited 1 with nothing parseable on
   stdout, which is what a rejected config file looks like from two of the
   three.
+
+A gate carrying `enforce: false` is left out of that composition entirely,
+and a gate the stage filter deferred never gets as far as it. Both are the
+policy file's own decisions, written down in the repository; nothing here
+reads a gate's output and decides on its own to ignore it.
 
 This is not the numeric maximum of the children's exit codes, because the
 codes do not mean the same thing in each product. One of the three uses 2

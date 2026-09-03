@@ -3,7 +3,7 @@ import { describe, expect, it } from '@jest/globals';
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, EXIT_OK, composeExitCode } from '../src/exit-codes.js';
 
 function gate(overrides: Partial<Parameters<typeof composeExitCode>[0][number]> = {}) {
-  return { couldNotRun: null, exitCode: 0, hasBlockingFinding: false, ...overrides };
+  return { couldNotRun: null, exitCode: 0, hasBlockingFinding: false, enforce: true, ...overrides };
 }
 
 describe('exit code composition', () => {
@@ -47,6 +47,42 @@ describe('exit code composition', () => {
     expect(composeExitCode([gate({ couldNotRun: { reason: 'gate-error' }, exitCode: 1 })])).toBe(
       EXIT_COULD_NOT_RUN
     );
+  });
+
+  it('leaves the code at 0 when the only gate that blocked is not enforced', () => {
+    expect(
+      composeExitCode([gate({ exitCode: 1, hasBlockingFinding: true, enforce: false })])
+    ).toBe(EXIT_OK);
+  });
+
+  it('leaves the code at 0 when the only gate that could not run is not enforced', () => {
+    expect(
+      composeExitCode([
+        gate({ couldNotRun: { reason: 'binary-missing' }, exitCode: null, enforce: false }),
+      ])
+    ).toBe(EXIT_OK);
+  });
+
+  it('still reports an enforced gate beside an unenforced one', () => {
+    expect(
+      composeExitCode([
+        gate({ exitCode: 1, hasBlockingFinding: true, enforce: false }),
+        gate({ exitCode: 1, hasBlockingFinding: true }),
+      ])
+    ).toBe(EXIT_BLOCKED);
+  });
+
+  it('does not let an unenforced could-not-run outrank an enforced blocking gate', () => {
+    // The rule is unchanged for enforced gates: could-not-run outranks
+    // blocked. It must not start applying to a gate that was told not to
+    // decide anything, or enforce: false would raise the exit code instead
+    // of leaving it alone.
+    expect(
+      composeExitCode([
+        gate({ exitCode: 1, hasBlockingFinding: true }),
+        gate({ couldNotRun: { reason: 'gate-error' }, exitCode: 2, enforce: false }),
+      ])
+    ).toBe(EXIT_BLOCKED);
   });
 
   it('treats a missing enabled gate as non-zero, never as clean', () => {

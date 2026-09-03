@@ -282,7 +282,8 @@ function ruleDeclarations(findings: Finding[]): Array<Record<string, unknown>> {
 function makeRun(
   name: string,
   version: string | null,
-  findings: Finding[]
+  findings: Finding[],
+  properties?: Record<string, unknown>
 ): Record<string, unknown> {
   return {
     tool: {
@@ -296,6 +297,7 @@ function makeRun(
       },
     },
     results: findings.map(toResult),
+    ...(properties === undefined ? {} : { properties }),
   };
 }
 
@@ -360,6 +362,65 @@ function deferredFindings(result: RunResult): Finding[] {
 }
 
 /**
+ * The gates the policy file told not to decide anything, as SARIF results.
+ *
+ * These are written in TWO places on purpose, and neither one is redundant:
+ *
+ *  - `properties.enforced` on the gate's own run. That is the natural owner
+ *    of the fact, because enforcement is a property of the gate rather than
+ *    of any one finding, and it sits where a consumer already looks to find
+ *    out whose results these are. It is emitted for enforced gates too, so
+ *    an absent property never has to be read as either answer.
+ *
+ *  - a note in the umbrella's run, always. The run-level property cannot
+ *    carry the case that matters most: a gate that COULD NOT RUN produces
+ *    no run of its own, by the rule at the top of this file, so the only
+ *    place left to say "and it was not enforced, which is why this log
+ *    reports exit 0 with a gate that verified nothing" is the umbrella's
+ *    own run. Emitting the note only in that case would make it look like
+ *    an error report rather than a statement about coverage, so it is
+ *    emitted for every unenforced gate.
+ *
+ * What is deliberately NOT done: touching the results themselves. A
+ * critical finding stays critical, and `blocking` stays whatever the gate
+ * decided. Enforcement is this repository's policy about the exit code, and
+ * writing it into the field a code-scanning UI uses to describe the finding
+ * would make the finding lie about what the gate found.
+ */
+function unenforcedFindings(result: RunResult): Finding[] {
+  return result.gates
+    .filter((gate) => !gate.enforce)
+    .map((gate) => {
+      const blocking = gate.findings.filter((finding) => finding.blocking).length;
+      const what =
+        gate.couldNotRun !== null
+          ? `It could not run (${gate.couldNotRun.reason}), and nothing was checked by it.`
+          : `It reported ${blocking} blocking finding(s) and exited ${gate.exitCode ?? -1}.`;
+      return {
+        schemaVersion: 1 as const,
+        product: UMBRELLA_DRIVER_NAME,
+        productVersion: null,
+        ruleId: 'conductor/gate-not-enforced',
+        severity: 'info' as const,
+        severityIsDerived: true,
+        blocking: false,
+        message:
+          `The ${gate.role} gate (${gate.product}) has enforce: false, so its verdict did not ` +
+          `reach the exit code. ${what}`,
+        subject: { kind: 'none' as const },
+        fingerprint: null,
+        details: {
+          role: gate.role,
+          product: gate.product,
+          enforced: false,
+          couldNotRun: gate.couldNotRun === null ? null : gate.couldNotRun.reason,
+          blockingFindings: blocking,
+        },
+      };
+    });
+}
+
+/**
  * Renders a whole run as one SARIF log.
  *
  * `umbrellaVersion` names this package's own version, used only for the
@@ -376,7 +437,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     if (gate.couldNotRun !== null && own.length === 0) {
       continue;
     }
-    runs.push(makeRun(gate.product, gate.productVersion, own));
+    runs.push(makeRun(gate.product, gate.productVersion, own, { enforced: gate.enforce }));
   }
 
   const umbrellaFindings = [
@@ -385,6 +446,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
       .filter((finding) => finding.product === UMBRELLA_DRIVER_NAME),
     ...diagnosticFindings(result),
     ...deferredFindings(result),
+    ...unenforcedFindings(result),
   ];
 
   if (umbrellaFindings.length > 0) {

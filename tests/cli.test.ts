@@ -227,6 +227,216 @@ describe('conductor run --stage', () => {
   });
 });
 
+describe('a gate with enforce: false', () => {
+  const BLOCKING_VAULT_GUARD = JSON.stringify({
+    version: '1',
+    scannedAt: '2026-09-02T00:00:00.000Z',
+    summary: { files: 1, secrets: 1 },
+    run: {
+      duration_ms: 1,
+      files_scanned: 1,
+      bytes_scanned: 40,
+      patterns_active: 59,
+      diagnostics_count: 0,
+      fail_on: 'medium',
+      blocking_matches: 1,
+    },
+    // The match shape is the one captured from vault-guard 1.4.2 in
+    // tests/fixtures, not an invented one.
+    results: [
+      {
+        file: 'src/config.js',
+        matches: [
+          {
+            type: 'github-token',
+            severity: 'critical',
+            line: 2,
+            column: 22,
+            offset: 93,
+            value: 'ghp_...(40c)',
+            fingerprint: '85ce78fecbada885e18040c4ef1299a29367a1d2eec35fec239ab556a0172c79',
+          },
+        ],
+      },
+    ],
+  });
+
+  const SECRETS_UNENFORCED = [
+    'version: 1',
+    'gates:',
+    '  secrets:',
+    '    product: vault-guard',
+    '    enforce: false',
+    '',
+  ].join('\n');
+
+  it('exits 0 while the text report still shows the blocking findings', () => {
+    const repo = repoWithPolicy(SECRETS_UNENFORCED);
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: BLOCKING_VAULT_GUARD, exit: 1 });
+
+    const result = runCli(repo, ['run', '--staged'], bin);
+
+    expect(result.status).toBe(0);
+    // The findings are not quieted to match the exit code.
+    expect(result.stdout).toMatch(/BLOCKING/);
+    expect(result.stdout).toMatch(/vault-guard\/github-token/);
+    // And the green exit explains itself on the same screen.
+    expect(result.stdout).toMatch(/not enforced/);
+    expect(result.stdout).toMatch(/verdict: exit 0, but secrets blocked/);
+  });
+
+  it('keeps the findings at their own level in the SARIF log', () => {
+    const repo = repoWithPolicy(SECRETS_UNENFORCED);
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: BLOCKING_VAULT_GUARD, exit: 1 });
+
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif'], bin);
+
+    expect(result.status).toBe(0);
+    const log = JSON.parse(result.stdout) as {
+      runs: Array<{
+        tool: { driver: { name: string } };
+        properties?: { enforced?: boolean };
+        results: Array<{ ruleId: string; level: string; properties: { blocking: boolean } }>;
+      }>;
+    };
+
+    const gateRun = log.runs.find((run) => run.tool.driver.name === 'vault-guard');
+    expect(gateRun?.properties?.enforced).toBe(false);
+    expect(gateRun?.results[0].level).toBe('error');
+    expect(gateRun?.results[0].properties.blocking).toBe(true);
+
+    const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
+    expect(umbrella?.results.map((entry) => entry.ruleId)).toContain(
+      'conductor/gate-not-enforced'
+    );
+  });
+
+  it('exits 0 with a note when an unenforced gate could not run at all', () => {
+    // Enforced, this is exit 2: a gate that verified nothing is worse than
+    // one that failed. Unenforced, it is a note, and the report has to say
+    // out loud that nothing was checked.
+    const repo = repoWithPolicy(SECRETS_UNENFORCED);
+
+    const result = runCli(repo, ['run', '--staged'], tempDir());
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/DID NOT RUN/);
+    expect(result.stdout).toMatch(/conductor\/gate-missing/);
+    expect(result.stdout).toMatch(/not enforced/);
+    expect(result.stdout).toMatch(/verdict: exit 0, but secrets could not run/);
+  });
+
+  it('still exits 2 for an enforced gate standing beside an unenforced broken one', () => {
+    const repo = repoWithPolicy(
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '    enforce: false',
+        '',
+      ].join('\n')
+    );
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: '', stderr: 'corpus unreadable', exit: 2 });
+
+    const result = runCli(repo, ['run', '--staged'], bin);
+
+    expect(result.status).toBe(2);
+  });
+});
+
+describe('a stage-deferred gate beside an unenforced blocking one', () => {
+  it('runs neither into the exit code, and says why for each separately', () => {
+    // The two mechanisms are different and must stay legible as different
+    // ones: the intent gate did not run at all, and the secrets gate ran and
+    // was overruled by the policy file.
+    const repo = repoWithPolicy(
+      [
+        'version: 1',
+        'gates:',
+        '  secrets:',
+        '    product: vault-guard',
+        '    stage: commit',
+        '    enforce: false',
+        '  intent:',
+        '    product: intent-guard',
+        '    stage: ci',
+        '',
+      ].join('\n')
+    );
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', {
+      stdout: JSON.stringify({
+        version: '1',
+        summary: { files: 1, secrets: 1 },
+        run: { fail_on: 'medium', blocking_matches: 1 },
+        results: [
+          {
+            file: 'src/config.js',
+            matches: [
+              {
+                type: 'github-token',
+                severity: 'critical',
+                line: 2,
+                column: 22,
+                offset: 93,
+                value: 'ghp_...(40c)',
+                fingerprint: '85ce78fecbada885e18040c4ef1299a29367a1d2eec35fec239ab556a0172c79',
+              },
+            ],
+          },
+        ],
+      }),
+      exit: 1,
+    });
+    // Deliberately not installed: a deferred gate's binary is never looked
+    // for, so its absence must not be able to fail this run.
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+
+    const result = runCli(repo, ['run', '--staged', '--stage', 'commit'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/deferred\s+intent/);
+    expect(result.stdout).toMatch(/not enforced/);
+    expect(result.stdout).toMatch(/vault-guard\/github-token/);
+    // Never confused for each other.
+    expect(result.stdout).not.toMatch(/conductor\/gate-missing/);
+  });
+
+  it('carries both facts into the SARIF log as separate notes', () => {
+    const repo = repoWithPolicy(
+      [
+        'version: 1',
+        'gates:',
+        '  secrets:',
+        '    product: vault-guard',
+        '    enforce: false',
+        '  intent:',
+        '    product: intent-guard',
+        '',
+      ].join('\n')
+    );
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+
+    const result = runCli(repo, ['run', '--staged', '--stage', 'commit', '--format', 'sarif'], bin);
+
+    expect(result.status).toBe(0);
+    const log = JSON.parse(result.stdout) as {
+      runs: Array<{ tool: { driver: { name: string } }; results: Array<{ ruleId: string }> }>;
+    };
+    const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
+    const ruleIds = umbrella?.results.map((entry) => entry.ruleId) ?? [];
+    expect(ruleIds).toContain('conductor/gate-deferred');
+    expect(ruleIds).toContain('conductor/gate-not-enforced');
+  });
+});
+
 describe('a gate-state reason alongside a budget violation', () => {
   // Both reasons come out of intent-guard in one array with nothing marking
   // which is which. Before the fix the unfrozen-contract reason appeared in

@@ -47,6 +47,11 @@
           "type": "boolean",
           "default": true
         },
+        "enforce": {
+          "description": "Whether this gate's verdict reaches the exit code. Defaults to true. A gate with enforce false runs, reports, and appears in the text and SARIF output exactly as an enforced gate does, and never raises the exit code: neither its blocking findings nor its failure to run at all. This is the adoption ramp for a gate a repository is not ready to block on yet.",
+          "type": "boolean",
+          "default": true
+        },
         "stage": {
           "description": "When this gate runs. Stages are cumulative in the order commit, push, ci: a gate runs at its own stage and at every later one, so a run at ci runs everything enabled. Defaults to commit for dependencies and secrets, and to ci for intent, because only the intent gate carries per-task ceremony. A run with no --stage runs every enabled gate whatever its stage.",
           "enum": ["commit", "push", "ci"]

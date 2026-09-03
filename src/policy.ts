@@ -113,6 +113,13 @@ export interface GatePolicy {
   enabled: boolean;
   /** Resolved, never absent: the file's own value or this role's default. */
   stage: GateStage;
+  /**
+   * Whether this gate's verdict reaches the composed exit code. Defaults to
+   * true. An unenforced gate runs, reports, and appears in both output
+   * formats exactly as an enforced one does; the only thing it cannot do is
+   * change the exit code.
+   */
+  enforce: boolean;
   /** Absolute path to the gate's executable, overriding resolution. */
   command?: string;
   /** Argument prefix used with `command` when it cannot be inferred. */
@@ -255,6 +262,10 @@ export function parsePolicy(text: string, source: string): Policy {
       // The schema has already refused anything outside the enum, so the
       // only two cases left are "the file said one" and "it did not".
       stage: (entry.stage as GateStage | undefined) ?? DEFAULT_STAGE_FOR_ROLE[role],
+      // Defaults to true, and the schema has already refused anything that
+      // is not a boolean. Enforcement is the state a gate is in unless
+      // somebody wrote down that it is not.
+      enforce: entry.enforce === undefined ? true : Boolean(entry.enforce),
       ...(command === undefined ? {} : { command }),
       ...(entry.args === undefined ? {} : { args: entry.args as string[] }),
       options,

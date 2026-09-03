@@ -55,11 +55,43 @@ function findingLines(finding: Finding): string[] {
 
 function header(gate: GateOutcome): string {
   const version = gate.productVersion === null ? '(version unknown)' : gate.productVersion;
+  // On the header line rather than only at the bottom of the section: a
+  // reader scanning headers for the gate that refused their commit has to
+  // be able to see, in the same glance, that this one did not.
+  const enforcement = gate.enforce ? '' : '  [not enforced]';
   if (gate.couldNotRun !== null) {
-    return `${gate.role}  ${gate.product} ${version}  DID NOT RUN (${gate.couldNotRun.reason})`;
+    return `${gate.role}  ${gate.product} ${version}  DID NOT RUN (${gate.couldNotRun.reason})${enforcement}`;
   }
   const source = gate.binary === null ? '' : `  via ${gate.binary.candidate} on ${gate.binary.source}`;
-  return `${gate.role}  ${gate.product} ${version}  exit ${gate.exitCode ?? '?'}  ${gate.durationMs}ms${source}`;
+  return `${gate.role}  ${gate.product} ${version}  exit ${gate.exitCode ?? '?'}  ${gate.durationMs}ms${source}${enforcement}`;
+}
+
+/**
+ * The line that keeps a green exit from being a surprise.
+ *
+ * A report with BLOCKING on it and exit 0 at the bottom reads as a bug in
+ * the umbrella unless the reason is on the same screen, in words rather
+ * than in a flag somebody has to go and look up in the policy file.
+ */
+function enforcementNote(gate: GateOutcome): string | null {
+  if (gate.enforce) {
+    return null;
+  }
+  if (gate.couldNotRun !== null) {
+    return (
+      `  not enforced: this gate could not run, and enforce is false for it in .guardrails.yaml, ` +
+      'so it is a note here rather than a failed run. Nothing was checked by it.'
+    );
+  }
+  const blocking = gate.findings.filter((finding) => finding.blocking).length;
+  if (blocking > 0 || (gate.exitCode ?? 0) !== 0) {
+    return (
+      `  not enforced: this gate reported ${blocking} blocking finding(s) and exited ` +
+      `${gate.exitCode ?? '?'}, and enforce is false for it in .guardrails.yaml, so the commit ` +
+      'proceeds. Set enforce: true there to make it block.'
+    );
+  }
+  return '  not enforced: enforce is false for this gate in .guardrails.yaml. It found nothing to block on here.';
 }
 
 function gateSection(gate: GateOutcome): string[] {
@@ -125,6 +157,12 @@ function gateSection(gate: GateOutcome): string[] {
     lines.push(`  ! ${diagnostic.code}: ${diagnostic.message}`);
   }
 
+  // Last in the section, so it is the line under the findings it explains.
+  const enforcement = enforcementNote(gate);
+  if (enforcement !== null) {
+    lines.push(enforcement);
+  }
+
   return lines;
 }
 
@@ -173,6 +211,35 @@ function verdict(result: RunResult): string {
   if (result.exitCode === EXIT_BLOCKED) {
     return `verdict: exit 1, ${blocking} blocking finding(s) across ${result.gates.length} gate(s).`;
   }
+
+  // Exit 0 with red on the screen above it. The verdict is the one line
+  // somebody reads when they read nothing else, so it is the line that has
+  // to carry the reason rather than leaving it to the sections.
+  const unenforced = result.gates.filter((gate) => !gate.enforce);
+  // A gate that could not run is only that. Its findings list carries the
+  // umbrella's own blocking gate-missing finding, so a naive test for "has a
+  // blocking finding" reports the same gate as having blocked AND as having
+  // failed to run, which are opposite claims.
+  const blocked = unenforced.filter(
+    (gate) =>
+      gate.couldNotRun === null &&
+      ((gate.exitCode ?? 0) !== 0 || gate.findings.some((finding) => finding.blocking))
+  );
+  const broken = unenforced.filter((gate) => gate.couldNotRun !== null);
+  const clauses: string[] = [];
+  if (blocked.length > 0) {
+    clauses.push(`${blocked.map((gate) => gate.role).join(', ')} blocked`);
+  }
+  if (broken.length > 0) {
+    clauses.push(`${broken.map((gate) => gate.role).join(', ')} could not run`);
+  }
+  if (clauses.length > 0) {
+    return (
+      `verdict: exit 0, but ${clauses.join(' and ')}. ` +
+      'Those gates have enforce: false in .guardrails.yaml, so nothing here failed the run.'
+    );
+  }
+
   return `verdict: exit 0, every enabled gate ran and none blocked.`;
 }
 

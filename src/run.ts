@@ -101,6 +101,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
       couldNotRun: outcome.couldNotRun,
       exitCode: outcome.exitCode,
       hasBlockingFinding: outcome.findings.some((finding) => finding.blocking),
+      enforce: outcome.enforce,
     }))
   );
 
