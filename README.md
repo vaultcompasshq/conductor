@@ -181,6 +181,27 @@ which is where git actually looks. An absolute one pointing outside the
 repository is refused rather than written to, since that directory serves
 every repository on the machine.
 
+**Where git looks is not always the file to write.** husky 9 points
+`core.hooksPath` at `.husky/_`, a generated and gitignored directory it
+rewrites on every install; the file git executes there is a dispatcher
+that adds `node_modules/.bin` to `PATH` and runs the tracked hook one
+directory up. Init recognises that arrangement, by the `.husky/_`
+convention or by the dispatcher's own contents, either alone being enough,
+and then reads, detects, adopts, writes and reverts `.husky/pre-commit`
+and never anything under `.husky/_`. Reading the dispatcher instead
+reports the repository's real gate hook as foreign, so `--adopt` cannot
+adopt it, and writing the dispatcher puts the hook where the next install
+deletes it without saying so. Both were found by running this tool against
+a real husky 9 repository rather than against a fixture.
+
+lefthook and the pre-commit framework also install a generated script
+where git looks, and neither has a tracked counterpart to write instead,
+so both are recognised and refused with a pointer at the manager's own
+config file (`lefthook-local.yml`, `.pre-commit-config.yaml`). A gate run
+from either of those is subject to that manager's exit code rather than
+the umbrella's, so 1 and 2 stop meaning different things there; that is
+why init names the file rather than editing it.
+
 ## The report
 
 The text report is one section per gate, blocking findings first, with each
