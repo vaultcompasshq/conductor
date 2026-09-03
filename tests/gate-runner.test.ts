@@ -146,6 +146,22 @@ describe('running one gate', () => {
     expect(outcome.findings[0].blocking).toBe(true);
   });
 
+  it('names the two places it looked in the order it looked in them', () => {
+    // The line a user reads when a gate is missing tells them where to
+    // install it. Naming PATH first, after resolution was flipped to try
+    // the repository's own copy first, sends them to the wrong one of the
+    // two and hides that a project pin is what this tool prefers.
+    const outcome = runGate(gate(), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: tempDir(),
+    });
+
+    expect(outcome.couldNotRun?.detail).toBe(
+      'no dep-guard binary in node_modules/.bin or on PATH'
+    );
+  });
+
   it('treats exit 2 as could-not-run rather than as a policy violation', () => {
     const bin = tempDir();
     stubGate(bin, 'dep-guard', { stdout: '', stderr: 'corpus unreadable', exit: 2 });

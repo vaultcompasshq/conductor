@@ -102,7 +102,12 @@ spelled the way that gate spells it.
 **`command`** takes an absolute path and overrides binary resolution for
 that gate, for pointing at a build that is not installed anywhere.
 Otherwise resolution tries each of that product's binary names in order,
-looking on `PATH` and then in the repository's `node_modules/.bin`.
+looking in the repository's `node_modules/.bin` and then on `PATH`. The
+repository's own copy wins, so a project pin beats a global install, which
+is what `pnpm exec` does in the same repository. The name is the outer
+loop and the location the inner one, so a product's current name still
+wins over an older one wherever each is installed: a repository has no say
+in which product a name means, and every say in which build of it to run.
 
 **`report.format`** is `text` or `sarif`, and `--format` overrides it.
 
@@ -176,10 +181,62 @@ turns off by making the tool missing. It passes the exit code straight
 through, so 2 does not collapse into 1 and report findings that were never
 looked for.
 
+The hook prepends the repository's own `node_modules/.bin` to `PATH`
+before looking for the binary, so a conductor installed only as a project
+devDependency is visible to its own hook. The root comes from
+`git rev-parse --show-toplevel` rather than from the working directory,
+because a hook invoked from a subdirectory would otherwise prepend a path
+that does not exist. Fail-closed is unchanged: no conductor there and none
+on `PATH` still blocks the commit. The hook also survives being run under
+`sh -e`, which is what husky's dispatcher does, so the line explaining a
+blocked commit is printed there too rather than being cut off by the
+shell.
+
 A relative `core.hooksPath` is resolved against the working-tree root,
 which is where git actually looks. An absolute one pointing outside the
 repository is refused rather than written to, since that directory serves
 every repository on the machine.
+
+**Where git looks is not always the file to write.** husky 9 points
+`core.hooksPath` at `.husky/_`, a generated and gitignored directory it
+rewrites on every install; the file git executes there is a dispatcher
+that adds `node_modules/.bin` to `PATH` and runs the tracked hook one
+directory up. Init recognises that arrangement and then reads, detects,
+adopts, writes and reverts `.husky/pre-commit`, never anything under
+`.husky/_`. Reading the dispatcher instead reports the repository's real
+gate hook as foreign, so `--adopt` cannot adopt it, and writing the
+dispatcher puts the hook where the next install deletes it without saying
+so. Both were found by running this tool against a real husky 9
+repository rather than against a fixture.
+
+Recognition is structural: the hooks directory is named `_` and its parent
+is named `.husky`. Only husky creates that path, so the shape alone
+identifies it, and two things that look like useful corroboration are
+deliberately excluded.
+
+The **contents** of the file git executes are not a signal, because under
+husky 8 that file is the tracked hook itself: husky 8 points
+`core.hooksPath` at `.husky`, and every tracked hook there opens by
+sourcing `_/husky.sh` as a preamble. Reading that preamble as a dispatcher
+sends init one directory above `.husky`, which is the repository root.
+husky 8 therefore takes the ordinary path, where `.husky/pre-commit` is
+already both the file git runs and the file init reads.
+
+The **presence of husky's shim** is not a signal either. husky gitignores
+`.husky/_`, so `git clean -xdf` deletes that directory while
+`core.hooksPath=.husky/_` sits in `.git/config` and survives. A repository
+in that state has no shim and no dispatcher to find, and requiring one
+would send init back to writing `.husky/_/pre-commit`, the very file the
+next install wipes. The shim says whether husky ran recently, not whose
+directory this is, so `--dry-run` reports it and the rule ignores it.
+
+lefthook and the pre-commit framework also install a generated script
+where git looks, and neither has a tracked counterpart to write instead,
+so both are recognised and refused with a pointer at the manager's own
+config file (`lefthook-local.yml`, `.pre-commit-config.yaml`). A gate run
+from either of those is subject to that manager's exit code rather than
+the umbrella's, so 1 and 2 stop meaning different things there; that is
+why init names the file rather than editing it.
 
 ## The report
 
@@ -195,8 +252,12 @@ carries the gate's own fingerprint verbatim in `partialFingerprints` under
 a key naming the product, and the properties bag carries `blocking`,
 `severity`, whether that severity was assigned by the umbrella rather than
 by the gate, how durable that fingerprint is, and the gate's own details
-bag unchanged. No location is invented: a finding with no known line gets
-no region, and a finding about a missing binary gets no location at all.
+bag with its values unchanged. A value in that bag is never converted, so
+where a gate's own units differ from SARIF's the key says so:
+`columnZeroBased` is the secret scanner's own 0-based column, sitting
+beside the 1-based `startColumn` mapped from it. No location is invented:
+a finding with no known line gets no region, and a finding about a missing
+binary gets no location at all.
 
 ## Scope of v0.1
 
