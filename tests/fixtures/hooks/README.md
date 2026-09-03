@@ -12,12 +12,16 @@ The manager version is in each file name, so a fixture that stops matching
 a newer release is visible as a stale name rather than as a silent
 disagreement.
 
-**One redaction, applied by hand and listed here rather than left for a
-reader to spot.** All three files embed an absolute path to whatever
+**One redaction, applied by hand to two of the three files and listed here
+rather than left for a reader to spot.** `lefthook-2.1.12-pre-commit.sh`
+and `pre-commit-4.6.2-pre-commit.sh` each embed an absolute path to what
 installed them, which on the capture machine sat under a temporary
-directory carrying a user name. Each such path is rewritten to sit under
-`/opt/probe/` in the committed copy. Nothing else is changed, and no line
-the detection depends on is touched.
+directory carrying a user name; both paths are rewritten to sit under
+`/opt/probe/` in the committed copy. `lefthook-1.7.18-pre-commit.sh` is
+unmodified: that version's generated hook names no absolute path at all,
+which is itself one of the differences between the two lefthook captures.
+Nothing else is changed in any of the three, and no line the detection
+depends on is touched.
 
 ## lefthook 2.1.12 and 1.7.18
 

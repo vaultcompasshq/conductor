@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Public-repo hygiene guard: fail if tracked files contain tokens whose
-// SHA-256 (lowercased) matches the blocklist below, an internal
-// home-directory path, or a non-ASCII em/en dash. Plaintext product
+// SHA-256 (lowercased) matches the blocklist below, an absolute path rooted
+// in a per-machine directory, or a non-ASCII em/en dash. Plaintext product
 // codenames are never stored in this repo -- only hashes. To add an entry
 // locally, hash the lowercased token with SHA-256 and paste the digest into
 // BANNED_HASHES. See CONTRIBUTING.md, public repository hygiene section.
@@ -44,6 +44,24 @@ const ALLOWLIST = new Set(['CONTRIBUTING.md', 'scripts/check-public-hygiene.mjs'
 // that runs through a directory named "projects" (any case, any depth),
 // rather than one fixed machine layout.
 const INTERNAL_PATH = /\/Users\/[^/\s]+\/(?:[^/\s]+\/)*[Pp]rojects\/[^/\s]+/;
+
+// The broader shape: any absolute path rooted somewhere per-machine. The
+// pattern above requires a "projects" segment, so a path under a temporary
+// directory walked straight past it, and a temporary directory is exactly
+// where scratch repositories, captured fixtures and agent working
+// directories live. Two of the hook fixtures in this repository arrived
+// carrying one, and only a person reading the diff would have caught it.
+//
+// Built from a source string rather than a literal so this file does not
+// contain the shapes it looks for. Segments stop at quotes as well as at
+// whitespace, so a path inside a quoted string ends where the string does.
+//
+// At least two segments are required after the root, so naming a root
+// directory in prose is not a finding: a guard that cannot describe its own
+// rule is a guard everybody allowlists.
+const MACHINE_PATH = new RegExp(
+  `(?:/Users/[^/\\s'"]+|/home/[^/\\s'"]+|/var/folders|/private)/[^\\s'"]+`
+);
 
 // Em dash (code point 0x2014) and en dash (code point 0x2013), built from
 // code points rather than typed as literal characters so this file itself
@@ -128,9 +146,19 @@ export function scanFile(rel, text, { allowlisted, bannedHashes = BANNED_HASHES 
     return findings;
   }
 
+  // The specific pattern first, and only one finding per file: every
+  // internal workspace path is also a machine-specific one, and reporting
+  // both would read as two problems where there is one.
   const pathMatch = text.match(INTERNAL_PATH);
   if (pathMatch) {
     findings.push(`${rel}:${lineNumberAt(text, pathMatch.index)}: internal workspace path`);
+  } else {
+    const machineMatch = text.match(MACHINE_PATH);
+    if (machineMatch) {
+      findings.push(
+        `${rel}:${lineNumberAt(text, machineMatch.index)}: machine-specific absolute path`
+      );
+    }
   }
 
   for (const [lineNum, line] of lines.entries()) {
@@ -175,7 +203,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log('check-public-hygiene: no blocked tokens, internal paths, or non-ASCII dashes in tracked files.');
+  console.log('check-public-hygiene: no blocked tokens, machine paths, or non-ASCII dashes in tracked files.');
 }
 
 // realpath both sides before comparing: on macOS the OS temp dir (and other

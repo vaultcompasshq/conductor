@@ -121,6 +121,21 @@ describe('check-public-hygiene (temp-directory fixtures)', () => {
     expect(result.stderr).toMatch(/log\.txt:1: internal workspace path/);
   });
 
+  it('fails when a tracked file contains a temporary-directory path', () => {
+    // The shape a scratch repository, a captured fixture or an agent
+    // scratchpad actually leaves behind. It has no "projects" segment, so
+    // the older pattern walked straight past it.
+    const root = ['', 'private', 'tmp'].join('/');
+    const dir = buildFixtureRepo({
+      'capture.sh': `INSTALL=${root}/claude-502/session-id/probe/bin/tool\n`,
+    });
+
+    const result = runGuard(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/capture\.sh:1: machine-specific absolute path/);
+  });
+
   it('passes silently on a clean tree', () => {
     const dir = buildFixtureRepo({
       'readme.txt': 'A perfectly ordinary sentence with nothing to flag.\n',
@@ -130,7 +145,7 @@ describe('check-public-hygiene (temp-directory fixtures)', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).toMatch(/no blocked tokens, internal paths, or non-ASCII dashes/);
+    expect(result.stdout).toMatch(/no blocked tokens, machine paths, or non-ASCII dashes/);
   });
 });
 
@@ -154,6 +169,44 @@ describe('scanFile (unit)', () => {
   });
 
   it('flags an internal home-directory projects path even without Desktop in it', () => {
+    const findings = scanFile('fixture.md', `${FIXTURE_INTERNAL_PATH}\n`, {
+      allowlisted: false,
+      bannedHashes: new Set(),
+    });
+    expect(findings).toEqual(['fixture.md:1: internal workspace path']);
+  });
+
+  it.each([
+    ['a macOS temporary directory', ['', 'private', 'tmp'].join('/'), 'agent-scratch/probe/hook'],
+    ['a macOS per-user temporary directory', ['', 'var', 'folders'].join('/'), 'k9/abc123/T/out'],
+    ['a Linux home directory', ['', 'home', 'runner'].join('/'), 'work/repo/dist/index.js'],
+    ['a macOS home directory with no projects segment', ['', 'Users', 'someone'].join('/'), 'Desktop/scratch/notes.txt'],
+  ])('flags an absolute path under %s', (_name, root, rest) => {
+    const findings = scanFile('fixture.md', `built at ${root}/${rest}\n`, {
+      allowlisted: false,
+      bannedHashes: new Set(),
+    });
+    expect(findings).toEqual(['fixture.md:1: machine-specific absolute path']);
+  });
+
+  it('does not flag the name of a root directory on its own', () => {
+    // This repository's own prose names these roots when it explains the
+    // rule. A pattern that fired on the bare name would make the guard
+    // unable to describe itself, and would train everybody to allowlist.
+    const roots = [['', 'private'].join('/'), ['', 'Users'].join('/'), ['', 'home'].join('/')];
+    for (const root of roots) {
+      expect(
+        scanFile('fixture.md', `paths under ${root} are machine specific\n`, {
+          allowlisted: false,
+          bannedHashes: new Set(),
+        })
+      ).toEqual([]);
+    }
+  });
+
+  it('reports a home-directory projects path once, under its own more specific name', () => {
+    // Both patterns match it. Two findings about one path would read as two
+    // problems.
     const findings = scanFile('fixture.md', `${FIXTURE_INTERNAL_PATH}\n`, {
       allowlisted: false,
       bannedHashes: new Set(),
