@@ -493,6 +493,81 @@ describe('re-init over a hook a previous conductor wrote', () => {
   });
 });
 
+// The hook is already exactly right, so there is nothing to write. The
+// manifest is the part that has gone missing, and without it --revert has
+// no record that the hook is the umbrella's, so it reports success and
+// leaves a hook behind that runs a tool the repository no longer wants.
+describe('re-init when the hook is current but the manifest is gone', () => {
+  function repoWithLostManifest(): string {
+    const repo = gitRepo();
+    init(repo);
+    // What a "git clean", a deleted .guardrails directory, or an install
+    // from before there were manifests leaves behind.
+    rmSync(path.join(repo, path.dirname(MANIFEST_RELATIVE_PATH)), {
+      recursive: true,
+      force: true,
+    });
+    return repo;
+  }
+
+  it('records the hook it found, rather than writing a manifest without it', () => {
+    const repo = repoWithLostManifest();
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { files: Array<{ path: string; sha256: string; kind: string }> };
+    const hookEntry = manifest.files.find((file) => file.kind === 'hook');
+    expect(hookEntry).toBeDefined();
+    expect(hookEntry?.sha256).toBe(
+      createHash('sha256')
+        .update(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8'))
+        .digest('hex')
+    );
+  });
+
+  it('leaves the hook byte for byte alone while doing it', () => {
+    const repo = repoWithLostManifest();
+    const before = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+
+    init(repo);
+
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(before);
+  });
+
+  it('makes a later revert actually remove the hook', () => {
+    const repo = repoWithLostManifest();
+    init(repo);
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('writes nothing under --dry-run', () => {
+    const repo = repoWithLostManifest();
+
+    const result = init(repo, { dryRun: true });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(false);
+  });
+
+  it('still does nothing at all when the manifest already records the hook', () => {
+    // The ordinary second run. Nothing is missing, so nothing is rebuilt.
+    const repo = gitRepo();
+    init(repo);
+
+    const second = init(repo);
+
+    expect(second.alreadyInstalled).toBe(true);
+    expect(second.actions.every((action) => action.kind === 'skip')).toBe(true);
+  });
+});
+
 describe('re-init over a managed hook somebody edited', () => {
   const EDITED = [
     '#!/bin/sh',

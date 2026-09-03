@@ -334,6 +334,17 @@ export interface InitResult {
     executable: boolean;
     kind: 'hook' | 'policy';
   }>;
+  /**
+   * Files already on disk in exactly the right state, which the manifest is
+   * nevertheless missing.
+   *
+   * Nothing is written for these: the bytes are correct already. They exist
+   * because the manifest is what makes --revert honest, and a file init put
+   * there but cannot prove it put there is one revert walks past. Recording
+   * the content that is already on disk is what turns "I found this" into
+   * "this is mine to remove".
+   */
+  records: Array<{ path: string; content: string; kind: 'hook' | 'policy' }>;
 }
 
 export interface InitOptions {
@@ -568,10 +579,11 @@ function foreignGuidance(relPath: string): string {
 
 function editedManagedGuidance(relPath: string): string {
   return (
-    `${relPath} carries conductor's own marker but does not match either the hook this version ` +
-    'writes or the one recorded in the manifest, so somebody has edited it. Nothing was changed: ' +
-    'an edited hook is that person\'s working setup, marker or not. Re-run with --force to ' +
-    'replace it anyway, or delete it by hand and re-run.'
+    `${relPath} carries conductor's own marker but does not match the hook this version writes, ` +
+    'and either does not match the one recorded in the manifest or there is no manifest to ' +
+    'check against. Either way nothing on disk says these are the contents conductor left, so ' +
+    "nothing was changed: an edited hook is somebody's working setup, marker or not. Re-run " +
+    'with --force to replace it anyway, or delete it by hand and re-run.'
   );
 }
 
@@ -589,6 +601,7 @@ export function planInit(options: InitOptions): InitResult {
   const actions: InitAction[] = [];
   const conflicts: InitConflict[] = [];
   const writes: InitResult['writes'] = [];
+  const records: InitResult['records'] = [];
 
   const base: InitResult = {
     ok: false,
@@ -601,6 +614,7 @@ export function planInit(options: InitOptions): InitResult {
     repoRoot: '',
     adoptedFrom: null,
     writes,
+    records,
   };
 
   const root = repoRootOf(options.cwd);
@@ -677,11 +691,31 @@ export function planInit(options: InitOptions): InitResult {
     // actually settles is whose hook this is, not which version of it, so
     // the digest has to decide the rest.
     const installed = sha256(existingHook);
+    const recorded = recordedHookSha(root);
     if (installed === sha256(HOOK)) {
-      // Nothing to do for the hook. The policy file is still checked below,
-      // so a repository whose policy file was deleted can get it back.
-      actions.push({ kind: 'skip', path: relHook, detail: 'already installed by conductor init' });
-    } else if (installed === recordedHookSha(root)) {
+      // Nothing to WRITE for the hook. The policy file is still checked
+      // below, so a repository whose policy file was deleted can get it
+      // back, and the manifest gets the same treatment: a hook that is
+      // already exactly right but is missing from the manifest has to be
+      // recorded, or --revert has no record that the hook is the
+      // umbrella's, reports success, and leaves it running. A git clean, a
+      // deleted .guardrails directory and an install from before there were
+      // manifests all land in that state.
+      if (recorded === installed) {
+        actions.push({
+          kind: 'skip',
+          path: relHook,
+          detail: 'already installed by conductor init',
+        });
+      } else {
+        actions.push({
+          kind: 'skip',
+          path: relHook,
+          detail: 'already installed, and recorded in the manifest, which had lost it',
+        });
+        records.push({ path: hookPath, content: existingHook, kind: 'hook' });
+      }
+    } else if (installed === recorded) {
       // On disk it is exactly what the manifest says a previous init wrote,
       // so nobody has touched it since and it is the umbrella's to replace.
       actions.push({
@@ -774,7 +808,9 @@ export function planInit(options: InitOptions): InitResult {
     });
   }
 
-  const alreadyInstalled = writes.length === 0;
+  // A record with nothing to write is still work: the manifest has to be
+  // rebuilt, so this is not an "already installed, nothing to do" run.
+  const alreadyInstalled = writes.length === 0 && records.length === 0;
   if (!alreadyInstalled) {
     actions.push({ kind: 'write', path: MANIFEST_RELATIVE_PATH, detail: 'record what init wrote' });
   }
@@ -788,6 +824,7 @@ export function planInit(options: InitOptions): InitResult {
     repoRoot: root,
     adoptedFrom,
     writes,
+    records,
   };
 }
 
@@ -830,10 +867,23 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
       manifest.files.push({ path: write.path, sha256: sha256(write.content), kind: write.kind });
     }
 
+    // Files already correct on disk that the manifest had lost. Nothing is
+    // written for these; the entry is the whole point.
+    for (const record of plan.records) {
+      manifest.files.push({
+        path: record.path,
+        sha256: sha256(record.content),
+        kind: record.kind,
+      });
+    }
+
     // Everything a previous init recorded and this one did not rewrite. The
     // fresh entries come first so the newly written digests are what a
     // reader sees at the top of the file.
-    const rewritten = new Set(plan.writes.map((write) => write.path));
+    const rewritten = new Set([
+      ...plan.writes.map((write) => write.path),
+      ...plan.records.map((record) => record.path),
+    ]);
     for (const file of previous?.files ?? []) {
       if (!rewritten.has(file.path)) {
         manifest.files.push(file);

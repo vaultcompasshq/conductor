@@ -178,9 +178,12 @@ reason above.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
   does not recognise is never replaced, with or without `--adopt`.
-- `--force` acts on a file that has changed since init wrote it: on its own
-  it replaces a managed hook somebody has edited, and with `--revert` it
-  removes one, restoring an adopted hook if there was one.
+- `--force` acts on a file **conductor itself wrote** and that has changed
+  since: on its own it replaces a managed hook somebody has edited, and with
+  `--revert` it removes one, restoring an adopted hook if there was one. It
+  never overrides a foreign-hook or gate-hook refusal, with or without
+  `--adopt`: those hooks were never conductor's, and no flag here turns
+  somebody else's file into one this tool may overwrite.
 
 Re-running init over a hook a **previous version of conductor** wrote
 replaces it, rather than reporting it already installed. The marker in the
@@ -193,6 +196,15 @@ by hand, and it is refused with the same guidance a changed file gets under
 edited. Skipping an old hook left it running a command line this version no
 longer writes, and left it out of the new manifest, so a later `--revert`
 walked past it.
+
+The manifest is rebuilt when it is the part that has gone missing. A hook
+that is already byte for byte what this version writes, in a repository
+whose manifest no longer records it, is left alone on disk and entered in
+the manifest. Nothing is written to the hook, because nothing is wrong with
+it; without the entry, `--revert` has no record that the hook is the
+umbrella's, reports success, and leaves it running. A `git clean`, a
+deleted `.guardrails` directory, and an install from before there were
+manifests all reach that state.
 
 A revert that cannot remove everything removes nothing that would leave the
 repository half-wired, keeps the manifest describing what is left, and
