@@ -49,6 +49,8 @@ interface RunCliOptions {
   format: string;
   gate?: string[];
   stage?: string;
+  base?: string;
+  spec?: string;
 }
 
 function parseFormat(value: string): 'text' | 'sarif' {
@@ -174,6 +176,14 @@ export function buildProgram(): Command {
       `which stopping point this run is: ${GATE_STAGES.join(', ')}. Stages are cumulative, so a gate runs at its own stage and every later one. Omit it to run every enabled gate.`
     )
     .option(
+      '--base <ref>',
+      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to origin/<GITHUB_BASE_REF> when it is set.'
+    )
+    .option(
+      '--spec <path>',
+      'the spec the intent gate imports its contract from, outranking a Spec: line in the pull request body and the branch-name convention'
+    )
+    .option(
       '--gate <role>',
       'restrict the run to this role; repeatable',
       (value: string, previous: string[] = []) => [...previous, value]
@@ -196,7 +206,10 @@ export function buildProgram(): Command {
           repoRoot: root,
           staged: Boolean(options.staged),
           pathValue: process.env.PATH ?? '',
+          env: process.env,
           ...(stage === undefined ? {} : { stage }),
+          ...(options.base === undefined ? {} : { base: options.base }),
+          ...(options.spec === undefined ? {} : { spec: options.spec }),
         });
 
         process.stdout.write(
