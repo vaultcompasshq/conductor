@@ -56,7 +56,45 @@ describe('binary resolution', () => {
     expect(resolved?.argvPrefix).toEqual(['scan']);
   });
 
-  it('falls back to the target repository node_modules/.bin', () => {
+  // DOGFOOD 1, finding 4: a global vault-guard 1.4.3 ran over the project's
+  // pinned 1.4.1, silently, and the report named a version the repository
+  // had deliberately not chosen. "pnpm exec vault-guard" in the same
+  // repository runs the pin, so the umbrella disagreed with the package
+  // manager about which copy of a gate this repository means.
+  it('prefers the repository own pin over a global install of the same name', () => {
+    const binDir = tempDir();
+    shim(binDir, 'vault-guard');
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'vault-guard');
+
+    const resolved = resolveGateBinary(
+      gate({ role: 'secrets', product: 'vault-guard' }),
+      repo,
+      binDir
+    );
+
+    expect(resolved?.source).toBe('node_modules');
+    expect(resolved?.command).toBe(path.join(repo, 'node_modules', '.bin', 'vault-guard'));
+  });
+
+  it('still keeps the current name ahead of an older one, wherever each is installed', () => {
+    // Candidate-major ordering, unchanged: the outer loop is the candidate
+    // list and only the inner loop is location. A repository pinning the
+    // pre-1.2.0 per-command binary must not beat a current intent-guard on
+    // PATH, or a leftover name would decide what runs for as long as it
+    // stayed installed.
+    const binDir = tempDir();
+    shim(binDir, 'intent-guard');
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'intent-guard-check');
+
+    const resolved = resolveGateBinary(gate(), repo, binDir);
+
+    expect(resolved?.candidate).toBe('intent-guard');
+    expect(resolved?.source).toBe('path');
+  });
+
+  it('resolves from the target repository node_modules/.bin', () => {
     const emptyPath = tempDir();
     const repo = tempDir();
     shim(path.join(repo, 'node_modules', '.bin'), 'dep-guard');

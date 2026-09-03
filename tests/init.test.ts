@@ -204,7 +204,8 @@ describe('what init writes', () => {
     const repo = gitRepo();
     init(repo);
     const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
-    expect(policy).toMatch(/# not found on PATH or in node_modules\/\.bin/);
+    // Named in resolution order, which is the repository's own copy first.
+    expect(policy).toMatch(/# not found in node_modules\/\.bin or on PATH/);
   });
 
   it('writes byte-identical output on two runs in two repositories', () => {

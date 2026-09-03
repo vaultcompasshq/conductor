@@ -340,12 +340,15 @@ function detectGates(root: string, pathValue: string): Set<GateRole> {
   for (const role of GATE_ROLES) {
     const product = PRODUCT_FOR_ROLE[role];
     for (const candidate of CANDIDATES[product]) {
+      // Same order as resolve.ts, though only the answer matters here:
+      // detection asks whether a gate is installed at all, not which copy
+      // of it would run.
+      const local = isExecutable(path.join(root, 'node_modules', '.bin', candidate.name));
       const onPath = pathValue
         .split(path.delimiter)
         .filter((dir) => dir.length > 0)
         .some((dir) => isExecutable(path.join(dir, candidate.name)));
-      const local = isExecutable(path.join(root, 'node_modules', '.bin', candidate.name));
-      if (onPath || local) {
+      if (local || onPath) {
         found.add(role);
         break;
       }
@@ -396,7 +399,7 @@ export function renderPolicy(detected: Set<GateRole>): string {
     lines.push(`  # ${ROLE_DESCRIPTION[role]}`);
     if (!enabled) {
       lines.push(
-        `  # not found on PATH or in node_modules/.bin. Install ${product}, then set enabled: true.`
+        `  # not found in node_modules/.bin or on PATH. Install ${product}, then set enabled: true.`
       );
     }
     lines.push(`  ${role}:`);

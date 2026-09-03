@@ -9,7 +9,20 @@
 //     be global: a machine with a leftover pre-rename install on PATH would
 //     beat the repository's own current-name dev dependency, silently and
 //     for as long as the old package stayed installed. So the outer loop is
-//     the candidate list and the inner loop is PATH then node_modules.
+//     the candidate list, and only the inner loop is location.
+//
+//  1b. Within one name, the REPOSITORY'S OWN COPY wins over a global
+//     install. This was the other way round until a dogfood run found a
+//     global vault-guard 1.4.3 running over the repository's pinned 1.4.1,
+//     silently, with the report naming a version that repository had
+//     deliberately not chosen. `pnpm exec` in the same repository runs the
+//     pin, so PATH-first meant the umbrella and the package manager
+//     disagreed about which copy of a gate a repository means, and the
+//     package manager is the one the repository's lockfile agrees with.
+//     Note that this is the opposite ordering from rule 1, and deliberately
+//     so: a NAME is a statement about which product, and the repository has
+//     no say in that; a LOCATION is a statement about which build, and the
+//     repository does.
 //
 //  2. Only a unified binary is asked for its version. `intent-guard`
 //     answers --version; the per-command binaries shipped before 1.2.0 did
@@ -132,13 +145,15 @@ function locate(
   repoRoot: string,
   pathValue: string
 ): { command: string; source: ResolutionSource } | null {
-  const onPath = findOnPath(name, pathValue);
-  if (onPath !== null) {
-    return { command: onPath, source: 'path' };
-  }
+  // The repository's own copy first: a project pin beats a global install,
+  // which is what "pnpm exec <name>" does in the same repository.
   const local = findInNodeModules(name, repoRoot);
   if (local !== null) {
     return { command: local, source: 'node_modules' };
+  }
+  const onPath = findOnPath(name, pathValue);
+  if (onPath !== null) {
+    return { command: onPath, source: 'path' };
   }
   return null;
 }

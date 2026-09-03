@@ -102,7 +102,12 @@ spelled the way that gate spells it.
 **`command`** takes an absolute path and overrides binary resolution for
 that gate, for pointing at a build that is not installed anywhere.
 Otherwise resolution tries each of that product's binary names in order,
-looking on `PATH` and then in the repository's `node_modules/.bin`.
+looking in the repository's `node_modules/.bin` and then on `PATH`. The
+repository's own copy wins, so a project pin beats a global install, which
+is what `pnpm exec` does in the same repository. The name is the outer
+loop and the location the inner one, so a product's current name still
+wins over an older one wherever each is installed: a repository has no say
+in which product a name means, and every say in which build of it to run.
 
 **`report.format`** is `text` or `sarif`, and `--format` overrides it.
 
