@@ -1,5 +1,5 @@
 {
-  "name": "@vaultcompass/compass",
+  "name": "@vaultcompass/conductor",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "bin": {
-    "compass": "dist/cli.js"
+    "conductor": "dist/cli.js"
   },
   "files": [
     "dist",

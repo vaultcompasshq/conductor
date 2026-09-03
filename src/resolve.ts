@@ -70,16 +70,15 @@ export interface ResolvedBinary {
 export const CANDIDATES: Record<Product, Candidate[]> = {
   'dep-guard': [{ name: 'dep-guard', prefix: ['scan'], versionSafe: true }],
   'vault-guard': [{ name: 'vault-guard', prefix: ['scan'], versionSafe: true }],
-  // Current names first, pre-rename names after. A repository installed
-  // before the rename keeps working; a repository installed after it never
-  // picks up the old package because someone left it on PATH. The two
-  // per-command entries are marked unsafe to ask for a version, per rule 2
-  // above.
+  // intent-guard-check is a per-command binary intent-guard shipped before
+  // 1.2.0, marked unsafe to ask for a version, per rule 2 above. The
+  // pre-rename conductor and conductor-check names are not resolved here:
+  // those packages are deprecated and had no users, so a pre-rename install
+  // is not a supported target, and the umbrella's own binary now carries
+  // the name conductor.
   'intent-guard': [
     { name: 'intent-guard', prefix: ['check'], versionSafe: true },
     { name: 'intent-guard-check', prefix: [], versionSafe: false },
-    { name: 'conductor', prefix: ['check'], versionSafe: true },
-    { name: 'conductor-check', prefix: [], versionSafe: false },
   ],
 };
 

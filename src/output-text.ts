@@ -155,7 +155,7 @@ function verdict(result: RunResult): string {
 
 export function renderText(result: RunResult): string {
   const lines: string[] = [
-    `compass run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
+    `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];
 
   for (const gate of result.gates) {

@@ -368,15 +368,15 @@ describe('the umbrella own findings', () => {
       findings: [
         {
           schemaVersion: 1,
-          product: 'compass',
+          product: 'conductor',
           productVersion: null,
-          ruleId: 'compass/gate-missing',
+          ruleId: 'conductor/gate-missing',
           severity: 'critical',
           severityIsDerived: true,
           blocking: true,
           message: 'no vault-guard binary',
           subject: { kind: 'none' },
-          fingerprint: { value: 'abc', scope: 'compass', stability: 'stable' },
+          fingerprint: { value: 'abc', scope: 'conductor', stability: 'stable' },
           details: {},
         },
       ],
@@ -389,10 +389,10 @@ describe('the umbrella own findings', () => {
     // and a missing version on something vault-guard never did.
     expect(log.runs).toHaveLength(1);
     const driver = (log.runs[0].tool as Record<string, Record<string, unknown>>).driver;
-    expect(driver.name).toBe('compass');
+    expect(driver.name).toBe('conductor');
     expect(driver.version).toBe('0.1.0');
     expect((log.runs[0].results as Array<Record<string, unknown>>)[0].ruleId).toBe(
-      'compass/gate-missing'
+      'conductor/gate-missing'
     );
   });
 
@@ -402,9 +402,9 @@ describe('the umbrella own findings', () => {
       findings: [
         {
           schemaVersion: 1,
-          product: 'compass',
+          product: 'conductor',
           productVersion: null,
-          ruleId: 'compass/gate-missing',
+          ruleId: 'conductor/gate-missing',
           severity: 'critical',
           severityIsDerived: true,
           blocking: true,
@@ -430,7 +430,7 @@ describe('the umbrella own findings', () => {
         findings: depGuard.findings,
         diagnostics: [
           {
-            code: 'compass/blocking-count-mismatch',
+            code: 'conductor/blocking-count-mismatch',
             message: 'dep-guard reported 1 blocking finding(s) but the umbrella reconstructed 2.',
           },
         ],
@@ -439,11 +439,11 @@ describe('the umbrella own findings', () => {
 
     const log = sarif(withDiagnostic);
     const umbrella = log.runs.find(
-      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'compass'
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
     );
     const entry = (umbrella?.results as Array<Record<string, unknown>>)[0];
 
-    expect(entry.ruleId).toBe('compass/blocking-count-mismatch');
+    expect(entry.ruleId).toBe('conductor/blocking-count-mismatch');
     expect(entry.level).toBe('note');
     expect((entry.message as Record<string, string>).text).toMatch(/reconstructed 2/);
     // A diagnostic is not a finding: it does not block, and it has no
@@ -458,12 +458,12 @@ describe('the umbrella own findings', () => {
         role: 'secrets',
         product: 'vault-guard',
         findings: [],
-        diagnostics: [{ code: 'compass/blocking-threshold-unknown', message: 'no threshold' }],
+        diagnostics: [{ code: 'conductor/blocking-threshold-unknown', message: 'no threshold' }],
       }),
     ]);
     const log = sarif(withDiagnostic);
     const umbrella = log.runs.find(
-      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'compass'
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
     );
     const entry = (umbrella?.results as Array<Record<string, unknown>>)[0];
     const details = (entry.properties as Record<string, Record<string, unknown>>).details;

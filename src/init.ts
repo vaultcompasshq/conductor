@@ -1,4 +1,4 @@
-// `compass init`: one policy file, one pre-commit hook, one manifest.
+// `conductor init`: one policy file, one pre-commit hook, one manifest.
 //
 // The manifest is what makes --revert honest. Without one, "undo the init"
 // means guessing which files were the tool's, and a tool that guesses about
@@ -15,7 +15,7 @@
 //     off by making the tool missing.
 //
 //  2. PRESERVE THE EXIT CODE. 2 means a gate could not run; 1 means a gate
-//     blocked. A hook written the natural way, `if compass run; then exit
+//     blocked. A hook written the natural way, `if conductor run; then exit
 //     0; fi; exit 1`, collapses 2 into 1 and reports findings that were
 //     never looked for.
 //
@@ -48,7 +48,7 @@ import { CANDIDATES } from './resolve.js';
 
 export { POLICY_FILE_NAME };
 
-/** The one string that says "compass init wrote this". */
+/** The one string that says "conductor init wrote this". */
 export const MANAGED_HOOK_MARKER = 'guardrails-managed-hook: v1';
 
 export const MANIFEST_RELATIVE_PATH = '.guardrails/manifest.json';
@@ -81,7 +81,7 @@ function detectGateHook(content: string): Product | null {
 
 const HOOK = `#!/bin/sh
 # Guardrail pre-commit hook. ${MANAGED_HOOK_MARKER}
-# Installed by "compass init". Remove it with "compass init --revert".
+# Installed by "conductor init". Remove it with "conductor init --revert".
 #
 # No "set -e" on purpose: under it the shell would exit at the failing
 # command before the status could be captured, which loses the explanatory
@@ -91,21 +91,21 @@ const HOOK = `#!/bin/sh
 # some minimal images, and reports success in some shells for a builtin
 # that is not an executable.
 
-if ! command -v compass >/dev/null 2>&1; then
-  echo "compass: command not found, so this commit was NOT checked by any guardrail gate. Install the umbrella, or run 'compass init --revert' to remove this hook." >&2
+if ! command -v conductor >/dev/null 2>&1; then
+  echo "conductor: command not found, so this commit was NOT checked by any guardrail gate. Install the umbrella, or run 'conductor init --revert' to remove this hook." >&2
   exit 1
 fi
 
-compass run --staged
-compass_status=$?
+conductor run --staged
+conductor_status=$?
 
-if [ "$compass_status" -ne 0 ]; then
-  echo "compass: commit blocked (compass exit $compass_status). Review the report above; 'git commit --no-verify' bypasses this hook at your own risk." >&2
+if [ "$conductor_status" -ne 0 ]; then
+  echo "conductor: commit blocked (conductor exit $conductor_status). Review the report above; 'git commit --no-verify' bypasses this hook at your own risk." >&2
 fi
 
 # Passed straight through. 1 means a gate blocked; 2 means a gate could not
 # run at all. Collapsing 2 into 1 would report findings never looked for.
-exit "$compass_status"
+exit "$conductor_status"
 `;
 
 export type ConflictReason =
@@ -321,7 +321,7 @@ export function renderPolicy(detected: Set<GateRole>): string {
 
 function foreignGuidance(relPath: string): string {
   return (
-    `${relPath} already exists and was not written by compass init. Merge "compass run --staged" ` +
+    `${relPath} already exists and was not written by conductor init. Merge "conductor run --staged" ` +
     'into it yourself, or move it aside and re-run init. Init never replaces a hook it does not ' +
     'recognise, because that hook is somebody working setup.'
   );
@@ -388,7 +388,7 @@ export function planInit(options: InitOptions): InitResult {
   if (existingHook !== undefined && existingHook.includes(MANAGED_HOOK_MARKER)) {
     // Nothing to do for the hook. The policy file is still checked below,
     // so a repository whose policy file was deleted can get it back.
-    actions.push({ kind: 'skip', path: relHook, detail: 'already installed by compass init' });
+    actions.push({ kind: 'skip', path: relHook, detail: 'already installed by conductor init' });
   } else if (existingHook !== undefined && existingHook.trim().length > 0) {
     const gateProduct = detectGateHook(existingHook);
     if (gateProduct === null) {
@@ -687,7 +687,7 @@ export function renderInitHuman(result: InitResult): string {
   const lines: string[] = [];
 
   if (result.conflicts.length > 0) {
-    lines.push('compass init: nothing was written.');
+    lines.push('conductor init: nothing was written.');
     for (const conflict of result.conflicts) {
       lines.push(`  ${conflict.path} (${conflict.reason})`);
       lines.push(`    ${conflict.guidance}`);
@@ -696,10 +696,10 @@ export function renderInitHuman(result: InitResult): string {
   }
 
   if (result.alreadyInstalled) {
-    lines.push('compass init: already installed; nothing to do.');
+    lines.push('conductor init: already installed; nothing to do.');
   } else {
     lines.push(
-      result.dryRun ? 'compass init (dry run): would write' : 'compass init: wrote'
+      result.dryRun ? 'conductor init (dry run): would write' : 'conductor init: wrote'
     );
   }
   for (const action of result.actions) {
@@ -713,12 +713,12 @@ export function renderRevertHuman(result: RevertResult): string {
   const removed = result.actions.filter((action) => action.kind === 'remove').length;
   const lines: string[] = [
     removed === 0
-      ? 'compass init --revert: nothing was removed.'
-      : 'compass init --revert: partly done, see below.',
+      ? 'conductor init --revert: nothing was removed.'
+      : 'conductor init --revert: partly done, see below.',
   ];
 
   if (result.ok) {
-    lines[0] = 'compass init --revert:';
+    lines[0] = 'conductor init --revert:';
   }
 
   for (const action of result.actions) {

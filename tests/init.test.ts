@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-init-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-init-'));
   temps.push(dir);
   return dir;
 }
@@ -49,7 +49,7 @@ function gitRepo(): string {
 }
 
 // git's absolute path, so a commit can be driven with a PATH that has no
-// compass on it WITHOUT also hiding git from this process. Setting PATH to
+// conductor on it WITHOUT also hiding git from this process. Setting PATH to
 // an empty directory and still calling "git" by name finds nothing, and the
 // resulting undefined stderr looks like a hook that stayed quiet.
 const GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
@@ -84,7 +84,7 @@ describe('what init writes', () => {
     init(repo);
     const hook = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
 
-    expect(hook).toMatch(/compass run --staged/);
+    expect(hook).toMatch(/conductor run --staged/);
     expect(hook).toContain(MANAGED_HOOK_MARKER);
     expect(hook).not.toMatch(/dep-guard scan/);
     expect(hook).not.toMatch(/vault-guard scan/);
@@ -220,7 +220,7 @@ describe('revert with a hook the user edited', () => {
 
     expect(result.ok).toBe(false);
     // The proven consequence: removing the policy file here leaves an edited
-    // hook running compass with nothing to read, so every commit after this
+    // hook running conductor with nothing to read, so every commit after this
     // is refused with exit 2 while revert reported success.
     expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
     expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
@@ -422,12 +422,12 @@ describe('core.hooksPath', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'should be refused'], {
       cwd: repo,
       encoding: 'utf8',
-      // No compass on PATH, so the fail-closed branch is what refuses it.
+      // No conductor on PATH, so the fail-closed branch is what refuses it.
       env: { ...process.env, PATH: tempDir() },
     });
 
     expect(commit.status).not.toBe(0);
-    expect(commit.stderr).toMatch(/compass: command not found/);
+    expect(commit.stderr).toMatch(/conductor: command not found/);
   });
 
   it('leaves an absolute hooksPath that points outside the repository alone', () => {
@@ -450,7 +450,7 @@ describe('the generated hook', () => {
 
     writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
     execFileSync('git', ['add', '-A'], { cwd: repo });
-    const commit = spawnSync(GIT, ['commit', '-m', 'no compass installed'], {
+    const commit = spawnSync(GIT, ['commit', '-m', 'no conductor installed'], {
       cwd: repo,
       encoding: 'utf8',
       env: { ...process.env, PATH: tempDir() },
@@ -464,7 +464,7 @@ describe('the generated hook', () => {
     const repo = gitRepo();
     init(repo);
     const bin = tempDir();
-    shim(bin, 'compass', '#!/bin/sh\nexit 2\n');
+    shim(bin, 'conductor', '#!/bin/sh\nexit 2\n');
 
     const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
       cwd: repo,
@@ -481,7 +481,7 @@ describe('the generated hook', () => {
     const repo = gitRepo();
     init(repo);
     const bin = tempDir();
-    shim(bin, 'compass', '#!/bin/sh\nexit 0\n');
+    shim(bin, 'conductor', '#!/bin/sh\nexit 0\n');
 
     writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
     execFileSync('git', ['add', '-A'], { cwd: repo });

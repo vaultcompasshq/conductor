@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 import { CLEAN_INTENT_GUARD, CLEAN_VAULT_GUARD, stubGate } from './helpers/stub-gate.js';
 
-const COMPASS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const COMPASS_CLI = path.join(COMPASS_ROOT, 'dist', 'cli.js');
+const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CONDUCTOR_CLI = path.join(CONDUCTOR_ROOT, 'dist', 'cli.js');
 
 const temps: string[] = [];
 
@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-cli-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-cli-'));
   temps.push(dir);
   return dir;
 }
@@ -44,7 +44,7 @@ function repoWithPolicy(policy = ALL_THREE_POLICY): string {
 }
 
 function runCli(cwd: string, args: string[], pathValue: string) {
-  const result = spawnSync(process.execPath, [COMPASS_CLI, ...args], {
+  const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, PATH: pathValue },
@@ -81,7 +81,7 @@ describe('the CLI never prints a stack trace for a gate failure', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).not.toMatch(STACK_FRAME);
     expect(result.stdout).not.toMatch(STACK_FRAME);
-    expect(result.stdout).toMatch(/compass\/gate-output-unparseable/);
+    expect(result.stdout).toMatch(/conductor\/gate-output-unparseable/);
     // And the other two gates still reported.
     expect(result.stdout).toMatch(/vault-guard/);
     expect(result.stdout).toMatch(/intent-guard/);
@@ -109,7 +109,7 @@ describe('the CLI never prints a stack trace for a gate failure', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).not.toMatch(STACK_FRAME);
     expect(result.stdout).not.toMatch(STACK_FRAME);
-    expect(result.stdout).toMatch(/compass\/gate-missing/);
+    expect(result.stdout).toMatch(/conductor\/gate-missing/);
   });
 
   it('prints a one-line message and no stack for a policy file that will not parse', () => {
@@ -130,7 +130,7 @@ describe('the CLI never prints a stack trace for a gate failure', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).not.toMatch(STACK_FRAME);
-    expect(result.stderr).toMatch(/compass init/);
+    expect(result.stderr).toMatch(/conductor init/);
   });
 
   it('keeps the SARIF output parseable when a gate could not run', () => {
@@ -146,9 +146,9 @@ describe('the CLI never prints a stack trace for a gate failure', () => {
     const log = JSON.parse(result.stdout) as {
       runs: Array<{ tool: { driver: { name: string } }; results: Array<{ ruleId: string }> }>;
     };
-    const umbrella = log.runs.find((run) => run.tool.driver.name === 'compass');
+    const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
     expect(umbrella?.results.map((entry) => entry.ruleId)).toContain(
-      'compass/gate-output-unparseable'
+      'conductor/gate-output-unparseable'
     );
   });
 });
@@ -248,7 +248,7 @@ describe('sarif output, continued', () => {
     expect(log.runs.map((run) => run.tool.driver.name)).toEqual([
       'vault-guard',
       'intent-guard',
-      'compass',
+      'conductor',
     ]);
   });
 });

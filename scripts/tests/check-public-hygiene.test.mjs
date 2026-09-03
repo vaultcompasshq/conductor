@@ -44,7 +44,7 @@ const FIXTURE_INTERNAL_PATH = ['/Users/someone', 'Projects/some-app/notes'].join
 // the allowlist, exit codes) rather than only the pure functions it is
 // built from.
 function buildFixtureRepo(files) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-hygiene-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-hygiene-'));
   tempDirs.push(dir);
 
   execFileSync('git', ['init', '--quiet'], { cwd: dir });

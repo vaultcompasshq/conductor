@@ -1,9 +1,10 @@
-# Compass
+# Conductor
 
-Working name, nothing published. This repository is the umbrella over the
-Vault & Compass guardrail gates: one policy file, one init, one hook, and
-one report across three tools that each install, version, and run on their
-own.
+The name is conductor. The package is not yet published. This repository is
+the umbrella over the Vault & Compass guardrail gates: one policy file, one
+init, one hook, and one report across three tools that each install,
+version, and run on their own. The word conductor previously belonged to
+the intent gate, which is now intent-guard.
 
 ## What it is
 
@@ -44,7 +45,7 @@ it.
 
 ## The policy file
 
-`.guardrails.yaml`, at the repository root. `compass init` writes one with
+`.guardrails.yaml`, at the repository root. `conductor init` writes one with
 every gate listed and only the ones it found switched on.
 
 ```yaml
@@ -77,7 +78,7 @@ role to arrive without the schema moving.
 
 **`enabled`** defaults to true. A gate that is enabled and whose binary
 cannot be found is a blocking finding of the umbrella's own
-(`compass/gate-missing`), never a silent skip. A gate that is switched on
+(`conductor/gate-missing`), never a silent skip. A gate that is switched on
 and quietly absent is the failure this whole family exists to prevent.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
@@ -117,7 +118,7 @@ reason above.
 
 ## Commands
 
-`compass init` writes the policy file and one pre-commit hook.
+`conductor init` writes the policy file and one pre-commit hook.
 
 - `--dry-run` prints every file it would write or change and writes nothing.
 - `--revert` removes exactly what a previous init wrote, and nothing else.
@@ -143,7 +144,7 @@ own hook, but it is a heuristic, and a hand-written hook that happens to
 call that tool the same way will be treated as its. Read what `--dry-run`
 reports before running `--adopt` on a hook you did not write.
 
-`compass run` runs every enabled gate and prints one report.
+`conductor run` runs every enabled gate and prints one report.
 
 - `--staged` gates the git index against HEAD, which is what the hook does.
 - `--format text|sarif`.
@@ -168,7 +169,7 @@ looked is worse than one that says it failed.
 
 ## The hook
 
-One hook, running `compass run --staged`. It fails closed: a missing
+One hook, running `conductor run --staged`. It fails closed: a missing
 umbrella binary blocks the commit with one line saying so, because a
 guardrail that is off when the tool is missing is a guardrail an attacker
 turns off by making the tool missing. It passes the exit code straight
@@ -207,11 +208,11 @@ Out, deliberately: a unified baseline (each gate keeps its own, and their
 fingerprints are not equally durable, so one shared file would expire
 entries silently for one product and not another), an MCP registration, a
 GitHub Action, running the gates concurrently, and any finding of the
-umbrella's own beyond `compass/gate-missing`.
+umbrella's own beyond `conductor/gate-missing`.
 
-Also out: a published name. The gates are the product; this is the
-convenience layer over them, and it stays unnamed and unpublished until it
-has earned a config file worth keeping.
+Also out: a published package. The gates are the product; this is the
+convenience layer over them, and it stays unpublished until it has earned a
+config file worth keeping.
 
 ## License
 

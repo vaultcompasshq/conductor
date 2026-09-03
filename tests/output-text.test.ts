@@ -200,7 +200,7 @@ describe('a gate that could not run', () => {
   });
 
   it('prints the umbrella own blocking finding in that gate section', () => {
-    expect(text).toMatch(/compass\/gate-missing/);
+    expect(text).toMatch(/conductor\/gate-missing/);
   });
 
   it('says the version is unknown rather than printing a blank', () => {

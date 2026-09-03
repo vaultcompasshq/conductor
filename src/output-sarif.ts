@@ -17,7 +17,7 @@
 //  - A GATE THAT NEVER RAN GETS NO RUN. The tempting alternative is an
 //    empty run named for the missing product, which would put that tool's
 //    name on something it never did. The umbrella's own findings about it
-//    (compass/gate-missing) go into a final run whose driver IS the
+//    (conductor/gate-missing) go into a final run whose driver IS the
 //    umbrella, which is the only honest owner of a statement about a tool
 //    that is not installed.
 //
@@ -72,7 +72,7 @@ import type { RunResult } from './run.js';
 const SARIF_SCHEMA =
   'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json';
 
-export const UMBRELLA_DRIVER_NAME = 'compass';
+export const UMBRELLA_DRIVER_NAME = 'conductor';
 
 /**
  * Total over Severity, not a lookup with a fallback: a level added to the

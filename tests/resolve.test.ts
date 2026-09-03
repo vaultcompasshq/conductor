@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-resolve-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-resolve-'));
   temps.push(dir);
   return dir;
 }
@@ -89,39 +89,20 @@ describe('binary resolution', () => {
     expect(resolved?.argvPrefix).toEqual([]);
   });
 
-  it('falls back to the pre-rename conductor names', () => {
+  it('does not resolve the intent gate from a binary literally named conductor', () => {
+    // The umbrella's own binary is named conductor, and that name used to
+    // be a pre-rename fallback for intent-guard too. It no longer is: those
+    // packages are deprecated and had no users, so a binary named conductor
+    // on PATH must never satisfy the intent gate, even with no real
+    // intent-guard binary anywhere. resolveGateBinary must report this as
+    // missing, the same way detectGates (init's own detection, driven by
+    // the same CANDIDATES table) reports the gate as not found.
     const binDir = tempDir();
     shim(binDir, 'conductor');
 
     const resolved = resolveGateBinary(gate(), tempDir(), binDir);
 
-    expect(resolved?.candidate).toBe('conductor');
-    expect(resolved?.argvPrefix).toEqual(['check']);
-  });
-
-  it('falls back to conductor-check last', () => {
-    const binDir = tempDir();
-    shim(binDir, 'conductor-check');
-
-    const resolved = resolveGateBinary(gate(), tempDir(), binDir);
-
-    expect(resolved?.candidate).toBe('conductor-check');
-    expect(resolved?.argvPrefix).toEqual([]);
-  });
-
-  it('prefers the current name over a pre-rename one even when the old one is on PATH', () => {
-    const binDir = tempDir();
-    shim(binDir, 'conductor');
-    const repo = tempDir();
-    shim(path.join(repo, 'node_modules', '.bin'), 'intent-guard');
-
-    const resolved = resolveGateBinary(gate(), repo, binDir);
-
-    // A locally installed current name beats a globally installed old one.
-    // Preferring PATH here would silently pin a repository to the package
-    // its author renamed away from.
-    expect(resolved?.candidate).toBe('intent-guard');
-    expect(resolved?.source).toBe('node_modules');
+    expect(resolved).toBeNull();
   });
 
   it('lets an absolute command in the policy override resolution entirely', () => {
@@ -210,12 +191,10 @@ describe('version probing', () => {
 });
 
 describe('candidate table', () => {
-  it('lists the pre-rename names after the current ones for the intent gate', () => {
+  it('lists only the current names for the intent gate', () => {
     expect(CANDIDATES['intent-guard'].map((candidate) => candidate.name)).toEqual([
       'intent-guard',
       'intent-guard-check',
-      'conductor',
-      'conductor-check',
     ]);
   });
 

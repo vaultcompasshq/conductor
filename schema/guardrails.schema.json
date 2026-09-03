@@ -26,7 +26,7 @@
       "additionalProperties": false,
       "properties": {
         "format": {
-          "description": "Default output format for `compass run`. The --format flag overrides it.",
+          "description": "Default output format for `conductor run`. The --format flag overrides it.",
           "enum": ["text", "sarif"]
         }
       }

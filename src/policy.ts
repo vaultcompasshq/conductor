@@ -238,7 +238,7 @@ export function loadPolicy(repoRoot: string): Policy {
     text = readFileSync(filePath, 'utf8');
   } catch {
     throw new PolicyError(
-      `No ${POLICY_FILE_NAME} in ${repoRoot}. Run "compass init" to write one. ` +
+      `No ${POLICY_FILE_NAME} in ${repoRoot}. Run "conductor init" to write one. ` +
         'The umbrella deliberately has no implicit default policy: a run that gates a commit ' +
         'should be explainable from a file in the repository, not from a built-in.'
     );

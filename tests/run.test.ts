@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'compass-run-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-run-'));
   temps.push(dir);
   return dir;
 }
@@ -78,11 +78,11 @@ describe('a gate whose output parses but has drifted shape', () => {
   it('raises a blocking umbrella finding naming the problem', () => {
     const result = driftedRun();
     const finding = result.findings.find(
-      (entry) => entry.ruleId === 'compass/gate-output-unparseable'
+      (entry) => entry.ruleId === 'conductor/gate-output-unparseable'
     );
     expect(finding).toBeDefined();
     expect(finding?.blocking).toBe(true);
-    expect(finding?.product).toBe('compass');
+    expect(finding?.product).toBe('conductor');
     expect(String(finding?.details.detail)).toMatch(/dep-guard/);
   });
 
@@ -128,7 +128,7 @@ describe('a gate that throws from a malformed nested field', () => {
     expect(result.gates[0].couldNotRun).toBeNull();
     expect(result.gates[2].couldNotRun).toBeNull();
     expect(
-      result.findings.some((finding) => finding.ruleId === 'compass/gate-output-unparseable')
+      result.findings.some((finding) => finding.ruleId === 'conductor/gate-output-unparseable')
     ).toBe(true);
   });
 
@@ -165,7 +165,7 @@ describe('a gate that could not run for a reason other than its output', () => {
     const result = runWith(bin);
 
     expect(result.exitCode).toBe(2);
-    const finding = result.findings.find((entry) => entry.ruleId === 'compass/gate-failed');
+    const finding = result.findings.find((entry) => entry.ruleId === 'conductor/gate-failed');
     expect(finding?.blocking).toBe(true);
     expect(String(finding?.details.detail)).toMatch(/exited 2/);
   });
