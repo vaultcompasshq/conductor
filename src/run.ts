@@ -150,64 +150,68 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
   // commit has just been refused, and v0.1's job is to be legible. This is
   // the obvious thing to revisit with a measurement rather than a guess.
   const outcomes: GateOutcome[] = [];
-  for (const gate of gates) {
-    let intent: IntentPreparation | undefined;
+  try {
+    for (const gate of gates) {
+      let intent: IntentPreparation | undefined;
 
-    if (gate.role === 'intent' && isPullRequestShaped(options, env)) {
-      const binary = intentBinary(gate, options);
-      // A gate with no binary is left to runGate, which raises the umbrella's
-      // own gate-missing finding. Reporting the same absence twice, once as a
-      // failed preparation and once as a missing gate, would read as two
-      // problems where there is one.
-      if (binary !== null) {
-        const prepared = prepareIntent({
-          repoRoot: options.repoRoot,
-          binary,
-          env,
-          ...(options.base === undefined ? {} : { base: options.base }),
-          ...(options.spec === undefined ? {} : { spec: options.spec }),
-          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        });
-
-        if (prepared.kind === 'skip') {
-          skipped.push({
-            role: gate.role,
-            product: gate.product,
-            reason: prepared.reason,
-            detail: prepared.detail,
+      if (gate.role === 'intent' && isPullRequestShaped(options, env)) {
+        const binary = intentBinary(gate, options);
+        // A gate with no binary is left to runGate, which raises the
+        // umbrella's own gate-missing finding. Reporting the same absence
+        // twice, once as a failed preparation and once as a missing gate,
+        // would read as two problems where there is one.
+        if (binary !== null) {
+          const prepared = prepareIntent({
+            repoRoot: options.repoRoot,
+            binary,
+            env,
+            ...(options.base === undefined ? {} : { base: options.base }),
+            ...(options.spec === undefined ? {} : { spec: options.spec }),
+            ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
           });
-          continue;
+
+          if (prepared.kind === 'skip') {
+            skipped.push({
+              role: gate.role,
+              product: gate.product,
+              reason: prepared.reason,
+              detail: prepared.detail,
+            });
+            continue;
+          }
+          if (prepared.kind === 'failed') {
+            outcomes.push(
+              preparationFailed(
+                gate,
+                `the intent gate could not be prepared at the ${prepared.step} step: ${prepared.detail}`
+              )
+            );
+            continue;
+          }
+          intent = prepared.preparation;
+          cleanups.push(prepared.preparation.cleanup);
         }
-        if (prepared.kind === 'failed') {
-          outcomes.push(
-            preparationFailed(
-              gate,
-              `the intent gate could not be prepared at the ${prepared.step} step: ${prepared.detail}`
-            )
-          );
-          continue;
-        }
-        intent = prepared.preparation;
-        cleanups.push(prepared.preparation.cleanup);
       }
+
+      outcomes.push(
+        runGate(gate, {
+          repoRoot: options.repoRoot,
+          staged: options.staged,
+          pathValue: options.pathValue,
+          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          ...(intent === undefined ? {} : { intent }),
+        })
+      );
     }
-
-    outcomes.push(
-      runGate(gate, {
-        repoRoot: options.repoRoot,
-        staged: options.staged,
-        pathValue: options.pathValue,
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        ...(intent === undefined ? {} : { intent }),
-      })
-    );
-  }
-
-  // The temporary contract directories go once every gate has run, not on the
-  // way out of a branch: an early return anywhere above would otherwise leave
-  // one behind on a CI runner, once per pull request.
-  for (const cleanup of cleanups) {
-    cleanup();
+  } finally {
+    // Once every gate has run, and whatever happened while they did. runGate
+    // is total and nothing in the loop is expected to throw, which is exactly
+    // why the try is worth two lines: the cost of being wrong about that is
+    // one leaked directory per pull request on a shared CI runner, with
+    // nothing in any report pointing at the cause.
+    for (const cleanup of cleanups) {
+      cleanup();
+    }
   }
 
   const findings = outcomes.flatMap((outcome) => outcome.findings).sort(compareFindings);

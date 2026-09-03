@@ -354,6 +354,13 @@ budget breaches block, subject to `enforce`. Drift on its own is reported and
 not blocked, which is already intent-guard's own behaviour. The umbrella adds
 no severity threshold of its own here either.
 
+**Which budget applies** is intent-guard's rule, not this package's, and it
+is worth knowing before you write one: the importer takes the **first** fenced
+`yaml` block whose whole content is a single `budget` key, searching the
+**spec first** and the plan only after it. So a budget in the spec wins, and a
+budget in the plan applies only when the spec has none. Putting one in each
+is not a merge; the plan's is simply never read.
+
 Both reports say what the verdict is about. The text report carries one line
 naming the contract source and the base ref; the gate's SARIF run carries
 `contractSource` and `baseRef` in its properties bag, beside `enforced` and
