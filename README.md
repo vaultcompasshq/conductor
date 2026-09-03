@@ -56,22 +56,34 @@ gates:
     product: dep-guard
     enabled: true
     stage: commit
+    enforce: true
     options:
       fail-on: high
   secrets:
     product: vault-guard
     enabled: true
     stage: commit
+    enforce: true
   intent:
     product: intent-guard
     enabled: true
     stage: ci
+    # It runs and reports in CI without failing the run. Flip it to
+    # true once a few pull requests show the signal is worth blocking on.
+    enforce: false
     options:
       require-frozen: false
 
 report:
   format: text
 ```
+
+`stage` and `enforce` are both written out for every gate, with their
+default values, because a default that lives only in the parser is a default
+nobody can find. `enforce` is the one exception to "the written value is the
+default": the intent gate starts at `false`, so a fresh init produces the
+adoption ramp rather than describing it and leaving somebody to hand-edit it
+in.
 
 **Gates are keyed by role**, not by product. `dependencies`, `secrets`,
 `intent`. The `product` field says which binary fills that role today. This
@@ -110,7 +122,8 @@ and appears in the text report and the SARIF log exactly as an enforced gate
 does. The only thing it cannot do is change the exit code: its blocking
 findings do not raise it, and its failing to run at all is a note rather
 than exit 2. That is the adoption ramp, so a gate can be switched on and
-read for a few weeks before it is allowed to refuse anybody's commit.
+read for a few weeks before it is allowed to refuse anybody's commit. `init`
+writes it out for every gate, and starts the intent gate at `false`.
 
 It is not a downgrade of what the gate said. Findings keep their own
 severities and their own `blocking` flags, in both formats, because
@@ -435,7 +448,7 @@ jobs:
 `continue-on-error` there hides nothing: a gate that blocked has already
 failed the job through `conductor`'s own exit code, before this step runs.
 
-The intent gate starts at `enforce: false` in the policy file while a
+The intent gate starts at `enforce: false`, which is what `init` writes, so a
 repository reads a few pull requests' worth of drift before letting it refuse
 anybody's merge:
 

@@ -24,6 +24,7 @@ import {
   planInit,
   revertInit,
 } from '../src/init.js';
+import { parsePolicy } from '../src/policy.js';
 
 /** Pre-commit hooks captured from real hook-manager installs. */
 const HOOK_FIXTURES = path.join(
@@ -295,17 +296,45 @@ describe('what init writes', () => {
     expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+stage: ci/);
   });
 
-  it('mentions the enforce ramp in the file, without switching it on for anyone', () => {
-    // Written as a comment rather than as a key. The default is true, and a
-    // file that spells out enforce: true on every gate reads as three
-    // decisions somebody made rather than as the one state a gate is in
-    // unless told otherwise. The comment is what makes the ramp findable.
+  it('writes each gate enforce explicitly, by the same rule that writes stage', () => {
+    // The file writes stage on every gate on the argument that a default
+    // living only in the parser is undiscoverable. enforce is the same kind
+    // of key and was getting a comment instead, which is that argument
+    // applied to one of two identical cases.
     const repo = gitRepo();
     init(repo);
     const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
 
-    expect(policy).toMatch(/# enforce/);
-    expect(policy).not.toMatch(/^\s+enforce:/m);
+    expect(policy).toMatch(/dependencies:\n(?:.*\n)*?\s+enforce: true/);
+    expect(policy).toMatch(/secrets:\n(?:.*\n)*?\s+enforce: true/);
+    expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+enforce: false/);
+  });
+
+  it('starts the intent gate off the exit code, which is the ramp the design calls for', () => {
+    // The adoption ramp is a thing a fresh init should PRODUCE, not a thing
+    // it describes and leaves for somebody to hand-edit into three
+    // repositories, which is what actually happened.
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const intent = policy.slice(policy.indexOf('  intent:'));
+
+    expect(intent).toMatch(/# It runs and reports in CI without failing the run/);
+    expect(intent).toMatch(/Flip it to\n\s+# true once a few pull requests/);
+  });
+
+  it('writes a policy file that still validates against the shipped schema', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const parsed = parsePolicy(
+      readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8'),
+      POLICY_FILE_NAME
+    );
+
+    expect(parsed.gates.dependencies?.enforce).toBe(true);
+    expect(parsed.gates.secrets?.enforce).toBe(true);
+    expect(parsed.gates.intent?.enforce).toBe(false);
   });
 
   it('says in the file why a gate is switched off, so the file explains itself', () => {
