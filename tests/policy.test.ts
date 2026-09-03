@@ -2,11 +2,13 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   GATE_ROLES,
+  GATE_STAGES,
   POLICY_FILE_NAME,
   applyCliOverrides,
   enabledGates,
   parsePolicy,
   renderOptionFlags,
+  runsAtStage,
 } from '../src/policy.js';
 
 const MINIMAL = `version: 1
@@ -51,6 +53,33 @@ describe('policy file', () => {
       POLICY_FILE_NAME
     );
     expect(policy.gates.secrets?.enabled).toBe(true);
+  });
+
+  it('defaults each gate stage by role: the cheap two at commit, intent at ci', () => {
+    const policy = parsePolicy(MINIMAL, POLICY_FILE_NAME);
+    expect(policy.gates.dependencies?.stage).toBe('commit');
+    expect(policy.gates.secrets?.stage).toBe('commit');
+    // The intent gate is the only one with per-task ceremony behind it, so
+    // its natural stopping point is a pull request rather than a commit.
+    expect(policy.gates.intent?.stage).toBe('ci');
+  });
+
+  it('keeps an explicit stage over the role default', () => {
+    const policy = parsePolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n    stage: commit\n  secrets:\n    product: vault-guard\n    stage: push\n',
+      POLICY_FILE_NAME
+    );
+    expect(policy.gates.intent?.stage).toBe('commit');
+    expect(policy.gates.secrets?.stage).toBe('push');
+  });
+
+  it('rejects a stage that is not one of the three', () => {
+    expect(() =>
+      parsePolicy(
+        'version: 1\ngates:\n  secrets:\n    product: vault-guard\n    stage: nightly\n',
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/stage/);
   });
 
   it('rejects an unknown gate role', () => {
@@ -147,6 +176,30 @@ describe('per-gate option passthrough', () => {
         POLICY_FILE_NAME
       )
     ).toThrow(/reserved/);
+  });
+});
+
+describe('stages are cumulative', () => {
+  it('runs a gate at its own stage', () => {
+    expect(runsAtStage('commit', 'commit')).toBe(true);
+    expect(runsAtStage('push', 'push')).toBe(true);
+    expect(runsAtStage('ci', 'ci')).toBe(true);
+  });
+
+  it('runs an earlier gate at every later stage', () => {
+    expect(runsAtStage('commit', 'push')).toBe(true);
+    expect(runsAtStage('commit', 'ci')).toBe(true);
+    expect(runsAtStage('push', 'ci')).toBe(true);
+  });
+
+  it('does not run a later gate at an earlier stage', () => {
+    expect(runsAtStage('ci', 'commit')).toBe(false);
+    expect(runsAtStage('ci', 'push')).toBe(false);
+    expect(runsAtStage('push', 'commit')).toBe(false);
+  });
+
+  it('names the three stages in order, earliest first', () => {
+    expect(GATE_STAGES).toEqual(['commit', 'push', 'ci']);
   });
 });
 

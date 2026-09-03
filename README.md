@@ -55,14 +55,17 @@ gates:
   dependencies:
     product: dep-guard
     enabled: true
+    stage: commit
     options:
       fail-on: high
   secrets:
     product: vault-guard
     enabled: true
+    stage: commit
   intent:
     product: intent-guard
     enabled: true
+    stage: ci
     options:
       require-frozen: false
 
@@ -80,6 +83,27 @@ role to arrive without the schema moving.
 cannot be found is a blocking finding of the umbrella's own
 (`conductor/gate-missing`), never a silent skip. A gate that is switched on
 and quietly absent is the failure this whole family exists to prevent.
+
+**`stage`** says when a gate runs: `commit`, `push`, or `ci`. Stages are
+**cumulative** in that order, so a gate runs at its own stage and at every
+later one, and a run at `ci` runs everything that is enabled. The defaults
+are `commit` for `dependencies` and `secrets` and `ci` for `intent`.
+
+Runtime is not what decides that split. All three gates together take under
+a second on a staged commit. Ceremony is the cost, and only the intent gate
+has any: it wants a contract approved before the work starts, which is a
+per-task human step and belongs at a pull request. The other two are silent
+until they find something, and a secret that reaches a pull request is
+already on a remote, so the earliest stage is the only honest place for
+them.
+
+A gate held back by the stage filter is never silent. It is one line in the
+text report naming the stage it is waiting for, and a `conductor/gate-deferred`
+note in the SARIF log's `conductor` run. It gets no SARIF run of its own,
+for the same reason a gate that could not run gets none: it produced no tool
+output, and an empty run named for that product would put its name on
+something it never did. Its binary is not even looked for, so a gate
+installed only on the CI image does not fail a developer's commit.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
@@ -153,6 +177,11 @@ reports before running `--adopt` on a hook you did not write.
 
 - `--staged` gates the git index against HEAD, which is what the hook does.
 - `--format text|sarif`.
+- `--stage commit|push|ci` runs the gates at that stopping point and every
+  earlier one. With no `--stage` at all, every enabled gate runs, whatever
+  its stage. An unknown value is a usage error and exits 2 rather than
+  quietly running everything or nothing: a typo in a CI file that runs every
+  gate and one that runs none both look like a passing build.
 - `--gate <role>`, repeatable.
 
 ### Exit codes
@@ -174,7 +203,10 @@ looked is worse than one that says it failed.
 
 ## The hook
 
-One hook, running `conductor run --staged`. It fails closed: a missing
+One hook, running `conductor run --staged --stage commit`. It names the
+stage rather than running everything, because a pre-commit hook is the
+commit stopping point, and a hook that runs the per-task ceremony of the
+intent gate on every commit is a hook a team switches off. It fails closed: a missing
 umbrella binary blocks the commit with one line saying so, because a
 guardrail that is off when the tool is missing is a guardrail an attacker
 turns off by making the tool missing. It passes the exit code straight

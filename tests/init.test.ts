@@ -227,6 +227,32 @@ describe('what init writes', () => {
     expect(hook).not.toMatch(/vault-guard scan/);
   });
 
+  it('writes a hook that runs the commit stage, not every stage', () => {
+    // A pre-commit hook is the commit stopping point, so it asks for that
+    // stage by name rather than for everything. Without it the hook would
+    // run the intent gate on every commit, which is the per-task ceremony
+    // the stage split exists to keep out of a commit.
+    const repo = gitRepo();
+    init(repo);
+    const hook = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+
+    expect(hook).toMatch(/conductor run --staged --stage commit/);
+  });
+
+  it('records the hook it actually wrote, so revert still recognises it', () => {
+    // The manifest hashes the hook's contents. A hook text change that did
+    // not reach the manifest would make every revert report the hook as
+    // edited by hand and refuse to remove anything.
+    const repo = gitRepo();
+    init(repo);
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(revert.conflicts).toEqual([]);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
   it('enables gates it found and lists the rest disabled rather than omitting them', () => {
     const repo = gitRepo();
     const bin = tempDir();
@@ -238,6 +264,20 @@ describe('what init writes', () => {
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: false/);
     expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
+  });
+
+  it('writes each gate stage explicitly, so the file explains when each one runs', () => {
+    // The generated policy file is where a user discovers the vocabulary.
+    // A default that exists only in the parser is a default nobody can see,
+    // and the intent gate sitting at a different stage from the other two is
+    // exactly the thing that needs saying out loud.
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(policy).toMatch(/dependencies:\n(?:.*\n)*?\s+stage: commit/);
+    expect(policy).toMatch(/secrets:\n(?:.*\n)*?\s+stage: commit/);
+    expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+stage: ci/);
   });
 
   it('says in the file why a gate is switched off, so the file explains itself', () => {

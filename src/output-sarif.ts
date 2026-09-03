@@ -333,6 +333,33 @@ function diagnosticFindings(result: RunResult): Finding[] {
 }
 
 /**
+ * The gates the stage filter held back, as SARIF results.
+ *
+ * They follow the same rule as a gate that could not run: no tool output,
+ * so no run of their own, and the statement about them belongs to the
+ * umbrella. Note level and non-blocking, because a deferred gate is not a
+ * failure, and it is not silence either: a consumer reading only the SARIF
+ * can otherwise not tell a commit-stage log from a full one.
+ */
+function deferredFindings(result: RunResult): Finding[] {
+  return result.deferred.map((gate) => ({
+    schemaVersion: 1 as const,
+    product: UMBRELLA_DRIVER_NAME,
+    productVersion: null,
+    ruleId: 'conductor/gate-deferred',
+    severity: 'info' as const,
+    severityIsDerived: true,
+    blocking: false,
+    message:
+      `The ${gate.role} gate (${gate.product}) did not run at this stage. ` +
+      `It runs from stage ${gate.stage} onwards.`,
+    subject: { kind: 'none' as const },
+    fingerprint: null,
+    details: { role: gate.role, product: gate.product, stage: gate.stage },
+  }));
+}
+
+/**
  * Renders a whole run as one SARIF log.
  *
  * `umbrellaVersion` names this package's own version, used only for the
@@ -357,6 +384,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
       .flatMap((gate) => gate.findings)
       .filter((finding) => finding.product === UMBRELLA_DRIVER_NAME),
     ...diagnosticFindings(result),
+    ...deferredFindings(result),
   ];
 
   if (umbrellaFindings.length > 0) {

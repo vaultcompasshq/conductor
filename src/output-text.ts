@@ -128,8 +128,31 @@ function gateSection(gate: GateOutcome): string[] {
   return lines;
 }
 
+/**
+ * One line per gate the stage filter held back.
+ *
+ * Deliberately not a section: nothing ran, so there is no header, no exit
+ * code and no duration to put in one. It still has to be on screen, because
+ * a run at the commit stage otherwise reads exactly like a run that checked
+ * everything, and the whole point of a stage is that some gates did not.
+ */
+function deferredLines(result: RunResult): string[] {
+  return result.deferred.map(
+    (gate) =>
+      `  deferred  ${gate.role}  ${gate.product}  did not run here; it runs from stage ${gate.stage} onwards`
+  );
+}
+
 function verdict(result: RunResult): string {
   const blocking = result.findings.filter((finding) => finding.blocking).length;
+  if (result.gates.length === 0 && result.deferred.length > 0) {
+    // Distinct from "none is enabled" below. A policy file with everything
+    // switched off and a stage with nothing to do at it are two different
+    // states, and telling somebody to set enabled: true is the wrong advice
+    // for the second one.
+    const names = result.deferred.map((gate) => `${gate.role} at stage ${gate.stage}`).join(', ');
+    return `verdict: exit 0, nothing ran at this stage: every enabled gate is deferred (${names}).`;
+  }
   if (result.gates.length === 0) {
     // Exit 0 with an empty report is indistinguishable from a clean run at a
     // glance, and a policy file with every gate switched off is exactly the
@@ -160,6 +183,11 @@ export function renderText(result: RunResult): string {
 
   for (const gate of result.gates) {
     lines.push(...gateSection(gate));
+  }
+
+  const deferred = deferredLines(result);
+  if (deferred.length > 0) {
+    lines.push('', ...deferred);
   }
 
   // A derived severity is marked with a trailing asterisk above; say what

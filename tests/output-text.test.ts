@@ -38,12 +38,17 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
   } as GateOutcome;
 }
 
-function result(gates: GateOutcome[], exitCode: number): RunResult {
+function result(
+  gates: GateOutcome[],
+  exitCode: number,
+  deferred: RunResult['deferred'] = []
+): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
     schemaVersion: 1,
     generatedAt: '2026-09-02T00:00:00.000Z',
     gates,
+    deferred,
     findings,
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
@@ -220,6 +225,49 @@ describe('a clean run', () => {
     const last = text.trimEnd().split('\n').pop() as string;
     expect(last).toMatch(/exit 0/);
     expect(last).toMatch(/none blocked/);
+  });
+});
+
+describe('a gate the stage filter deferred', () => {
+  const text = renderText(
+    result([outcome({ exitCode: 0 })], 0, [
+      { role: 'intent', product: 'intent-guard', stage: 'ci' },
+    ])
+  );
+
+  it('says the gate was deferred and names the stage it is waiting for', () => {
+    // A gate that is switched on and did not run has to be on screen, or a
+    // commit-stage run reads exactly like a run that checked everything.
+    expect(text).toMatch(/deferred/);
+    expect(text).toMatch(/intent/);
+    expect(text).toMatch(/stage ci/);
+  });
+
+  it('does not dress it up as a gate that could not run', () => {
+    // Could-not-run is exit 2 and a failure. Deferred is neither.
+    expect(text).not.toMatch(/DID NOT RUN/);
+  });
+
+  it('counts only the gates that actually ran in the header', () => {
+    expect(text).toMatch(/^conductor run: 1 gate\(s\)/m);
+  });
+});
+
+describe('a run where every enabled gate was deferred', () => {
+  const text = renderText(
+    result([], 0, [
+      { role: 'intent', product: 'intent-guard', stage: 'ci' },
+    ])
+  );
+
+  it('says so rather than claiming nothing is enabled', () => {
+    // The two states look identical in a report and are not the same
+    // problem: one is a policy file with everything switched off, the other
+    // is a stage that had nothing to do.
+    const last = text.trimEnd().split('\n').pop() as string;
+    expect(last).toMatch(/exit 0/);
+    expect(last).toMatch(/deferred/);
+    expect(last).not.toMatch(/none is enabled/);
   });
 });
 

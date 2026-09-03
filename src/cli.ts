@@ -22,8 +22,8 @@ import {
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
 import { renderText } from './output-text.js';
-import { GATE_ROLES, PolicyError, applyCliOverrides, loadPolicy } from './policy.js';
-import type { GateRole } from './policy.js';
+import { GATE_ROLES, GATE_STAGES, PolicyError, applyCliOverrides, loadPolicy } from './policy.js';
+import type { GateRole, GateStage } from './policy.js';
 import { runAll } from './run.js';
 
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
@@ -48,6 +48,7 @@ interface RunCliOptions {
   staged?: boolean;
   format: string;
   gate?: string[];
+  stage?: string;
 }
 
 function parseFormat(value: string): 'text' | 'sarif' {
@@ -55,6 +56,24 @@ function parseFormat(value: string): 'text' | 'sarif' {
     throw new PolicyError(`--format must be "text" or "sarif", got "${value}".`);
   }
   return value;
+}
+
+/**
+ * An unknown stage is a usage error, never a silent full run.
+ *
+ * The dangerous failure here is the quiet one. A typo in a CI file that
+ * makes the job run every gate reads as a passing build with more coverage
+ * than it has, and a typo that makes it run none reads as a passing build
+ * with no coverage at all. Both look like success.
+ */
+function parseStage(value: string | undefined): GateStage | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!(GATE_STAGES as readonly string[]).includes(value)) {
+    throw new PolicyError(`--stage must be one of ${GATE_STAGES.join(', ')}, got "${value}".`);
+  }
+  return value as GateStage;
 }
 
 function parseRoles(values: string[] | undefined): GateRole[] | undefined {
@@ -150,6 +169,10 @@ export function buildProgram(): Command {
     .option('--staged', 'gate the git index against HEAD, the way the pre-commit hook does')
     .option('--format <format>', 'output format: text or sarif')
     .option(
+      '--stage <stage>',
+      `which stopping point this run is: ${GATE_STAGES.join(', ')}. Stages are cumulative, so a gate runs at its own stage and every later one. Omit it to run every enabled gate.`
+    )
+    .option(
       '--gate <role>',
       'restrict the run to this role; repeatable',
       (value: string, previous: string[] = []) => [...previous, value]
@@ -166,11 +189,13 @@ export function buildProgram(): Command {
             : { gates: parseRoles(options.gate) as GateRole[] }),
         });
         const format = parseFormat(options.format ?? policy.report.format);
+        const stage = parseStage(options.stage);
 
         const result = runAll(policy, {
           repoRoot: root,
           staged: Boolean(options.staged),
           pathValue: process.env.PATH ?? '',
+          ...(stage === undefined ? {} : { stage }),
         });
 
         process.stdout.write(

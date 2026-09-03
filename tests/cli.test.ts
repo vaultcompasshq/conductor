@@ -5,7 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CLEAN_INTENT_GUARD, CLEAN_VAULT_GUARD, stubGate } from './helpers/stub-gate.js';
+import {
+  CLEAN_DEP_GUARD,
+  CLEAN_INTENT_GUARD,
+  CLEAN_VAULT_GUARD,
+  stubGate,
+} from './helpers/stub-gate.js';
 
 const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONDUCTOR_CLI = path.join(CONDUCTOR_ROOT, 'dist', 'cli.js');
@@ -150,6 +155,75 @@ describe('the CLI never prints a stack trace for a gate failure', () => {
     expect(umbrella?.results.map((entry) => entry.ruleId)).toContain(
       'conductor/gate-output-unparseable'
     );
+  });
+});
+
+describe('conductor run --stage', () => {
+  function allThreeStubbed(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return bin;
+  }
+
+  it('runs the commit gates and defers the intent gate at --stage commit', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged', '--stage', 'commit'], allThreeStubbed());
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/dep-guard/);
+    expect(result.stdout).toMatch(/vault-guard/);
+    expect(result.stdout).toMatch(/deferred\s+intent/);
+    expect(result.stdout).toMatch(/stage ci/);
+  });
+
+  it('runs every gate at --stage ci', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged', '--stage', 'ci'], allThreeStubbed());
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^conductor run: 3 gate\(s\)/m);
+    expect(result.stdout).not.toMatch(/deferred/);
+  });
+
+  it('runs every gate with no --stage at all, exactly as v0.1 did', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], allThreeStubbed());
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^conductor run: 3 gate\(s\)/m);
+    expect(result.stdout).not.toMatch(/deferred/);
+  });
+
+  it('refuses an unknown stage with exit 2 rather than quietly running everything', () => {
+    // The dangerous failure is the silent one: a typo in a CI file that
+    // makes the job run every gate, or none, and say nothing about it.
+    const result = runCli(
+      repoWithPolicy(),
+      ['run', '--staged', '--stage', 'nightly'],
+      allThreeStubbed()
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/nightly/);
+    expect(result.stderr).toMatch(/commit, push, ci/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+    // Nothing ran.
+    expect(result.stdout).toBe('');
+  });
+
+  it('names the deferred gate in the SARIF log rather than dropping it', () => {
+    const result = runCli(
+      repoWithPolicy(),
+      ['run', '--staged', '--stage', 'commit', '--format', 'sarif'],
+      allThreeStubbed()
+    );
+
+    const log = JSON.parse(result.stdout) as {
+      runs: Array<{ tool: { driver: { name: string } }; results: Array<{ ruleId: string }> }>;
+    };
+    const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
+    expect(umbrella?.results.map((entry) => entry.ruleId)).toContain('conductor/gate-deferred');
+    // And the gate that did not run got no run of its own.
+    expect(log.runs.map((run) => run.tool.driver.name)).not.toContain('intent-guard');
   });
 });
 

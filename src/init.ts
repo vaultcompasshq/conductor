@@ -64,7 +64,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-import { GATE_ROLES, POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
+import { DEFAULT_STAGE_FOR_ROLE, GATE_ROLES, POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
 import type { GateRole, Product } from './policy.js';
 import { CANDIDATES } from './resolve.js';
 
@@ -246,8 +246,14 @@ if ! command -v conductor >/dev/null 2>&1; then
   exit 1
 fi
 
+# --stage commit, not every stage. A pre-commit hook IS the commit stopping
+# point, and the gates are split across stopping points on ceremony rather
+# than on runtime: the dependency and secret gates are silent until they
+# find something, while the intent gate wants a contract approved before the
+# work starts, which is a per-task human step and belongs at a pull request.
+# Running everything here is what makes a team disable the hook.
 conductor_status=0
-conductor run --staged || conductor_status=$?
+conductor run --staged --stage commit || conductor_status=$?
 
 if [ "$conductor_status" -ne 0 ]; then
   echo "conductor: commit blocked (conductor exit $conductor_status). Review the report above; 'git commit --no-verify' bypasses this hook at your own risk." >&2
@@ -467,6 +473,10 @@ export function renderPolicy(detected: Set<GateRole>): string {
     '#',
     '# There is deliberately no shared severity threshold. Each gate keeps its',
     '# own, spelled the way that gate spells it, inside its own options block.',
+    '#',
+    '# stage says when a gate runs: commit, push, or ci. Stages are cumulative,',
+    '# so a gate runs at its own stage and at every later one, and a run at ci',
+    '# runs everything enabled. The values below are the defaults.',
     'version: 1',
     '',
     'gates:',
@@ -484,6 +494,7 @@ export function renderPolicy(detected: Set<GateRole>): string {
     lines.push(`  ${role}:`);
     lines.push(`    product: ${product}`);
     lines.push(`    enabled: ${enabled ? 'true' : 'false'}`);
+    lines.push(`    stage: ${DEFAULT_STAGE_FOR_ROLE[role]}`);
     lines.push('    # Handed to this gate unchanged. Keys are its own long flags,');
     lines.push('    # without the leading dashes. Example: fail-on: high');
     lines.push('    options: {}');
