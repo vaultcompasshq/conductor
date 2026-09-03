@@ -145,17 +145,61 @@ function exists(repoRoot: string, relative: string): boolean {
 }
 
 /**
- * The plan belonging to a spec, by the same stem rule.
+ * The best of the candidates whose stem relates to `target`, or undefined.
+ *
+ * `stemMatches` decides who is a CANDIDATE; this decides who wins, and the
+ * two are different questions. Ranking on the lexically newest filename alone
+ * was answering the second with the first: a loose candidate carrying a later
+ * date beat the spec whose stem was the branch slug exactly, and an undated
+ * name beat everything because it sorts after every date. A pull request was
+ * then measured against a different feature's requirements, with nothing in
+ * the report saying so, since naming the spec it used is exactly what the
+ * report does.
+ *
+ * So: an exact stem first, then the most specific stem, and only then the
+ * newest name. Specificity is stem LENGTH, which is crude but is the property
+ * the failure actually had: "superpowers" beat
+ * "1.2.1-base-and-superpowers" by being shorter and vaguer.
+ */
+function bestMatch(names: string[], target: string): string | undefined {
+  return names
+    .filter((name) => stemMatches(normalizeStem(name), target))
+    .sort((a, b) => {
+      const stemA = normalizeStem(a);
+      const stemB = normalizeStem(b);
+      const exactA = stemA === target ? 0 : 1;
+      const exactB = stemB === target ? 0 : 1;
+      if (exactA !== exactB) {
+        return exactA - exactB;
+      }
+      if (stemA.length !== stemB.length) {
+        return stemB.length - stemA.length;
+      }
+      // Newest name last in lexical order, so descending puts it first. The
+      // names carry an ISO date prefix, so this is date order among equally
+      // good candidates and nothing more.
+      return a < b ? 1 : a > b ? -1 : 0;
+    })[0];
+}
+
+/**
+ * The plan belonging to a spec.
+ *
+ * The stem must be EQUAL, not merely related. The loose rule paired one
+ * feature's spec with another feature's plan, which freezes a set of
+ * requirements against a change budget belonging to different work: the
+ * resulting block or pass is about neither of them. No plan is a fine
+ * outcome, since intent-guard imports a spec on its own; the wrong plan is
+ * not.
  *
  * Applied to any spec, however it was chosen, rather than only to a
  * conventionally discovered one: a spec named in a pull request body has a
- * plan beside it just as often, and its budget block is the half of the
- * contract that actually blocks.
+ * plan beside it just as often.
  */
 function planFor(repoRoot: string, specPath: string): string | null {
   const specStem = normalizeStem(path.basename(specPath));
-  const matches = markdownFilesIn(repoRoot, PLAN_DIR).filter((name) =>
-    stemMatches(normalizeStem(name), specStem)
+  const matches = markdownFilesIn(repoRoot, PLAN_DIR).filter(
+    (name) => normalizeStem(name) === specStem
   );
   const newest = matches[matches.length - 1];
   return newest === undefined ? null : `${PLAN_DIR}/${newest}`;
@@ -191,16 +235,9 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
   }
 
   if (options.branch !== undefined) {
-    const slug = branchSlug(options.branch);
-    const matches = markdownFilesIn(repoRoot, SPEC_DIR).filter((name) =>
-      stemMatches(normalizeStem(name), slug)
-    );
-    // Lexically newest. The names carry an ISO date prefix, so lexical order
-    // is date order, and a second attempt at the same feature sorts after the
-    // first without anybody having to remember to delete the old one.
-    const newest = matches[matches.length - 1];
-    if (newest !== undefined) {
-      const relative = `${SPEC_DIR}/${newest}`;
+    const best = bestMatch(markdownFilesIn(repoRoot, SPEC_DIR), branchSlug(options.branch));
+    if (best !== undefined) {
+      const relative = `${SPEC_DIR}/${best}`;
       return { kind: 'convention', spec: relative, plan: planFor(repoRoot, relative) };
     }
   }

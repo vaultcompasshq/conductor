@@ -306,11 +306,22 @@ gate looks like. In Actions this is almost always a shallow checkout, so
 4. A markdown file **directly under** `docs/superpowers/specs` whose name
    relates to the branch. The branch slug is the branch name with its first
    segment (`feat/`, `fix/`) removed; a filename is reduced by stripping a
-   `YYYY-MM-DD-` prefix and a trailing `-design`; the two match when either
-   contains the other. If several match, the lexically newest wins, which for
-   these names is the newest date. The plan under `docs/superpowers/plans` is
-   paired by the same rule and passed as `--plan`, and its budget block is
-   the half of a contract that actually blocks.
+   `YYYY-MM-DD-` prefix and a trailing `-design`; the two are candidates when
+   either contains the other.
+
+   Several candidates are ranked: a stem **equal** to the slug first, then
+   the **longest** stem, and only then the newest name. Newest alone was the
+   rule and it was wrong twice over: a vaguer spec with a later date beat the
+   one named for the branch, and an undated name beat everything, because it
+   sorts after every date. Both put a pull request against another feature's
+   requirements.
+
+   The plan under `docs/superpowers/plans` is paired only when its stem is
+   **equal** to the chosen spec's, and passed as `--plan`. Equal rather than
+   related, because pairing a spec with a neighbouring feature's plan freezes
+   one set of requirements against the other's change budget, and the block
+   or pass that follows is about neither. No plan is fine; intent-guard
+   imports a spec on its own.
 
 **How it is frozen.** `intent-guard import-spec --from superpowers
 --dry-run` drafts a contract, that YAML is written into a **temporary**

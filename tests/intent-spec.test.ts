@@ -168,6 +168,61 @@ describe('discoverSpec', () => {
     });
   });
 
+  it('prefers the spec whose stem IS the branch slug over a newer looser one', () => {
+    // The reproduction. On this branch the loose candidate normalizes to
+    // "superpowers", which the slug contains, so it matched; it carried a
+    // later date, so lexical order handed it the win over the branch's own
+    // spec. A pull request was then measured against another feature's
+    // requirements entirely.
+    const root = repoWith([
+      '2026-09-03-1.2.1-base-and-superpowers-design.md',
+      '2026-09-05-superpowers-design.md',
+    ]);
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/1.2.1-base-and-superpowers' });
+
+    expect(found).toMatchObject({
+      spec: 'docs/superpowers/specs/2026-09-03-1.2.1-base-and-superpowers-design.md',
+    });
+  });
+
+  it('does not let an undated looser spec win by sorting last', () => {
+    // Undated names sort after every dated one, so the old lexical rule gave
+    // the win to whatever happened to have no date prefix, however little it
+    // had to do with the branch.
+    const root = repoWith(['2026-09-03-widget-cache-design.md', 'cache-design.md']);
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/widget-cache' });
+
+    expect(found).toMatchObject({
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+    });
+  });
+
+  it('takes the most specific match when none is exact', () => {
+    const root = repoWith(['2026-09-03-cache-design.md', '2026-09-01-widget-cache-rev-design.md']);
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/widget-cache-rev-two' });
+
+    expect(found).toMatchObject({
+      spec: 'docs/superpowers/specs/2026-09-01-widget-cache-rev-design.md',
+    });
+  });
+
+  it('pairs no plan at all rather than another feature plan', () => {
+    // The worst outcome of the loose rule: one feature's requirements frozen
+    // against another feature's change budget, which then blocks or passes a
+    // pull request for reasons belonging to neither.
+    const root = repoWith(['2026-09-03-widget-cache-design.md'], ['2026-09-03-widget.md']);
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/widget-cache' });
+
+    expect(found).toMatchObject({
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      plan: null,
+    });
+  });
+
   it('lets a Spec: line in the PR body win over the branch-slug match', () => {
     const root = repoWith(['2026-09-03-widget-cache-design.md', '2026-09-01-other-design.md']);
 
