@@ -175,8 +175,21 @@ reason above.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
   does not recognise is never replaced, with or without `--adopt`.
-- `--force`, with `--revert`, removes a file that has changed since init
-  anyway, restoring an adopted hook if there was one.
+- `--force` acts on a file that has changed since init wrote it: on its own
+  it replaces a managed hook somebody has edited, and with `--revert` it
+  removes one, restoring an adopted hook if there was one.
+
+Re-running init over a hook a **previous version of conductor** wrote
+replaces it, rather than reporting it already installed. The marker in the
+hook says whose it is, not which version, so the decision is the hook's
+digest: identical to what this version writes means nothing to do;
+identical to the digest the manifest recorded means an older conductor
+wrote it and it is updated in place; anything else means it has been edited
+by hand, and it is refused with the same guidance a changed file gets under
+`--revert`. A marked hook with no manifest to check against is treated as
+edited. Skipping an old hook left it running a command line this version no
+longer writes, and left it out of the new manifest, so a later `--revert`
+walked past it.
 
 A revert that cannot remove everything removes nothing that would leave the
 repository half-wired, keeps the manifest describing what is left, and

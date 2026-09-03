@@ -113,7 +113,7 @@ export function buildProgram(): Command {
     .option('--revert', 'remove exactly what a previous init wrote')
     .option(
       '--force',
-      'with --revert: remove a file that has changed since init anyway, restoring any adopted hook'
+      'act on a file that has changed since init wrote it: replace a managed hook somebody has edited, or with --revert remove one and restore any adopted hook'
     )
     .option('--json', 'print the result as JSON')
     .exitOverride()
@@ -149,6 +149,7 @@ export function buildProgram(): Command {
           ...shared,
           ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
           ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
+          ...(options.force === undefined ? {} : { force: options.force }),
         };
         const result = applyInit(planInit(initOptions), initOptions);
 

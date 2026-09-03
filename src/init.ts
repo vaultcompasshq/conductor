@@ -343,7 +343,11 @@ export interface InitOptions {
   dryRun?: boolean;
   /** Replace a per-gate hook with the umbrella's. Never replaces a foreign one. */
   adopt?: boolean;
-  /** Revert only: remove a file that has changed since init anyway. */
+  /**
+   * Act on a file that has changed since init wrote it: on init, replace a
+   * managed hook somebody has edited; on revert, remove one. Never touches a
+   * foreign or gate-owned hook, which have their own routes.
+   */
   force?: boolean;
 }
 
@@ -423,6 +427,32 @@ function readIfExists(file: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The manifest a previous init left, or null when there is none or it will
+ * not parse.
+ *
+ * An unreadable manifest is deliberately the same answer as a missing one:
+ * everything that consults it here is deciding whether a file on disk is
+ * one the umbrella wrote, and "the record is unreadable" is not evidence
+ * that it was.
+ */
+function readManifest(root: string): Manifest | null {
+  const raw = readIfExists(path.join(root, MANIFEST_RELATIVE_PATH));
+  if (raw === undefined) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as Manifest;
+  } catch {
+    return null;
+  }
+}
+
+/** The hook digest a previous init recorded, or null when there is none. */
+function recordedHookSha(root: string): string | null {
+  return readManifest(root)?.files.find((file) => file.kind === 'hook')?.sha256 ?? null;
 }
 
 /** Names of the gates whose binary resolves right now. */
@@ -536,6 +566,15 @@ function foreignGuidance(relPath: string): string {
   );
 }
 
+function editedManagedGuidance(relPath: string): string {
+  return (
+    `${relPath} carries conductor's own marker but does not match either the hook this version ` +
+    'writes or the one recorded in the manifest, so somebody has edited it. Nothing was changed: ' +
+    'an edited hook is that person\'s working setup, marker or not. Re-run with --force to ' +
+    'replace it anyway, or delete it by hand and re-run.'
+  );
+}
+
 function gateHookGuidance(product: Product, relPath: string): string {
   return (
     `${relPath} is ${product}'s own pre-commit hook. Adding the umbrella hook alongside it would ` +
@@ -630,9 +669,47 @@ export function planInit(options: InitOptions): InitResult {
   let adoptedFrom: AdoptedHook | null = null;
 
   if (existingHook !== undefined && existingHook.includes(MANAGED_HOOK_MARKER)) {
-    // Nothing to do for the hook. The policy file is still checked below,
-    // so a repository whose policy file was deleted can get it back.
-    actions.push({ kind: 'skip', path: relHook, detail: 'already installed by conductor init' });
+    // The marker alone used to end the matter, and that was a bug with a
+    // long fuse. A hook an OLDER conductor wrote carries the same marker, so
+    // it was skipped for ever: it kept running that version's command line
+    // after the hook text changed, and it never entered the new manifest, so
+    // a later --revert walked past it and left it behind. What the marker
+    // actually settles is whose hook this is, not which version of it, so
+    // the digest has to decide the rest.
+    const installed = sha256(existingHook);
+    if (installed === sha256(HOOK)) {
+      // Nothing to do for the hook. The policy file is still checked below,
+      // so a repository whose policy file was deleted can get it back.
+      actions.push({ kind: 'skip', path: relHook, detail: 'already installed by conductor init' });
+    } else if (installed === recordedHookSha(root)) {
+      // On disk it is exactly what the manifest says a previous init wrote,
+      // so nobody has touched it since and it is the umbrella's to replace.
+      actions.push({
+        kind: 'write',
+        path: relHook,
+        detail: 'update: the installed hook is from an older conductor',
+      });
+      writes.push({ path: hookPath, content: HOOK, executable: true, kind: 'hook' });
+    } else if (options.force) {
+      actions.push({
+        kind: 'write',
+        path: relHook,
+        detail: 'replace (--force, the managed hook had been edited)',
+      });
+      writes.push({ path: hookPath, content: HOOK, executable: true, kind: 'hook' });
+    } else {
+      // It matches neither this version's hook nor the recorded one, which
+      // includes the case where there is no manifest to check against. The
+      // marker says it started as ours; the digest says it is not any more,
+      // and an edited hook is somebody's working setup whatever comment sits
+      // at the top of it.
+      conflicts.push({
+        path: relHook,
+        reason: 'changed-since-init',
+        guidance: editedManagedGuidance(relHook),
+      });
+      return { ...base, repoRoot: root, hookPath, hookManager };
+    }
   } else if (existingHook !== undefined && existingHook.trim().length > 0) {
     const gateProduct = detectGateHook(existingHook);
     if (gateProduct === null) {
@@ -719,12 +796,19 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
     return plan;
   }
 
+  // What a previous init recorded. An upgrade rewrites the hook and nothing
+  // else, so a manifest built purely from this run's writes would forget the
+  // policy file it wrote last time, and would forget the gate hook --adopt
+  // replaced -- and the manifest is the only copy of that hook anywhere, so
+  // forgetting it makes the gate's own hook unrestorable.
+  const previous = readManifest(plan.repoRoot);
+
   const manifest: Manifest = {
     version: 1,
     files: [],
     adopted:
       plan.adoptedFrom === null
-        ? null
+        ? (previous?.adopted ?? null)
         : {
             path: plan.hookPath,
             content: plan.adoptedFrom.content,
@@ -744,6 +828,16 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
         chmodSync(write.path, (statSync(write.path).mode & 0o777) | 0o755);
       }
       manifest.files.push({ path: write.path, sha256: sha256(write.content), kind: write.kind });
+    }
+
+    // Everything a previous init recorded and this one did not rewrite. The
+    // fresh entries come first so the newly written digests are what a
+    // reader sees at the top of the file.
+    const rewritten = new Set(plan.writes.map((write) => write.path));
+    for (const file of previous?.files ?? []) {
+      if (!rewritten.has(file.path)) {
+        manifest.files.push(file);
+      }
     }
 
     const manifestPath = path.join(plan.repoRoot, MANIFEST_RELATIVE_PATH);
