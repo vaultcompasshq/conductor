@@ -133,6 +133,20 @@ describe('vault-guard 1.4.2 normalization', () => {
     });
   });
 
+  // The details bag is carried, not mapped: every number in it is the
+  // gate's own, in the gate's own units. That put a 0-based column next to
+  // a 1-based startColumn in the same SARIF result, both spelled "column",
+  // which reads as an off-by-one in this tool. The value stays raw and the
+  // KEY says which base it is in, so nothing in the bag is quietly
+  // rewritten into units its own gate never used.
+  it('names the raw column by its base, since the bag carries the gate own units', () => {
+    expect(result.findings[0].details.columnZeroBased).toBe(22);
+    expect(result.findings[0].details).not.toHaveProperty('column');
+    // The mapped, 1-based one lives on the subject, which is where SARIF
+    // reads it from.
+    expect((result.findings[0].subject as { column: number }).column).toBe(23);
+  });
+
   it('never invents an end column, because the JSON output has no match length', () => {
     const subject = result.findings[0].subject;
     expect(subject.kind).toBe('location');

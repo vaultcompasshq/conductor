@@ -49,6 +49,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  rmdirSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -804,7 +805,12 @@ export function revertInit(options: InitOptions): RevertResult {
     rmSync(manifestPath, { force: true });
     actions.push({ kind: 'remove', path: MANIFEST_RELATIVE_PATH, detail: 'removed' });
     try {
-      rmSync(path.dirname(manifestPath), { recursive: false });
+      // rmdirSync, not rmSync: rmSync on a directory without recursive: true
+      // throws before it removes anything, so this swallowed its own error
+      // every time and left an empty .guardrails behind after a revert that
+      // said it had removed everything. rmdirSync removes an empty directory
+      // and refuses a non-empty one, which is exactly the rule wanted here.
+      rmdirSync(path.dirname(manifestPath));
     } catch {
       // The directory holds something else. Leaving it is the correct
       // "nothing else" behaviour.

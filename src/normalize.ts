@@ -300,7 +300,14 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
           type,
           severity,
           line,
-          column,
+          // Spelled with its base in the key. This bag is carried, not
+          // mapped, so the number stays the gate's own 0-based one; calling
+          // it "column" put it next to a 1-based SARIF startColumn in the
+          // same result, where it read as an off-by-one in this tool rather
+          // than as two different conventions side by side. Renaming the key
+          // says which is which without rewriting a gate's own output into
+          // units that gate never used.
+          columnZeroBased: column,
           offset: match.offset ?? null,
           // Already redacted at the source, so it is safe to carry.
           value: match.value ?? null,

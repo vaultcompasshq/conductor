@@ -232,7 +232,10 @@ carries the gate's own fingerprint verbatim in `partialFingerprints` under
 a key naming the product, and the properties bag carries `blocking`,
 `severity`, whether that severity was assigned by the umbrella rather than
 by the gate, how durable that fingerprint is, and the gate's own details
-bag unchanged. No location is invented: a finding with no known line gets
+bag with its values unchanged. A value in that bag is never converted, so
+where a gate's own units differ from SARIF's the key says so:
+`columnZeroBased` is the secret scanner's own 0-based column, sitting
+beside the 1-based `startColumn` mapped from it. No location is invented: a finding with no known line gets
 no region, and a finding about a missing binary gets no location at all.
 
 ## Scope of v0.1

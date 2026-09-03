@@ -282,6 +282,30 @@ describe('revert', () => {
     expect(existsSync(path.join(repo, 'unrelated.txt'))).toBe(true);
   });
 
+  it('takes the .guardrails directory with the last file it held', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    // An empty directory left behind is the one visible trace of a revert
+    // that reported it had removed everything.
+    expect(existsSync(path.join(repo, '.guardrails'))).toBe(false);
+  });
+
+  it('leaves the .guardrails directory when something else is in it', () => {
+    const repo = gitRepo();
+    init(repo);
+    writeFileSync(path.join(repo, '.guardrails', 'notes.txt'), 'somebody else put this here\n');
+
+    revertInit({ cwd: repo, pathValue: '' });
+
+    // "Removes exactly what init wrote, and nothing else" includes the
+    // directory: it is only ours while it holds only our files.
+    expect(existsSync(path.join(repo, '.guardrails', 'notes.txt'))).toBe(true);
+  });
+
   it('leaves a policy file the user changed after init, rather than deleting their work', () => {
     const repo = gitRepo();
     init(repo);
