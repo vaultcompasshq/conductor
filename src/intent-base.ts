@@ -50,6 +50,30 @@ export function resolveBaseRef(options: {
 }
 
 /**
+ * The branch this run is about.
+ *
+ * `GITHUB_HEAD_REF` first, and it is not an optimization: `actions/checkout`
+ * leaves a pull request build on a DETACHED HEAD, so asking git for the
+ * branch name there answers "HEAD" and matches no spec at all. Outside CI the
+ * variable is absent and git is the only answer.
+ */
+export function currentBranch(repoRoot: string, env: NodeJS.ProcessEnv): string | null {
+  const fromGithub = env.GITHUB_HEAD_REF;
+  if (fromGithub !== undefined && fromGithub !== '') {
+    return fromGithub;
+  }
+  const child = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  const value = (child.stdout ?? '').trim();
+  if (child.status !== 0 || value === '' || value === 'HEAD') {
+    return null;
+  }
+  return value;
+}
+
+/**
  * The paths the branch changed since it forked from `base`.
  *
  * Three flags, each of which is a decision:

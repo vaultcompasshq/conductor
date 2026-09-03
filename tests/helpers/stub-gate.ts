@@ -49,6 +49,62 @@ export function stubGate(binDir: string, name: string, options: StubOptions = {}
   return file;
 }
 
+export interface StubIntentGuardOptions {
+  /** stdout for each subcommand, and the code it exits with. */
+  importSpec?: { stdout?: string; stderr?: string; exit?: number };
+  freeze?: { stdout?: string; stderr?: string; exit?: number };
+  check?: { stdout?: string; stderr?: string; exit?: number };
+  /** File to append each non-version invocation's arguments to. */
+  argvLog?: string;
+  version?: string;
+}
+
+/**
+ * A stub intent-guard that answers three different subcommands.
+ *
+ * The plain stubGate above prints one canned payload whatever it is asked,
+ * which is exactly wrong for the pull-request flow: that flow runs
+ * import-spec, then freeze, then check, and a test that cannot tell them
+ * apart cannot show that the chain stopped at the right step. Each
+ * subcommand's payload goes in its own sibling file and is cat-ed, for the
+ * same reason the simple stub does it: the shell's quoting rules do not get
+ * a vote on what the gate "printed".
+ */
+export function stubIntentGuard(binDir: string, options: StubIntentGuardOptions = {}): string {
+  mkdirSync(binDir, { recursive: true });
+  const file = path.join(binDir, 'intent-guard');
+
+  const lines = ['#!/bin/sh'];
+  if (options.argvLog !== undefined) {
+    lines.push(`if [ "$1" != "--version" ]; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
+  }
+  lines.push(`if [ "$1" = "--version" ]; then echo "${options.version ?? '1.2.1'}"; exit 0; fi`);
+  lines.push('case "$1" in');
+
+  for (const [subcommand, payload] of [
+    ['import-spec', options.importSpec],
+    ['freeze', options.freeze],
+    ['check', options.check],
+  ] as const) {
+    const outFile = `${file}.${subcommand}.stdout`;
+    const errFile = `${file}.${subcommand}.stderr`;
+    writeFileSync(outFile, payload?.stdout ?? '');
+    writeFileSync(errFile, payload?.stderr ?? '');
+    lines.push(
+      `  ${subcommand}) ${CAT} ${JSON.stringify(errFile)} >&2; ${CAT} ${JSON.stringify(outFile)}; exit ${payload?.exit ?? 0} ;;`
+    );
+  }
+
+  // Anything else is a subcommand this stub was not told about. Exiting 2
+  // rather than 0 keeps an unexpected invocation from reading as success.
+  lines.push('  *) echo "stub intent-guard: unexpected subcommand $1" >&2; exit 2 ;;');
+  lines.push('esac');
+
+  writeFileSync(file, `${lines.join('\n')}\n`);
+  chmodSync(file, 0o755);
+  return file;
+}
+
 /** Minimal well-formed output for each gate, for the gates a test is not testing. */
 export const CLEAN_DEP_GUARD = JSON.stringify({
   findings: [],
