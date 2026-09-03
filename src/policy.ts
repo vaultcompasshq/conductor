@@ -247,8 +247,17 @@ export function parsePolicy(text: string, source: string): Policy {
       if (RESERVED_OPTIONS[product].includes(key)) {
         throw new PolicyError(
           `${source}: "${key}" under gates.${role}.options is reserved. ` +
-            `The umbrella passes that flag to ${product} itself, and two writers of one flag ` +
-            'would resolve differently depending on that CLI argument parser.'
+            // Every other reserved key is one the umbrella writes itself, and
+            // the general sentence is true of them. `base` on the intent gate
+            // is rejected for a different reason, and giving somebody the
+            // wrong reason sends them to the wrong fix.
+            (product === 'intent-guard' && key === 'base'
+              ? 'The umbrella works the changed-path set out itself and passes --paths, because ' +
+                '--project may be a temporary directory holding only a contract. A --base here ' +
+                'would be resolved against that directory, where there is no repository. ' +
+                'Use the umbrella\'s own --base instead.'
+              : `The umbrella passes that flag to ${product} itself, and two writers of one flag ` +
+                'would resolve differently depending on that CLI argument parser.')
         );
       }
     }

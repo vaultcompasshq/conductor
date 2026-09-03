@@ -223,6 +223,19 @@ describe('per-gate option passthrough', () => {
       )
     ).toThrow(/reserved/);
   });
+
+  it('explains base on the intent gate for the reason it is actually rejected', () => {
+    // The generic sentence says the umbrella passes that flag itself, and for
+    // this one key that is not true: it passes --paths instead, and --base
+    // would be resolved against a project directory holding no repository.
+    // A message that gives the wrong reason sends somebody to the wrong fix.
+    expect(() =>
+      parsePolicy(
+        'version: 1\ngates:\n  intent:\n    product: intent-guard\n    options:\n      base: main\n',
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/--paths/);
+  });
 });
 
 describe('stages are cumulative', () => {
