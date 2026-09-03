@@ -275,8 +275,21 @@ fi
 conductor_status=0
 conductor run --staged --stage commit || conductor_status=$?
 
-if [ "$conductor_status" -ne 0 ]; then
-  echo "conductor: commit blocked (conductor exit $conductor_status). Review the report above; 'git commit --no-verify' bypasses this hook at your own risk." >&2
+# One message per exit code, not one message for both. The comment below
+# says collapsing 2 into 1 would report findings never looked for, and a
+# single human-readable line saying "commit blocked" for both did exactly
+# that: exit 2 means a gate could not run, so nothing was checked, and
+# calling that a blocked commit describes a decision nobody made.
+#
+# Neither line mentions a bypass flag. Every gate already has a recorded,
+# reviewable, scoped escape: an allow entry, an ignore path, a baseline, or
+# enforce: false in .guardrails.yaml. A bypass skips every gate invisibly,
+# including the ones that would have caught something unrelated to the
+# finding somebody disagreed with, and leaves no trace of the decision.
+if [ "$conductor_status" -eq 1 ]; then
+  echo "conductor: a gate blocked this commit. Review the report above. If you disagree with a finding, record the decision where the next reader can see it: an allow entry, an ignore path, or a baseline in that gate's own configuration, or enforce: false for the gate in .guardrails.yaml." >&2
+elif [ "$conductor_status" -ne 0 ]; then
+  echo "conductor: a gate could not run, so NOTHING was checked and this commit was not verified by any gate. The report above names the gate and says why. Fix that before committing." >&2
 fi
 
 # Passed straight through. 1 means a gate blocked; 2 means a gate could not

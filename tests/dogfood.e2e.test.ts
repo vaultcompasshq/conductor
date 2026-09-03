@@ -223,7 +223,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
 
     expect(commit.status).not.toBe(0);
     // The hook ran the umbrella, and the umbrella refused.
-    expect(`${commit.stdout}${commit.stderr}`).toMatch(/conductor: commit blocked/);
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(/conductor: a gate blocked this commit/);
   });
 
   it('names the right findings in the text report', () => {

@@ -1407,7 +1407,7 @@ describe('the generated hook', () => {
 
     expect(commit.status).not.toBe(0);
     expect(commit.stderr).toMatch(/the umbrella ran: run --staged/);
-    expect(commit.stderr).toMatch(/conductor: commit blocked \(conductor exit 1\)/);
+    expect(commit.stderr).toMatch(/conductor: a gate blocked this commit/);
     // The fail-closed branch must not be what refused this commit: that
     // would be the right exit code for the wrong reason.
     expect(commit.stderr).not.toMatch(/command not found/);
@@ -1429,7 +1429,7 @@ describe('the generated hook', () => {
     });
 
     expect(run.status).toBe(1);
-    expect(run.stderr).toMatch(/conductor: commit blocked/);
+    expect(run.stderr).toMatch(/conductor: a gate blocked this commit/);
     expect(run.stderr).not.toMatch(/command not found/);
   });
 
@@ -1469,9 +1469,7 @@ describe('the generated hook', () => {
     // anything. The exit code survives that; the explanation does not, and
     // a blocked commit with no reason on screen is the failure this line
     // exists to prevent.
-    expect(`${commit.stdout}${commit.stderr}`).toMatch(
-      /conductor: commit blocked \(conductor exit 2\)/
-    );
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(/conductor: a gate could not run/);
   });
 
   it('passes the umbrella exit code through unchanged', () => {
@@ -1506,5 +1504,143 @@ describe('the generated hook', () => {
     });
 
     expect(commit.status).toBe(0);
+  });
+});
+
+/**
+ * What the hook SAYS, taken from running the generated script rather than
+ * from reading the template.
+ *
+ * A stub conductor that exits with a chosen code is the whole fixture: the
+ * hook's own two branches are shell, and the only honest test of shell is to
+ * run it. Asserting on the template's text would pass just as happily on a
+ * message that never reaches a terminal.
+ */
+describe('what the generated hook says about each exit code', () => {
+  function hookOutput(exitCode: number): string {
+    const repo = gitRepo();
+    init(repo);
+    const bin = tempDir();
+    shim(bin, 'conductor', `#!/bin/sh\nexit ${exitCode}\n`);
+
+    const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    return `${run.stdout ?? ''}${run.stderr ?? ''}`;
+  }
+
+  it('says nothing at all on exit 0', () => {
+    expect(hookOutput(0).trim()).toBe('');
+  });
+
+  it('says a gate blocked on exit 1, and where to record a disagreement', () => {
+    const output = hookOutput(1);
+
+    expect(output).toMatch(/conductor: a gate blocked this commit/);
+    expect(output).toMatch(/report above/);
+    // The escape a gate already has is a recorded one. An allow entry, an
+    // ignore path, a baseline, or enforce: false all leave a reviewable
+    // trace of the decision in the repository.
+    expect(output).toMatch(/\.guardrails\.yaml/);
+  });
+
+  it('says nothing was checked on exit 2, rather than calling it a blocked commit', () => {
+    // Exit 2 means a gate could not run, so nothing was looked at. Calling
+    // that "commit blocked" reports findings that were never looked for,
+    // which is the exact confusion the exit-code split exists to prevent.
+    const output = hookOutput(2);
+
+    expect(output).toMatch(/conductor: a gate could not run/);
+    expect(output).toMatch(/NOTHING was checked/);
+    expect(output).not.toMatch(/blocked/);
+  });
+
+  it('advertises no bypass, in any branch of the hook it writes', () => {
+    // Every gate already has a recorded, reviewable, scoped escape. A
+    // bypass flag skips every gate invisibly, including the ones that would
+    // have caught something unrelated to the finding somebody disagreed
+    // with, and it leaves no trace of the decision anywhere.
+    const native = gitRepo();
+    init(native);
+    const husky = huskyRepo();
+    init(husky);
+
+    for (const hookPath of [
+      path.join(native, '.git', 'hooks', 'pre-commit'),
+      path.join(husky, '.husky', 'pre-commit'),
+    ]) {
+      expect(readFileSync(hookPath, 'utf8')).not.toMatch(/no-verify/);
+    }
+  });
+});
+
+/**
+ * The hooks already installed in real repositories, upgraded in place.
+ *
+ * Changing the hook body makes every hook a previous conductor wrote into
+ * one "from an older conductor". The upgrade path decides that by digest, so
+ * this is a test of the REAL previous body rather than a synthetic stand-in:
+ * the fixture is byte for byte what v0.2 wrote into those repositories.
+ */
+describe('re-init over the hook body v0.2 actually shipped', () => {
+  const V02_HOOK = readFileSync(
+    path.join(HOOK_FIXTURES, 'conductor-0.2.0-pre-commit.sh'),
+    'utf8'
+  );
+
+  function repoRunningTheOldBody(): string {
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hookPath, V02_HOOK);
+
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { files: Array<{ path: string; sha256: string; kind: string }> };
+    for (const file of manifest.files) {
+      if (file.kind === 'hook') {
+        file.sha256 = createHash('sha256').update(V02_HOOK).digest('hex');
+      }
+    }
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+    return repo;
+  }
+
+  it('is the previous body, not the current one', () => {
+    // The guard on the whole block. If this fixture ever drifts into being
+    // what init writes today, every assertion below passes for the wrong
+    // reason.
+    const repo = gitRepo();
+    init(repo);
+    expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).not.toBe(
+      V02_HOOK
+    );
+    expect(V02_HOOK).toMatch(new RegExp(MANAGED_HOOK_MARKER));
+  });
+
+  it('reports the update rather than refusing it as a hand-edited hook', () => {
+    const repo = repoRunningTheOldBody();
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(result.actions.find((action) => action.path.endsWith('pre-commit'))?.detail).toMatch(
+      /older conductor/
+    );
+  });
+
+  it('leaves the new message in place of the old one', () => {
+    const repo = repoRunningTheOldBody();
+    init(repo);
+
+    const hook = readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+    expect(hook).toMatch(/a gate blocked this commit/);
+    expect(hook).not.toMatch(/no-verify/);
   });
 });

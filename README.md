@@ -459,6 +459,25 @@ turns off by making the tool missing. It passes the exit code straight
 through, so 2 does not collapse into 1 and report findings that were never
 looked for.
 
+**It says a different thing for each of those two codes.** On exit 1 a gate
+blocked, and the line points at the report and says that disagreeing with a
+finding is done in `.guardrails.yaml` or in that gate's own configuration, so
+the decision is recorded where the next reader can see it. On exit 2 nothing
+was checked at all, and the line says that rather than calling it a blocked
+commit: a gate that could not run made no decision, and reporting one is the
+same error as collapsing the codes.
+
+**Neither line advertises a bypass.** Every gate already has a recorded,
+reviewable, scoped escape: an allow entry, an ignore path, a baseline, or
+`enforce: false`. Skipping the hook skips every gate invisibly, including the
+ones that would have caught something unrelated to the finding somebody
+disagreed with, and leaves no trace of the decision anywhere.
+
+Changing the hook body turns every hook a previous conductor wrote into one
+"from an older conductor", which is the case init already handles by digest:
+it rewrites the body in place and records the new digest. Nothing has to be
+reverted and reinstalled by hand.
+
 The hook prepends the repository's own `node_modules/.bin` to `PATH`
 before looking for the binary, so a conductor installed only as a project
 devDependency is visible to its own hook. The root comes from
