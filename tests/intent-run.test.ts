@@ -54,7 +54,11 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-intent-run-'));
+  // Deliberately NOT prefixed "conductor-intent-": that is the prefix the
+  // preparation itself uses, and intent-prepare.test.ts counts those to prove
+  // a failed chain leaks none. Two suites running in parallel would make that
+  // count wander.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-prflow-'));
   temps.push(dir);
   return dir;
 }
@@ -312,6 +316,34 @@ describe('the report says where the contract came from', () => {
     const gateRun = log.runs.find((entry) => entry.tool.driver.name === 'intent-guard');
     expect(gateRun?.properties?.contractSource?.kind).toBe('imported');
     expect(gateRun?.properties?.baseRef).toBe('main');
+  });
+});
+
+describe('the ambient environment', () => {
+  it('is never read unless the caller passes it in', () => {
+    // pathValue is already injected rather than read, for exactly this
+    // reason. Without the same rule for the environment, this very suite
+    // behaves differently when it runs inside a pull request build, because
+    // Actions sets GITHUB_BASE_REF and every runAll call that did not name an
+    // env would quietly enter the pull-request flow.
+    const previous = process.env.GITHUB_BASE_REF;
+    process.env.GITHUB_BASE_REF = 'main';
+    try {
+      const result = runAll(INTENT_ONLY, {
+        repoRoot: repo(),
+        staged: true,
+        pathValue: binWith(CHECK_PASSING),
+      });
+
+      expect(result.gates[0].intent).toBeUndefined();
+      expect(result.gates[0].argv).toEqual(['check', '--project', '.', '--staged', '--json']);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GITHUB_BASE_REF;
+      } else {
+        process.env.GITHUB_BASE_REF = previous;
+      }
+    }
   });
 });
 

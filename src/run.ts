@@ -78,7 +78,15 @@ export interface RunOptions {
   base?: string;
   /** An explicit spec for the intent gate, outranking every other source. */
   spec?: string;
-  /** Injected so tests never depend on the machine's own environment. */
+  /**
+   * The environment the pull-request defaults are read from.
+   *
+   * Injected rather than read off `process`, exactly like `pathValue`, and it
+   * defaults to EMPTY rather than to `process.env`. A run is then a function
+   * of its arguments: without this, running this package's own suite inside a
+   * pull request build would put every gate into the pull-request flow,
+   * because Actions sets GITHUB_BASE_REF for the whole job.
+   */
   env?: NodeJS.ProcessEnv;
   /** Injected in tests so a run's output is comparable between runs. */
   now?: () => Date;
@@ -132,7 +140,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           .filter((gate) => !runsAtStage(gate.stage, requested))
           .map((gate) => ({ role: gate.role, product: gate.product, stage: gate.stage }));
 
-  const env = options.env ?? process.env;
+  const env = options.env ?? {};
   const skipped: SkippedGate[] = [];
   const cleanups: Array<() => void> = [];
 
