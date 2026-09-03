@@ -633,6 +633,33 @@ describe('a husky-managed repository', () => {
     expect(`${commit.stdout}${commit.stderr}`).toMatch(/the umbrella ran: run --staged/);
   });
 
+  // The second half of the same finding. Writing into .husky/_ produced a
+  // hook that worked exactly until the next install, and then stopped
+  // without a word: the gate reported itself installed and never ran. The
+  // regeneration is simulated rather than driven through a real husky, so
+  // this suite never needs husky installed to hold the property.
+  it('survives the reinstall that rewrites husky generated directory', () => {
+    const repo = huskyRepo();
+    init(repo);
+
+    // Byte for byte what husky's prepare step writes, on install and on
+    // every re-install. Anything the umbrella left under _ is gone now.
+    writeHuskyGenerated(repo);
+
+    const bin = shimDirWithGit();
+    shim(bin, 'conductor', '#!/bin/sh\necho "the umbrella ran: $*" >&2\nexit 1\n');
+    writeFileSync(path.join(repo, 'change.txt'), 'staged\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const commit = spawnSync(GIT, ['commit', '-m', 'still gated after an install'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathLedBy(bin) },
+    });
+
+    expect(commit.status).not.toBe(0);
+    expect(`${commit.stdout}${commit.stderr}`).toMatch(/the umbrella ran: run --staged/);
+  });
+
   it('recognises husky by the dispatcher content even outside the .husky/_ path', () => {
     const repo = gitRepo();
     const generated = path.join(repo, 'hooks', '_');
