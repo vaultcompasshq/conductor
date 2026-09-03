@@ -128,12 +128,9 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     const policy = readFileSync(path.join(clone, '.guardrails.yaml'), 'utf8');
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: true/);
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
-    // The umbrella's own binary is shimmed on PATH as "conductor", and that
-    // is also the pre-rename fallback name intent-guard's candidate table
-    // still matches on (see resolve.ts). Detection has no way to tell those
-    // apart from a name alone, so it reports the intent gate as found even
-    // though the real intent-guard binary is not on this PATH.
-    expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: true/);
+    // Not on PATH and not in node_modules/.bin, so init leaves it off and
+    // says why rather than silently switching on a gate that is not there.
+    expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
   });
 
   it('reaches the unpublished gate through an absolute command in the policy', () => {
