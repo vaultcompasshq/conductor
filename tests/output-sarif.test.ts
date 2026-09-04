@@ -303,6 +303,91 @@ describe('coverage statements are notifications rather than results', () => {
   });
 });
 
+/**
+ * executionSuccessful is a claim, so it has to be made in both directions.
+ *
+ * It was being written only when there were notifications to hang it on, so
+ * the field appeared when the answer was true and vanished when it was
+ * false. An enforced gate that could not run, with nothing deferred and
+ * nothing skipped, produced no invocation at all, which is exactly the run
+ * where "the analysis did not complete" most needed saying.
+ */
+describe('the umbrella invocation', () => {
+  function umbrellaInvocation(log: {
+    runs: Array<Record<string, unknown>>;
+  }): Record<string, unknown> | undefined {
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    return (umbrella?.invocations as Array<Record<string, unknown>> | undefined)?.[0];
+  }
+
+  const BROKEN_GATE = result([
+    outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: null,
+      exitCode: null,
+      couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+      findings: [
+        {
+          schemaVersion: 1,
+          product: 'conductor',
+          productVersion: null,
+          ruleId: 'conductor/gate-missing',
+          severity: 'high',
+          severityIsDerived: true,
+          blocking: true,
+          message: 'the intent gate is enabled but no intent-guard binary was found',
+          subject: { kind: 'none' },
+          fingerprint: null,
+          details: {},
+        } satisfies Finding,
+      ],
+    }),
+  ]);
+
+  it('says the analysis did not complete, with no notification to hang it on', () => {
+    const invocation = umbrellaInvocation(sarif(BROKEN_GATE));
+
+    expect(invocation).toBeDefined();
+    expect(invocation?.executionSuccessful).toBe(false);
+    // Nothing was deferred, skipped or unenforced, so there is nothing to
+    // notify. The invocation is still there, because the claim is about the
+    // run rather than about the notifications.
+    expect(invocation).not.toHaveProperty('toolExecutionNotifications');
+  });
+
+  it('says the analysis completed when every gate ran', () => {
+    const log = sarif(
+      result([
+        outcome({
+          exitCode: 0,
+          findings: [],
+          diagnostics: [
+            { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+          ],
+        }),
+      ])
+    );
+
+    expect(umbrellaInvocation(log)?.executionSuccessful).toBe(true);
+  });
+
+  it('gives a gate run no invocation of its own', () => {
+    // The claim belongs to the umbrella. A gate's run describes what that
+    // gate found, and conductor has no standing to write an invocation
+    // object under another tool's driver name.
+    const gateRun = sarif(BROKEN_GATE).runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name !== 'conductor'
+    );
+    expect(gateRun).toBeUndefined();
+
+    const ranFine = sarif(result([outcome({ findings: depGuard.findings })]));
+    expect(ranFine.runs[0]).not.toHaveProperty('invocations');
+  });
+});
+
 describe('a clean run, whose text report is now one summary line', () => {
   // The summary line is a text-format decision and nothing else. SARIF is
   // read by machines, and a published log that got quieter because a run

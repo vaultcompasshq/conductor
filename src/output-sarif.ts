@@ -331,14 +331,34 @@ function notificationDeclarations(
   return ids.map((id) => ({ id, name: id.slice(id.indexOf('/') + 1) }));
 }
 
+/**
+ * How the umbrella's own run went, and what it has to say about coverage.
+ *
+ * Only the umbrella's run gets one. A gate's run describes what that gate
+ * found, and this package has no standing to write an invocation object
+ * under another tool's driver name.
+ */
+interface Invocation {
+  /**
+   * Whether the analysis completed. A CLAIM, so it is written whenever the
+   * umbrella's run is written and never only when something happens to be
+   * hanging off it. Emitting it with the notifications made the field
+   * present when the answer was true and absent when it was false, which is
+   * the one direction that matters: an enforced gate that could not run,
+   * with nothing deferred or skipped, produced no invocation at all.
+   */
+  executionSuccessful: boolean;
+  notifications: Notification[];
+}
+
 function makeRun(
   name: string,
   version: string | null,
   findings: Finding[],
   properties?: Record<string, unknown>,
-  notifications: Notification[] = [],
-  executionSuccessful = true
+  invocation?: Invocation
 ): Record<string, unknown> {
+  const notifications = invocation?.notifications ?? [];
   return {
     tool: {
       driver: {
@@ -356,14 +376,18 @@ function makeRun(
       },
     },
     results: findings.map(toResult),
-    // Omitted entirely when there is nothing to carry, rather than written
-    // as an empty invocation. An invocation object is a claim about how the
-    // tool ran, and a run with no notifications has no reason to make one.
-    ...(notifications.length === 0
+    ...(invocation === undefined
       ? {}
       : {
           invocations: [
-            { executionSuccessful, toolExecutionNotifications: notifications.map(toNotification) },
+            {
+              executionSuccessful: invocation.executionSuccessful,
+              // The conditional half. An empty notification list is nothing
+              // to say, and an empty array says it at length.
+              ...(notifications.length === 0
+                ? {}
+                : { toolExecutionNotifications: notifications.map(toNotification) }),
+            },
           ],
         }),
     ...(properties === undefined ? {} : { properties }),
@@ -567,18 +591,14 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
   // that did not run there.
   if (umbrellaFindings.length > 0 || notifications.length > 0) {
     runs.push(
-      makeRun(
-        UMBRELLA_DRIVER_NAME,
-        umbrellaVersion,
-        umbrellaFindings,
-        undefined,
-        notifications,
+      makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings, undefined, {
         // A claim about whether the analysis completed, taken from the gates
         // rather than from the exit code: an unenforced gate that could not
         // run leaves the run at exit 0, and nothing was checked by it either
-        // way.
-        result.gates.every((gate) => gate.couldNotRun === null)
-      )
+        // way. Written whenever this run is written, in both directions.
+        executionSuccessful: result.gates.every((gate) => gate.couldNotRun === null),
+        notifications,
+      })
     );
   }
 
