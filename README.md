@@ -391,10 +391,11 @@ naming the contract source and the base ref; the gate's SARIF run carries
 `action.yml` at the root is a composite action that runs the gates at the
 `ci` stage and writes one SARIF log for the caller to upload.
 
-It **installs nothing**. The package is unpublished, so an install step would
-either fail or fetch something else under a name it does not own; instead the
-action checks for `node_modules/.bin/conductor` and fails with a sentence
-saying to add it as a devDependency. `--base` is passed only when the
+It **installs nothing**, on purpose. It runs the conductor your repository
+already depends on, so the version gating your pull requests is the one your
+lockfile pins rather than whatever the registry serves that morning; instead
+of installing, the action checks for `node_modules/.bin/conductor` and fails
+with a sentence saying to add it as a devDependency. `--base` is passed only when the
 `base-ref` input names one; left empty, the umbrella reads `GITHUB_BASE_REF`
 itself and treats an empty value as "not a pull request", which is what a
 push build wants.
@@ -444,6 +445,11 @@ jobs:
         with:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
 ```
+
+The `@v4` pins there are readable, not safe: a tag moves, so pinning by one
+runs whatever its author pushes to it next. Pin every third-party action by
+commit digest in a workflow you actually run, the way this repository's own
+workflows do.
 
 `continue-on-error` there hides nothing: a gate that blocked has already
 failed the job through `conductor`'s own exit code, before this step runs.
@@ -656,9 +662,10 @@ promotion would want and which the audits do by hand today; anything that
 runs inside an agent session or on save, which intent-guard's own optional
 session hooks already cover; and a unified baseline or ledger.
 
-Also out: a published package. The gates are the product; this is the
-convenience layer over them, and it stays unpublished until it has earned a
-config file worth keeping.
+No longer out: a published package. v0.2.0 is the first version of this on
+npm, and it is a first release of a young tool rather than a finished one.
+The gates are still the product; this is the convenience layer over them,
+and what it covers is exactly the two scope lists above.
 
 ## License
 

@@ -40,18 +40,24 @@ outputs:
 runs:
   using: composite
   steps:
-    # No install step, on purpose. This package is unpublished, so an install
-    # here would either fail or fetch something else entirely under a name it
-    # does not own. A repository that wants this action depends on conductor
-    # the ordinary way, and this step says so in a sentence rather than
-    # failing later with a command-not-found.
+    # No install step, on purpose. A repository that wants this action
+    # depends on conductor the ordinary way, so the version gating its pull
+    # requests is the one its own lockfile pins rather than whatever an
+    # install here decided to fetch. This step says that in a sentence
+    # rather than failing later with a command-not-found.
     - name: Check conductor is installed
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        # Read as a variable rather than interpolated into the script, the
+        # same as every other input in this file: an expression expanded
+        # inside a run block is pasted in as source text before the shell
+        # ever sees it, so a value carrying a quote rewrites the script.
+        WORKDIR: ${{ inputs.working-directory }}
       run: |
         set -eu
         if [ ! -x node_modules/.bin/conductor ]; then
-          echo "conductor: no node_modules/.bin/conductor in ${{ inputs.working-directory }}." >&2
+          echo "conductor: no node_modules/.bin/conductor in ${WORKDIR}." >&2
           echo "This action runs the conductor your repository already depends on and installs nothing." >&2
           echo "Add it as a devDependency and run your install step before this one." >&2
           exit 1

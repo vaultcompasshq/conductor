@@ -4,6 +4,10 @@
   "type": "module",
   "description": "Umbrella installer and combined report over the independently installable guardrail gates.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vaultcompasshq/conductor.git"
+  },
   "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=22"

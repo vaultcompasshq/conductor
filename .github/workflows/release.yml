@@ -4,18 +4,30 @@ name: Release
 #
 # npm only exposes the trusted-publisher setting on a package that already
 # exists on the registry, so the very first publish of a new name cannot go
-# through OIDC. That first publish has to happen by hand, from a maintainer's
-# machine, after clearing package.json's "private": true flag. Only once
-# @vaultcompass/conductor exists on the registry can the trusted publisher be
-# configured for it, and only after that can this workflow's OIDC publish
-# step succeed. Every tag pushed after that bootstrap runs unchanged; the
-# skip-if-already-published step below is exactly what keeps the bootstrap
-# tag's own run green rather than failing on a duplicate-version publish.
+# through OIDC. That first publish has to happen by hand, from a
+# maintainer's machine. Only once @vaultcompass/conductor exists on the
+# registry can the trusted publisher be configured for it, and only after
+# that can this workflow's OIDC publish step succeed. Every tag pushed after
+# that bootstrap runs unchanged; the skip-if-already-published step below is
+# exactly what keeps the bootstrap tag's own run green rather than failing
+# on a duplicate-version publish.
+#
+# CONTRIBUTING.md's Releasing section spells that bootstrap out step by
+# step. This comment is the why; that section is the how.
 
 on:
   push:
     tags:
       - 'v*'
+
+# Serializes every release attempt across the whole repository, so a manual
+# re-run overlapping a tag-triggered run cannot both pass the
+# already-published check before either of them publishes and then race each
+# other into a rejected duplicate-version publish. Never cancel a run
+# mid-publish; queue the next one instead. Matches dep-guard.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -38,6 +50,58 @@ jobs:
         cache: 'pnpm'
         registry-url: 'https://registry.npmjs.org'
 
+    # Ported from dep-guard, and placed here on purpose: everything above
+    # this step can fail and be re-run harmlessly, and everything below it
+    # cannot. A publish cannot be taken back, so a mistyped tag would
+    # otherwise publish whatever version package.json happens to carry and
+    # then describe it in a GitHub Release as though the two matched.
+    #
+    # Nothing in this step depends on install, build, or test output: it
+    # reads package.json through "node -p" and talks to git directly, which
+    # is why it can run this early and cost about a minute rather than
+    # fifteen.
+    #
+    # dep-guard's version of this step also asserts that its core and cli
+    # packages carry the same version, and branches on GITHUB_REF_TYPE
+    # because it can also be started by workflow_dispatch. Neither applies
+    # here: conductor is one package, and this workflow triggers on a tag
+    # push and nothing else, so GITHUB_REF_NAME is always a tag name.
+    - name: Assert the tag matches the version being published
+      run: |
+        set -euo pipefail
+        VERSION="$(node -p "require('./package.json').version")"
+        EXPECTED_TAG="v${VERSION}"
+
+        if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+          echo "::error::Tag mismatch: pushed tag is ${GITHUB_REF_NAME}, but package.json is at version ${VERSION} (expected tag ${EXPECTED_TAG}). Publishing anyway would put ${VERSION} on the registry irreversibly under a GitHub Release named for a different version. Refusing to publish."
+          exit 1
+        fi
+
+        # The checkout above uses actions/checkout's default fetch-depth of
+        # 1, so this working copy holds the tagged commit and nothing else:
+        # no history connecting it to main, and no origin/main ref at all.
+        # Unshallow first, but only when the repository actually is shallow,
+        # because --unshallow on a complete repository is a hard error and
+        # nothing above promises which one this checkout is. Then fetch main
+        # by name into an explicit remote-tracking ref, since a tag-triggered
+        # checkout never sets one up on its own.
+        if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+          git fetch --unshallow origin
+        fi
+        git fetch origin main:refs/remotes/origin/main
+
+        # "git tag v0.2.0 SOME_COMMIT && git push --tags" fires this
+        # workflow from any commit, on or off main. This repository has no
+        # branch protection and no tag ruleset, so without this check a tag
+        # on a side branch walks straight into an OIDC trusted publish, with
+        # a real tag and a matching GitHub Release to show for it.
+        if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+          echo "::error::Tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not an ancestor of origin/main. Publishing it would put code that never merged on the registry under a real tag. Refusing to publish."
+          exit 1
+        fi
+
+        echo "Version check passed: version=${VERSION} tag=${GITHUB_REF_NAME}, and the tagged commit is on main."
+
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
 
@@ -50,6 +114,14 @@ jobs:
     - name: Lint (public repository hygiene guard)
       run: pnpm lint
 
+    # Read this as the unit suites and nothing more. tests/dogfood.e2e.test.ts
+    # is the only test that drives the real gate binaries through a real
+    # commit, and it skips itself when the sibling checkouts it needs are
+    # absent. They are always absent on a runner, so this step and ci.yml's
+    # identical one have never once run it. The end-to-end coverage exists
+    # on a maintainer's machine; it is not part of this gate, and treating a
+    # green run here as though it were is exactly the mistake the whole
+    # family exists to prevent.
     - name: Run tests
       run: pnpm test
 
@@ -84,7 +156,12 @@ jobs:
           echo "SKIP: $name@$version is already on the registry"
         else
           echo "PUBLISH: $name@$version"
-          pnpm publish --access public --provenance --no-git-checks
+          # No --provenance. Trusted publishing attaches a provenance
+          # attestation on its own, npm's own documentation says the flag is
+          # unnecessary under OIDC, and neither dep-guard nor vault-guard
+          # passes it. It buys no attestation and adds a way to fail.
+          # --no-git-checks stays: a tag checkout is on a detached head.
+          pnpm publish --access public --no-git-checks
         fi
 
     - name: Create GitHub Release
@@ -98,6 +175,11 @@ jobs:
     name: Smoke test published CLI
     needs: release
     runs-on: ubuntu-latest
+    # This job installs a published tarball from a public registry and runs
+    # it. It needs nothing from this repository, so it gets nothing: an
+    # empty mapping rather than the repository default, which is whatever
+    # the org settings happen to grant.
+    permissions: {}
     steps:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -114,29 +196,48 @@ jobs:
 
           # A single package, so there is no cross-package registry
           # propagation lag to wait out the way intent-guard's four-package
-          # smoke job does. There is still a small window right after
-          # publish where the registry has not caught up, so wait for the
-          # exact version to become visible rather than installing
-          # immediately, and fail loudly with a named timeout instead of
-          # letting npm install's own error stand in for it.
+          # smoke job does. There is still a window right after publish
+          # where the registry has not caught up, so wait for the exact
+          # version to become visible rather than installing immediately,
+          # and fail loudly with a named timeout instead of letting npm
+          # install's own error stand in for it.
+          #
+          # Two minutes was too short a budget to hang a red release run on:
+          # intent-guard has watched one of its packages take about six
+          # minutes to appear. Leave the registry room to be slow.
+          ATTEMPTS=36
+          DELAY=10
+          BUDGET=$(( (ATTEMPTS - 1) * DELAY ))
           FOUND=0
-          for i in $(seq 1 12); do
+          for i in $(seq 1 "${ATTEMPTS}"); do
             if [[ "$(npm view "@vaultcompass/conductor@${VERSION}" version 2>/dev/null)" == "${VERSION}" ]]; then
               echo "Package visible on registry."
               FOUND=1
               break
             fi
-            echo "Waiting for npm registry (attempt ${i}/12)..."
-            sleep 10
+            # No sleep after the last attempt: the loop is about to give up,
+            # and sleeping first only makes the timeout later than it says.
+            if [[ "${i}" -lt "${ATTEMPTS}" ]]; then
+              echo "Waiting for npm registry (attempt ${i}/${ATTEMPTS})..."
+              sleep "${DELAY}"
+            fi
           done
           if [[ "${FOUND}" -ne 1 ]]; then
-            echo "::error::Timed out after 120s waiting for @vaultcompass/conductor@${VERSION} on the npm registry."
+            echo "::error::Timed out after ${ATTEMPTS} attempts over ${BUDGET}s waiting for @vaultcompass/conductor@${VERSION} on the npm registry."
             exit 1
           fi
 
           TMP=$(mktemp -d)
           cd "${TMP}"
           npm init -y >/dev/null 2>&1
+
+          # "conductor init" attaches a pre-commit hook, so it needs a git
+          # repository to attach one to. Without this line it reports
+          # not-a-git-repository and exits 2, which under "set -e" fails the
+          # whole job -- after the publish has already happened, so the red
+          # is unfixable and describes a release that was actually fine.
+          git init -q .
+
           npm install "@vaultcompass/conductor@${VERSION}"
           ./node_modules/.bin/conductor --version
           ./node_modules/.bin/conductor init --dry-run
