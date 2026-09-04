@@ -114,6 +114,14 @@ jobs:
     - name: Lint (public repository hygiene guard)
       run: pnpm lint
 
+    # Read this as the unit suites and nothing more. tests/dogfood.e2e.test.ts
+    # is the only test that drives the real gate binaries through a real
+    # commit, and it skips itself when the sibling checkouts it needs are
+    # absent. They are always absent on a runner, so this step and ci.yml's
+    # identical one have never once run it. The end-to-end coverage exists
+    # on a maintainer's machine; it is not part of this gate, and treating a
+    # green run here as though it were is exactly the mistake the whole
+    # family exists to prevent.
     - name: Run tests
       run: pnpm test
 
