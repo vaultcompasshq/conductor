@@ -558,17 +558,24 @@ it is what makes a team switch a hook off. The line names the gates that ran,
 names any gate deferred to a later stage or left with nothing to check,
 counts any notes, and says to re-run with `--verbose` for the rest.
 
-Clean means all three of: the composed exit code is 0, no gate blocked, and
-no gate could not run. The second and third are not implied by the first. A
-gate with `enforce: false` is left out of the composed code entirely, so one
-that blocked, or one that could not run at all, still leaves the run at exit
-0, and those are exactly the runs whose report must not be collapsed to a
-line. A run where no gate ran at all prints the full report too, so the
-distinct verdicts for "none is enabled", "every gate was deferred" and
-"nothing had a contract to check" survive. Notes and diagnostics on their own
-do not force the full report; they are counted on the summary line, because a
-standing note about a lockfile format is a permanent property of that format
-rather than news about this commit.
+Clean means all four of: the composed exit code is 0, no gate blocked, no
+gate could not run, and the umbrella raised no diagnostic of its own. The
+last three are not implied by the first. A gate with `enforce: false` is left
+out of the composed code entirely, so one that blocked, or one that could not
+run at all, still leaves the run at exit 0, and those are exactly the runs
+whose report must not be collapsed to a line. A run where no gate ran at all
+prints the full report too, so the distinct verdicts for "none is enabled",
+"every gate was deferred" and "nothing had a contract to check" survive.
+
+**A gate's own notes are counted; the umbrella's own diagnostics force the
+full report.** The same rule separates them as separates a SARIF notification
+from a SARIF result. A gate's note is a statement about how much a run
+covered, such as pnpm lockfiles not recording install-script metadata, which
+is a permanent property of that file format and true on every run forever. A
+`conductor/blocking-mismatch` is the umbrella saying its own report may
+disagree with the gate's own verdict about what blocked, which is a defect in
+this run and cannot honestly be a number on a line that also says "clean,
+nothing blocked".
 
 This is a text-format decision and nothing else. The SARIF log is unchanged
 either way, and there is deliberately no policy key for it: the schema
@@ -606,11 +613,21 @@ repository on the adoption ramp accrued permanent alerts about the tool's own
 configuration, which is alert fatigue manufactured by the thing that exists
 to reduce it.
 
-`conductor/gate-missing` and `conductor/gate-failed` stay **results**, and
-the asymmetry is deliberate. A gate that could not run is the fail-closed
-posture made visible: a class of problem went unlooked-for on this change,
-and a reviewer scanning a pull request's alerts has to meet that as an alert
-rather than as tool status.
+The rule that decides which is which, so the next case does not go to
+judgment: **a statement about how much of the policy a run covered is a
+notification, and a statement that something went wrong is a result.** The
+first is true of the configuration rather than of the change, identical on
+every run until somebody edits the policy file, and on the adoption ramp
+deliberately true for weeks; a permanent alert is a dismissed alert. The
+second is about this run, goes away when somebody fixes it, and the reviewer
+of this change is the person who should see it.
+
+So `conductor/gate-missing` and `conductor/gate-failed` stay **results**: a
+gate that could not run is the fail-closed posture made visible, a class of
+problem went unlooked-for on this change, and a reviewer scanning a pull
+request's alerts has to meet that as an alert rather than as tool status. The
+normalization diagnostics stay results for the same reason. That rule also
+decides the text report's summary line, and the two answer it the same way.
 
 ## Scope of v0.1
 

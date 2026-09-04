@@ -288,7 +288,12 @@ describe('a fully clean run, which is most runs', () => {
     expect(text).toMatch(/stage ci/);
   });
 
-  it('counts the notes rather than hiding them or printing them all', () => {
+  it('counts the gate own notes rather than hiding them or printing them all', () => {
+    // A gate's own note is a statement about how much this run covered: the
+    // standing one about pnpm lockfiles not recording install-script
+    // metadata is a permanent property of that file format rather than news
+    // about this commit. Counted, not printed, and it does not stop the run
+    // being clean.
     const text = renderText(
       result(
         [
@@ -298,10 +303,12 @@ describe('a fully clean run, which is most runs', () => {
               failOn: 'medium',
               suppressed: 0,
               ignored: 0,
-              diagnostics: [{ code: 'dep-guard/lockfile-missing', message: 'no lockfile found' }],
+              diagnostics: [
+                { code: 'dep-guard/lockfile-missing', message: 'no lockfile found' },
+                { code: 'dep-guard/no-script-metadata', message: 'the format records none' },
+              ],
               details: {},
             },
-            diagnostics: [{ code: 'conductor/blocking-mismatch', message: 'counts disagree' }],
           }),
         ],
         0
@@ -311,6 +318,39 @@ describe('a fully clean run, which is most runs', () => {
     expect(text.trimEnd().split('\n')).toHaveLength(1);
     expect(text).toMatch(/2 note\(s\)/);
     expect(text).not.toMatch(/lockfile-missing/);
+  });
+
+});
+
+describe('an umbrella diagnostic is not a note', () => {
+  // The discriminator, applied: a statement about how much of the policy a
+  // run covered is a notification, and a statement that something went wrong
+  // is a result. A gate's own note is the first. conductor/blocking-mismatch
+  // is the second: it is the umbrella saying its own report may disagree
+  // with the gate's own verdict, which is a defect in this run rather than a
+  // permanent property of anything.
+  const withDiagnostic = result(
+    [
+      outcome({
+        exitCode: 0,
+        diagnostics: [
+          { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+        ],
+      }),
+    ],
+    0
+  );
+
+  it('prints the full report even though nothing blocked and nothing broke', () => {
+    const text = renderText(withDiagnostic);
+
+    expect(text).toMatch(/^conductor run: /m);
+    expect(text).toMatch(/blocking-mismatch/);
+    expect(text).toMatch(/^verdict: exit 0/m);
+  });
+
+  it('is not counted among the notes on a summary line, because there is none', () => {
+    expect(renderText(withDiagnostic)).not.toMatch(/note\(s\)/);
   });
 });
 

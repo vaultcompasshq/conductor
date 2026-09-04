@@ -464,8 +464,29 @@ function deferredNotifications(result: RunResult): Notification[] {
  * The comment that used to sit here said this was kept consistent with
  * gate-deferred and gate-not-enforced, and that whether the whole family
  * should be notifications was one decision to take once rather than three.
- * That decision has now been taken, for all three at once: a statement about
- * coverage or configuration is a notification, not a finding.
+ * That decision has now been taken, for all three at once, and the rule it
+ * was taken on is written out here so the next case decides itself instead
+ * of going to somebody's judgment a fourth time:
+ *
+ *   A statement about HOW MUCH OF THE POLICY A RUN COVERED is a
+ *   NOTIFICATION. It is true of the configuration rather than of this
+ *   change, so it is identical on every run until somebody edits the policy
+ *   file, and on the adoption ramp it is deliberately true for weeks. A
+ *   permanent alert is a dismissed alert, and it teaches the reader to
+ *   dismiss the next one.
+ *
+ *   A statement that SOMETHING WENT WRONG is a RESULT. It is about this run,
+ *   it goes away when somebody fixes it, and a reviewer of this change is
+ *   the person who should see it.
+ *
+ * That is why conductor/gate-missing and conductor/gate-failed stay results:
+ * a gate that could not run means a class of problem went unlooked-for on
+ * this change. It is also why the normalization diagnostics stay results:
+ * conductor/blocking-mismatch is the umbrella saying its own report may
+ * disagree with the gate's own verdict, which is a defect in this run and
+ * not a property of anybody's configuration. The same rule decides the text
+ * report's summary line, in isFullyClean in output-text.ts, and the two must
+ * keep answering it the same way.
  */
 function skippedNotifications(result: RunResult): Notification[] {
   return result.skipped.map((gate) => ({

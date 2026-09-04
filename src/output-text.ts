@@ -346,10 +346,19 @@ export interface TextOptions {
  * of the exit code. A gate with enforce: false is left out of the composed
  * code entirely, so a run where such a gate blocked, or could not run at
  * all, still exits 0; collapsing those to one "clean" line would silently
- * swallow the only report of them anybody sees. Notes and diagnostics are
- * deliberately NOT in here: they are counted on the summary line instead,
- * because a standing note about a lockfile format is a permanent property of
- * that format rather than news about this commit.
+ * swallow the only report of them anybody sees.
+ *
+ * A GATE'S OWN NOTES ARE NOT IN HERE; THE UMBRELLA'S OWN DIAGNOSTICS ARE.
+ * The two are printed with different markers in the full report and the
+ * difference is real. A statement about how much of the policy a run covered
+ * is a notification: the standing note that pnpm lockfiles do not record
+ * install-script metadata is a permanent property of that file format, true
+ * on every run forever, and forcing a screenful over it would make the
+ * summary line useless in the repositories that most need it. A statement
+ * that something went wrong is a result: conductor/blocking-mismatch is the
+ * umbrella saying its own report may disagree with the gate's own verdict
+ * about what blocked, which is a defect in THIS run and cannot be reported
+ * as a number on a line that also says "clean, nothing blocked".
  *
  * A run where no gate ran at all is not clean either, whatever the exit code
  * says. "No gate ran because none is enabled", "every gate was deferred" and
@@ -365,16 +374,20 @@ function isFullyClean(result: RunResult): boolean {
     (gate) =>
       gate.couldNotRun === null &&
       (gate.exitCode ?? 0) === 0 &&
+      gate.diagnostics.length === 0 &&
       !gate.findings.some((finding) => finding.blocking)
   );
 }
 
-/** Gate notes plus umbrella diagnostics: everything the report prints as a note. */
+/**
+ * The gates' own notes, and only those.
+ *
+ * The umbrella's own diagnostics are deliberately not added in. They force
+ * the full report instead, by the rule on isFullyClean above, so a count of
+ * them here would be a count of something that can never be on this line.
+ */
 function noteCount(result: RunResult): number {
-  return result.gates.reduce(
-    (total, gate) => total + gate.run.diagnostics.length + gate.diagnostics.length,
-    0
-  );
+  return result.gates.reduce((total, gate) => total + gate.run.diagnostics.length, 0);
 }
 
 /**
