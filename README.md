@@ -446,6 +446,11 @@ jobs:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
 ```
 
+The `@v4` pins there are readable, not safe: a tag moves, so pinning by one
+runs whatever its author pushes to it next. Pin every third-party action by
+commit digest in a workflow you actually run, the way this repository's own
+workflows do.
+
 `continue-on-error` there hides nothing: a gate that blocked has already
 failed the job through `conductor`'s own exit code, before this step runs.
 
