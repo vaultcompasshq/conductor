@@ -28,13 +28,13 @@ friction this repository removes, and that is all it removes:
 
 ## What it deliberately is not
 
-It is not a fourth gate. It finds no bugs of its own, has no rules about
-your code, and scans nothing. Every finding about your code came from one of
-the three gates and is labelled with which one. The only findings it adds
-are about the gates themselves, and they are labelled `conductor`: a gate
-that is switched on and could not run, and a gate whose output it could not
-read. Those exist because a report that reads clean when nothing looked is
-the failure this whole family exists to prevent.
+It is not a fourth gate. It finds no bugs of its own and scans nothing.
+Every finding about your code came from one of the three gates and is
+labelled with which one. The only findings it adds are about the gates
+themselves, and they are labelled `conductor`: a gate that is switched on
+and could not run, and a gate whose output it could not read. Those exist
+because a report that reads clean when nothing looked is the failure this
+whole family exists to prevent.
 
 It is not something you adopt before the gates are useful. Each gate keeps
 its own config file, its own baseline, its own thresholds, and its own exit
@@ -506,10 +506,10 @@ umbrella that crashed or was never executable, and exit 127 with no output
 at all is one of the shapes that reaches it.
 
 **Neither line advertises a bypass.** Every gate already has a recorded,
-reviewable, scoped escape: an allow entry, an ignore path, a baseline, or
-`enforce: false`. Skipping the hook skips every gate invisibly, including the
-ones that would have caught something unrelated to the finding somebody
-disagreed with, and leaves no trace of the decision anywhere.
+scoped escape: an allow entry, an ignore path, a baseline, or
+`enforce: false`. Skipping the hook skips every gate invisibly, including
+the ones that would have caught something unrelated to the finding
+somebody disagreed with, and leaves no trace of the decision anywhere.
 
 Changing the hook body turns every hook a previous conductor wrote into one
 "from an older conductor", which is the case init already handles by digest:
