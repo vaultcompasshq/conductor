@@ -74,6 +74,35 @@ chain.
 
 ## Releasing
 
+### The first version, by hand, once
+
+npm only exposes the trusted-publisher setting on a package that already
+exists on the registry, so the very first publish of a new name cannot go
+through OIDC. Tagging alone does not release the first version: the
+workflow's publish step has nothing to authenticate with and fails. If
+`@vaultcompass/conductor` is already on npm, this section is finished
+forever; skip to the next one.
+
+Merge the version bump and wait for `main`'s CI to go green on the merge
+commit, the same as any release. Then, from that commit on a maintainer's
+machine:
+
+    npm login
+    pnpm install --frozen-lockfile
+    pnpm build
+    pnpm publish --access public
+
+Then configure the trusted publisher for the package on npmjs.com, naming
+this repository and `.github/workflows/release.yml`. Only after that can an
+OIDC publish from Actions succeed.
+
+Now tag that same commit and push, exactly as below. That run finds its
+version already on the registry, skips its own publish rather than failing
+on a duplicate, and creates the GitHub Release. Every later release is the
+ordinary flow and touches none of this.
+
+### Every release after that
+
 Open a pull request that bumps the version in `package.json`. Let it merge
 like any other change, and wait for `main`'s own CI to go green on the
 merge commit. Only then tag that commit and push the tag:
