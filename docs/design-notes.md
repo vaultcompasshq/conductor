@@ -94,9 +94,10 @@ in which product a name means, and every say in which build of it to run.
 2. this policy file, delivered to the gate as command-line flags;
 3. a flag on the umbrella's own command line.
 
-Layer three is narrow in v0.1: `--gate <role>` restricts a run to named
-roles. There is no umbrella flag that rewrites a gate's threshold, for the
-reason above.
+Layer three is narrow on purpose. `--gate <role>` restricts a run to named
+roles; `--stage`, `--base` and `--spec` change what a run measures; `--format`,
+`--output` and `--verbose` change how it is reported. There is no umbrella flag
+that rewrites a gate's threshold, for the reason above.
 
 ### Why an excluded gate is named in the report
 

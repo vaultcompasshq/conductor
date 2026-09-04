@@ -1,11 +1,8 @@
 # conductor
 
-Three gates cover three boundaries of an AI-assisted coding session: what
-comes in (dependencies), what goes out (secrets), and what was approved
-(drift from the intent somebody signed off on). Each of the three installs,
-versions and runs on its own. conductor is the optional layer over them, and
-all it adds is one policy file, one init, one hook and one report. Delete it
-and every gate still runs, with exactly the configuration it had.
+conductor is the optional layer over three guardrail gates that each work on
+their own. All it adds is one policy file, one init, one hook and one report.
+Delete it and every gate still runs, with exactly the configuration it had.
 
 <!-- guardrails-family: shared block, keep it identical in dep-guard, vault-guard, intent-guard and conductor -->
 The Vault & Compass guardrails are three gates over an AI-assisted coding
@@ -269,8 +266,8 @@ branch changed since it forked, from
 `git diff --name-only --no-renames <base>...HEAD` in the repository root.
 
 With no `--base`, `GITHUB_BASE_REF` is used as `origin/<value>` when it is
-set, and the text report says so. With neither, the intent gate runs exactly
-as it did in v0.1.
+set, and the text report says so. With neither, the intent gate runs the way
+it does at a commit: against the staged index, or the paths you name.
 
 A git failure here is **fail-closed**: could-not-run, so exit 2 for an
 enforced gate and a note for an unenforced one. There is deliberately no
@@ -396,9 +393,8 @@ promotion would want and which the audits do by hand today; and anything that
 runs inside an agent session or on save, which intent-guard's own optional
 session hooks already cover.
 
-v0.2.0 is the first version of this on npm, and it is a first release of a
-young tool rather than a finished one. The gates are still the product; this
-is the convenience layer over them.
+0.2.0 is the first release, of a young tool rather than a finished one. The
+gates are still the product; this is the convenience layer over them.
 
 ## Design notes
 
