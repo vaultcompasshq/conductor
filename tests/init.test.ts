@@ -762,6 +762,24 @@ describe('revert with a hook the user edited', () => {
     expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
   });
 
+  it('removes nothing at all while the hook survives', () => {
+    // The tests around this one assert that this file and that file still
+    // exist, one at a time. The guarantee is the whole of it: while the hook
+    // is still there, revert removes nothing, because anything it did remove
+    // would be removed from under a hook that is still running. Asserted on
+    // the action list rather than on a list of paths, so a file added to
+    // what init writes is covered without anybody remembering to come back.
+    const repo = gitRepo();
+    init(repo);
+    editedHook(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.actions.length).toBeGreaterThan(0);
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+    expect(result.actions.every((action) => action.kind === 'skip')).toBe(true);
+  });
+
   it('keeps the manifest, so a second revert still knows what it is looking at', () => {
     const repo = gitRepo();
     init(repo);
@@ -827,6 +845,25 @@ describe('revert after adopting a gate hook', () => {
       readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
     ) as { adopted: { content: string } | null };
     expect(manifest.adopted?.content).toBe(ORIGINAL);
+  });
+
+  it('does not put the adopted hook back while the umbrella hook is still there', () => {
+    // The negative half of the restore rule, and the half nothing pinned.
+    // Both existing tests check that the gate's own hook IS restored once the
+    // umbrella hook is gone. Restoring it while the umbrella hook survives
+    // would write over the very edit the user asked to keep, at the same
+    // path, and revert would report a conflict while having overwritten it.
+    const repo = adopted();
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hookPath, `${readFileSync(hookPath, 'utf8')}\n# a local tweak\n`);
+    const edited = readFileSync(hookPath, 'utf8');
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(hookPath, 'utf8')).toBe(edited);
+    expect(readFileSync(hookPath, 'utf8')).not.toBe(ORIGINAL);
+    expect(result.actions.map((action) => action.kind)).not.toContain('restore');
   });
 
   it('restores the gate own hook byte for byte under --force', () => {
