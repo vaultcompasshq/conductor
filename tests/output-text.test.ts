@@ -320,6 +320,29 @@ describe('a fully clean run, which is most runs', () => {
     expect(text).not.toMatch(/lockfile-missing/);
   });
 
+  it('names a gate that ran but could not have blocked anything', () => {
+    // A repository on the adoption ramp otherwise reads clean with no hint
+    // that one of the gates it just named had no vote. "Clean" and "one of
+    // these could not have failed the run" are two different pieces of news.
+    const text = renderText(
+      result(
+        [
+          outcome({ exitCode: 0 }),
+          outcome({ role: 'intent', product: 'intent-guard', exitCode: 0, enforce: false }),
+        ],
+        0
+      )
+    );
+
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+    expect(text).toMatch(/enforce: false in \.guardrails\.yaml: intent \(intent-guard\)/);
+    // The gate that did have a vote is not swept into the same clause.
+    expect(text).not.toMatch(/enforce: false[^.]*dependencies/);
+  });
+
+  it('says nothing about enforcement when every gate that ran was enforced', () => {
+    expect(renderText(result([outcome({ exitCode: 0 })], 0))).not.toMatch(/enforce/);
+  });
 });
 
 describe('an umbrella diagnostic is not a note', () => {

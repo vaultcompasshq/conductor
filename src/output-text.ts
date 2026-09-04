@@ -419,6 +419,19 @@ function summaryLine(result: RunResult): string {
     parts.push(`Nothing to check against: ${names}.`);
   }
 
+  // A gate that ran with enforce: false could not have failed this run
+  // whatever it found. Naming it among the gates that ran and then saying
+  // nothing more makes a repository on the adoption ramp read as fully
+  // gated, and being fully gated is exactly what the ramp is not yet. The
+  // full report says this in the line under that gate's findings; on a clean
+  // run there are no findings, so the summary line is the only place left to
+  // say it.
+  const unenforced = result.gates.filter((gate) => !gate.enforce);
+  if (unenforced.length > 0) {
+    const names = unenforced.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+    parts.push(`Could not have blocked, enforce: false in .guardrails.yaml: ${names}.`);
+  }
+
   // Non-blocking findings are counted rather than hidden, for the same reason
   // the full report prints the suppressed and ignored counts at zero: they
   // are things the gates actually said, and a summary that omitted them would

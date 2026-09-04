@@ -555,8 +555,9 @@ constraint on all of this is that the gates must not slow development down,
 with ceremony rather than runtime named as the cost. A screenful of per-gate
 detail on a commit that found nothing is that cost, paid on every commit, and
 it is what makes a team switch a hook off. The line names the gates that ran,
-names any gate deferred to a later stage or left with nothing to check,
-counts any notes, and says to re-run with `--verbose` for the rest.
+names any gate deferred to a later stage or left with nothing to check, names
+any gate that ran with `enforce: false` and so could not have blocked
+anything, counts any notes, and says to re-run with `--verbose` for the rest.
 
 Clean means all four of: the composed exit code is 0, no gate blocked, no
 gate could not run, and the umbrella raised no diagnostic of its own. The
