@@ -1,18 +1,29 @@
-# Conductor
+# conductor
 
-The name is conductor. The package is not yet published. This repository is
-the umbrella over the Vault & Compass guardrail gates: one policy file, one
-init, one hook, and one report across three tools that each install,
-version, and run on their own. The word conductor previously belonged to
-the intent gate, which is now intent-guard.
+Three gates cover three boundaries of an AI-assisted coding session: what
+comes in (dependencies), what goes out (secrets), and what was approved
+(drift from the intent somebody signed off on). Each of the three installs,
+versions and runs on its own. conductor is the optional layer over them, and
+all it adds is one policy file, one init, one hook and one report. Delete it
+and every gate still runs, with exactly the configuration it had.
 
-## What it is
+<!-- guardrails-family: shared block, keep it identical in dep-guard, vault-guard, intent-guard and conductor -->
+The Vault & Compass guardrails are three gates over an AI-assisted coding
+session: [dep-guard](https://www.npmjs.com/package/@vaultcompass/dep-guard)
+checks what comes in (hallucinated package names, typosquats, tampered
+lockfile entries),
+[vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) checks
+what goes out (credentials about to be committed), and
+[intent-guard](https://www.npmjs.com/package/@vaultcompass/intent-guard)
+checks the change against what was approved (drift from a frozen intent
+contract, and change budgets). Each one installs, configures and runs on its
+own;
+[conductor](https://www.npmjs.com/package/@vaultcompass/conductor) is the
+optional umbrella that runs them from one policy file, one hook and one
+report.
+<!-- /guardrails-family -->
 
-Three gates cover three boundaries of an AI-assisted coding session.
-dep-guard checks what comes in: hallucinated package names, typosquats,
-tampered lockfile entries. vault-guard checks what goes out: credentials
-about to be committed. intent-guard checks what was approved: drift from a
-frozen intent contract, and change budgets.
+## Why
 
 Run all three and you have three inits, three config files, three output
 shapes, and three pre-commit hooks fighting over one file. That is the
@@ -25,6 +36,72 @@ friction this repository removes, and that is all it removes:
   but the intent one;
 - **one report**, as text for a terminal or as a single SARIF 2.1.0 log
   with one run per gate.
+
+**A clean run prints one line.** Most runs are clean, and the design
+constraint on all of this is that the gates must not slow development down,
+with ceremony rather than runtime named as the cost. A screenful of per-gate
+detail on a commit that found nothing is that cost, paid on every commit, and
+it is what makes a team switch a hook off.
+
+## Quickstart
+
+Install the gates. Each of them is a working tool on its own, and none of
+them needs this one:
+
+```
+npm install -g @vaultcompass/dep-guard @vaultcompass/vault-guard @vaultcompass/intent-guard
+```
+
+The umbrella is optional. Install it when running the three separately has
+become the annoying part:
+
+```
+npm install -g @vaultcompass/conductor
+```
+
+From the repository root, look before you write:
+
+```
+conductor init --dry-run
+```
+
+That prints every file it would write or change and writes nothing. Then:
+
+```
+conductor init
+```
+
+which writes `.guardrails.yaml` with every gate listed and only the ones it
+found switched on, plus one pre-commit hook running every enabled gate whose
+stage is `commit`.
+
+Commit something. A clean commit prints one line:
+
+```
+conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 1 note(s). Re-run with --verbose for the full report.
+```
+
+A commit with a staged credential in it prints the full report and exits 1:
+
+```
+conductor run: 2 gate(s), 1 finding(s)
+
+dependencies  dep-guard 0.2.1  exit 0  251ms  via dep-guard on path
+  threshold medium   suppressed 0   ignored 0
+
+secrets  vault-guard 1.4.6  exit 1  97ms  via vault-guard on path
+  BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:27:32
+      Possible secret of type 'anthropic'
+  threshold medium   suppressed 0   ignored not reported
+
+  deferred  intent  intent-guard  did not run here; it runs from stage ci onwards
+
+verdict: exit 1, 1 blocking finding(s) across 2 gate(s).
+```
+
+Both gates there are the ones you installed a moment ago, running with their
+own thresholds and their own baselines. The umbrella found nothing of its
+own, because it looks for nothing of its own.
 
 ## What it deliberately is not
 
@@ -83,113 +160,50 @@ report:
   format: text
 ```
 
-`stage` and `enforce` are both written out for every gate, with their
-default values, because a default that lives only in the parser is a default
-nobody can find. `enforce` is the one exception to "the written value is the
-default": the intent gate starts at `false`, so a fresh init produces the
-adoption ramp rather than describing it and leaving somebody to hand-edit it
-in.
-
 **Gates are keyed by role**, not by product. `dependencies`, `secrets`,
-`intent`. The `product` field says which binary fills that role today. This
-is worth one extra line: it makes a product rename a one-line edit rather
-than a rename of the key your CI reads, and it leaves room for a fourth
-role to arrive without the schema moving.
+`intent`. The `product` field says which binary fills that role today.
 
 **`enabled`** defaults to true. A gate that is enabled and whose binary
 cannot be found is a blocking finding of the umbrella's own
-(`conductor/gate-missing`), never a silent skip. A gate that is switched on
-and quietly absent is the failure this whole family exists to prevent.
+(`conductor/gate-missing`), never a silent skip.
 
 **`stage`** says when a gate runs: `commit`, `push`, or `ci`. Stages are
 **cumulative** in that order, so a gate runs at its own stage and at every
 later one, and a run at `ci` runs everything that is enabled. The defaults
 are `commit` for `dependencies` and `secrets` and `ci` for `intent`.
 
-Runtime is not what decides that split. All three gates together take under
-a second on a staged commit. Ceremony is the cost, and only the intent gate
-has any: it wants a contract approved before the work starts, which is a
-per-task human step and belongs at a pull request. The other two are silent
-until they find something, and a secret that reaches a pull request is
-already on a remote, so the earliest stage is the only honest place for
-them.
-
 A gate held back by the stage filter is never silent. It is one line in the
 text report naming the stage it is waiting for, and a `conductor/gate-deferred`
-notification in the SARIF log's `conductor` run. It gets no SARIF run of its own,
-for the same reason a gate that could not run gets none: it produced no tool
-output, and an empty run named for that product would put its name on
-something it never did. Its binary is not even looked for, so a gate
-installed only on the CI image does not fail a developer's commit.
+notification in the SARIF log's `conductor` run. Its binary is not even looked
+for, so a gate installed only on the CI image does not fail a developer's
+commit.
 
 **`enforce`** defaults to true. A gate with `enforce: false` runs, reports,
 and its findings appear in the text report and the SARIF log exactly as an
 enforced gate's do. The only thing it cannot do is change the exit code: its
 blocking findings do not raise it, and its failing to run at all does not
-make the run exit 2. The failure is not quietened down anywhere else. In
-SARIF it is still a `conductor/gate-missing` or `conductor/gate-failed`
-result at `error` level, because a class of problem went unlooked-for on
-this change whoever was enforcing the gate. What records that the verdict
-never reached the exit code is the `conductor/gate-not-enforced`
-notification, and in the text report the line under that gate's section.
-That is the adoption ramp, so a gate can be switched on and read for a few
-weeks before it is allowed to refuse anybody's commit. `init` writes it out
-for every gate, and starts the intent gate at `false`.
-
-It is not a downgrade of what the gate said. Findings keep their own
-severities and their own `blocking` flags, in both formats, because
-rewriting a critical finding to a note would put this repository's
-enforcement policy into the field a code-scanning UI uses to describe the
-finding itself. What changes is that the text report says in words that the
-gate blocked and was not enforced, on the same screen as the findings, so a
-green exit next to red findings is never a surprise. In SARIF that gate's
-own run carries `properties.enforced: false`, and the `conductor` run
-carries a `conductor/gate-not-enforced` notification as well, because a gate
-that could not run has no run of its own to hang the property on and that is
-exactly the case worth saying out loud. That run's properties bag also
-carries the `stage` the gate ran at, so a log from a commit-stage run is
-distinguishable from a full one rather than looking like the same run with
-fewer findings in it.
+make the run exit 2. That is the adoption ramp, so a gate can be switched on
+and read for a few weeks before it is allowed to refuse anybody's commit.
+`init` writes it out for every gate, and starts the intent gate at `false`.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
 becomes `--fail-on high`, `online: true` becomes `--online`,
 `require-frozen: false` becomes `--no-require-frozen`, and a list becomes
-one flag per entry. Nothing here interprets any of them, which is why a
-gate can grow a flag without this package needing a release. The handful of
-flags the umbrella supplies itself (the JSON format flag, `--staged`, and
-the intent gate's `--project`) are rejected if you also set them, rather
-than being silently overridden.
+one flag per entry. The handful of flags the umbrella supplies itself (the
+JSON format flag, `--staged`, and the intent gate's `--project`) are
+rejected if you also set them, rather than being silently overridden.
 
-**There is no shared severity threshold, on purpose.** Two of the three
-products share a four-level scale exactly; the third scores a weighted
-rubric from 0 to 100 and has two budget outcomes with no severity in them
-at all. One top-level `failOn` would read as one decision and mean three
-different things, so setting one is an error rather than a knob that half
-works. Each gate keeps its own threshold in its own `options` block,
-spelled the way that gate spells it.
+**There is no shared severity threshold, on purpose.** One top-level
+`failOn` would read as one decision and mean three different things, so
+setting one is an error rather than a knob that half works. Each gate keeps
+its own threshold in its own `options` block, spelled the way that gate
+spells it.
 
 **`command`** takes an absolute path and overrides binary resolution for
 that gate, for pointing at a build that is not installed anywhere.
-Otherwise resolution tries each of that product's binary names in order,
-looking in the repository's `node_modules/.bin` and then on `PATH`. The
-repository's own copy wins, so a project pin beats a global install, which
-is what `pnpm exec` does in the same repository. The name is the outer
-loop and the location the inner one, so a product's current name still
-wins over an older one wherever each is installed: a repository has no say
-in which product a name means, and every say in which build of it to run.
 
 **`report.format`** is `text` or `sarif`, and `--format` overrides it.
-
-### Precedence
-
-1. the gate's own config file, which the umbrella never reads or writes;
-2. this policy file, delivered to the gate as command-line flags;
-3. a flag on the umbrella's own command line.
-
-Layer three is narrow in v0.1: `--gate <role>` restricts a run to named
-roles. There is no umbrella flag that rewrites a gate's threshold, for the
-reason above.
 
 ## Commands
 
@@ -208,41 +222,6 @@ reason above.
   never overrides a foreign-hook or gate-hook refusal, with or without
   `--adopt`: those hooks were never conductor's, and no flag here turns
   somebody else's file into one this tool may overwrite.
-
-Re-running init over a hook a **previous version of conductor** wrote
-replaces it, rather than reporting it already installed. The marker in the
-hook says whose it is, not which version, so the decision is the hook's
-digest: identical to what this version writes means nothing to do;
-identical to the digest the manifest recorded means an older conductor
-wrote it and it is updated in place; anything else means it has been edited
-by hand, and it is refused with the same guidance a changed file gets under
-`--revert`. A marked hook with no manifest to check against is treated as
-edited. Skipping an old hook left it running a command line this version no
-longer writes, and left it out of the new manifest, so a later `--revert`
-walked past it.
-
-The manifest is rebuilt when it is the part that has gone missing. A hook
-that is already byte for byte what this version writes, in a repository
-whose manifest no longer records it, is left alone on disk and entered in
-the manifest. Nothing is written to the hook, because nothing is wrong with
-it; without the entry, `--revert` has no record that the hook is the
-umbrella's, reports success, and leaves it running. A `git clean`, a
-deleted `.guardrails` directory, and an install from before there were
-manifests all reach that state.
-
-A revert that cannot remove everything removes nothing that would leave the
-repository half-wired, keeps the manifest describing what is left, and
-exits non-zero. In particular, if the hook has been edited by hand it is
-left alone and so is the policy file, because a hook running the umbrella
-with no policy file to read would refuse every commit.
-
-Two of the three gates write a marker comment into the hook they install,
-so init recognises those exactly. The secret scanner writes no marker, so
-its hook is recognised **by content**: a hook that mentions that tool and
-runs a staged scan. That is the same test its own installer applies to its
-own hook, but it is a heuristic, and a hand-written hook that happens to
-call that tool the same way will be treated as its. Read what `--dry-run`
-reports before running `--adopt` on a hook you did not write.
 
 `conductor run` runs every enabled gate and prints one report.
 
@@ -267,9 +246,7 @@ reports before running `--adopt` on a hook you did not write.
 - `--gate <role>`, repeatable. A gate the policy file enables and this flag
   leaves out is named as excluded, on one line in the text report and as a
   `conductor/gate-excluded` notification in the SARIF log's `conductor` run.
-  It never reaches the exit code. Without those lines an uploaded log from a
-  narrowed run cannot be told from a log of a full one, which is the same
-  confusion the deferred notification exists to prevent.
+  It never reaches the exit code.
 
 ### Exit codes
 
@@ -280,19 +257,6 @@ reports before running `--adopt` on a hook you did not write.
   stdout, which is what a rejected config file looks like from two of the
   three.
 
-A gate carrying `enforce: false` is left out of that composition entirely,
-and a gate the stage filter deferred never gets as far as it. Both are the
-policy file's own decisions, written down in the repository; nothing here
-reads a gate's output and decides on its own to ignore it.
-
-This is not the numeric maximum of the children's exit codes, because the
-codes do not mean the same thing in each product. One of the three uses 2
-for "could not run the checks at all"; the other two have only 0 and 1 and
-use 1 both for a real finding and for a broken config. So the composed code
-can differ from the maximum of its children's, and a gate that could not
-run outranks a gate that blocked. A report that reads clean because nothing
-looked is worse than one that says it failed.
-
 ## Intent at a pull request
 
 The intent gate is the only one of the three with any ceremony: its native
@@ -302,12 +266,7 @@ human step. That step is exactly what a pull request cannot carry, so at the
 
 **What it measures.** With `--base <ref>`, the changed-path set is what this
 branch changed since it forked, from
-`git diff --name-only --no-renames <base>...HEAD` in the repository root. The
-three-dot form is the point: two-dot would attribute every commit that landed
-on the base branch after this branch forked to this branch, so somebody else's
-merge would breach this pull request's change budget. A rename lists both its
-old and its new path, so moving a file out of a protected directory still
-blocks; the cost is that a rename counts as two paths against `max_files`.
+`git diff --name-only --no-renames <base>...HEAD` in the repository root.
 
 With no `--base`, `GITHUB_BASE_REF` is used as `origin/<value>` when it is
 set, and the text report says so. With neither, the intent gate runs exactly
@@ -331,51 +290,15 @@ gate looks like. In Actions this is almost always a shallow checkout, so
    running the gate against it fails every pull request on "not frozen by
    user" without checking anything.
 3. The **first** `Spec: <path>` line in the pull request body, read from the
-   event payload at `GITHUB_EVENT_PATH`. Written by whoever opened the pull
-   request, which is a weaker claim, so a path here that is not on disk falls
-   through to the next rule: a typo in a description must not fail a build. A
-   path that leaves the repository falls through the same way, because on a
-   fork pull request that body is written by somebody with no write access,
-   and an unchecked `../` there imports an arbitrary readable file from the
-   runner and puts its path in the contract. `--spec` is deliberately not held
-   to that rule: a person typed it, and a spec kept outside the checkout is a
-   real thing to want.
+   event payload at `GITHUB_EVENT_PATH`. A path here that is not on disk, or
+   one that leaves the repository, falls through to the next rule.
 4. A markdown file **directly under** `docs/superpowers/specs` whose name
    relates to the branch. The branch slug is the branch name with its first
    segment (`feat/`, `fix/`) removed; a filename is reduced by stripping a
    `YYYY-MM-DD-` prefix and a trailing `-design`; the two are candidates when
-   either contains the other.
-
-   Several candidates are ranked: a stem **equal** to the slug first, then
-   the **longest** stem, and only then the newest name. Newest alone was the
-   rule, and it put a pull request against another feature's requirements: a
-   vaguer spec carrying a later date beat the one named for the branch.
-
-   The newest-name tie-break is still a lexical one, so **date every spec**.
-   Where two names reduce to the same stem and one has no `YYYY-MM-DD-`
-   prefix, the undated one sorts last and wins. That is a different revision
-   of the right feature's spec rather than a different feature's, which is
-   why the ranking leaves it alone, but it is not necessarily the revision
-   you meant.
-
-   The plan under `docs/superpowers/plans` is paired only when its stem is
-   **equal** to the chosen spec's, and passed as `--plan`. Equal rather than
-   related, because pairing a spec with a neighbouring feature's plan freezes
-   one set of requirements against the other's change budget, and the block
-   or pass that follows is about neither. No plan is fine; intent-guard
-   imports a spec on its own.
-
-**How it is frozen.** `intent-guard import-spec --from superpowers
---dry-run` drafts a contract, that YAML is written into a **temporary**
-directory, `intent-guard freeze` approves it there with an `--approved-by`
-naming the spec and the short commit, and the gate runs with `--project`
-pointed at that directory. Nothing is ever written under the repository's own
-`.conductor`: a contract is a committed artifact with an approver's name on
-it, and one dropped into a working tree by a CI run is either committed by
-accident or read by the next run as though a person had approved it. Any
-failure in that chain is could-not-run for the gate, and the report names the
-step it failed at, because the gate itself said nothing and that sentence is
-all there is to tell a shallow checkout from a spec the importer choked on.
+   either contains the other. Several candidates are ranked: a stem **equal**
+   to the slug first, then the **longest** stem, and only then the newest
+   name, which is a lexical tie-break, so **date every spec**.
 
 **A branch with neither** is a third state beside deferred and could-not-run:
 the gate is switched on, it ran, and it had nothing to check. It gets one
@@ -390,18 +313,6 @@ budget breaches block, subject to `enforce`. Drift on its own is reported and
 not blocked, which is already intent-guard's own behaviour. The umbrella adds
 no severity threshold of its own here either.
 
-**Which budget applies** is intent-guard's rule, not this package's, and it
-is worth knowing before you write one: the importer takes the **first** fenced
-`yaml` block whose whole content is a single `budget` key, searching the
-**spec first** and the plan only after it. So a budget in the spec wins, and a
-budget in the plan applies only when the spec has none. Putting one in each
-is not a merge; the plan's is simply never read.
-
-Both reports say what the verdict is about. The text report carries one line
-naming the contract source and the base ref; the gate's SARIF run carries
-`contractSource` and `baseRef` in its properties bag, beside `enforced` and
-`stage`.
-
 ## The Action
 
 `action.yml` at the root is a composite action that runs the gates at the
@@ -415,11 +326,6 @@ with a sentence saying to add it as a devDependency. `--base` is passed only whe
 `base-ref` input names one; left empty, the umbrella reads `GITHUB_BASE_REF`
 itself and treats an empty value as "not a pull request", which is what a
 push build wants.
-
-`output` is relative to `working-directory`, and the `sarif` output reports
-it relative to the **workspace**, which is where the caller's upload step
-runs. It is published before the gates run, because the log is most worth
-having on the run that failed.
 
 ```yaml
 name: guardrails
@@ -467,202 +373,16 @@ runs whatever its author pushes to it next. Pin every third-party action by
 commit digest in a workflow you actually run, the way this repository's own
 workflows do.
 
-`continue-on-error` there hides nothing: a gate that blocked has already
-failed the job through `conductor`'s own exit code, before this step runs.
-
-The intent gate starts at `enforce: false`, which is what `init` writes, so a
-repository reads a few pull requests' worth of drift before letting it refuse
-anybody's merge:
-
-```yaml
-gates:
-  intent:
-    product: intent-guard
-    stage: ci
-    enforce: false
-```
-
-## The hook
-
-One hook, running `conductor run --staged --stage commit`. It names the
-stage rather than running everything, because a pre-commit hook is the
-commit stopping point, and a hook that runs the per-task ceremony of the
-intent gate on every commit is a hook a team switches off. It fails closed:
-a missing umbrella binary blocks the commit with one line saying so, because
-a guardrail that is off when the tool is missing is a guardrail an attacker
-turns off by making the tool missing. It passes the exit code straight
-through, so 2 does not collapse into 1 and report findings that were never
-looked for.
-
-**It says a different thing for each of those two codes.** On exit 1 a gate
-blocked, and the line points at the report and says that disagreeing with a
-finding is done in `.guardrails.yaml` or in that gate's own configuration, so
-the decision is recorded where the next reader can see it. On exit 2 nothing
-was checked at all, and the line says that rather than calling it a blocked
-commit: a gate that could not run made no decision, and reporting one is the
-same error as collapsing the codes. That line says "if there is a report
-above" rather than "the report above", because the same branch catches an
-umbrella that crashed or was never executable, and exit 127 with no output
-at all is one of the shapes that reaches it.
-
-**Neither line advertises a bypass.** Every gate already has a recorded,
-scoped escape: an allow entry, an ignore path, a baseline, or
-`enforce: false`. Skipping the hook skips every gate invisibly, including
-the ones that would have caught something unrelated to the finding
-somebody disagreed with, and leaves no trace of the decision anywhere.
-
-Changing the hook body turns every hook a previous conductor wrote into one
-"from an older conductor", which is the case init already handles by digest:
-it rewrites the body in place and records the new digest. Nothing has to be
-reverted and reinstalled by hand.
-
-The hook prepends the repository's own `node_modules/.bin` to `PATH`
-before looking for the binary, so a conductor installed only as a project
-devDependency is visible to its own hook. The root comes from
-`git rev-parse --show-toplevel` rather than from the working directory,
-because a hook invoked from a subdirectory would otherwise prepend a path
-that does not exist. Fail-closed is unchanged: no conductor there and none
-on `PATH` still blocks the commit. The hook also survives being run under
-`sh -e`, which is what husky's dispatcher does, so the line explaining a
-blocked commit is printed there too rather than being cut off by the
-shell.
-
-A relative `core.hooksPath` is resolved against the working-tree root,
-which is where git actually looks. An absolute one pointing outside the
-repository is refused rather than written to, since that directory serves
-every repository on the machine.
-
-**Where git looks is not always the file to write.** husky 9 points
-`core.hooksPath` at `.husky/_`, a generated and gitignored directory it
-rewrites on every install; the file git executes there is a dispatcher
-that adds `node_modules/.bin` to `PATH` and runs the tracked hook one
-directory up. Init recognises that arrangement and then reads, detects,
-adopts, writes and reverts `.husky/pre-commit`, never anything under
-`.husky/_`. Reading the dispatcher instead reports the repository's real
-gate hook as foreign, so `--adopt` cannot adopt it, and writing the
-dispatcher puts the hook where the next install deletes it without saying
-so. Both were found by running this tool against a real husky 9
-repository rather than against a fixture.
-
-Recognition is structural: the hooks directory is named `_` and its parent
-is named `.husky`. Only husky creates that path, so the shape alone
-identifies it, and two things that look like useful corroboration are
-deliberately excluded.
-
-The **contents** of the file git executes are not a signal, because under
-husky 8 that file is the tracked hook itself: husky 8 points
-`core.hooksPath` at `.husky`, and every tracked hook there opens by
-sourcing `_/husky.sh` as a preamble. Reading that preamble as a dispatcher
-sends init one directory above `.husky`, which is the repository root.
-husky 8 therefore takes the ordinary path, where `.husky/pre-commit` is
-already both the file git runs and the file init reads.
-
-The **presence of husky's shim** is not a signal either. husky gitignores
-`.husky/_`, so `git clean -xdf` deletes that directory while
-`core.hooksPath=.husky/_` sits in `.git/config` and survives. A repository
-in that state has no shim and no dispatcher to find, and requiring one
-would send init back to writing `.husky/_/pre-commit`, the very file the
-next install wipes. The shim says whether husky ran recently, not whose
-directory this is, so `--dry-run` reports it and the rule ignores it.
-
-lefthook and the pre-commit framework also install a generated script
-where git looks, and neither has a tracked counterpart to write instead,
-so both are recognised and refused with a pointer at the manager's own
-config file (`lefthook-local.yml`, `.pre-commit-config.yaml`). A gate run
-from either of those is subject to that manager's exit code rather than
-the umbrella's, so 1 and 2 stop meaning different things there; that is
-why init names the file rather than editing it.
-
-## The report
-
-**A clean run prints one line.** Most runs are clean, and the design
-constraint on all of this is that the gates must not slow development down,
-with ceremony rather than runtime named as the cost. A screenful of per-gate
-detail on a commit that found nothing is that cost, paid on every commit, and
-it is what makes a team switch a hook off. The line names the gates that ran,
-names any gate deferred to a later stage or left with nothing to check, names
-any gate that ran with `enforce: false` and so could not have blocked
-anything, counts any notes, and says to re-run with `--verbose` for the rest.
-
-Clean means all four of: the composed exit code is 0, no gate blocked, no
-gate could not run, and the umbrella raised no diagnostic of its own. The
-last three are not implied by the first. A gate with `enforce: false` is left
-out of the composed code entirely, so one that blocked, or one that could not
-run at all, still leaves the run at exit 0, and those are exactly the runs
-whose report must not be collapsed to a line. A run where no gate ran at all
-prints the full report too, so the distinct verdicts for "none is enabled",
-"every gate was deferred" and "nothing had a contract to check" survive.
-
-**A gate's own notes are counted; the umbrella's own diagnostics force the
-full report.** The same rule separates them as separates a SARIF notification
-from a SARIF result. A gate's note is a statement about how much a run
-covered, such as pnpm lockfiles not recording install-script metadata, which
-is a permanent property of that file format and true on every run forever. A
-`conductor/blocking-count-mismatch`, or a `conductor/blocking-threshold-unknown`,
-is the umbrella saying its own report may disagree with the gate's own verdict
-about what blocked, which is a defect in this run and cannot honestly be a
-number on a line that also says "clean, nothing blocked".
-
-This is a text-format decision and nothing else. The SARIF log is unchanged
-either way, and there is deliberately no policy key for it: the schema
-describes what a repository gates on, and how loud one developer wants their
-own terminal to be is not that.
-
-The full text report is one section per gate, blocking findings first, with each
-gate's own threshold, its own suppressed and ignored counts, and its own
-exit code and duration in the header. The counts are printed even at zero,
-because they are the user's earlier decisions and hiding them makes a
-repository with two hundred baselined findings read as clean.
-
-The SARIF output is one log with one run per gate, each run's tool name and
-version taken from that gate. Rule ids are product-namespaced, each result
-carries the gate's own fingerprint verbatim in `partialFingerprints` under
-a key naming the product, and the properties bag carries `blocking`,
-`severity`, whether that severity was assigned by the umbrella rather than
-by the gate, how durable that fingerprint is, and the gate's own details
-bag with its values unchanged. A value in that bag is never converted, so
-where a gate's own units differ from SARIF's the key says so:
-`columnZeroBased` is the secret scanner's own 0-based column, sitting
-beside the 1-based `startColumn` mapped from it. No location is invented:
-a finding with no known line gets no region, and a finding about a missing
-binary gets no location at all.
-
-**A statement about coverage or configuration is a notification, not a
-finding.** Three of the umbrella's own statements are about how much of the
-policy a run represents rather than about anybody's code: a gate deferred to
-a later stage, a gate the policy told not to decide anything, and a branch
-with no contract for the intent gate to check against. They live in
-`invocations[0].toolExecutionNotifications` on the `conductor` run, keeping
-their rule ids as descriptor ids and their text unchanged. As results they
-were fingerprint-less note alerts that came back on every single run, so a
-repository on the adoption ramp accrued permanent alerts about the tool's own
-configuration, which is alert fatigue manufactured by the thing that exists
-to reduce it.
-
-The rule that decides which is which, so the next case does not go to
-judgment: **a statement about how much of the policy a run covered is a
-notification, and a statement that something went wrong is a result.** The
-first is true of the configuration rather than of the change, identical on
-every run until somebody edits the policy file, and on the adoption ramp
-deliberately true for weeks; a permanent alert is a dismissed alert. The
-second is about this run, goes away when somebody fixes it, and the reviewer
-of this change is the person who should see it.
-
-So `conductor/gate-missing` and `conductor/gate-failed` stay **results**: a
-gate that could not run is the fail-closed posture made visible, a class of
-problem went unlooked-for on this change, and a reviewer scanning a pull
-request's alerts has to meet that as an alert rather than as tool status. The
-normalization diagnostics stay results for the same reason. That rule also
-decides the text report's summary line, and the two answer it the same way.
-
-## Scope of v0.1
+## What is in and what is out
 
 In: the policy file and its schema, `init` with dry-run, revert, and adopt,
-`run` producing the combined text report and a combined SARIF log, and the
-composed exit code.
+`run` producing the combined text report and a combined SARIF log, the
+composed exit code, per-gate `stage` and `enforce`, `run --stage`, the intent
+gate at a pull request (`--base`, `--spec`, the imported contract, the
+no-contract advisory), and the composite Action.
 
-Out, deliberately: a unified baseline (each gate keeps its own, and their
-fingerprints are not equally durable, so one shared file would expire
+Out, deliberately: a unified baseline or ledger (each gate keeps its own, and
+their fingerprints are not equally durable, so one shared file would expire
 entries silently for one product and not another), an MCP registration,
 running the gates concurrently, and any finding of the umbrella's own about
 anybody's CODE. The findings it does raise are all about the gates
@@ -671,21 +391,25 @@ and `conductor/gate-failed`, plus the two diagnostics
 `conductor/blocking-count-mismatch` and
 `conductor/blocking-threshold-unknown`.
 
-## Scope of v0.2
-
-In: per-gate `stage` and `enforce`, `run --stage`, the intent gate at a pull
-request (`--base`, `--spec`, the imported contract, the no-contract
-advisory), and the composite Action.
-
-Still out: intent at the cohesion level, which is what a merge or a
-promotion would want and which the audits do by hand today; anything that
+Also out: intent at the cohesion level, which is what a merge or a
+promotion would want and which the audits do by hand today; and anything that
 runs inside an agent session or on save, which intent-guard's own optional
-session hooks already cover; and a unified baseline or ledger.
+session hooks already cover.
 
-No longer out: a published package. v0.2.0 is the first version of this on
-npm, and it is a first release of a young tool rather than a finished one.
-The gates are still the product; this is the convenience layer over them,
-and what it covers is exactly the two scope lists above.
+v0.2.0 is the first version of this on npm, and it is a first release of a
+young tool rather than a finished one. The gates are still the product; this
+is the convenience layer over them.
+
+## Design notes
+
+The reasoning behind the decisions above lives in
+[docs/design-notes.md](docs/design-notes.md): the digest ladder that lets a
+re-install replace an older hook, how husky and lefthook are recognised and
+why one of them is refused, what the hook says on each exit code, why a clean
+report collapses to one line, the rule separating a SARIF notification from a
+SARIF result, how the exit code is composed, and the mechanism behind the
+intent gate at a pull request. Several of them were learned from running this
+tool against real repositories rather than reasoned out in advance.
 
 ## License
 

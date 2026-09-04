@@ -6,6 +6,8 @@ dist/
 *.tsbuildinfo
 *.local.md
 .local/
+# Local agent settings and agent worktrees. Never committed.
+.claude/
 docs/sessions/
 docs/plans/
 *.log
