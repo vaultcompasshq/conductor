@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { Finding } from '../src/envelope.js';
 import type { GateOutcome } from '../src/gate-runner.js';
 import { normalizeDepGuard, normalizeIntentGuard, normalizeVaultGuard } from '../src/normalize.js';
-import { renderSarif } from '../src/output-sarif.js';
+import { fingerprintKey, placeArtifact, renderSarif } from '../src/output-sarif.js';
 import type { RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -1044,5 +1044,93 @@ describe('the umbrella own findings', () => {
     const log = sarif(result([outcome({ exitCode: 0, findings: [] })]));
     expect(log.runs).toHaveLength(1);
     expect(log.runs[0].results).toEqual([]);
+  });
+});
+
+/**
+ * The two exported helpers, exercised directly.
+ *
+ * They are exported so these rules can be read one at a time rather than only
+ * through a whole rendered log, and until now nothing imported either of them,
+ * so the comment saying so promised a test that did not exist. A path rule is
+ * exactly the kind of thing worth pinning here: a wrong uri is
+ * indistinguishable from a right one once the log is uploaded, and a rendered
+ * log only ever exercises whichever spellings the fixtures happen to contain.
+ */
+describe('placing one path in a SARIF log', () => {
+  it('keeps a path inside the root relative, for %SRCROOT%', () => {
+    expect(placeArtifact('src/index.ts')).toEqual({ placement: 'in-root', uri: 'src/index.ts' });
+  });
+
+  it('forward-slashes a Windows-spelled relative path', () => {
+    expect(placeArtifact('src\\deep\\index.ts')).toEqual({
+      placement: 'in-root',
+      uri: 'src/deep/index.ts',
+    });
+  });
+
+  it('strips a leading ./, which names the same file', () => {
+    expect(placeArtifact('./src/index.ts')).toEqual({ placement: 'in-root', uri: 'src/index.ts' });
+  });
+
+  it('calls an absolute path elsewhere, rather than stripping the slash off it', () => {
+    // Stripping the leading slash fabricates a source-root-relative path that
+    // points at a different file, and %SRCROOT% then vouches for it. One of
+    // the gates keeps a path absolute exactly when the file is OUTSIDE the
+    // directory it scanned, so an absolute path is positive evidence against
+    // the claim %SRCROOT% would make.
+    expect(placeArtifact('/etc/hosts')).toEqual({
+      placement: 'outside-root',
+      uri: 'file:///etc/hosts',
+    });
+  });
+
+  it('treats a Windows drive prefix as absolute too', () => {
+    expect(placeArtifact('C:\\Users\\dev\\secrets.txt')).toEqual({
+      placement: 'outside-root',
+      uri: 'file:///C%3A/Users/dev/secrets.txt',
+    });
+  });
+
+  it('encodes each segment of an absolute path, keeping the separators', () => {
+    // A path can legitimately hold a space or a hash and neither is legal raw
+    // in a uri, but encoding the separators too would collapse the path into
+    // one opaque segment.
+    const placed = placeArtifact('/tmp/my notes/a#b.txt');
+    expect(placed).toEqual({ placement: 'outside-root', uri: 'file:///tmp/my%20notes/a%23b.txt' });
+  });
+
+  it('refuses to place a path that escapes the root', () => {
+    expect(placeArtifact('../outside.txt')).toEqual({ placement: 'unresolvable' });
+  });
+
+  it('refuses one that only escapes after normalizing, not just one that starts with ..', () => {
+    // "a/../../b" escapes too, and only the second .. is visible without
+    // resolving the path first.
+    expect(placeArtifact('a/../../b')).toEqual({ placement: 'unresolvable' });
+  });
+
+  it('refuses a path that normalizes away to nothing', () => {
+    expect(placeArtifact('.')).toEqual({ placement: 'unresolvable' });
+    expect(placeArtifact('a/..')).toEqual({ placement: 'unresolvable' });
+  });
+
+  it('keeps a path that walks up and back down inside the root', () => {
+    expect(placeArtifact('src/../lib/index.ts')).toEqual({
+      placement: 'in-root',
+      uri: 'lib/index.ts',
+    });
+  });
+});
+
+describe('the partialFingerprints key', () => {
+  it('names the product and a version, so a later change to the inputs ships as v2', () => {
+    // Hashing a product's own fingerprint together with anything would mint a
+    // second identity that moves when the first does not, and every alert
+    // would resurface on the next scan. The version is what lets a consumer
+    // tell two generations of inputs apart instead of silently comparing
+    // hashes of different things.
+    expect(fingerprintKey('dep-guard')).toBe('dep-guard/v1');
+    expect(fingerprintKey('conductor')).toBe('conductor/v1');
   });
 });

@@ -710,7 +710,7 @@ describe('revert', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('does not report the directory at all when it went with the manifest', () => {
+  it('reports the directory as removed when it went with the manifest', () => {
     const repo = gitRepo();
     init(repo);
 
@@ -992,10 +992,15 @@ describe('core.hooksPath', () => {
 // vault-guard hook as foreign; writing the dispatcher put the umbrella hook
 // somewhere the next install deletes.
 //
-// Recognition takes all three of: hooks directory named _, parent named
-// .husky, and husky's own shim in that directory. The husky 8 suite below
-// is the case that says why the third one is required and why the executed
-// file's content is not a signal at all.
+// Recognition is the SHAPE alone: the hooks directory is named _ and its
+// parent is named .husky. Only husky creates that path. Neither the executed
+// file's CONTENT nor the presence of husky's own shim is allowed to join the
+// rule. Content fires against husky 8's tracked hook, which sources the same
+// shim and IS the hook, and the husky 8 suite below is the case that says so.
+// The shim is worth reporting but never testing: husky gitignores .husky/_,
+// so a git clean deletes the shim while core.hooksPath still points there,
+// and requiring it would send init back to writing the one file husky's next
+// install wipes.
 describe('a husky 9 repository', () => {
   it('detects the tracked hook, not the generated dispatcher, when deciding what is there', () => {
     const repo = huskyRepoWithGateHook();
