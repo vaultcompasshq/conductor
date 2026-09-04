@@ -137,6 +137,14 @@ jobs:
           TMP=$(mktemp -d)
           cd "${TMP}"
           npm init -y >/dev/null 2>&1
+
+          # "conductor init" attaches a pre-commit hook, so it needs a git
+          # repository to attach one to. Without this line it reports
+          # not-a-git-repository and exits 2, which under "set -e" fails the
+          # whole job -- after the publish has already happened, so the red
+          # is unfixable and describes a release that was actually fine.
+          git init -q .
+
           npm install "@vaultcompass/conductor@${VERSION}"
           ./node_modules/.bin/conductor --version
           ./node_modules/.bin/conductor init --dry-run
