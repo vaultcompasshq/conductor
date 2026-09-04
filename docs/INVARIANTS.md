@@ -122,9 +122,10 @@ clean while its own report carried a blocking finding still fails the run.
 Pinned by tests/exit-codes.test.ts, twelve cases, of which the ones that
 matter are "does not take the numeric maximum of the children codes"
 (line 43, whose single gate exited 1 and is could-not-run, so the answer
-is 2 where the maximum would be 1), "lets could-not-run outrank a blocking
-gate rather than the other way round" (line 34), and "is 1 when a gate reported a blocking
-finding even if its exit code did not" (line 22). The wiring from a real
+is 2 where the maximum would be 1), "lets could-not-run outrank a
+blocking gate rather than the other way round" (line 34), and "is 1 when
+a gate reported a blocking finding even if its exit code did not" (line
+22). The wiring from a real
 run into that function is tests/run.test.ts:73, which drives a gate whose
 output has drifted shape and asserts the composed code is 2 and not 1.
 
@@ -207,10 +208,10 @@ never got as far as spawning anything.
 
 Each one produces a finding of the umbrella's own, critical and blocking,
 with no location (`gateProblem`, src/normalize.ts:629-657, and the four
-functions that call it at src/normalize.ts:667-742). That is not symmetry for its
-own sake. A gate that never ran gets no SARIF run of its own, by the rule
-below, so without one of these findings the published report would carry
-no trace of the most important thing that happened.
+functions that call it at src/normalize.ts:667-742). That is not symmetry
+for its own sake. A gate that never ran gets no SARIF run of its own, by
+the rule below, so without one of these findings the published report
+would carry no trace of the most important thing that happened.
 
 A gate that exits above 1, or does not exit normally at all because it was
 killed or timed out, is could-not-run (src/gate-runner.ts:386-402). A gate
