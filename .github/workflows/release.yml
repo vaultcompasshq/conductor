@@ -17,6 +17,15 @@ on:
     tags:
       - 'v*'
 
+# Serializes every release attempt across the whole repository, so a manual
+# re-run overlapping a tag-triggered run cannot both pass the
+# already-published check before either of them publishes and then race each
+# other into a rejected duplicate-version publish. Never cancel a run
+# mid-publish; queue the next one instead. Matches dep-guard.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
