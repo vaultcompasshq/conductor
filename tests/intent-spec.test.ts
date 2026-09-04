@@ -53,7 +53,7 @@ describe('branchSlug', () => {
   });
 
   it('drops only the FIRST segment, so a nested branch keeps the rest', () => {
-    // "melroy/feat/widget-cache" is one prefix and a two-segment name, not
+    // "alex/feat/widget-cache" is one prefix and a two-segment name, not
     // two prefixes: dropping every segment but the last would turn
     // "feat/online/cache" into "cache" and match the wrong spec.
     expect(branchSlug('feat/online/widget-cache')).toBe('online/widget-cache');
