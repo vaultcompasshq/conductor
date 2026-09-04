@@ -275,8 +275,26 @@ fi
 conductor_status=0
 conductor run --staged --stage commit || conductor_status=$?
 
-if [ "$conductor_status" -ne 0 ]; then
-  echo "conductor: commit blocked (conductor exit $conductor_status). Review the report above; 'git commit --no-verify' bypasses this hook at your own risk." >&2
+# One message per exit code, not one message for both. The comment below
+# says collapsing 2 into 1 would report findings never looked for, and a
+# single human-readable line saying "commit blocked" for both did exactly
+# that: exit 2 means a gate could not run, so nothing was checked, and
+# calling that a blocked commit describes a decision nobody made.
+#
+# Neither line mentions a bypass flag. Every gate already has a recorded,
+# reviewable, scoped escape: an allow entry, an ignore path, a baseline, or
+# enforce: false in .guardrails.yaml. A bypass skips every gate invisibly,
+# including the ones that would have caught something unrelated to the
+# finding somebody disagreed with, and leaves no trace of the decision.
+if [ "$conductor_status" -eq 1 ]; then
+  echo "conductor: a gate blocked this commit. Review the report above. If you disagree with a finding, record the decision where the next reader can see it: an allow entry, an ignore path, or a baseline in that gate's own configuration, or enforce: false for the gate in .guardrails.yaml." >&2
+elif [ "$conductor_status" -ne 0 ]; then
+  # "If there is a report above" rather than "the report above". This branch
+  # also catches an umbrella that crashed or was not executable, and exit 127
+  # with no output at all is one of the shapes that reaches here. Sending
+  # somebody to read a report that was never printed makes them hunt for
+  # output rather than for the gate.
+  echo "conductor: a gate could not run, so NOTHING was checked and this commit was not verified by any gate. If there is a report above, it names the gate and says why. Fix that before committing." >&2
 fi
 
 # Passed straight through. 1 means a gate blocked; 2 means a gate could not
@@ -539,9 +557,12 @@ export function renderPolicy(detected: Set<GateRole>): string {
     '# so a gate runs at its own stage and at every later one, and a run at ci',
     '# runs everything enabled. The values below are the defaults.',
     '#',
-    '# enforce defaults to true. Add enforce: false to a gate to make it run',
-    '# and report without ever changing the exit code, which is how a gate is',
-    '# adopted before anybody is ready to have it refuse a commit.',
+    '# enforce says whether a gate can change the exit code. A gate with',
+    '# enforce: false runs and reports exactly as an enforced one does and',
+    '# never fails the run, which is how a gate is adopted before anybody is',
+    '# ready to have it refuse a commit. It is written out below for every',
+    '# gate, for the same reason stage is: a default that lives only in the',
+    '# parser is a default nobody can find.',
     'version: 1',
     '',
     'gates:',
@@ -560,6 +581,18 @@ export function renderPolicy(detected: Set<GateRole>): string {
     lines.push(`    product: ${product}`);
     lines.push(`    enabled: ${enabled ? 'true' : 'false'}`);
     lines.push(`    stage: ${DEFAULT_STAGE_FOR_ROLE[role]}`);
+    // The intent gate is the one with ceremony, and the ramp is what makes
+    // that ceremony adoptable: it reports for a few pull requests before it
+    // is allowed to refuse anybody's merge. Writing that here rather than
+    // describing it in a comment is the difference between a fresh init
+    // producing the ramp and three repositories being hand-edited into it.
+    if (role === 'intent') {
+      lines.push('    # It runs and reports in CI without failing the run. Flip it to');
+      lines.push('    # true once a few pull requests show the signal is worth blocking on.');
+      lines.push('    enforce: false');
+    } else {
+      lines.push('    enforce: true');
+    }
     lines.push('    # Handed to this gate unchanged. Keys are its own long flags,');
     lines.push('    # without the leading dashes. Example: fail-on: high');
     lines.push('    options: {}');

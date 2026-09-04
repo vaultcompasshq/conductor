@@ -56,22 +56,34 @@ gates:
     product: dep-guard
     enabled: true
     stage: commit
+    enforce: true
     options:
       fail-on: high
   secrets:
     product: vault-guard
     enabled: true
     stage: commit
+    enforce: true
   intent:
     product: intent-guard
     enabled: true
     stage: ci
+    # It runs and reports in CI without failing the run. Flip it to
+    # true once a few pull requests show the signal is worth blocking on.
+    enforce: false
     options:
       require-frozen: false
 
 report:
   format: text
 ```
+
+`stage` and `enforce` are both written out for every gate, with their
+default values, because a default that lives only in the parser is a default
+nobody can find. `enforce` is the one exception to "the written value is the
+default": the intent gate starts at `false`, so a fresh init produces the
+adoption ramp rather than describing it and leaving somebody to hand-edit it
+in.
 
 **Gates are keyed by role**, not by product. `dependencies`, `secrets`,
 `intent`. The `product` field says which binary fills that role today. This
@@ -99,7 +111,7 @@ them.
 
 A gate held back by the stage filter is never silent. It is one line in the
 text report naming the stage it is waiting for, and a `conductor/gate-deferred`
-note in the SARIF log's `conductor` run. It gets no SARIF run of its own,
+notification in the SARIF log's `conductor` run. It gets no SARIF run of its own,
 for the same reason a gate that could not run gets none: it produced no tool
 output, and an empty run named for that product would put its name on
 something it never did. Its binary is not even looked for, so a gate
@@ -110,7 +122,8 @@ and appears in the text report and the SARIF log exactly as an enforced gate
 does. The only thing it cannot do is change the exit code: its blocking
 findings do not raise it, and its failing to run at all is a note rather
 than exit 2. That is the adoption ramp, so a gate can be switched on and
-read for a few weeks before it is allowed to refuse anybody's commit.
+read for a few weeks before it is allowed to refuse anybody's commit. `init`
+writes it out for every gate, and starts the intent gate at `false`.
 
 It is not a downgrade of what the gate said. Findings keep their own
 severities and their own `blocking` flags, in both formats, because
@@ -120,8 +133,8 @@ finding itself. What changes is that the text report says in words that the
 gate blocked and was not enforced, on the same screen as the findings, so a
 green exit next to red findings is never a surprise. In SARIF that gate's
 own run carries `properties.enforced: false`, and the `conductor` run
-carries a `conductor/gate-not-enforced` note as well, because a gate that
-could not run has no run of its own to hang the property on and that is
+carries a `conductor/gate-not-enforced` notification as well, because a gate
+that could not run has no run of its own to hang the property on and that is
 exactly the case worth saying out loud. That run's properties bag also
 carries the `stage` the gate ran at, so a log from a commit-stage run is
 distinguishable from a full one rather than looking like the same run with
@@ -238,6 +251,8 @@ reports before running `--adopt` on a hook you did not write.
   only product is an uploaded artifact otherwise reads as a job that did
   nothing. A path that cannot be written is exit 2, not a green run beside a
   report nobody can read.
+- `--verbose` prints the full per-gate report even when the run is clean.
+  Text output only; the SARIF log never changes shape with it.
 - `--gate <role>`, repeatable.
 
 ### Exit codes
@@ -348,7 +363,7 @@ all there is to tell a shallow checkout from a spec the importer choked on.
 
 **A branch with neither** is a third state beside deferred and could-not-run:
 the gate is switched on, it ran, and it had nothing to check. It gets one
-line in the text report and one note-level `intent-guard/no-contract` result
+line in the text report and one `intent-guard/no-contract` notification
 in the `conductor` run, and it **never** reaches the exit code, enforced or
 not. A branch with no spec is a branch this gate has no opinion about, and
 turning that into a failed build is how a gate gets switched off across a
@@ -433,7 +448,7 @@ jobs:
 `continue-on-error` there hides nothing: a gate that blocked has already
 failed the job through `conductor`'s own exit code, before this step runs.
 
-The intent gate starts at `enforce: false` in the policy file while a
+The intent gate starts at `enforce: false`, which is what `init` writes, so a
 repository reads a few pull requests' worth of drift before letting it refuse
 anybody's merge:
 
@@ -456,6 +471,28 @@ a guardrail that is off when the tool is missing is a guardrail an attacker
 turns off by making the tool missing. It passes the exit code straight
 through, so 2 does not collapse into 1 and report findings that were never
 looked for.
+
+**It says a different thing for each of those two codes.** On exit 1 a gate
+blocked, and the line points at the report and says that disagreeing with a
+finding is done in `.guardrails.yaml` or in that gate's own configuration, so
+the decision is recorded where the next reader can see it. On exit 2 nothing
+was checked at all, and the line says that rather than calling it a blocked
+commit: a gate that could not run made no decision, and reporting one is the
+same error as collapsing the codes. That line says "if there is a report
+above" rather than "the report above", because the same branch catches an
+umbrella that crashed or was never executable, and exit 127 with no output
+at all is one of the shapes that reaches it.
+
+**Neither line advertises a bypass.** Every gate already has a recorded,
+reviewable, scoped escape: an allow entry, an ignore path, a baseline, or
+`enforce: false`. Skipping the hook skips every gate invisibly, including the
+ones that would have caught something unrelated to the finding somebody
+disagreed with, and leaves no trace of the decision anywhere.
+
+Changing the hook body turns every hook a previous conductor wrote into one
+"from an older conductor", which is the case init already handles by digest:
+it rewrites the body in place and records the new digest. Nothing has to be
+reverted and reinstalled by hand.
 
 The hook prepends the repository's own `node_modules/.bin` to `PATH`
 before looking for the binary, so a conductor installed only as a project
@@ -516,7 +553,40 @@ why init names the file rather than editing it.
 
 ## The report
 
-The text report is one section per gate, blocking findings first, with each
+**A clean run prints one line.** Most runs are clean, and the design
+constraint on all of this is that the gates must not slow development down,
+with ceremony rather than runtime named as the cost. A screenful of per-gate
+detail on a commit that found nothing is that cost, paid on every commit, and
+it is what makes a team switch a hook off. The line names the gates that ran,
+names any gate deferred to a later stage or left with nothing to check, names
+any gate that ran with `enforce: false` and so could not have blocked
+anything, counts any notes, and says to re-run with `--verbose` for the rest.
+
+Clean means all four of: the composed exit code is 0, no gate blocked, no
+gate could not run, and the umbrella raised no diagnostic of its own. The
+last three are not implied by the first. A gate with `enforce: false` is left
+out of the composed code entirely, so one that blocked, or one that could not
+run at all, still leaves the run at exit 0, and those are exactly the runs
+whose report must not be collapsed to a line. A run where no gate ran at all
+prints the full report too, so the distinct verdicts for "none is enabled",
+"every gate was deferred" and "nothing had a contract to check" survive.
+
+**A gate's own notes are counted; the umbrella's own diagnostics force the
+full report.** The same rule separates them as separates a SARIF notification
+from a SARIF result. A gate's note is a statement about how much a run
+covered, such as pnpm lockfiles not recording install-script metadata, which
+is a permanent property of that file format and true on every run forever. A
+`conductor/blocking-mismatch` is the umbrella saying its own report may
+disagree with the gate's own verdict about what blocked, which is a defect in
+this run and cannot honestly be a number on a line that also says "clean,
+nothing blocked".
+
+This is a text-format decision and nothing else. The SARIF log is unchanged
+either way, and there is deliberately no policy key for it: the schema
+describes what a repository gates on, and how loud one developer wants their
+own terminal to be is not that.
+
+The full text report is one section per gate, blocking findings first, with each
 gate's own threshold, its own suppressed and ignored counts, and its own
 exit code and duration in the header. The counts are printed even at zero,
 because they are the user's earlier decisions and hiding them makes a
@@ -534,6 +604,34 @@ where a gate's own units differ from SARIF's the key says so:
 beside the 1-based `startColumn` mapped from it. No location is invented:
 a finding with no known line gets no region, and a finding about a missing
 binary gets no location at all.
+
+**A statement about coverage or configuration is a notification, not a
+finding.** Three of the umbrella's own statements are about how much of the
+policy a run represents rather than about anybody's code: a gate deferred to
+a later stage, a gate the policy told not to decide anything, and a branch
+with no contract for the intent gate to check against. They live in
+`invocations[0].toolExecutionNotifications` on the `conductor` run, keeping
+their rule ids as descriptor ids and their text unchanged. As results they
+were fingerprint-less note alerts that came back on every single run, so a
+repository on the adoption ramp accrued permanent alerts about the tool's own
+configuration, which is alert fatigue manufactured by the thing that exists
+to reduce it.
+
+The rule that decides which is which, so the next case does not go to
+judgment: **a statement about how much of the policy a run covered is a
+notification, and a statement that something went wrong is a result.** The
+first is true of the configuration rather than of the change, identical on
+every run until somebody edits the policy file, and on the adoption ramp
+deliberately true for weeks; a permanent alert is a dismissed alert. The
+second is about this run, goes away when somebody fixes it, and the reviewer
+of this change is the person who should see it.
+
+So `conductor/gate-missing` and `conductor/gate-failed` stay **results**: a
+gate that could not run is the fail-closed posture made visible, a class of
+problem went unlooked-for on this change, and a reviewer scanning a pull
+request's alerts has to meet that as an alert rather than as tool status. The
+normalization diagnostics stay results for the same reason. That rule also
+decides the text report's summary line, and the two answer it the same way.
 
 ## Scope of v0.1
 

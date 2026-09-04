@@ -23,6 +23,17 @@ which is itself one of the differences between the two lefthook captures.
 Nothing else is changed in any of the three, and no line the detection
 depends on is touched.
 
+**One file here is not another tool's.** `conductor-0.2.0-pre-commit.sh` is
+conductor's own hook body as v0.2 shipped it, the bytes actually sitting in
+the repositories that installed it. It is kept because changing the body
+makes every one of those hooks a hook "from an older conductor", and the
+upgrade path that recognises them works on the digest of the previous body:
+a synthetic stand-in tests the mechanism, and only the real bytes test the
+upgrade those repositories will actually take. It carries the old message
+that named a bypass flag, which is the thing that changed; the test that
+reads it asserts it is NOT what init writes today, so the fixture cannot
+quietly drift into being the current body and pass for the wrong reason.
+
 ## lefthook 2.1.12 and 1.7.18
 
     pnpm add -D lefthook@<version>

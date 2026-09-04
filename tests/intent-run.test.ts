@@ -238,18 +238,29 @@ describe('a branch with no contract and no spec', () => {
     expect(noSpecRun(false).exitCode).toBe(0);
   });
 
-  it('is one note in the umbrella SARIF run', () => {
+  it('is one notification in the umbrella SARIF run, not an alert', () => {
+    // A branch with no spec is the ordinary state of most branches in a
+    // repository that has not adopted the flow. As a RESULT it was a
+    // fingerprint-less note alert on every run; as a notification it is what
+    // it actually is, a statement about this run's coverage.
     const log = JSON.parse(renderSarif(noSpecRun(), '0.2.0')) as {
       runs: Array<{
         tool: { driver: { name: string } };
-        results: Array<{ ruleId: string; level: string; properties: { blocking: boolean } }>;
+        results: Array<{ ruleId: string }>;
+        invocations?: Array<{
+          toolExecutionNotifications: Array<{ descriptor: { id: string }; level: string }>;
+        }>;
       }>;
     };
 
     const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
-    const advisory = umbrella?.results.find((entry) => entry.ruleId === 'intent-guard/no-contract');
+    expect(umbrella?.results.map((entry) => entry.ruleId)).not.toContain(
+      'intent-guard/no-contract'
+    );
+    const advisory = umbrella?.invocations?.[0].toolExecutionNotifications.find(
+      (entry) => entry.descriptor.id === 'intent-guard/no-contract'
+    );
     expect(advisory?.level).toBe('note');
-    expect(advisory?.properties.blocking).toBe(false);
     // And the gate that never ran gets no run of its own.
     expect(log.runs.map((entry) => entry.tool.driver.name)).not.toContain('intent-guard');
   });
@@ -329,7 +340,12 @@ describe('a changed path the --paths encoding cannot carry', () => {
 
 describe('the report says where the contract came from', () => {
   it('names the spec and the plan and the base ref in the text report', () => {
-    const text = renderText(run(repo(), binWith(CHECK_PASSING), { base: 'main' }));
+    // Verbose, because this run is clean and a clean run prints one summary
+    // line. The contract line is per-gate detail, which is what --verbose is
+    // for.
+    const text = renderText(run(repo(), binWith(CHECK_PASSING), { base: 'main' }), {
+      verbose: true,
+    });
 
     expect(text).toMatch(/contract: spec docs\/superpowers\/specs\/2026-09-03-widget-cache-design\.md/);
     expect(text).toMatch(/plus plan docs\/superpowers\/plans\/2026-09-03-widget-cache\.md/);

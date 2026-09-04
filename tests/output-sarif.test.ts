@@ -81,6 +81,414 @@ function sarif(runResult: RunResult): Record<string, never> & {
   return JSON.parse(renderSarif(runResult, '0.1.0'));
 }
 
+/** The umbrella run's tool-execution notifications, or an empty list. */
+function notificationsOf(log: { runs: Array<Record<string, unknown>> }): Array<
+  Record<string, unknown>
+> {
+  const umbrella = log.runs.find(
+    (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+  );
+  const invocations = umbrella?.invocations as Array<Record<string, unknown>> | undefined;
+  return (invocations?.[0]?.toolExecutionNotifications as Array<Record<string, unknown>>) ?? [];
+}
+
+/** Rule ids of the umbrella run's results, or an empty list. */
+function umbrellaResultIds(log: { runs: Array<Record<string, unknown>> }): unknown[] {
+  const umbrella = log.runs.find(
+    (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+  );
+  return ((umbrella?.results as Array<Record<string, unknown>>) ?? []).map((entry) => entry.ruleId);
+}
+
+/**
+ * A statement about coverage is a notification, not a finding.
+ *
+ * Three of the umbrella's own note-level results were statements about what
+ * this run covered rather than about anybody's code: a gate deferred to a
+ * later stage, a gate the policy told not to decide anything, and a branch
+ * with no contract for the intent gate to check against. As results they
+ * accrued in code scanning on every run of a repository on the adoption
+ * ramp, fingerprint-less and permanent, which is alert fatigue manufactured
+ * by the tool that is supposed to reduce it.
+ */
+describe('coverage statements are notifications rather than results', () => {
+  const DEFERRED = result([outcome({ exitCode: 0, findings: [] })], [
+    { role: 'intent', product: 'intent-guard', stage: 'ci' },
+  ]);
+  const UNENFORCED = result([outcome({ enforce: false, findings: depGuard.findings })]);
+  const SKIPPED = result(
+    [outcome({ exitCode: 0, findings: [] })],
+    [],
+    [
+      {
+        role: 'intent',
+        product: 'intent-guard',
+        reason: 'no-contract',
+        detail: 'no spec was named and no frozen contract is in the repository.',
+      },
+    ]
+  );
+
+  it('moves gate-deferred out of results', () => {
+    expect(umbrellaResultIds(sarif(DEFERRED))).not.toContain('conductor/gate-deferred');
+    expect(
+      notificationsOf(sarif(DEFERRED)).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).toContain('conductor/gate-deferred');
+  });
+
+  it('moves gate-not-enforced out of results', () => {
+    expect(umbrellaResultIds(sarif(UNENFORCED))).not.toContain('conductor/gate-not-enforced');
+    expect(
+      notificationsOf(sarif(UNENFORCED)).map(
+        (entry) => (entry.descriptor as Record<string, unknown>).id
+      )
+    ).toContain('conductor/gate-not-enforced');
+  });
+
+  it('moves the no-contract advisory out of results, keeping the gate own namespace', () => {
+    expect(umbrellaResultIds(sarif(SKIPPED))).not.toContain('intent-guard/no-contract');
+    expect(
+      notificationsOf(sarif(SKIPPED)).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).toContain('intent-guard/no-contract');
+  });
+
+  it('keeps the message text unchanged in the move', () => {
+    const entry = notificationsOf(sarif(DEFERRED))[0];
+    expect((entry.message as Record<string, unknown>).text).toBe(
+      'The intent gate (intent-guard) did not run at this stage. It runs from stage ci onwards.'
+    );
+  });
+
+  it('keeps gate-missing a result, because a gate that could not run is an alert', () => {
+    // The deliberate asymmetry. A gate that could not run is the fail-closed
+    // posture made visible, and a reviewer looking at a pull request's alerts
+    // has to see it as an alert rather than as tool status.
+    const log = sarif(
+      result([
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [
+            {
+              schemaVersion: 1,
+              product: 'conductor',
+              productVersion: null,
+              ruleId: 'conductor/gate-missing',
+              severity: 'high',
+              severityIsDerived: true,
+              blocking: true,
+              message: 'the intent gate is enabled but no intent-guard binary was found',
+              subject: { kind: 'none' },
+              fingerprint: null,
+              details: {},
+            } satisfies Finding,
+          ],
+        }),
+      ])
+    );
+
+    expect(umbrellaResultIds(log)).toContain('conductor/gate-missing');
+    expect(
+      notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).not.toContain('conductor/gate-missing');
+  });
+
+  it('keeps gate-failed a result, for the same reason', () => {
+    const log = sarif(
+      result([
+        outcome({
+          exitCode: 3,
+          couldNotRun: { reason: 'gate-error', detail: 'dep-guard exited 3' },
+          findings: [
+            {
+              schemaVersion: 1,
+              product: 'conductor',
+              productVersion: null,
+              ruleId: 'conductor/gate-failed',
+              severity: 'high',
+              severityIsDerived: true,
+              blocking: true,
+              message: 'dep-guard could not complete its scan',
+              subject: { kind: 'none' },
+              fingerprint: null,
+              details: {},
+            } satisfies Finding,
+          ],
+        }),
+      ])
+    );
+
+    expect(umbrellaResultIds(log)).toContain('conductor/gate-failed');
+    expect(
+      notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).not.toContain('conductor/gate-failed');
+  });
+
+  it('writes notification objects SARIF 2.1.0 can read', () => {
+    const log = sarif(DEFERRED);
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    ) as Record<string, unknown>;
+    const invocation = (umbrella.invocations as Array<Record<string, unknown>>)[0];
+
+    // executionSuccessful is required on an invocation object, and it is a
+    // claim rather than a constant: every enabled gate here ran.
+    expect(invocation.executionSuccessful).toBe(true);
+
+    for (const entry of notificationsOf(log)) {
+      expect(entry.descriptor).toEqual({ id: expect.any(String) });
+      expect(['note', 'warning', 'error']).toContain(entry.level);
+      expect((entry.message as Record<string, unknown>).text).toEqual(expect.any(String));
+    }
+
+    // Declared on the driver beside its rules, so a consumer can resolve the
+    // descriptor reference rather than being handed a dangling id.
+    const declared = (
+      (umbrella.tool as Record<string, Record<string, unknown>>).driver
+        .notifications as Array<Record<string, unknown>>
+    ).map((entry) => entry.id);
+    expect(declared).toContain('conductor/gate-deferred');
+  });
+
+  it('says the run did not succeed when a gate could not run', () => {
+    const log = sarif(
+      result([
+        outcome({
+          enforce: false,
+          couldNotRun: { reason: 'binary-missing', detail: 'no dep-guard binary on PATH' },
+          exitCode: null,
+          findings: [],
+        }),
+      ])
+    );
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    ) as Record<string, unknown>;
+
+    expect((umbrella.invocations as Array<Record<string, unknown>>)[0].executionSuccessful).toBe(
+      false
+    );
+  });
+
+  it('still emits the umbrella run when the only thing to say is a notification', () => {
+    // The regression this move could quietly cause: the umbrella run used to
+    // be emitted only when it had findings, and a deferred gate was one. If
+    // notifications did not also earn the run, a commit-stage log would say
+    // nothing at all about the gate that did not run there.
+    const log = sarif(DEFERRED);
+    expect(
+      log.runs.map((run) => (run.tool as Record<string, Record<string, unknown>>).driver.name)
+    ).toContain('conductor');
+  });
+
+  it('gives a deferred gate no run of its own, notifications or not', () => {
+    expect(
+      sarif(DEFERRED).runs.map(
+        (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name
+      )
+    ).toEqual(['dep-guard', 'conductor']);
+  });
+
+  it('does not count the umbrella own finding as a blocking finding of the gate', () => {
+    // A gate that could not run carries the umbrella's own blocking
+    // gate-missing finding in its findings list, and counting it made the
+    // notification say the gate blocked one thing AND never ran, which are
+    // opposite claims about the same gate in the same object. The text
+    // report already guards against exactly this contradiction.
+    const log = sarif(
+      result([
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          enforce: false,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [
+            {
+              schemaVersion: 1,
+              product: 'conductor',
+              productVersion: null,
+              ruleId: 'conductor/gate-missing',
+              severity: 'high',
+              severityIsDerived: true,
+              blocking: true,
+              message: 'the intent gate is enabled but no intent-guard binary was found',
+              subject: { kind: 'none' },
+              fingerprint: null,
+              details: {},
+            } satisfies Finding,
+          ],
+        }),
+      ])
+    );
+
+    const entry = notificationsOf(log).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-not-enforced'
+    );
+    const details = (entry?.properties as Record<string, Record<string, unknown>>).details;
+
+    expect(details.blockingFindings).toBe(0);
+    expect(details.couldNotRun).toBe('binary-missing');
+    expect((entry?.message as Record<string, unknown>).text).toMatch(/could not run/);
+  });
+
+  it('still counts the gate own blocking findings when it did run', () => {
+    const log = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
+    const entry = notificationsOf(log).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-not-enforced'
+    );
+    const details = (entry?.properties as Record<string, Record<string, unknown>>).details;
+
+    expect(details.blockingFindings).toBe(depGuard.findings.filter((f) => f.blocking).length);
+    expect(details.blockingFindings).toBeGreaterThan(0);
+  });
+
+  it('leaves the exit code alone in every one of those cases', () => {
+    // Rendering is not allowed to be a decision. The exit code was composed
+    // in run.ts and the renderer only reads it.
+    for (const runResult of [DEFERRED, UNENFORCED, SKIPPED]) {
+      const before = runResult.exitCode;
+      sarif(runResult);
+      expect(runResult.exitCode).toBe(before);
+    }
+  });
+});
+
+/**
+ * executionSuccessful is a claim, so it has to be made in both directions.
+ *
+ * It was being written only when there were notifications to hang it on, so
+ * the field appeared when the answer was true and vanished when it was
+ * false. An enforced gate that could not run, with nothing deferred and
+ * nothing skipped, produced no invocation at all, which is exactly the run
+ * where "the analysis did not complete" most needed saying.
+ */
+describe('the umbrella invocation', () => {
+  function umbrellaInvocation(log: {
+    runs: Array<Record<string, unknown>>;
+  }): Record<string, unknown> | undefined {
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    return (umbrella?.invocations as Array<Record<string, unknown>> | undefined)?.[0];
+  }
+
+  const BROKEN_GATE = result([
+    outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: null,
+      exitCode: null,
+      couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+      findings: [
+        {
+          schemaVersion: 1,
+          product: 'conductor',
+          productVersion: null,
+          ruleId: 'conductor/gate-missing',
+          severity: 'high',
+          severityIsDerived: true,
+          blocking: true,
+          message: 'the intent gate is enabled but no intent-guard binary was found',
+          subject: { kind: 'none' },
+          fingerprint: null,
+          details: {},
+        } satisfies Finding,
+      ],
+    }),
+  ]);
+
+  it('says the analysis did not complete, with no notification to hang it on', () => {
+    const invocation = umbrellaInvocation(sarif(BROKEN_GATE));
+
+    expect(invocation).toBeDefined();
+    expect(invocation?.executionSuccessful).toBe(false);
+    // Nothing was deferred, skipped or unenforced, so there is nothing to
+    // notify. The invocation is still there, because the claim is about the
+    // run rather than about the notifications.
+    expect(invocation).not.toHaveProperty('toolExecutionNotifications');
+  });
+
+  it('says the analysis completed when every gate ran', () => {
+    const log = sarif(
+      result([
+        outcome({
+          exitCode: 0,
+          findings: [],
+          diagnostics: [
+            { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+          ],
+        }),
+      ])
+    );
+
+    expect(umbrellaInvocation(log)?.executionSuccessful).toBe(true);
+  });
+
+  it('gives a gate run no invocation of its own', () => {
+    // The claim belongs to the umbrella. A gate's run describes what that
+    // gate found, and conductor has no standing to write an invocation
+    // object under another tool's driver name.
+    const gateRun = sarif(BROKEN_GATE).runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name !== 'conductor'
+    );
+    expect(gateRun).toBeUndefined();
+
+    const ranFine = sarif(result([outcome({ findings: depGuard.findings })]));
+    expect(ranFine.runs[0]).not.toHaveProperty('invocations');
+  });
+});
+
+describe('a clean run, whose text report is now one summary line', () => {
+  // The summary line is a text-format decision and nothing else. SARIF is
+  // read by machines, and a published log that got quieter because a run
+  // happened to be clean would make a clean scan and a scan that found
+  // nothing to say indistinguishable to whatever consumes it. This pins the
+  // whole document, byte for byte, against a literal written out by hand
+  // rather than against whatever the renderer currently produces.
+  const clean = result([
+    outcome({ role: 'dependencies', product: 'dep-guard', exitCode: 0 }),
+    outcome({
+      role: 'secrets',
+      product: 'vault-guard',
+      productVersion: '1.4.2',
+      exitCode: 0,
+    }),
+  ]);
+
+  it('renders exactly the log it rendered before the summary line existed', () => {
+    const expected = JSON.stringify(
+      {
+        $schema:
+          'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json',
+        version: '2.1.0',
+        runs: [
+          {
+            tool: { driver: { name: 'dep-guard', version: '0.2.0', rules: [] } },
+            results: [],
+            properties: { enforced: true, stage: 'commit' },
+          },
+          {
+            tool: { driver: { name: 'vault-guard', version: '1.4.2', rules: [] } },
+            results: [],
+            properties: { enforced: true, stage: 'commit' },
+          },
+        ],
+      },
+      null,
+      2
+    );
+
+    expect(renderSarif(clean, '0.1.0')).toBe(expected);
+  });
+});
+
 describe('one SARIF log, one run per gate', () => {
   const log = sarif(THREE_GATES);
 
@@ -513,16 +921,13 @@ describe('the umbrella own findings', () => {
 
   it('also names an unenforced gate in the umbrella run, where a gate with no run still fits', () => {
     const log = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
-    const umbrella = log.runs.find(
-      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
-    );
-    const entry = (umbrella?.results as Array<Record<string, unknown>>).find(
-      (candidate) => candidate.ruleId === 'conductor/gate-not-enforced'
+    const entry = notificationsOf(log).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-not-enforced'
     );
 
     expect(entry).toBeDefined();
     expect(entry?.level).toBe('note');
-    expect((entry?.properties as Record<string, unknown>).blocking).toBe(false);
     const details = (entry?.properties as Record<string, Record<string, unknown>>).details;
     expect(details.role).toBe('dependencies');
     expect(details.product).toBe('dep-guard');
@@ -560,13 +965,16 @@ describe('the umbrella own findings', () => {
     expect(
       log.runs.map((run) => (run.tool as Record<string, Record<string, unknown>>).driver.name)
     ).toEqual(['conductor']);
-    const ruleIds = (log.runs[0].results as Array<Record<string, unknown>>).map(
-      (entry) => entry.ruleId
+    expect(
+      notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).toContain('conductor/gate-not-enforced');
+    // And the gate that could not run is still an ALERT, in the same log.
+    expect((log.runs[0].results as Array<Record<string, unknown>>).map((e) => e.ruleId)).toContain(
+      'conductor/gate-missing'
     );
-    expect(ruleIds).toContain('conductor/gate-not-enforced');
   });
 
-  it('records a stage-deferred gate as a note in the umbrella run, with no run of its own', () => {
+  it('records a stage-deferred gate as a notification in the umbrella run, with no run of its own', () => {
     // Same rule as a gate that could not run: the gate produced no tool
     // output, so putting its name on a SARIF run would attribute an empty
     // run to a tool that never executed. The umbrella is the honest owner
@@ -581,13 +989,9 @@ describe('the umbrella own findings', () => {
       log.runs.map((run) => (run.tool as Record<string, Record<string, unknown>>).driver.name)
     ).toEqual(['dep-guard', 'conductor']);
 
-    const umbrella = log.runs.find(
-      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
-    );
-    const entry = (umbrella?.results as Array<Record<string, unknown>>)[0];
-    expect(entry.ruleId).toBe('conductor/gate-deferred');
+    const entry = notificationsOf(log)[0];
+    expect((entry.descriptor as Record<string, unknown>).id).toBe('conductor/gate-deferred');
     expect(entry.level).toBe('note');
-    expect((entry.properties as Record<string, unknown>).blocking).toBe(false);
     expect(entry).not.toHaveProperty('locations');
 
     const details = (entry.properties as Record<string, Record<string, unknown>>).details;

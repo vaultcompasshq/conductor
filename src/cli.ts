@@ -52,6 +52,7 @@ interface RunCliOptions {
   base?: string;
   spec?: string;
   output?: string;
+  verbose?: boolean;
 }
 
 function parseFormat(value: string): 'text' | 'sarif' {
@@ -189,6 +190,10 @@ export function buildProgram(): Command {
       'the spec the intent gate imports its contract from, outranking a Spec: line in the pull request body and the branch-name convention'
     )
     .option(
+      '--verbose',
+      'print the full per-gate report even when the run is clean. A clean run prints one summary line by default, because a pre-commit hook that prints a screenful on every commit is a hook a team switches off. Text output only; SARIF is unaffected.'
+    )
+    .option(
       '--gate <role>',
       'restrict the run to this role; repeatable',
       (value: string, previous: string[] = []) => [...previous, value]
@@ -218,7 +223,9 @@ export function buildProgram(): Command {
         });
 
         const rendered =
-          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderText(result);
+          format === 'sarif'
+            ? `${renderSarif(result, pkg.version)}\n`
+            : renderText(result, { verbose: Boolean(options.verbose) });
 
         if (options.output === undefined) {
           process.stdout.write(rendered);

@@ -21,6 +21,22 @@
 //    umbrella, which is the only honest owner of a statement about a tool
 //    that is not installed.
 //
+//  - A STATEMENT ABOUT COVERAGE OR CONFIGURATION IS A NOTIFICATION, NOT A
+//    FINDING. A gate deferred to a later stage, a gate the policy told not
+//    to decide anything, and a branch with no contract to check against are
+//    statements about how much of the policy this run represents. They go in
+//    `invocations[0].toolExecutionNotifications` on the umbrella's run,
+//    keeping their rule ids as descriptor ids. As results they were
+//    fingerprint-less note alerts that reappeared on every run, so a
+//    repository on the adoption ramp accrued permanent alerts about this
+//    tool's own configuration.
+//
+//    `conductor/gate-missing` and `conductor/gate-failed` are the deliberate
+//    exception and stay RESULTS. A gate that could not run is the
+//    fail-closed posture made visible: a class of problem went unlooked-for
+//    on this change, and a reviewer scanning a pull request's alerts has to
+//    meet that as an alert rather than as tool status.
+//
 //  - `properties.blocking` is the gate's decision as reconciled in
 //    normalize.ts, never recomputed here from a severity ladder. A second
 //    copy of the gate living in the renderer would drift silently, and the
@@ -279,12 +295,70 @@ function ruleDeclarations(findings: Finding[]): Array<Record<string, unknown>> {
   }));
 }
 
+/**
+ * One statement about what this run covered, rather than about any code.
+ *
+ * Carried separately from Finding because it is not one and must never be
+ * able to become one by accident: nothing here reaches a severity ladder, a
+ * summary, a fingerprint, or an exit code.
+ */
+interface Notification {
+  /** The rule id this used to be filed under. Kept, so nothing loses identity. */
+  id: string;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+function toNotification(notification: Notification): Record<string, unknown> {
+  return {
+    // A reportingDescriptorReference. The id is the one this statement was
+    // filed under when it was a result, so a consumer that had rules for
+    // these still recognises them.
+    descriptor: { id: notification.id },
+    // Note, always. A statement about coverage is never an error about the
+    // code, and a notification that arrived as a warning would push these
+    // straight back into the alert list they were moved out of.
+    level: 'note',
+    message: { text: notification.message },
+    properties: { details: notification.details },
+  };
+}
+
+function notificationDeclarations(
+  notifications: Notification[]
+): Array<Record<string, unknown>> {
+  const ids = [...new Set(notifications.map((notification) => notification.id))].sort();
+  return ids.map((id) => ({ id, name: id.slice(id.indexOf('/') + 1) }));
+}
+
+/**
+ * How the umbrella's own run went, and what it has to say about coverage.
+ *
+ * Only the umbrella's run gets one. A gate's run describes what that gate
+ * found, and this package has no standing to write an invocation object
+ * under another tool's driver name.
+ */
+interface Invocation {
+  /**
+   * Whether the analysis completed. A CLAIM, so it is written whenever the
+   * umbrella's run is written and never only when something happens to be
+   * hanging off it. Emitting it with the notifications made the field
+   * present when the answer was true and absent when it was false, which is
+   * the one direction that matters: an enforced gate that could not run,
+   * with nothing deferred or skipped, produced no invocation at all.
+   */
+  executionSuccessful: boolean;
+  notifications: Notification[];
+}
+
 function makeRun(
   name: string,
   version: string | null,
   findings: Finding[],
-  properties?: Record<string, unknown>
+  properties?: Record<string, unknown>,
+  invocation?: Invocation
 ): Record<string, unknown> {
+  const notifications = invocation?.notifications ?? [];
   return {
     tool: {
       driver: {
@@ -294,9 +368,28 @@ function makeRun(
         // findings.
         ...(version === null ? {} : { version }),
         rules: ruleDeclarations(findings),
+        // Declared beside the rules, so a descriptor reference in the
+        // notifications below resolves to something rather than dangling.
+        ...(notifications.length === 0
+          ? {}
+          : { notifications: notificationDeclarations(notifications) }),
       },
     },
     results: findings.map(toResult),
+    ...(invocation === undefined
+      ? {}
+      : {
+          invocations: [
+            {
+              executionSuccessful: invocation.executionSuccessful,
+              // The conditional half. An empty notification list is nothing
+              // to say, and an empty array says it at length.
+              ...(notifications.length === 0
+                ? {}
+                : { toolExecutionNotifications: notifications.map(toNotification) }),
+            },
+          ],
+        }),
     ...(properties === undefined ? {} : { properties }),
   };
 }
@@ -335,66 +428,77 @@ function diagnosticFindings(result: RunResult): Finding[] {
 }
 
 /**
- * The gates the stage filter held back, as SARIF results.
+ * The gates the stage filter held back, as notifications.
  *
  * They follow the same rule as a gate that could not run: no tool output,
  * so no run of their own, and the statement about them belongs to the
- * umbrella. Note level and non-blocking, because a deferred gate is not a
- * failure, and it is not silence either: a consumer reading only the SARIF
- * can otherwise not tell a commit-stage log from a full one.
+ * umbrella. It is not silence either: a consumer reading only the SARIF can
+ * otherwise not tell a commit-stage log from a full one.
+ *
+ * A NOTIFICATION rather than a result, which is the whole of the change. A
+ * deferred gate is a statement about what this run covered, not a statement
+ * about anybody's code, and as a result it was a fingerprint-less note alert
+ * that reappeared on every run of a repository running the commit stage.
+ * Permanent alerts about the tool's own configuration are how a code
+ * scanning tab becomes something nobody reads.
  */
-function deferredFindings(result: RunResult): Finding[] {
+function deferredNotifications(result: RunResult): Notification[] {
   return result.deferred.map((gate) => ({
-    schemaVersion: 1 as const,
-    product: UMBRELLA_DRIVER_NAME,
-    productVersion: null,
-    ruleId: 'conductor/gate-deferred',
-    severity: 'info' as const,
-    severityIsDerived: true,
-    blocking: false,
+    id: 'conductor/gate-deferred',
     message:
       `The ${gate.role} gate (${gate.product}) did not run at this stage. ` +
       `It runs from stage ${gate.stage} onwards.`,
-    subject: { kind: 'none' as const },
-    fingerprint: null,
     details: { role: gate.role, product: gate.product, stage: gate.stage },
   }));
 }
 
 /**
- * The gates that had nothing to check, as SARIF results.
+ * The gates that had nothing to check, as notifications.
  *
- * The rule id is the GATE'S namespace rather than the umbrella's, because the
- * statement is about that gate's coverage of this branch and a consumer
- * filtering on `intent-guard/` should see it. The run it lands in is still
- * the umbrella's, by the rule at the top of this file: a gate that produced
- * no tool output gets no run of its own, whatever the results in it say.
+ * The descriptor id is the GATE'S namespace rather than the umbrella's,
+ * because the statement is about that gate's coverage of this branch and a
+ * consumer filtering on `intent-guard/` should see it. The run it lands in is
+ * still the umbrella's, by the rule at the top of this file: a gate that
+ * produced no tool output gets no run of its own, whatever it says.
  *
- * Note level and non-blocking, and it is deliberately consistent with
- * gate-deferred and gate-not-enforced rather than with a
- * toolExecutionNotification. All three are the same kind of statement, so
- * they are the same kind of object; whether that whole family should be
- * notifications instead is one decision to take once, not three.
+ * The comment that used to sit here said this was kept consistent with
+ * gate-deferred and gate-not-enforced, and that whether the whole family
+ * should be notifications was one decision to take once rather than three.
+ * That decision has now been taken, for all three at once, and the rule it
+ * was taken on is written out here so the next case decides itself instead
+ * of going to somebody's judgment a fourth time:
+ *
+ *   A statement about HOW MUCH OF THE POLICY A RUN COVERED is a
+ *   NOTIFICATION. It is true of the configuration rather than of this
+ *   change, so it is identical on every run until somebody edits the policy
+ *   file, and on the adoption ramp it is deliberately true for weeks. A
+ *   permanent alert is a dismissed alert, and it teaches the reader to
+ *   dismiss the next one.
+ *
+ *   A statement that SOMETHING WENT WRONG is a RESULT. It is about this run,
+ *   it goes away when somebody fixes it, and a reviewer of this change is
+ *   the person who should see it.
+ *
+ * That is why conductor/gate-missing and conductor/gate-failed stay results:
+ * a gate that could not run means a class of problem went unlooked-for on
+ * this change. It is also why the normalization diagnostics stay results:
+ * conductor/blocking-mismatch is the umbrella saying its own report may
+ * disagree with the gate's own verdict, which is a defect in this run and
+ * not a property of anybody's configuration. The same rule decides the text
+ * report's summary line, in isFullyClean in output-text.ts, and the two must
+ * keep answering it the same way.
  */
-function skippedFindings(result: RunResult): Finding[] {
+function skippedNotifications(result: RunResult): Notification[] {
   return result.skipped.map((gate) => ({
-    schemaVersion: 1 as const,
-    product: UMBRELLA_DRIVER_NAME,
-    productVersion: null,
-    ruleId: `${gate.product}/no-contract`,
-    severity: 'info' as const,
-    severityIsDerived: true,
-    blocking: false,
+    id: `${gate.product}/no-contract`,
     message:
       `The ${gate.role} gate (${gate.product}) checked nothing on this branch. ${gate.detail}`,
-    subject: { kind: 'none' as const },
-    fingerprint: null,
     details: { role: gate.role, product: gate.product, reason: gate.reason },
   }));
 }
 
 /**
- * The gates the policy file told not to decide anything, as SARIF results.
+ * The gates the policy file told not to decide anything, as notifications.
  *
  * These are written in TWO places on purpose, and neither one is redundant:
  *
@@ -404,7 +508,7 @@ function skippedFindings(result: RunResult): Finding[] {
  *    out whose results these are. It is emitted for enforced gates too, so
  *    an absent property never has to be read as either answer.
  *
- *  - a note in the umbrella's run, always. The run-level property cannot
+ *  - a notification in the umbrella's run, always. The run-level property cannot
  *    carry the case that matters most: a gate that COULD NOT RUN produces
  *    no run of its own, by the rule at the top of this file, so the only
  *    place left to say "and it was not enforced, which is why this log
@@ -419,28 +523,30 @@ function skippedFindings(result: RunResult): Finding[] {
  * writing it into the field a code-scanning UI uses to describe the finding
  * would make the finding lie about what the gate found.
  */
-function unenforcedFindings(result: RunResult): Finding[] {
+function unenforcedNotifications(result: RunResult): Notification[] {
   return result.gates
     .filter((gate) => !gate.enforce)
     .map((gate) => {
-      const blocking = gate.findings.filter((finding) => finding.blocking).length;
+      // The GATE'S own blocking findings, which is why the umbrella's are
+      // filtered out rather than counted. A gate that could not run carries
+      // the umbrella's own blocking gate-missing finding in this same list,
+      // and counting it made this object say the gate blocked one thing and
+      // also that it never ran, which are opposite claims. Filtering by
+      // product rather than special-casing couldNotRun, because the question
+      // this number answers is "what did the gate say", and the umbrella's
+      // own findings are never the gate's answer.
+      const blocking = gate.findings.filter(
+        (finding) => finding.blocking && finding.product !== UMBRELLA_DRIVER_NAME
+      ).length;
       const what =
         gate.couldNotRun !== null
           ? `It could not run (${gate.couldNotRun.reason}), and nothing was checked by it.`
           : `It reported ${blocking} blocking finding(s) and exited ${gate.exitCode ?? -1}.`;
       return {
-        schemaVersion: 1 as const,
-        product: UMBRELLA_DRIVER_NAME,
-        productVersion: null,
-        ruleId: 'conductor/gate-not-enforced',
-        severity: 'info' as const,
-        severityIsDerived: true,
-        blocking: false,
+        id: 'conductor/gate-not-enforced',
         message:
           `The ${gate.role} gate (${gate.product}) has enforce: false, so its verdict did not ` +
           `reach the exit code. ${what}`,
-        subject: { kind: 'none' as const },
-        fingerprint: null,
         details: {
           role: gate.role,
           product: gate.product,
@@ -490,18 +596,41 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     );
   }
 
+  // Still RESULTS, deliberately, and the asymmetry with the three above is
+  // the point. gate-missing and gate-failed are the fail-closed posture made
+  // visible: a gate that could not run means a class of problem went
+  // unlooked-for on this change, and a reviewer scanning a pull request's
+  // alerts has to meet that as an alert rather than as tool status. The
+  // three below it are statements about how much of the policy this run
+  // represents, which is the tool describing itself.
   const umbrellaFindings = [
     ...result.gates
       .flatMap((gate) => gate.findings)
       .filter((finding) => finding.product === UMBRELLA_DRIVER_NAME),
     ...diagnosticFindings(result),
-    ...deferredFindings(result),
-    ...skippedFindings(result),
-    ...unenforcedFindings(result),
   ];
 
-  if (umbrellaFindings.length > 0) {
-    runs.push(makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings));
+  const notifications = [
+    ...deferredNotifications(result),
+    ...skippedNotifications(result),
+    ...unenforcedNotifications(result),
+  ];
+
+  // Notifications earn the run on their own. Before this, the umbrella run
+  // existed only when it had findings and a deferred gate was one; without
+  // this clause a commit-stage log would say nothing whatever about the gate
+  // that did not run there.
+  if (umbrellaFindings.length > 0 || notifications.length > 0) {
+    runs.push(
+      makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings, undefined, {
+        // A claim about whether the analysis completed, taken from the gates
+        // rather than from the exit code: an unenforced gate that could not
+        // run leaves the run at exit 0, and nothing was checked by it either
+        // way. Written whenever this run is written, in both directions.
+        executionSuccessful: result.gates.every((gate) => gate.couldNotRun === null),
+        notifications,
+      })
+    );
   }
 
   return JSON.stringify({ $schema: SARIF_SCHEMA, version: '2.1.0', runs }, null, 2);
