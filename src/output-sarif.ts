@@ -78,9 +78,12 @@
 //    reports a line and a column; the other two report no position at all.
 //    An invented startLine annotates an unrelated line of somebody's file
 //    and is indistinguishable from a true one once uploaded. No endColumn
-//    either, for the same reason: the secret scanner's JSON output does not
-//    carry the match length, so the end of the match is genuinely unknown
-//    from that output.
+//    either, for the same reason: the secret scanner's JSON output leaves
+//    the match length off the match object, so the end of the match is
+//    unknown from the channel the umbrella reads. Not unknown to that
+//    product, which puts an end column in its own SARIF; see the note in
+//    normalize.ts, which is where the omission would stop mattering if the
+//    field were ever carried.
 
 import type { Finding, Severity } from './envelope.js';
 import type { RunResult } from './run.js';

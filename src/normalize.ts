@@ -281,9 +281,14 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
           // product's own SARIF does the same conversion; doing it here too
           // is what makes one shared mapping possible.
           column: column + 1,
-          // No endColumn. The JSON output does not carry matchLength (only
-          // the fingerprint's inputs use it), so the end of the match is
-          // genuinely unknown from this output and is not guessed.
+          // No endColumn. vault-guard DOES know the match length: it hashes
+          // it into the fingerprint and puts an end column in its own SARIF.
+          // What it omits is matchLength on the match object in the JSON
+          // output, which is the channel the umbrella reads. So the end of
+          // the match is unknown from THIS CHANNEL rather than unknown to
+          // the product, which makes it a fixable upstream ask (carry
+          // matchLength on the match) rather than a permanent limitation.
+          // Until it is carried, it is not guessed.
         },
         fingerprint: {
           value: needString(match.fingerprint, product, `${where}.fingerprint`),

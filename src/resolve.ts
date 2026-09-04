@@ -25,16 +25,21 @@
 //     repository does.
 //
 //  2. Only a unified binary is asked for its version. `intent-guard`
-//     answers --version; the per-command binaries shipped before 1.2.0 did
-//     not parse the flag at all and RAN THE GATE against the current
-//     directory instead. A version probe that runs a gate is not a probe.
-//     The fix for that is merged upstream but unpublished, and an installed
-//     copy is whatever the user has, so probing stays on the unified binary:
-//     when the resolved binary is a per-command one, the unified binary of
-//     the same product is resolved separately and asked instead, and when
-//     that is not installed either the version is reported unknown rather
-//     than guessed. This can be relaxed once the floor is a release that
-//     has the fix, and not before.
+//     answers --version; a per-command binary once did not parse the flag at
+//     all and RAN THE GATE against the current directory instead, and a
+//     version probe that runs a gate is not a probe.
+//
+//     That is fixed, and NO PUBLISHED VERSION OF THE NAMES RESOLVED HERE
+//     has the bug: the fix is the commit v1.2.0 points at, only 1.2.0 and
+//     1.2.1 were ever published under these names, and the releases that
+//     had it were the pre-rename packages this file already refuses to
+//     resolve at all. So this is belt and braces against a class of bug
+//     rather than a live hazard. It is kept because it costs one field on a
+//     candidate and a fallback nobody exercises, and because the failure it
+//     prevents is silent and happens in the user's own repository: when the
+//     resolved binary is a per-command one, the unified binary of the same
+//     product is resolved separately and asked instead, and when that is not
+//     installed either the version is reported unknown rather than guessed.
 //
 //  3. There is no npx fallback. The draft proposed `npx --no-install` as a
 //     last resort, and it is dropped here on purpose: it makes what ran
@@ -56,9 +61,10 @@ export interface Candidate {
   prefix: string[];
   /**
    * Whether `<name> --version` can be relied on to print a version instead
-   * of doing work. False for the per-command binaries: those shipped before
-   * 1.2.0 ignore the flag and run the gate, and an installed copy is
-   * whatever the user has rather than whatever is on a branch.
+   * of doing work. False for the per-command binaries, per rule 2 above: no
+   * published version under the names resolved here ignores the flag, so
+   * this is a guard against the class of bug rather than against a release
+   * anybody can install.
    */
   versionSafe: boolean;
 }
