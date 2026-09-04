@@ -44,7 +44,8 @@ function result(
   gates: GateOutcome[],
   exitCode: number,
   deferred: RunResult['deferred'] = [],
-  skipped: RunResult['skipped'] = []
+  skipped: RunResult['skipped'] = [],
+  excluded: RunResult['excluded'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -53,6 +54,7 @@ function result(
     gates,
     deferred,
     skipped,
+    excluded,
     findings,
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
@@ -718,6 +720,42 @@ describe('a gate the stage filter deferred', () => {
 
   it('counts only the gates that actually ran in the header', () => {
     expect(text).toMatch(/^conductor run: 1 gate\(s\)/m);
+  });
+});
+
+describe('a run restricted with --gate', () => {
+  const excluded: RunResult['excluded'] = [
+    { role: 'secrets', product: 'vault-guard' },
+    { role: 'intent', product: 'intent-guard' },
+  ];
+
+  it('names the excluded gates in the full report', () => {
+    // The same reason a deferred gate gets a line: a run that checked one
+    // role otherwise reads exactly like a run that checked the policy.
+    const text = renderText(result([outcome({ exitCode: 0 })], 0, [], [], excluded), {
+      verbose: true,
+    });
+
+    expect(text).toMatch(/excluded/);
+    expect(text).toMatch(/secrets/);
+    expect(text).toMatch(/intent/);
+    expect(text).toMatch(/--gate/);
+  });
+
+  it('names them on the one-line summary of a clean run too', () => {
+    const text = renderText(result([outcome({ exitCode: 0 })], 0, [], [], excluded));
+
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+    expect(text).toMatch(/--gate/);
+    expect(text).toMatch(/secrets \(vault-guard\)/);
+    expect(text).toMatch(/intent \(intent-guard\)/);
+  });
+
+  it('says nothing about exclusion on a run that had no --gate', () => {
+    expect(renderText(result([outcome({ exitCode: 0 })], 0))).not.toMatch(/excluded|--gate/);
+    expect(
+      renderText(result([outcome({ exitCode: 0 })], 0), { verbose: true })
+    ).not.toMatch(/excluded|--gate/);
   });
 });
 

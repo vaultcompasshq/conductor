@@ -284,6 +284,36 @@ describe('precedence', () => {
     expect(enabledGates(policy).map((gate) => gate.role)).toEqual(['dependencies', 'intent']);
   });
 
+  it('marks the gates --gate switched off, so a later report can name them', () => {
+    // A gate --gate left out is neither deferred nor skipped, and without a
+    // mark on it nothing downstream can tell it apart from a gate the policy
+    // file itself switched off. An uploaded log from a --gate run would then
+    // be indistinguishable from a full one, which is the confusion the
+    // deferred notification exists to prevent.
+    const policy = parsePolicy(MINIMAL, POLICY_FILE_NAME);
+    const narrowed = applyCliOverrides(policy, { gates: ['dependencies'] });
+
+    expect(narrowed.gates.intent?.excludedByCli).toBe(true);
+    expect(narrowed.gates.dependencies?.excludedByCli).toBe(false);
+  });
+
+  it('does not mark a gate the policy file had already switched off', () => {
+    // MINIMAL declares secrets with enabled: false. --gate did not turn that
+    // off, so naming it as excluded would report the user's own decision back
+    // to them as something the command line did.
+    const policy = parsePolicy(MINIMAL, POLICY_FILE_NAME);
+    const narrowed = applyCliOverrides(policy, { gates: ['dependencies'] });
+
+    expect(narrowed.gates.secrets?.excludedByCli).toBe(false);
+  });
+
+  it('marks nothing when no --gate was given', () => {
+    const policy = applyCliOverrides(parsePolicy(MINIMAL, POLICY_FILE_NAME), {});
+    for (const role of GATE_ROLES) {
+      expect(policy.gates[role]?.excludedByCli ?? false).toBe(false);
+    }
+  });
+
   it('rejects a command-line gate selection naming a role the policy does not declare', () => {
     const policy = parsePolicy(
       'version: 1\ngates:\n  secrets:\n    product: vault-guard\n',

@@ -253,7 +253,12 @@ reports before running `--adopt` on a hook you did not write.
   report nobody can read.
 - `--verbose` prints the full per-gate report even when the run is clean.
   Text output only; the SARIF log never changes shape with it.
-- `--gate <role>`, repeatable.
+- `--gate <role>`, repeatable. A gate the policy file enables and this flag
+  leaves out is named as excluded, on one line in the text report and as a
+  `conductor/gate-excluded` notification in the SARIF log's `conductor` run.
+  It never reaches the exit code. Without those lines an uploaded log from a
+  narrowed run cannot be told from a log of a full one, which is the same
+  confusion the deferred notification exists to prevent.
 
 ### Exit codes
 

@@ -127,6 +127,18 @@ export interface GatePolicy {
    * change the exit code.
    */
   enforce: boolean;
+  /**
+   * Whether `--gate` switched this gate off, as opposed to the policy file.
+   *
+   * The two are different facts about a run and only one of them is news. A
+   * gate the file disables is a standing decision somebody wrote down; a gate
+   * `--gate` left out was on in the file and did not run this once, and
+   * without this flag nothing downstream can tell them apart. That is what
+   * made an uploaded log from a `--gate` run indistinguishable from a full
+   * one, which is exactly the confusion the deferred notification exists to
+   * prevent.
+   */
+  excludedByCli: boolean;
   /** Absolute path to the gate's executable, overriding resolution. */
   command?: string;
   /** Argument prefix used with `command` when it cannot be inferred. */
@@ -282,6 +294,9 @@ export function parsePolicy(text: string, source: string): Policy {
       // is not a boolean. Enforcement is the state a gate is in unless
       // somebody wrote down that it is not.
       enforce: entry.enforce === undefined ? true : Boolean(entry.enforce),
+      // Nothing on the command line has been read at this point, so no gate
+      // can have been excluded by one yet.
+      excludedByCli: false,
       ...(command === undefined ? {} : { command }),
       ...(entry.args === undefined ? {} : { args: entry.args as string[] }),
       options,
@@ -347,7 +362,16 @@ export function applyCliOverrides(policy: Policy, overrides: CliOverrides): Poli
     if (gate === undefined) {
       continue;
     }
-    gates[role] = { ...gate, enabled: overrides.gates.includes(role) };
+    const named = overrides.gates.includes(role);
+    gates[role] = {
+      ...gate,
+      enabled: named,
+      // Only a gate that WAS on and is not now. A gate the policy file had
+      // already switched off was not excluded by this flag, and reporting it
+      // as such would read the user's own standing decision back to them as
+      // something the command line did.
+      excludedByCli: !named && gate.enabled,
+    };
   }
 
   return { ...policy, gates };

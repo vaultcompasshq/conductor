@@ -229,6 +229,21 @@ function skippedLines(result: RunResult): string[] {
 }
 
 /**
+ * One line per gate the --gate flag left out.
+ *
+ * The same reasoning as the deferred lines above, with the one difference
+ * that there is no later stage to name: this gate is on in the policy file
+ * and did not run because of how this one command was typed. Without the
+ * line, a --gate run and a full run produce the same report.
+ */
+function excludedLines(result: RunResult): string[] {
+  return result.excluded.map(
+    (gate) =>
+      `  excluded  ${gate.role}  ${gate.product}  did not run here; --gate did not name it`
+  );
+}
+
+/**
  * What an unenforced gate did, as clauses for a verdict line.
  *
  * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
@@ -438,6 +453,15 @@ function summaryLine(result: RunResult): string {
     parts.push(`Nothing to check against: ${names}.`);
   }
 
+  // Same reasoning again, for the gates the command line left out. This one
+  // is the easiest of the three to lose: a --gate run is usually somebody
+  // narrowing a run on purpose, and a log of it that says nothing about the
+  // narrowing is the log that gets uploaded and read as a full run later.
+  if (result.excluded.length > 0) {
+    const names = result.excluded.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+    parts.push(`Left out by --gate: ${names}.`);
+  }
+
   // A gate that ran with enforce: false could not have failed this run
   // whatever it found. Naming it among the gates that ran and then saying
   // nothing more makes a repository on the adoption ramp read as fully
@@ -492,7 +516,7 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     lines.push(...gateSection(gate));
   }
 
-  const aside = [...deferredLines(result), ...skippedLines(result)];
+  const aside = [...deferredLines(result), ...skippedLines(result), ...excludedLines(result)];
   if (aside.length > 0) {
     lines.push('', ...aside);
   }

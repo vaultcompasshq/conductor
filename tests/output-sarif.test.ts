@@ -38,7 +38,8 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
 function result(
   gates: GateOutcome[],
   deferred: RunResult['deferred'] = [],
-  skipped: RunResult['skipped'] = []
+  skipped: RunResult['skipped'] = [],
+  excluded: RunResult['excluded'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -47,6 +48,7 @@ function result(
     gates,
     deferred,
     skipped,
+    excluded,
     findings,
     summary: { blocking: 0, byProduct: {}, bySeverity: {} },
     exitCode: 1,
@@ -134,6 +136,37 @@ describe('coverage statements are notifications rather than results', () => {
     expect(
       notificationsOf(sarif(DEFERRED)).map((entry) => (entry.descriptor as Record<string, unknown>).id)
     ).toContain('conductor/gate-deferred');
+  });
+
+  it('records a gate --gate excluded as a notification, beside the deferred ones', () => {
+    // Same discriminator, same answer: how much of the policy this run
+    // covered is a statement about the run, not about anybody's code. Without
+    // it an uploaded log from a --gate run cannot be told from a full one.
+    const EXCLUDED = result(
+      [outcome({ exitCode: 0, findings: [] })],
+      [],
+      [],
+      [{ role: 'secrets', product: 'vault-guard' }]
+    );
+
+    expect(umbrellaResultIds(sarif(EXCLUDED))).not.toContain('conductor/gate-excluded');
+    const entry = notificationsOf(sarif(EXCLUDED)).find(
+      (candidate) => (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-excluded'
+    ) as Record<string, unknown>;
+
+    expect(entry).toBeDefined();
+    expect(entry.level).toBe('note');
+    expect((entry.message as Record<string, unknown>).text).toMatch(/secrets/);
+    expect((entry.message as Record<string, unknown>).text).toMatch(/--gate/);
+  });
+
+  it('says nothing about exclusion when there was no --gate', () => {
+    const log = sarif(result([outcome({ exitCode: 0, findings: [] })], [
+      { role: 'intent', product: 'intent-guard', stage: 'ci' },
+    ]));
+    expect(
+      notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).not.toContain('conductor/gate-excluded');
   });
 
   it('moves gate-not-enforced out of results', () => {

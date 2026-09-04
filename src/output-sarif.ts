@@ -453,6 +453,26 @@ function deferredNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The gates the --gate flag left out, as notifications.
+ *
+ * The discriminator at skippedNotifications below settles this one without a
+ * fresh judgment: how much of the policy a run covered is a statement about
+ * the run, so it is a notification. It is not a result, because nothing went
+ * wrong; it is not silence, because an uploaded log from a --gate run is
+ * otherwise indistinguishable from a full one, and that is the confusion the
+ * deferred notification already exists to prevent.
+ */
+function excludedNotifications(result: RunResult): Notification[] {
+  return result.excluded.map((gate) => ({
+    id: 'conductor/gate-excluded',
+    message:
+      `The ${gate.role} gate (${gate.product}) is enabled in the policy file but did not run: ` +
+      'this run was restricted with --gate and did not name it.',
+    details: { role: gate.role, product: gate.product },
+  }));
+}
+
+/**
  * The gates that had nothing to check, as notifications.
  *
  * The descriptor id is the GATE'S namespace rather than the umbrella's,
@@ -612,6 +632,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
 
   const notifications = [
     ...deferredNotifications(result),
+    ...excludedNotifications(result),
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
   ];
