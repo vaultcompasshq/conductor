@@ -25,6 +25,7 @@ import {
   revertInit,
 } from '../src/init.js';
 import { parsePolicy } from '../src/policy.js';
+import { childEnv } from './helpers/child-env.js';
 
 /** Pre-commit hooks captured from real hook-manager installs. */
 const HOOK_FIXTURES = path.join(
@@ -1002,7 +1003,7 @@ describe('core.hooksPath', () => {
       // No conductor on PATH, so the fail-closed branch is what refuses it.
       // git IS on it, so the refusal is about conductor and not about the
       // hook's own inability to look.
-      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+      env: childEnv(pathLedBy(shimDirWithGit())),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1114,7 +1115,7 @@ describe('a husky 9 repository', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'should be refused'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(bin) },
+      env: childEnv(pathLedBy(bin)),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1141,7 +1142,7 @@ describe('a husky 9 repository', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'still gated after an install'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(bin) },
+      env: childEnv(pathLedBy(bin)),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1204,7 +1205,7 @@ describe('a husky 9 repository', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'gated after a clean and a reinstall'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(bin) },
+      env: childEnv(pathLedBy(bin)),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1284,7 +1285,7 @@ describe('a husky 8 repository', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'should be refused'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(bin) },
+      env: childEnv(pathLedBy(bin)),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1415,7 +1416,7 @@ describe('the generated hook', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'no conductor installed'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+      env: childEnv(pathLedBy(shimDirWithGit())),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1438,7 +1439,7 @@ describe('the generated hook', () => {
     const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: tempDir() },
+      env: childEnv(tempDir()),
     });
 
     // Without git the hook cannot find the repository root, so it cannot
@@ -1473,7 +1474,7 @@ describe('the generated hook', () => {
       cwd: repo,
       encoding: 'utf8',
       // No conductor anywhere on PATH. The only copy is the project's own.
-      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+      env: childEnv(pathLedBy(shimDirWithGit())),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1496,7 +1497,7 @@ describe('the generated hook', () => {
     const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
       cwd: path.join(repo, 'packages', 'app'),
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+      env: childEnv(pathLedBy(shimDirWithGit())),
     });
 
     expect(run.status).toBe(1);
@@ -1514,7 +1515,7 @@ describe('the generated hook', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'no conductor anywhere'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+      env: childEnv(pathLedBy(shimDirWithGit())),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1531,7 +1532,7 @@ describe('the generated hook', () => {
     const commit = spawnSync(GIT, ['commit', '-m', 'a gate could not run'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: pathLedBy(shimDirWithGit()) },
+      env: childEnv(pathLedBy(shimDirWithGit())),
     });
 
     expect(commit.status).not.toBe(0);
@@ -1552,7 +1553,7 @@ describe('the generated hook', () => {
     const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+      env: childEnv(`${bin}${path.delimiter}${process.env.PATH ?? ''}`),
     });
 
     // 2 means a gate could not run. Collapsing it into 1 would report
@@ -1571,7 +1572,7 @@ describe('the generated hook', () => {
     const commit = spawnSync('git', ['commit', '-m', 'clean'], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+      env: childEnv(`${bin}${path.delimiter}${process.env.PATH ?? ''}`),
     });
 
     expect(commit.status).toBe(0);
@@ -1597,7 +1598,7 @@ describe('what the generated hook says about each exit code', () => {
     const run = spawnSync(path.join(repo, '.git', 'hooks', 'pre-commit'), [], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+      env: childEnv(`${bin}${path.delimiter}${process.env.PATH ?? ''}`),
     });
     return `${run.stdout ?? ''}${run.stderr ?? ''}`;
   }
