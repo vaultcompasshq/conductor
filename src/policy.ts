@@ -210,6 +210,47 @@ function describeErrors(errors: ValidateFunction['errors'], source: string): str
 }
 
 /**
+ * Why one reserved key is reserved.
+ *
+ * The general sentence, at the bottom, is that the umbrella writes that exact
+ * flag itself, and it is true of most of these keys. Three of them are
+ * reserved for other reasons, and a message giving the wrong reason sends
+ * somebody to the wrong fix: they go looking in the command line for a flag
+ * the umbrella never writes, find nothing, and conclude the rejection is a
+ * bug in this tool. A test in policy.test.ts derives the flags gateArgs
+ * actually writes and holds this list of exceptions to exactly those three,
+ * so a fourth cannot be added without saying why.
+ */
+function reservedReason(product: Product, key: string): string {
+  if (product === 'intent-guard' && key === 'base') {
+    return (
+      'The umbrella works the changed-path set out itself and passes --paths, because ' +
+      '--project may be a temporary directory holding only a contract. A --base here ' +
+      'would be resolved against that directory, where there is no repository. ' +
+      "Use the umbrella's own --base instead."
+    );
+  }
+  if (product === 'dep-guard' && key === 'base') {
+    return (
+      'The umbrella never passes --base to this gate; it passes --staged, and a base here ' +
+      'would fight it over which change set is being scanned. Use the umbrella own --staged, ' +
+      'or leave it off to scan the working tree.'
+    );
+  }
+  if (product === 'vault-guard' && key === 'format') {
+    return (
+      'The umbrella writes this option itself under its short name, -f json. A --format here ' +
+      'is a second writer of the same option, and which one wins depends on that CLI argument ' +
+      'parser. The report format is chosen with the umbrella own --format.'
+    );
+  }
+  return (
+    `The umbrella passes that flag to ${product} itself, and two writers of one flag ` +
+    'would resolve differently depending on that CLI argument parser.'
+  );
+}
+
+/**
  * Parses and validates policy YAML.
  *
  * `source` is only used in error messages, so the same function serves the
@@ -259,17 +300,7 @@ export function parsePolicy(text: string, source: string): Policy {
       if (RESERVED_OPTIONS[product].includes(key)) {
         throw new PolicyError(
           `${source}: "${key}" under gates.${role}.options is reserved. ` +
-            // Every other reserved key is one the umbrella writes itself, and
-            // the general sentence is true of them. `base` on the intent gate
-            // is rejected for a different reason, and giving somebody the
-            // wrong reason sends them to the wrong fix.
-            (product === 'intent-guard' && key === 'base'
-              ? 'The umbrella works the changed-path set out itself and passes --paths, because ' +
-                '--project may be a temporary directory holding only a contract. A --base here ' +
-                'would be resolved against that directory, where there is no repository. ' +
-                'Use the umbrella\'s own --base instead.'
-              : `The umbrella passes that flag to ${product} itself, and two writers of one flag ` +
-                'would resolve differently depending on that CLI argument parser.')
+            reservedReason(product, key)
         );
       }
     }
