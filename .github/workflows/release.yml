@@ -4,13 +4,16 @@ name: Release
 #
 # npm only exposes the trusted-publisher setting on a package that already
 # exists on the registry, so the very first publish of a new name cannot go
-# through OIDC. That first publish has to happen by hand, from a maintainer's
-# machine, after clearing package.json's "private": true flag. Only once
-# @vaultcompass/conductor exists on the registry can the trusted publisher be
-# configured for it, and only after that can this workflow's OIDC publish
-# step succeed. Every tag pushed after that bootstrap runs unchanged; the
-# skip-if-already-published step below is exactly what keeps the bootstrap
-# tag's own run green rather than failing on a duplicate-version publish.
+# through OIDC. That first publish has to happen by hand, from a
+# maintainer's machine. Only once @vaultcompass/conductor exists on the
+# registry can the trusted publisher be configured for it, and only after
+# that can this workflow's OIDC publish step succeed. Every tag pushed after
+# that bootstrap runs unchanged; the skip-if-already-published step below is
+# exactly what keeps the bootstrap tag's own run green rather than failing
+# on a duplicate-version publish.
+#
+# CONTRIBUTING.md's Releasing section spells that bootstrap out step by
+# step. This comment is the why; that section is the how.
 
 on:
   push:
