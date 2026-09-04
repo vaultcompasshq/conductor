@@ -109,7 +109,37 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     // and reaching it through the policy file's absolute "command:" is the
     // case that override exists for.
 
-    env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` };
+    // node and git are SHIMMED here rather than reached by putting their own
+    // directories on PATH, and that is the whole point of the arrangement
+    // below. See the PATH comment.
+    shim(binDir, 'node', `#!/bin/sh\nexec ${process.execPath} "$@"\n`);
+    const gitBinary = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    shim(binDir, 'git', `#!/bin/sh\nexec ${gitBinary} "$@"\n`);
+
+    // CONSTRUCTED, never inherited, and it is exactly one directory: the one
+    // this test filled itself.
+    //
+    // Prepending to the developer's own PATH made this suite's verdict
+    // depend on that developer's machine. The assertion below that init
+    // leaves the intent gate off is a claim that intent-guard is not
+    // findable, and it held only while nobody happened to have intent-guard
+    // installed. Somebody does, so the suite went red on main over a fact
+    // about a laptop rather than about the code.
+    //
+    // Naming the node and git directories instead of inheriting is not
+    // enough either, and the reason is worth writing down because it is the
+    // same mistake one step further in: a global npm install puts its bin
+    // symlink in THE SAME DIRECTORY AS NODE. On the machine that found this,
+    // intent-guard sits beside node in an nvm bin directory, so adding "the
+    // node directory" to PATH re-adds intent-guard and the test is
+    // machine-dependent again. /usr/bin, where git lives, is a shared
+    // directory with the same property in principle.
+    //
+    // So every entry on this PATH is a file this test wrote: the three gate
+    // shims, the umbrella, node, and git. "intent-guard is not findable" is
+    // then true by construction, and stays true on any machine, because
+    // there is nowhere for it to be.
+    env = { ...process.env, PATH: binDir };
   });
 
   afterAll(() => {
@@ -128,8 +158,10 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     const policy = readFileSync(path.join(clone, '.guardrails.yaml'), 'utf8');
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: true/);
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
-    // Not on PATH and not in node_modules/.bin, so init leaves it off and
-    // says why rather than silently switching on a gate that is not there.
+    // Not on PATH and not in node_modules/.bin, which is now true BY
+    // CONSTRUCTION: the child's PATH is built from three named directories
+    // and intent-guard is in none of them. init leaves it off and says why
+    // rather than silently switching on a gate that is not there.
     expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
   });
 
