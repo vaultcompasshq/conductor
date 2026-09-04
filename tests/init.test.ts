@@ -1586,6 +1586,17 @@ describe('what the generated hook says about each exit code', () => {
     expect(output).not.toMatch(/blocked/);
   });
 
+  it('does not promise a report above that a crash never printed', () => {
+    // The stub here exits non-zero having printed nothing at all, which is
+    // what exit 127 or a crashed umbrella looks like from the hook. Telling
+    // somebody to read a report that is not there sends them looking for
+    // output that was never written.
+    const output = hookOutput(2);
+
+    expect(output).toMatch(/If there is a report above/);
+    expect(output).not.toMatch(/The report above names/);
+  });
+
   it('advertises no bypass, in any branch of the hook it writes', () => {
     // Every gate already has a recorded, reviewable, scoped escape. A
     // bypass flag skips every gate invisibly, including the ones that would

@@ -289,7 +289,12 @@ conductor run --staged --stage commit || conductor_status=$?
 if [ "$conductor_status" -eq 1 ]; then
   echo "conductor: a gate blocked this commit. Review the report above. If you disagree with a finding, record the decision where the next reader can see it: an allow entry, an ignore path, or a baseline in that gate's own configuration, or enforce: false for the gate in .guardrails.yaml." >&2
 elif [ "$conductor_status" -ne 0 ]; then
-  echo "conductor: a gate could not run, so NOTHING was checked and this commit was not verified by any gate. The report above names the gate and says why. Fix that before committing." >&2
+  # "If there is a report above" rather than "the report above". This branch
+  # also catches an umbrella that crashed or was not executable, and exit 127
+  # with no output at all is one of the shapes that reaches here. Sending
+  # somebody to read a report that was never printed makes them hunt for
+  # output rather than for the gate.
+  echo "conductor: a gate could not run, so NOTHING was checked and this commit was not verified by any gate. If there is a report above, it names the gate and says why. Fix that before committing." >&2
 fi
 
 # Passed straight through. 1 means a gate blocked; 2 means a gate could not

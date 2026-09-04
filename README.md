@@ -478,7 +478,10 @@ finding is done in `.guardrails.yaml` or in that gate's own configuration, so
 the decision is recorded where the next reader can see it. On exit 2 nothing
 was checked at all, and the line says that rather than calling it a blocked
 commit: a gate that could not run made no decision, and reporting one is the
-same error as collapsing the codes.
+same error as collapsing the codes. That line says "if there is a report
+above" rather than "the report above", because the same branch catches an
+umbrella that crashed or was never executable, and exit 127 with no output
+at all is one of the shapes that reaches it.
 
 **Neither line advertises a bypass.** Every gate already has a recorded,
 reviewable, scoped escape: an allow entry, an ignore path, a baseline, or
