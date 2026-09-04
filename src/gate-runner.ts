@@ -140,8 +140,15 @@ const EMPTY_RUN: RunSummary = {
  * set, and this is the only place they are written. The passthrough block
  * goes last so a gate's own flags are visible at the end of the command
  * line in the report, where they read as the user's own additions.
+ *
+ * Exported so a test can DERIVE the flags this writes and hold
+ * RESERVED_OPTIONS in policy.ts against them. The two lists are otherwise
+ * parallel and hand-maintained, and a flag added here and forgotten there
+ * would let a policy file write the same flag a second time, with the winner
+ * decided by that gate's own argument parser rather than by anything the
+ * user could read in their own policy file.
  */
-function gateArgs(
+export function gateArgs(
   gate: GatePolicy,
   staged: boolean,
   intent: IntentPreparation | undefined

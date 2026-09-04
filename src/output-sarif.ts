@@ -78,9 +78,12 @@
 //    reports a line and a column; the other two report no position at all.
 //    An invented startLine annotates an unrelated line of somebody's file
 //    and is indistinguishable from a true one once uploaded. No endColumn
-//    either, for the same reason: the secret scanner's JSON output does not
-//    carry the match length, so the end of the match is genuinely unknown
-//    from that output.
+//    either, for the same reason: the secret scanner's JSON output leaves
+//    the match length off the match object, so the end of the match is
+//    unknown from the channel the umbrella reads. Not unknown to that
+//    product, which puts an end column in its own SARIF; see the note in
+//    normalize.ts, which is where the omission would stop mattering if the
+//    field were ever carried.
 
 import type { Finding, Severity } from './envelope.js';
 import type { RunResult } from './run.js';
@@ -453,6 +456,26 @@ function deferredNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The gates the --gate flag left out, as notifications.
+ *
+ * The discriminator at skippedNotifications below settles this one without a
+ * fresh judgment: how much of the policy a run covered is a statement about
+ * the run, so it is a notification. It is not a result, because nothing went
+ * wrong; it is not silence, because an uploaded log from a --gate run is
+ * otherwise indistinguishable from a full one, and that is the confusion the
+ * deferred notification already exists to prevent.
+ */
+function excludedNotifications(result: RunResult): Notification[] {
+  return result.excluded.map((gate) => ({
+    id: 'conductor/gate-excluded',
+    message:
+      `The ${gate.role} gate (${gate.product}) is enabled in the policy file but did not run: ` +
+      'this run was restricted with --gate and did not name it.',
+    details: { role: gate.role, product: gate.product },
+  }));
+}
+
+/**
  * The gates that had nothing to check, as notifications.
  *
  * The descriptor id is the GATE'S namespace rather than the umbrella's,
@@ -482,9 +505,13 @@ function deferredNotifications(result: RunResult): Notification[] {
  * That is why conductor/gate-missing and conductor/gate-failed stay results:
  * a gate that could not run means a class of problem went unlooked-for on
  * this change. It is also why the normalization diagnostics stay results:
- * conductor/blocking-mismatch is the umbrella saying its own report may
- * disagree with the gate's own verdict, which is a defect in this run and
- * not a property of anybody's configuration. The same rule decides the text
+ * conductor/blocking-count-mismatch and conductor/blocking-threshold-unknown,
+ * the two codes reconcileBlocking raises in normalize.ts, are the umbrella
+ * saying its own report may disagree with the gate's own verdict, which is a
+ * defect in this run and not a property of anybody's configuration. Those two
+ * ids are the whole set; a conductor/blocking-mismatch was named here, in the
+ * text report and in the README for a while, and nothing ever emitted it. The
+ * same rule decides the text
  * report's summary line, in isFullyClean in output-text.ts, and the two must
  * keep answering it the same way.
  */
@@ -612,6 +639,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
 
   const notifications = [
     ...deferredNotifications(result),
+    ...excludedNotifications(result),
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
   ];

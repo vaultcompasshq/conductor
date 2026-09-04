@@ -111,7 +111,9 @@ export function buildProgram(): Command {
 
   program
     .command('init')
-    .description('Write the policy file and one pre-commit hook that runs every enabled gate.')
+    .description(
+      'Write the policy file and one pre-commit hook that runs the commit-stage gates.'
+    )
     .option('--dry-run', 'print every file that would be written or changed, and write nothing')
     .option('--adopt', "replace a gate's own pre-commit hook with the umbrella hook")
     .option('--revert', 'remove exactly what a previous init wrote')

@@ -624,8 +624,8 @@ function gateHookGuidance(product: Product, relPath: string): string {
   return (
     `${relPath} is ${product}'s own pre-commit hook. Adding the umbrella hook alongside it would ` +
     `run ${product} twice and report its findings twice. Re-run with --adopt to replace it with ` +
-    'the umbrella hook, which runs every enabled gate including that one, or leave things as they ' +
-    'are and do not run init here.'
+    'the umbrella hook, which runs every enabled commit-stage gate including that one, or leave ' +
+    'things as they are and do not run init here.'
   );
 }
 

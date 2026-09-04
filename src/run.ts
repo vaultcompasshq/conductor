@@ -6,7 +6,7 @@ import { type GateOutcome, preparationFailed, runGate } from './gate-runner.js';
 import { resolveBaseRef } from './intent-base.js';
 import { type IntentPreparation, prepareIntent } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Policy, Product } from './policy.js';
-import { enabledGates, runsAtStage } from './policy.js';
+import { GATE_ROLES, enabledGates, runsAtStage } from './policy.js';
 import { ResolveError, resolveGateBinary } from './resolve.js';
 
 /**
@@ -23,6 +23,22 @@ export interface DeferredGate {
   product: Product;
   /** The earliest stage at which this gate will run. */
   stage: GateStage;
+}
+
+/**
+ * A gate `--gate` left out of this run.
+ *
+ * Recorded for the same reason a deferred gate is, and it is deliberately the
+ * same shape minus the stage: there is no stage at which this one comes back,
+ * only another command line. A gate switched on in the policy file that did
+ * not run has to be visible somewhere, or a `--gate secrets` run reads exactly
+ * like a run that checked the whole policy. It is NOT a GateOutcome for the
+ * same reason DeferredGate is not: no binary was looked for, nothing was
+ * spawned, and there is no exit code to report.
+ */
+export interface ExcludedGate {
+  role: GateRole;
+  product: Product;
 }
 
 /**
@@ -50,6 +66,8 @@ export interface RunResult {
   deferred: DeferredGate[];
   /** Enabled gates that ran at this stage and found nothing to check. */
   skipped: SkippedGate[];
+  /** Gates the --gate flag left out. Empty with no --gate. */
+  excluded: ExcludedGate[];
   /**
    * Every finding, flat across products, ordered blocking-first. Which gate
    * produced a finding is IN the finding rather than in the structure, so a
@@ -139,6 +157,13 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
       : enabled
           .filter((gate) => !runsAtStage(gate.stage, requested))
           .map((gate) => ({ role: gate.role, product: gate.product, stage: gate.stage }));
+
+  // Read off the policy rather than off the enabled list, because these gates
+  // are exactly the ones the override took out of it. In role order, so a
+  // report's ordering never depends on the order the flags were typed.
+  const excluded: ExcludedGate[] = GATE_ROLES.map((role) => policy.gates[role]).filter(
+    (gate): gate is GatePolicy => gate !== undefined && gate.excludedByCli
+  ).map((gate) => ({ role: gate.role, product: gate.product }));
 
   const env = options.env ?? {};
   const skipped: SkippedGate[] = [];
@@ -238,6 +263,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     gates: outcomes,
     deferred,
     skipped,
+    excluded,
     findings,
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,

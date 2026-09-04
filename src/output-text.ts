@@ -229,6 +229,21 @@ function skippedLines(result: RunResult): string[] {
 }
 
 /**
+ * One line per gate the --gate flag left out.
+ *
+ * The same reasoning as the deferred lines above, with the one difference
+ * that there is no later stage to name: this gate is on in the policy file
+ * and did not run because of how this one command was typed. Without the
+ * line, a --gate run and a full run produce the same report.
+ */
+function excludedLines(result: RunResult): string[] {
+  return result.excluded.map(
+    (gate) =>
+      `  excluded  ${gate.role}  ${gate.product}  did not run here; --gate did not name it`
+  );
+}
+
+/**
  * What an unenforced gate did, as clauses for a verdict line.
  *
  * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
@@ -312,6 +327,25 @@ function verdict(result: RunResult): string {
     return `verdict: exit 2, a gate could not run (${names}), so nothing here is a clean result.${aside}`;
   }
   if (result.exitCode === EXIT_BLOCKED) {
+    // Exit 1 with nothing on screen marked blocking. The sibling of the exit 0
+    // clause below, and it exists for the same reason: composeExitCode returns
+    // 1 for a non-zero gate exit code OR a blocking finding, and both branches
+    // of reconcileBlocking in normalize.ts drop every blocking flag to false
+    // while the gate's own non-zero exit still stands. "0 blocking finding(s)"
+    // on the one line somebody reads when they read nothing else contradicts
+    // the exit code printed beside it, and sends a reader looking for a
+    // finding that this report deliberately does not claim.
+    if (blocking === 0) {
+      const names = enforcedGates
+        .filter((gate) => (gate.exitCode ?? 0) !== 0)
+        .map((gate) => `${gate.role} (exit ${gate.exitCode ?? '?'})`)
+        .join(', ');
+      return (
+        `verdict: exit 1, and no finding here is marked blocking. Enforced gate(s) that exited ` +
+        `non-zero: ${names}. The umbrella could not reconcile a blocking count with what those ` +
+        `gates reported, so the gate exit code decided the run.${aside}`
+      );
+    }
     return `verdict: exit 1, ${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
   }
 
@@ -355,10 +389,12 @@ export interface TextOptions {
  * install-script metadata is a permanent property of that file format, true
  * on every run forever, and forcing a screenful over it would make the
  * summary line useless in the repositories that most need it. A statement
- * that something went wrong is a result: conductor/blocking-mismatch is the
- * umbrella saying its own report may disagree with the gate's own verdict
- * about what blocked, which is a defect in THIS run and cannot be reported
- * as a number on a line that also says "clean, nothing blocked".
+ * that something went wrong is a result: conductor/blocking-count-mismatch
+ * and conductor/blocking-threshold-unknown, the two codes reconcileBlocking
+ * raises in normalize.ts, are the umbrella saying its own report may disagree
+ * with the gate's own verdict about what blocked, which is a defect in THIS
+ * run and cannot be reported as a number on a line that also says "clean,
+ * nothing blocked".
  *
  * A run where no gate ran at all is not clean either, whatever the exit code
  * says. "No gate ran because none is enabled", "every gate was deferred" and
@@ -419,6 +455,15 @@ function summaryLine(result: RunResult): string {
     parts.push(`Nothing to check against: ${names}.`);
   }
 
+  // Same reasoning again, for the gates the command line left out. This one
+  // is the easiest of the three to lose: a --gate run is usually somebody
+  // narrowing a run on purpose, and a log of it that says nothing about the
+  // narrowing is the log that gets uploaded and read as a full run later.
+  if (result.excluded.length > 0) {
+    const names = result.excluded.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+    parts.push(`Left out by --gate: ${names}.`);
+  }
+
   // A gate that ran with enforce: false could not have failed this run
   // whatever it found. Naming it among the gates that ran and then saying
   // nothing more makes a repository on the adoption ramp read as fully
@@ -473,7 +518,7 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     lines.push(...gateSection(gate));
   }
 
-  const aside = [...deferredLines(result), ...skippedLines(result)];
+  const aside = [...deferredLines(result), ...skippedLines(result), ...excludedLines(result)];
   if (aside.length > 0) {
     lines.push('', ...aside);
   }

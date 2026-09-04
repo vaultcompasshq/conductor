@@ -44,7 +44,8 @@ function result(
   gates: GateOutcome[],
   exitCode: number,
   deferred: RunResult['deferred'] = [],
-  skipped: RunResult['skipped'] = []
+  skipped: RunResult['skipped'] = [],
+  excluded: RunResult['excluded'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -53,6 +54,7 @@ function result(
     gates,
     deferred,
     skipped,
+    excluded,
     findings,
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
@@ -348,16 +350,16 @@ describe('a fully clean run, which is most runs', () => {
 describe('an umbrella diagnostic is not a note', () => {
   // The discriminator, applied: a statement about how much of the policy a
   // run covered is a notification, and a statement that something went wrong
-  // is a result. A gate's own note is the first. conductor/blocking-mismatch
-  // is the second: it is the umbrella saying its own report may disagree
-  // with the gate's own verdict, which is a defect in this run rather than a
-  // permanent property of anything.
+  // is a result. A gate's own note is the first.
+  // conductor/blocking-count-mismatch is the second: it is the umbrella saying
+  // its own report may disagree with the gate's own verdict, which is a defect
+  // in this run rather than a permanent property of anything.
   const withDiagnostic = result(
     [
       outcome({
         exitCode: 0,
         diagnostics: [
-          { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+          { code: 'conductor/blocking-count-mismatch', message: 'the counts disagree' },
         ],
       }),
     ],
@@ -368,7 +370,7 @@ describe('an umbrella diagnostic is not a note', () => {
     const text = renderText(withDiagnostic);
 
     expect(text).toMatch(/^conductor run: /m);
-    expect(text).toMatch(/blocking-mismatch/);
+    expect(text).toMatch(/blocking-count-mismatch/);
     expect(text).toMatch(/^verdict: exit 0/m);
   });
 
@@ -610,6 +612,88 @@ describe('the verdict when enforced and unenforced gates are mixed', () => {
   });
 });
 
+describe('the verdict when the run exits 1 and nothing is marked blocking', () => {
+  // Both branches of reconcileBlocking drop every blocking flag to false while
+  // the gate's own non-zero exit code stands, so composeExitCode still returns
+  // 1. The verdict is the one line somebody reads when they read nothing else,
+  // and "exit 1, 0 blocking finding(s)" contradicts itself on that line.
+  function depGuardRaw(): { run: Record<string, unknown> } {
+    return fixture('dep-guard-0.2.0-blocking.json') as { run: Record<string, unknown> };
+  }
+
+  function verdictFor(raw: unknown): string {
+    const normalized = normalizeDepGuard(raw, '0.2.0');
+    // The precondition this whole branch is about: the gate exited non-zero
+    // and the umbrella marked nothing blocking.
+    expect(normalized.findings.some((finding) => finding.blocking)).toBe(false);
+    expect(normalized.diagnostics).toHaveLength(1);
+    const text = renderText(
+      result(
+        [outcome({ exitCode: 1, findings: normalized.findings, run: normalized.run, diagnostics: normalized.diagnostics })],
+        1
+      )
+    );
+    return text.trimEnd().split('\n').pop() as string;
+  }
+
+  it('does not print a blocking count when the threshold was never reported', () => {
+    const raw = depGuardRaw();
+    delete raw.run.failOn;
+    const last = verdictFor(raw);
+
+    expect(last).toMatch(/exit 1/);
+    expect(last).not.toMatch(/0 blocking finding\(s\)/);
+    expect(last).toMatch(/dependencies/);
+    expect(last).toMatch(/could not reconcile/);
+    expect(last).toMatch(/exit code decided the run/);
+  });
+
+  it('does not print a blocking count when the gate own count and the umbrella count disagree', () => {
+    const raw = depGuardRaw();
+    raw.run.blockingMatches = 5;
+    const last = verdictFor(raw);
+
+    expect(last).toMatch(/exit 1/);
+    expect(last).not.toMatch(/0 blocking finding\(s\)/);
+    expect(last).toMatch(/dependencies/);
+    expect(last).toMatch(/could not reconcile/);
+    expect(last).toMatch(/exit code decided the run/);
+  });
+
+  it('keeps the unenforced aside on that verdict', () => {
+    const raw = depGuardRaw();
+    delete raw.run.failOn;
+    const normalized = normalizeDepGuard(raw, '0.2.0');
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 1,
+            findings: normalized.findings,
+            run: normalized.run,
+            diagnostics: normalized.diagnostics,
+          }),
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: null,
+            exitCode: null,
+            binary: null,
+            enforce: false,
+            couldNotRun: { reason: 'binary-missing', detail: 'binary missing' },
+            findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+          }),
+        ],
+        1
+      )
+    );
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/intent could not run/);
+    expect(last).toMatch(/that is not why/);
+  });
+});
+
 describe('a gate the stage filter deferred', () => {
   // Verbose, because the run below is otherwise fully clean and would print
   // the one-line summary. The summary line's own deferred clause is covered
@@ -636,6 +720,42 @@ describe('a gate the stage filter deferred', () => {
 
   it('counts only the gates that actually ran in the header', () => {
     expect(text).toMatch(/^conductor run: 1 gate\(s\)/m);
+  });
+});
+
+describe('a run restricted with --gate', () => {
+  const excluded: RunResult['excluded'] = [
+    { role: 'secrets', product: 'vault-guard' },
+    { role: 'intent', product: 'intent-guard' },
+  ];
+
+  it('names the excluded gates in the full report', () => {
+    // The same reason a deferred gate gets a line: a run that checked one
+    // role otherwise reads exactly like a run that checked the policy.
+    const text = renderText(result([outcome({ exitCode: 0 })], 0, [], [], excluded), {
+      verbose: true,
+    });
+
+    expect(text).toMatch(/excluded/);
+    expect(text).toMatch(/secrets/);
+    expect(text).toMatch(/intent/);
+    expect(text).toMatch(/--gate/);
+  });
+
+  it('names them on the one-line summary of a clean run too', () => {
+    const text = renderText(result([outcome({ exitCode: 0 })], 0, [], [], excluded));
+
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+    expect(text).toMatch(/--gate/);
+    expect(text).toMatch(/secrets \(vault-guard\)/);
+    expect(text).toMatch(/intent \(intent-guard\)/);
+  });
+
+  it('says nothing about exclusion on a run that had no --gate', () => {
+    expect(renderText(result([outcome({ exitCode: 0 })], 0))).not.toMatch(/excluded|--gate/);
+    expect(
+      renderText(result([outcome({ exitCode: 0 })], 0), { verbose: true })
+    ).not.toMatch(/excluded|--gate/);
   });
 });
 

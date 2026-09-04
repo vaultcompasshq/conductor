@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
+import { POLICY_FILE_NAME, applyCliOverrides, parsePolicy } from '../src/policy.js';
 import { runAll } from '../src/run.js';
 import {
   CLEAN_DEP_GUARD,
@@ -315,6 +315,53 @@ describe('stage filtering', () => {
     expect(result.exitCode).toBe(0);
     expect(result.findings).toEqual([]);
     expect(result.deferred.map((gate) => gate.role)).toEqual(['intent']);
+  });
+
+  it('carries the gates --gate excluded, the way it carries the deferred ones', () => {
+    // Neither deferred nor skipped, and named nowhere before this: an
+    // uploaded log from a --gate run was indistinguishable from a full run.
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    const result = runAll(applyCliOverrides(ALL_THREE, { gates: ['dependencies'] }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+    });
+
+    expect(result.gates.map((gate) => gate.role)).toEqual(['dependencies']);
+    expect(result.excluded).toEqual([
+      { role: 'secrets', product: 'vault-guard' },
+      { role: 'intent', product: 'intent-guard' },
+    ]);
+  });
+
+  it('excludes nothing when no --gate was given', () => {
+    const result = runAll(applyCliOverrides(ALL_THREE, {}), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: allThreeInstalled(),
+    });
+    expect(result.excluded).toEqual([]);
+  });
+
+  it('gives a --gate run the same exit code a policy naming only that gate would', () => {
+    // Reporting the excluded gates must not give them a vote. The gate that
+    // would have blocked is one of the excluded ones, so if any of this
+    // reached composeExitCode the two numbers below would differ.
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 1 });
+
+    const declaredAlone = parsePolicy(
+      'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n',
+      POLICY_FILE_NAME
+    );
+    const options = { repoRoot: tempDir(), staged: true, pathValue: bin };
+    const narrowed = runAll(applyCliOverrides(ALL_THREE, { gates: ['dependencies'] }), options);
+
+    expect(narrowed.exitCode).toBe(runAll(declaredAlone, options).exitCode);
+    expect(narrowed.exitCode).toBe(0);
+    expect(narrowed.excluded.map((gate) => gate.role)).toEqual(['secrets', 'intent']);
   });
 
   it('leaves a disabled gate out of the deferred list rather than reporting it twice', () => {

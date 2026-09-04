@@ -5,8 +5,13 @@ import { fileURLToPath } from 'node:url';
 
 import type { Finding } from '../src/envelope.js';
 import type { GateOutcome } from '../src/gate-runner.js';
-import { normalizeDepGuard, normalizeIntentGuard, normalizeVaultGuard } from '../src/normalize.js';
-import { renderSarif } from '../src/output-sarif.js';
+import {
+  normalizeDepGuard,
+  normalizeIntentGuard,
+  normalizeMissingGate,
+  normalizeVaultGuard,
+} from '../src/normalize.js';
+import { fingerprintKey, placeArtifact, renderSarif } from '../src/output-sarif.js';
 import type { RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -38,7 +43,8 @@ function outcome(overrides: Partial<GateOutcome>): GateOutcome {
 function result(
   gates: GateOutcome[],
   deferred: RunResult['deferred'] = [],
-  skipped: RunResult['skipped'] = []
+  skipped: RunResult['skipped'] = [],
+  excluded: RunResult['excluded'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -47,6 +53,7 @@ function result(
     gates,
     deferred,
     skipped,
+    excluded,
     findings,
     summary: { blocking: 0, byProduct: {}, bySeverity: {} },
     exitCode: 1,
@@ -136,6 +143,37 @@ describe('coverage statements are notifications rather than results', () => {
     ).toContain('conductor/gate-deferred');
   });
 
+  it('records a gate --gate excluded as a notification, beside the deferred ones', () => {
+    // Same discriminator, same answer: how much of the policy this run
+    // covered is a statement about the run, not about anybody's code. Without
+    // it an uploaded log from a --gate run cannot be told from a full one.
+    const EXCLUDED = result(
+      [outcome({ exitCode: 0, findings: [] })],
+      [],
+      [],
+      [{ role: 'secrets', product: 'vault-guard' }]
+    );
+
+    expect(umbrellaResultIds(sarif(EXCLUDED))).not.toContain('conductor/gate-excluded');
+    const entry = notificationsOf(sarif(EXCLUDED)).find(
+      (candidate) => (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-excluded'
+    ) as Record<string, unknown>;
+
+    expect(entry).toBeDefined();
+    expect(entry.level).toBe('note');
+    expect((entry.message as Record<string, unknown>).text).toMatch(/secrets/);
+    expect((entry.message as Record<string, unknown>).text).toMatch(/--gate/);
+  });
+
+  it('says nothing about exclusion when there was no --gate', () => {
+    const log = sarif(result([outcome({ exitCode: 0, findings: [] })], [
+      { role: 'intent', product: 'intent-guard', stage: 'ci' },
+    ]));
+    expect(
+      notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).not.toContain('conductor/gate-excluded');
+  });
+
   it('moves gate-not-enforced out of results', () => {
     expect(umbrellaResultIds(sarif(UNENFORCED))).not.toContain('conductor/gate-not-enforced');
     expect(
@@ -150,6 +188,20 @@ describe('coverage statements are notifications rather than results', () => {
     expect(
       notificationsOf(sarif(SKIPPED)).map((entry) => (entry.descriptor as Record<string, unknown>).id)
     ).toContain('intent-guard/no-contract');
+  });
+
+  it('sends the no-contract advisory at note level, like every other notification', () => {
+    // The one notification whose descriptor id is a GATE'S namespace rather
+    // than the umbrella's, and the one whose level nothing pinned. A branch
+    // with no spec is the ordinary state of most branches on the adoption
+    // ramp, so this arriving as anything but a note would put a permanent
+    // alert on repositories that have done nothing wrong.
+    const entry = notificationsOf(sarif(SKIPPED)).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'intent-guard/no-contract'
+    ) as Record<string, unknown>;
+
+    expect(entry.level).toBe('note');
   });
 
   it('keeps the message text unchanged in the move', () => {
@@ -240,7 +292,13 @@ describe('coverage statements are notifications rather than results', () => {
 
     for (const entry of notificationsOf(log)) {
       expect(entry.descriptor).toEqual({ id: expect.any(String) });
-      expect(['note', 'warning', 'error']).toContain(entry.level);
+      // Note, always, and asserted as that rather than as "one of the three
+      // levels SARIF allows". The claim this stands for is that a statement
+      // about coverage is never an error about the code, and a notification
+      // arriving as a warning would push these straight back into the alert
+      // list they were moved out of. The looser assertion passed whatever
+      // level they arrived at, which is exactly the regression it names.
+      expect(entry.level).toBe('note');
       expect((entry.message as Record<string, unknown>).text).toEqual(expect.any(String));
     }
 
@@ -422,7 +480,7 @@ describe('the umbrella invocation', () => {
           exitCode: 0,
           findings: [],
           diagnostics: [
-            { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+            { code: 'conductor/blocking-count-mismatch', message: 'the counts disagree' },
           ],
         }),
       ])
@@ -556,6 +614,28 @@ describe('result mapping', () => {
       ])
     );
     expect((noteLevel.runs[0].results as Array<Record<string, unknown>>)[0].level).toBe('note');
+  });
+
+  it('does not recompute blocking from the severity ladder', () => {
+    // The discriminating fixture, and the reason the wholesale properties
+    // assertion below cannot stand on its own: in every fixture this file
+    // has, blocking agrees with severity, so a renderer that derived
+    // blocking from the level would pass all of them. This one is a
+    // BLOCKING finding rendered at note level, which only a renderer taking
+    // the flag from the normalizer gets right. A second copy of the gate
+    // living in here would drift silently, and the report would say
+    // "blocking: false" about a finding that had just failed a build.
+    const noteLevel = sarif(
+      result([
+        outcome({
+          findings: [{ ...depGuard.findings[0], severity: 'info' } as Finding],
+        }),
+      ])
+    );
+    const entry = (noteLevel.runs[0].results as Array<Record<string, unknown>>)[0];
+
+    expect(entry.level).toBe('note');
+    expect((entry.properties as Record<string, unknown>).blocking).toBe(true);
   });
 
   it('carries blocking, severity, severityIsDerived and the verbatim details bag', () => {
@@ -899,6 +979,39 @@ describe('the umbrella own findings', () => {
     expect(levels).not.toContain('note');
   });
 
+  it('keeps a gate that could not run an error-level result even when it is not enforced', () => {
+    // enforce: false is about the exit code and nothing else. A gate that
+    // could not run means a class of problem went unlooked-for on this
+    // change whoever was enforcing it, so the result keeps its severity and
+    // its error level; the gate-not-enforced notification beside it is what
+    // records that the verdict never reached the exit code.
+    const log = sarif(
+      result([
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          enforce: false,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+        }),
+      ])
+    );
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    ) as Record<string, unknown>;
+    const entry = (umbrella.results as Array<Record<string, unknown>>).find(
+      (candidate) => candidate.ruleId === 'conductor/gate-missing'
+    ) as Record<string, unknown>;
+
+    expect(entry.level).toBe('error');
+    expect((entry.properties as Record<string, unknown>).severity).toBe('critical');
+    expect(
+      notificationsOf(log).map((item) => (item.descriptor as Record<string, unknown>).id)
+    ).toContain('conductor/gate-not-enforced');
+  });
+
   it('marks the gate own run as unenforced, and an enforced one as enforced', () => {
     const unenforced = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
     const enforced = sarif(result([outcome({ findings: depGuard.findings })]));
@@ -1011,5 +1124,93 @@ describe('the umbrella own findings', () => {
     const log = sarif(result([outcome({ exitCode: 0, findings: [] })]));
     expect(log.runs).toHaveLength(1);
     expect(log.runs[0].results).toEqual([]);
+  });
+});
+
+/**
+ * The two exported helpers, exercised directly.
+ *
+ * They are exported so these rules can be read one at a time rather than only
+ * through a whole rendered log, and until now nothing imported either of them,
+ * so the comment saying so promised a test that did not exist. A path rule is
+ * exactly the kind of thing worth pinning here: a wrong uri is
+ * indistinguishable from a right one once the log is uploaded, and a rendered
+ * log only ever exercises whichever spellings the fixtures happen to contain.
+ */
+describe('placing one path in a SARIF log', () => {
+  it('keeps a path inside the root relative, for %SRCROOT%', () => {
+    expect(placeArtifact('src/index.ts')).toEqual({ placement: 'in-root', uri: 'src/index.ts' });
+  });
+
+  it('forward-slashes a Windows-spelled relative path', () => {
+    expect(placeArtifact('src\\deep\\index.ts')).toEqual({
+      placement: 'in-root',
+      uri: 'src/deep/index.ts',
+    });
+  });
+
+  it('strips a leading ./, which names the same file', () => {
+    expect(placeArtifact('./src/index.ts')).toEqual({ placement: 'in-root', uri: 'src/index.ts' });
+  });
+
+  it('calls an absolute path elsewhere, rather than stripping the slash off it', () => {
+    // Stripping the leading slash fabricates a source-root-relative path that
+    // points at a different file, and %SRCROOT% then vouches for it. One of
+    // the gates keeps a path absolute exactly when the file is OUTSIDE the
+    // directory it scanned, so an absolute path is positive evidence against
+    // the claim %SRCROOT% would make.
+    expect(placeArtifact('/etc/hosts')).toEqual({
+      placement: 'outside-root',
+      uri: 'file:///etc/hosts',
+    });
+  });
+
+  it('treats a Windows drive prefix as absolute too', () => {
+    expect(placeArtifact('C:\\Users\\dev\\secrets.txt')).toEqual({
+      placement: 'outside-root',
+      uri: 'file:///C%3A/Users/dev/secrets.txt',
+    });
+  });
+
+  it('encodes each segment of an absolute path, keeping the separators', () => {
+    // A path can legitimately hold a space or a hash and neither is legal raw
+    // in a uri, but encoding the separators too would collapse the path into
+    // one opaque segment.
+    const placed = placeArtifact('/tmp/my notes/a#b.txt');
+    expect(placed).toEqual({ placement: 'outside-root', uri: 'file:///tmp/my%20notes/a%23b.txt' });
+  });
+
+  it('refuses to place a path that escapes the root', () => {
+    expect(placeArtifact('../outside.txt')).toEqual({ placement: 'unresolvable' });
+  });
+
+  it('refuses one that only escapes after normalizing, not just one that starts with ..', () => {
+    // "a/../../b" escapes too, and only the second .. is visible without
+    // resolving the path first.
+    expect(placeArtifact('a/../../b')).toEqual({ placement: 'unresolvable' });
+  });
+
+  it('refuses a path that normalizes away to nothing', () => {
+    expect(placeArtifact('.')).toEqual({ placement: 'unresolvable' });
+    expect(placeArtifact('a/..')).toEqual({ placement: 'unresolvable' });
+  });
+
+  it('keeps a path that walks up and back down inside the root', () => {
+    expect(placeArtifact('src/../lib/index.ts')).toEqual({
+      placement: 'in-root',
+      uri: 'lib/index.ts',
+    });
+  });
+});
+
+describe('the partialFingerprints key', () => {
+  it('names the product and a version, so a later change to the inputs ships as v2', () => {
+    // Hashing a product's own fingerprint together with anything would mint a
+    // second identity that moves when the first does not, and every alert
+    // would resurface on the next scan. The version is what lets a consumer
+    // tell two generations of inputs apart instead of silently comparing
+    // hashes of different things.
+    expect(fingerprintKey('dep-guard')).toBe('dep-guard/v1');
+    expect(fingerprintKey('conductor')).toBe('conductor/v1');
   });
 });

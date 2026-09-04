@@ -7,9 +7,14 @@ README.md for the full shape of the policy file, the hook, and the Action.
 
 ## The one rule that matters here
 
-This repository is a convenience layer, not a fourth gate. It finds no
-findings of its own beyond `conductor/gate-missing`, and it never writes
-into a gate's own config. If this repository disappeared, all three gates
+This repository is a convenience layer, not a fourth gate. It scans nothing
+and has no rules about anybody's code: the only findings it raises are about
+the gates themselves, `conductor/gate-missing`,
+`conductor/gate-output-unparseable` and `conductor/gate-failed`, plus the two
+diagnostics it raises when it cannot reconcile a gate's own blocking count,
+`conductor/blocking-count-mismatch` and
+`conductor/blocking-threshold-unknown`. It never writes into a gate's own
+config. If this repository disappeared, all three gates
 would still install, configure, and run exactly as they do today, each on
 its own. Keep every change consistent with that: nothing here should make a
 gate depend on the umbrella to function.

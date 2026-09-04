@@ -1,15 +1,19 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { gateArgs } from '../src/gate-runner.js';
 import {
   GATE_ROLES,
   GATE_STAGES,
   POLICY_FILE_NAME,
+  PRODUCT_FOR_ROLE,
+  RESERVED_OPTIONS,
   applyCliOverrides,
   enabledGates,
   parsePolicy,
   renderOptionFlags,
   runsAtStage,
 } from '../src/policy.js';
+import type { GatePolicy, GateRole, Product } from '../src/policy.js';
 
 const MINIMAL = `version: 1
 gates:
@@ -236,6 +240,121 @@ describe('per-gate option passthrough', () => {
       )
     ).toThrow(/--paths/);
   });
+
+  it('explains format on the secrets gate as the short flag the umbrella actually writes', () => {
+    // The generic sentence says the umbrella passes that flag itself. For
+    // this key it passes the SHORT form, -f, so a reader told "the umbrella
+    // passes --format" goes looking for a --format in the command line and
+    // does not find one. Same class of wrong reason as base on the intent
+    // gate, and the same fix: say which flag, so the collision is visible.
+    expect(() =>
+      parsePolicy(
+        'version: 1\ngates:\n  secrets:\n    product: vault-guard\n    options:\n      format: text\n',
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/-f/);
+  });
+
+  it('explains base on the dependencies gate as the flag it fights rather than one the umbrella writes', () => {
+    // The umbrella passes --staged to dep-guard and never --base. The key is
+    // still reserved, because a policy-supplied base would fight the --staged
+    // the umbrella writes, but the generic sentence gives the wrong reason.
+    expect(() =>
+      parsePolicy(
+        'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n    options:\n      base: main\n',
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/--staged/);
+  });
+});
+
+/**
+ * The drift guard the two hand-maintained lists never had.
+ *
+ * RESERVED_OPTIONS describes what gateArgs writes, and until now nothing held
+ * the two together. The dangerous direction is a flag added to gateArgs and
+ * forgotten in RESERVED_OPTIONS: a policy file could then write the same flag
+ * a second time, and which one won would depend on that gate's own argument
+ * parser rather than on anything the user could read in their own policy file.
+ *
+ * Derived from gateArgs rather than restated, so this is not a third copy of
+ * the list. The one thing that cannot be derived is the other direction: a
+ * few keys are reserved WITHOUT the umbrella writing them, each for its own
+ * reason, so those are named here and each one has to be justified rather
+ * than accumulating quietly.
+ */
+describe('the reserved option list against the flags the umbrella writes', () => {
+  /** Every flag gateArgs can emit for a role, over the shapes of run there are. */
+  function flagsWritten(role: GateRole): Set<string> {
+    const gate: GatePolicy = {
+      role,
+      product: PRODUCT_FOR_ROLE[role],
+      enabled: true,
+      stage: 'commit',
+      enforce: true,
+      excludedByCli: false,
+      options: {},
+    };
+    const intent = {
+      projectDir: '/tmp/prepared',
+      paths: ['a.ts'],
+      contractSource: { kind: 'native' as const, path: '.conductor/intent-contract.yaml' },
+      baseRef: 'main',
+      baseSource: 'flag' as const,
+      cleanup: () => {},
+    };
+    const runs = [
+      gateArgs(gate, true, undefined),
+      gateArgs(gate, false, undefined),
+      gateArgs(gate, true, intent),
+      gateArgs(gate, false, { ...intent, paths: null }),
+    ];
+    const flags = new Set<string>();
+    for (const argv of runs) {
+      for (const token of argv) {
+        if (token.startsWith('-')) {
+          flags.add(token.replace(/^--?/, ''));
+        }
+      }
+    }
+    return flags;
+  }
+
+  /**
+   * Keys reserved although the umbrella writes no such flag. Each needs a
+   * reason that is not "the umbrella writes it", and each has one in the
+   * message parsePolicy raises.
+   */
+  const RESERVED_WITHOUT_WRITING: Record<Product, string[]> = {
+    // The umbrella passes --staged. A policy-supplied base would fight it.
+    'dep-guard': ['base'],
+    // The umbrella writes the same option under its short name, -f.
+    'vault-guard': ['format'],
+    // The umbrella passes --paths, and a --base would be resolved against a
+    // --project that may be a temporary directory with no repository in it.
+    'intent-guard': ['base'],
+  };
+
+  it('reserves every flag the umbrella writes, which is the direction that can hurt', () => {
+    for (const role of GATE_ROLES) {
+      const product = PRODUCT_FOR_ROLE[role];
+      const reserved = new Set(RESERVED_OPTIONS[product]);
+      const unreserved = [...flagsWritten(role)].filter((flag) => !reserved.has(flag)).sort();
+      expect({ product, unreserved }).toEqual({ product, unreserved: [] });
+    }
+  });
+
+  it('reserves nothing else without a stated reason', () => {
+    for (const role of GATE_ROLES) {
+      const product = PRODUCT_FOR_ROLE[role];
+      const written = flagsWritten(role);
+      const extra = RESERVED_OPTIONS[product].filter((key) => !written.has(key)).sort();
+      expect({ product, extra }).toEqual({
+        product,
+        extra: [...RESERVED_WITHOUT_WRITING[product]].sort(),
+      });
+    }
+  });
 });
 
 describe('stages are cumulative', () => {
@@ -282,6 +401,36 @@ describe('precedence', () => {
       POLICY_FILE_NAME
     );
     expect(enabledGates(policy).map((gate) => gate.role)).toEqual(['dependencies', 'intent']);
+  });
+
+  it('marks the gates --gate switched off, so a later report can name them', () => {
+    // A gate --gate left out is neither deferred nor skipped, and without a
+    // mark on it nothing downstream can tell it apart from a gate the policy
+    // file itself switched off. An uploaded log from a --gate run would then
+    // be indistinguishable from a full one, which is the confusion the
+    // deferred notification exists to prevent.
+    const policy = parsePolicy(MINIMAL, POLICY_FILE_NAME);
+    const narrowed = applyCliOverrides(policy, { gates: ['dependencies'] });
+
+    expect(narrowed.gates.intent?.excludedByCli).toBe(true);
+    expect(narrowed.gates.dependencies?.excludedByCli).toBe(false);
+  });
+
+  it('does not mark a gate the policy file had already switched off', () => {
+    // MINIMAL declares secrets with enabled: false. --gate did not turn that
+    // off, so naming it as excluded would report the user's own decision back
+    // to them as something the command line did.
+    const policy = parsePolicy(MINIMAL, POLICY_FILE_NAME);
+    const narrowed = applyCliOverrides(policy, { gates: ['dependencies'] });
+
+    expect(narrowed.gates.secrets?.excludedByCli).toBe(false);
+  });
+
+  it('marks nothing when no --gate was given', () => {
+    const policy = applyCliOverrides(parsePolicy(MINIMAL, POLICY_FILE_NAME), {});
+    for (const role of GATE_ROLES) {
+      expect(policy.gates[role]?.excludedByCli ?? false).toBe(false);
+    }
   });
 
   it('rejects a command-line gate selection naming a role the policy does not declare', () => {
