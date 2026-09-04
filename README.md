@@ -587,10 +587,10 @@ full report.** The same rule separates them as separates a SARIF notification
 from a SARIF result. A gate's note is a statement about how much a run
 covered, such as pnpm lockfiles not recording install-script metadata, which
 is a permanent property of that file format and true on every run forever. A
-`conductor/blocking-mismatch` is the umbrella saying its own report may
-disagree with the gate's own verdict about what blocked, which is a defect in
-this run and cannot honestly be a number on a line that also says "clean,
-nothing blocked".
+`conductor/blocking-count-mismatch`, or a `conductor/blocking-threshold-unknown`,
+is the umbrella saying its own report may disagree with the gate's own verdict
+about what blocked, which is a defect in this run and cannot honestly be a
+number on a line that also says "clean, nothing blocked".
 
 This is a text-format decision and nothing else. The SARIF log is unchanged
 either way, and there is deliberately no policy key for it: the schema

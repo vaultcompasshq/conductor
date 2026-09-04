@@ -59,6 +59,26 @@ describe('dep-guard 0.2.0 normalization', () => {
     expect(disagreed.findings.every((finding) => finding.blocking === false)).toBe(true);
   });
 
+  it('records a diagnostic rather than guessing when the gate reported no threshold', () => {
+    // The other branch of reconcileBlocking, and the one nothing pinned. Both
+    // codes exist only in normalize.ts, and every test that named one before
+    // this hand-wrote it into a fixture, so nothing held the renderers and the
+    // docs to the spelling the normalizer actually emits.
+    const noThreshold = JSON.parse(JSON.stringify(DEP_GUARD_BLOCKING)) as {
+      run: { failOn?: string };
+    };
+    delete noThreshold.run.failOn;
+    const unknown = normalizeDepGuard(noThreshold, '0.2.0');
+
+    expect(unknown.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'conductor/blocking-threshold-unknown',
+    ]);
+    // Nothing is marked blocking: with no threshold there is nothing to
+    // reconstruct the flag from, and the gate's own exit code still decides.
+    expect(unknown.findings.every((finding) => finding.blocking === false)).toBe(true);
+    expect(unknown.run.failOn).toBeNull();
+  });
+
   it('makes the subject a package, never a fabricated file position', () => {
     expect(result.findings[1].subject).toEqual({
       kind: 'package',

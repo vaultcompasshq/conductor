@@ -502,9 +502,13 @@ function excludedNotifications(result: RunResult): Notification[] {
  * That is why conductor/gate-missing and conductor/gate-failed stay results:
  * a gate that could not run means a class of problem went unlooked-for on
  * this change. It is also why the normalization diagnostics stay results:
- * conductor/blocking-mismatch is the umbrella saying its own report may
- * disagree with the gate's own verdict, which is a defect in this run and
- * not a property of anybody's configuration. The same rule decides the text
+ * conductor/blocking-count-mismatch and conductor/blocking-threshold-unknown,
+ * the two codes reconcileBlocking raises in normalize.ts, are the umbrella
+ * saying its own report may disagree with the gate's own verdict, which is a
+ * defect in this run and not a property of anybody's configuration. Those two
+ * ids are the whole set; a conductor/blocking-mismatch was named here, in the
+ * text report and in the README for a while, and nothing ever emitted it. The
+ * same rule decides the text
  * report's summary line, in isFullyClean in output-text.ts, and the two must
  * keep answering it the same way.
  */

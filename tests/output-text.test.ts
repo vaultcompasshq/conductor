@@ -350,16 +350,16 @@ describe('a fully clean run, which is most runs', () => {
 describe('an umbrella diagnostic is not a note', () => {
   // The discriminator, applied: a statement about how much of the policy a
   // run covered is a notification, and a statement that something went wrong
-  // is a result. A gate's own note is the first. conductor/blocking-mismatch
-  // is the second: it is the umbrella saying its own report may disagree
-  // with the gate's own verdict, which is a defect in this run rather than a
-  // permanent property of anything.
+  // is a result. A gate's own note is the first.
+  // conductor/blocking-count-mismatch is the second: it is the umbrella saying
+  // its own report may disagree with the gate's own verdict, which is a defect
+  // in this run rather than a permanent property of anything.
   const withDiagnostic = result(
     [
       outcome({
         exitCode: 0,
         diagnostics: [
-          { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+          { code: 'conductor/blocking-count-mismatch', message: 'the counts disagree' },
         ],
       }),
     ],
@@ -370,7 +370,7 @@ describe('an umbrella diagnostic is not a note', () => {
     const text = renderText(withDiagnostic);
 
     expect(text).toMatch(/^conductor run: /m);
-    expect(text).toMatch(/blocking-mismatch/);
+    expect(text).toMatch(/blocking-count-mismatch/);
     expect(text).toMatch(/^verdict: exit 0/m);
   });
 

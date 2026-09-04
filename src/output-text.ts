@@ -389,10 +389,12 @@ export interface TextOptions {
  * install-script metadata is a permanent property of that file format, true
  * on every run forever, and forcing a screenful over it would make the
  * summary line useless in the repositories that most need it. A statement
- * that something went wrong is a result: conductor/blocking-mismatch is the
- * umbrella saying its own report may disagree with the gate's own verdict
- * about what blocked, which is a defect in THIS run and cannot be reported
- * as a number on a line that also says "clean, nothing blocked".
+ * that something went wrong is a result: conductor/blocking-count-mismatch
+ * and conductor/blocking-threshold-unknown, the two codes reconcileBlocking
+ * raises in normalize.ts, are the umbrella saying its own report may disagree
+ * with the gate's own verdict about what blocked, which is a defect in THIS
+ * run and cannot be reported as a number on a line that also says "clean,
+ * nothing blocked".
  *
  * A run where no gate ran at all is not clean either, whatever the exit code
  * says. "No gate ran because none is enabled", "every gate was deferred" and

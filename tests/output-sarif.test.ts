@@ -455,7 +455,7 @@ describe('the umbrella invocation', () => {
           exitCode: 0,
           findings: [],
           diagnostics: [
-            { code: 'conductor/blocking-mismatch', message: 'the counts disagree' },
+            { code: 'conductor/blocking-count-mismatch', message: 'the counts disagree' },
           ],
         }),
       ])
