@@ -18,6 +18,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { childEnv } from './helpers/child-env.js';
+
 const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONDUCTOR_CLI = path.join(CONDUCTOR_ROOT, 'dist', 'cli.js');
 
@@ -139,7 +141,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     // shims, the umbrella, node, and git. "intent-guard is not findable" is
     // then true by construction, and stays true on any machine, because
     // there is nowhere for it to be.
-    env = { ...process.env, PATH: binDir };
+    env = childEnv(binDir);
   });
 
   afterAll(() => {

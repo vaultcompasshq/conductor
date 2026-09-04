@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { childEnv } from './helpers/child-env.js';
 import {
   CLEAN_DEP_GUARD,
   CLEAN_INTENT_GUARD,
@@ -52,7 +53,7 @@ function runCli(cwd: string, args: string[], pathValue: string) {
   const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, PATH: pathValue },
+    env: childEnv(pathValue),
   });
   return {
     status: result.status,
@@ -671,5 +672,49 @@ describe('sarif output, continued', () => {
       'intent-guard',
       'conductor',
     ]);
+  });
+});
+
+describe('the pull_request ambient environment', () => {
+  // GitHub Actions sets these three for the WHOLE JOB on a pull_request
+  // event, not just for a step that asks for them. This test pollutes the
+  // real environment of the process running the suite -- the same thing
+  // Actions does to the job hosting this very test -- and then spawns the
+  // CLI through runCli, exactly like every other test in this file. If
+  // runCli ever goes back to spreading process.env directly instead of
+  // going through childEnv(), this is the test that turns red: the intent
+  // gate would silently enter its pull-request path, find no contract to
+  // check against a scratch repository with no origin, and the run would
+  // report 2 gates instead of 3.
+  it('does not stop the intent gate from running through a spawned CLI', () => {
+    const previous = {
+      GITHUB_BASE_REF: process.env.GITHUB_BASE_REF,
+      GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
+      GITHUB_EVENT_PATH: process.env.GITHUB_EVENT_PATH,
+    };
+    process.env.GITHUB_BASE_REF = 'main';
+    process.env.GITHUB_HEAD_REF = 'feature/leaky';
+    process.env.GITHUB_EVENT_PATH = '/tmp/does-not-exist-pull-request-event.json';
+
+    try {
+      const bin = tempDir();
+      stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+      stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+
+      const result = runCli(repoWithPolicy(), ['run', '--staged', '--verbose'], bin);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/^conductor run: 3 gate\(s\)/m);
+      expect(result.stdout).not.toMatch(/no contract/);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = value;
+        }
+      }
+    }
   });
 });
