@@ -21,15 +21,20 @@ friction this repository removes, and that is all it removes:
 - **one policy file**, `.guardrails.yaml`, keyed by the role each gate
   fills rather than by the product filling it;
 - **one init**, which writes that file and a single pre-commit hook running
-  every enabled gate;
+  every enabled gate whose stage is `commit`, which by default is every gate
+  but the intent one;
 - **one report**, as text for a terminal or as a single SARIF 2.1.0 log
   with one run per gate.
 
 ## What it deliberately is not
 
-It is not a fourth gate. It finds no bugs of its own, has no rules, and
-scans nothing. Every finding in its report came from one of the three gates
-and is labelled with which one.
+It is not a fourth gate. It finds no bugs of its own, has no rules about
+your code, and scans nothing. Every finding about your code came from one of
+the three gates and is labelled with which one. The only findings it adds
+are about the gates themselves, and they are labelled `conductor`: a gate
+that is switched on and could not run, and a gate whose output it could not
+read. Those exist because a report that reads clean when nothing looked is
+the failure this whole family exists to prevent.
 
 It is not something you adopt before the gates are useful. Each gate keeps
 its own config file, its own baseline, its own thresholds, and its own exit
@@ -118,12 +123,18 @@ something it never did. Its binary is not even looked for, so a gate
 installed only on the CI image does not fail a developer's commit.
 
 **`enforce`** defaults to true. A gate with `enforce: false` runs, reports,
-and appears in the text report and the SARIF log exactly as an enforced gate
-does. The only thing it cannot do is change the exit code: its blocking
-findings do not raise it, and its failing to run at all is a note rather
-than exit 2. That is the adoption ramp, so a gate can be switched on and
-read for a few weeks before it is allowed to refuse anybody's commit. `init`
-writes it out for every gate, and starts the intent gate at `false`.
+and its findings appear in the text report and the SARIF log exactly as an
+enforced gate's do. The only thing it cannot do is change the exit code: its
+blocking findings do not raise it, and its failing to run at all does not
+make the run exit 2. The failure is not quietened down anywhere else. In
+SARIF it is still a `conductor/gate-missing` or `conductor/gate-failed`
+result at `error` level, because a class of problem went unlooked-for on
+this change whoever was enforcing the gate. What records that the verdict
+never reached the exit code is the `conductor/gate-not-enforced`
+notification, and in the text report the line under that gate's section.
+That is the adoption ramp, so a gate can be switched on and read for a few
+weeks before it is allowed to refuse anybody's commit. `init` writes it out
+for every gate, and starts the intent gate at `false`.
 
 It is not a downgrade of what the gate said. Findings keep their own
 severities and their own `blocking` flags, in both formats, because
@@ -653,8 +664,12 @@ composed exit code.
 Out, deliberately: a unified baseline (each gate keeps its own, and their
 fingerprints are not equally durable, so one shared file would expire
 entries silently for one product and not another), an MCP registration,
-running the gates concurrently, and any finding of the umbrella's own beyond
-`conductor/gate-missing`.
+running the gates concurrently, and any finding of the umbrella's own about
+anybody's CODE. The findings it does raise are all about the gates
+themselves: `conductor/gate-missing`, `conductor/gate-output-unparseable`
+and `conductor/gate-failed`, plus the two diagnostics
+`conductor/blocking-count-mismatch` and
+`conductor/blocking-threshold-unknown`.
 
 ## Scope of v0.2
 

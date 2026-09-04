@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 import type { Finding } from '../src/envelope.js';
 import type { GateOutcome } from '../src/gate-runner.js';
-import { normalizeDepGuard, normalizeIntentGuard, normalizeVaultGuard } from '../src/normalize.js';
+import {
+  normalizeDepGuard,
+  normalizeIntentGuard,
+  normalizeMissingGate,
+  normalizeVaultGuard,
+} from '../src/normalize.js';
 import { fingerprintKey, placeArtifact, renderSarif } from '../src/output-sarif.js';
 import type { RunResult } from '../src/run.js';
 
@@ -930,6 +935,39 @@ describe('the umbrella own findings', () => {
 
     expect(levels).toContain('error');
     expect(levels).not.toContain('note');
+  });
+
+  it('keeps a gate that could not run an error-level result even when it is not enforced', () => {
+    // enforce: false is about the exit code and nothing else. A gate that
+    // could not run means a class of problem went unlooked-for on this
+    // change whoever was enforcing it, so the result keeps its severity and
+    // its error level; the gate-not-enforced notification beside it is what
+    // records that the verdict never reached the exit code.
+    const log = sarif(
+      result([
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          enforce: false,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+        }),
+      ])
+    );
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    ) as Record<string, unknown>;
+    const entry = (umbrella.results as Array<Record<string, unknown>>).find(
+      (candidate) => candidate.ruleId === 'conductor/gate-missing'
+    ) as Record<string, unknown>;
+
+    expect(entry.level).toBe('error');
+    expect((entry.properties as Record<string, unknown>).severity).toBe('critical');
+    expect(
+      notificationsOf(log).map((item) => (item.descriptor as Record<string, unknown>).id)
+    ).toContain('conductor/gate-not-enforced');
   });
 
   it('marks the gate own run as unenforced, and an enforced one as enforced', () => {
