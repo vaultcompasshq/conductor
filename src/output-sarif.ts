@@ -506,7 +506,17 @@ function unenforcedNotifications(result: RunResult): Notification[] {
   return result.gates
     .filter((gate) => !gate.enforce)
     .map((gate) => {
-      const blocking = gate.findings.filter((finding) => finding.blocking).length;
+      // The GATE'S own blocking findings, which is why the umbrella's are
+      // filtered out rather than counted. A gate that could not run carries
+      // the umbrella's own blocking gate-missing finding in this same list,
+      // and counting it made this object say the gate blocked one thing and
+      // also that it never ran, which are opposite claims. Filtering by
+      // product rather than special-casing couldNotRun, because the question
+      // this number answers is "what did the gate say", and the umbrella's
+      // own findings are never the gate's answer.
+      const blocking = gate.findings.filter(
+        (finding) => finding.blocking && finding.product !== UMBRELLA_DRIVER_NAME
+      ).length;
       const what =
         gate.couldNotRun !== null
           ? `It could not run (${gate.couldNotRun.reason}), and nothing was checked by it.`

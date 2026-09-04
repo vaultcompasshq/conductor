@@ -292,6 +292,63 @@ describe('coverage statements are notifications rather than results', () => {
     ).toEqual(['dep-guard', 'conductor']);
   });
 
+  it('does not count the umbrella own finding as a blocking finding of the gate', () => {
+    // A gate that could not run carries the umbrella's own blocking
+    // gate-missing finding in its findings list, and counting it made the
+    // notification say the gate blocked one thing AND never ran, which are
+    // opposite claims about the same gate in the same object. The text
+    // report already guards against exactly this contradiction.
+    const log = sarif(
+      result([
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          enforce: false,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [
+            {
+              schemaVersion: 1,
+              product: 'conductor',
+              productVersion: null,
+              ruleId: 'conductor/gate-missing',
+              severity: 'high',
+              severityIsDerived: true,
+              blocking: true,
+              message: 'the intent gate is enabled but no intent-guard binary was found',
+              subject: { kind: 'none' },
+              fingerprint: null,
+              details: {},
+            } satisfies Finding,
+          ],
+        }),
+      ])
+    );
+
+    const entry = notificationsOf(log).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-not-enforced'
+    );
+    const details = (entry?.properties as Record<string, Record<string, unknown>>).details;
+
+    expect(details.blockingFindings).toBe(0);
+    expect(details.couldNotRun).toBe('binary-missing');
+    expect((entry?.message as Record<string, unknown>).text).toMatch(/could not run/);
+  });
+
+  it('still counts the gate own blocking findings when it did run', () => {
+    const log = sarif(result([outcome({ enforce: false, findings: depGuard.findings })]));
+    const entry = notificationsOf(log).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'conductor/gate-not-enforced'
+    );
+    const details = (entry?.properties as Record<string, Record<string, unknown>>).details;
+
+    expect(details.blockingFindings).toBe(depGuard.findings.filter((f) => f.blocking).length);
+    expect(details.blockingFindings).toBeGreaterThan(0);
+  });
+
   it('leaves the exit code alone in every one of those cases', () => {
     // Rendering is not allowed to be a decision. The exit code was composed
     // in run.ts and the renderer only reads it.
