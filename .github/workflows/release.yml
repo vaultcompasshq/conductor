@@ -38,6 +38,35 @@ jobs:
         cache: 'pnpm'
         registry-url: 'https://registry.npmjs.org'
 
+    # Ported from dep-guard, and placed here on purpose: everything above
+    # this step can fail and be re-run harmlessly, and everything below it
+    # cannot. A publish cannot be taken back, so a mistyped tag would
+    # otherwise publish whatever version package.json happens to carry and
+    # then describe it in a GitHub Release as though the two matched.
+    #
+    # Nothing in this step depends on install, build, or test output: it
+    # reads package.json through "node -p" and talks to git directly, which
+    # is why it can run this early and cost about a minute rather than
+    # fifteen.
+    #
+    # dep-guard's version of this step also asserts that its core and cli
+    # packages carry the same version, and branches on GITHUB_REF_TYPE
+    # because it can also be started by workflow_dispatch. Neither applies
+    # here: conductor is one package, and this workflow triggers on a tag
+    # push and nothing else, so GITHUB_REF_NAME is always a tag name.
+    - name: Assert the tag matches the version being published
+      run: |
+        set -euo pipefail
+        VERSION="$(node -p "require('./package.json').version")"
+        EXPECTED_TAG="v${VERSION}"
+
+        if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+          echo "::error::Tag mismatch: pushed tag is ${GITHUB_REF_NAME}, but package.json is at version ${VERSION} (expected tag ${EXPECTED_TAG}). Publishing anyway would put ${VERSION} on the registry irreversibly under a GitHub Release named for a different version. Refusing to publish."
+          exit 1
+        fi
+
+        echo "Version check passed: version=${VERSION} tag=${GITHUB_REF_NAME}"
+
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
 
