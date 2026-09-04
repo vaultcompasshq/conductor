@@ -55,6 +55,40 @@ disagreements were recorded here when this file was written; all five have
 since been fixed in the code or the README rather than in this file, and
 each is now recorded as history in the section it belongs to.
 
+## What is NOT pinned by any test
+
+The whole list, in one place, so the next audit starts here rather than
+reading for it. Each is stated again in its own section with the reason
+it is there and what would break in practice.
+
+Six were admitted when this file was written. Two have since been pinned:
+the `RESERVED_OPTIONS` list is now derived from `gateArgs` in one
+direction and held to three justified exceptions in the other
+(tests/policy.test.ts:338 and 347), and `conductor/blocking-threshold-unknown`
+is now exercised at the normalizer (tests/normalize.test.ts:62). FOUR
+REMAIN, each re-checked by searching for a test rather than assumed:
+
+1. A MALFORMED MANIFEST ON REVERT. `revertInit` parses it with a bare
+   `JSON.parse`, so a corrupt one throws where `readManifest` treats the
+   same file as missing. Nothing writes a malformed manifest anywhere in
+   tests/init.test.ts.
+2. THE SUCCESS HALF OF THE TEMPORARY-DIRECTORY CLEANUP. Nothing asserts
+   that a successful `runAll` leaves no `conductor-intent-` directory
+   behind. The failure half is pinned; this half is the caller's
+   `finally`.
+3. `--spec` OUTRANKING A FROZEN NATIVE CONTRACT. Nothing puts both in one
+   repository and checks which wins. It is held only by branch order.
+4. THE SUBDIRECTORY ANCHORING OF THE CLI. No test invokes `conductor run`
+   from a subdirectory of a repository. The hook's equivalent rule IS
+   pinned.
+
+Two more things belong on this list without being invariants of the same
+kind. `ExitInput.enforce` is REQUIRED rather than defaulted, which is a
+compile-time property that no test pins and no test could. And the
+generated hook's own `exit 1` is asserted on one of its two fail-closed
+branches only, which is a partial gap rather than an absent one; the
+section on it says which half is which.
+
 ## The exit code is composed, not maximised
 
 Three codes and nothing else. 0 means every enabled gate ran and none
@@ -271,8 +305,13 @@ unreadable" is not evidence that a file on disk is the umbrella's
 with exit 2 (src/cli.ts:266-280), so nothing leaks a stack, but the
 message is a JSON parser's rather than the "no record of what init wrote"
 conflict the missing-manifest path produces. THIS IS NOT PINNED BY ANY
-TEST: there is no test anywhere in tests/init.test.ts for a malformed
-manifest.
+TEST: nothing anywhere writes a malformed manifest and reverts, and every
+test in tests/init.test.ts that touches the manifest writes valid JSON
+back. If this silently stopped holding, a user whose manifest was
+truncated by a crash or a bad merge would get `Unexpected end of JSON
+input` from `conductor init --revert` and no indication which file was
+unreadable or that the fix is to delete it and remove the hook by hand.
+The asymmetry with `readManifest` is the finding here, not the throw.
 
 ## Gate resolution: the name outranks the location, and the location outranks nothing
 
@@ -423,9 +462,10 @@ The other direction cannot be derived, because the three keys above are
 reserved WITHOUT the umbrella writing them. Those are listed by hand in
 `RESERVED_WITHOUT_WRITING` (tests/policy.test.ts:328-336) and held to
 exactly those three by tests/policy.test.ts:347, so a fourth cannot be
-added without somebody writing down why. That hand-maintained list is now
-the only unpinned half, and it is three entries long rather than the
-whole table.
+added without somebody writing down why. That list is still hand
+maintained, but it is three entries long rather than the whole table, it
+is held against the derived set rather than restated beside it, and each
+of its three has its own message test above.
 
 ## Stages are cumulative, and a gate the filter holds back is never resolved
 
@@ -475,6 +515,53 @@ an empty PATH and an empty repository root and still gets exit 0 and no
 findings, so nothing was looked for), 268 ("never lets a deferred gate
 reach the exit code"), and 367 (a disabled gate is not also reported as
 deferred); and end to end by tests/cli.test.ts:170, 184, 196 and 221.
+
+## A gate `--gate` left out is recorded, not silently dropped
+
+Added after this file was first written, and it is the same rule as the
+deferred gate one applied to a different cause. `--gate secrets` narrows a
+run, and before this the narrowing left no trace: an uploaded log from a
+`--gate` run was indistinguishable from a log of a full one, which is
+exactly the confusion the deferred notification exists to prevent.
+
+The two facts are kept apart deliberately. A gate the POLICY FILE disables
+is a standing decision somebody wrote down and is not news. A gate the
+COMMAND LINE left out was on in the file and did not run this once. So
+`excludedByCli` is set only for a gate that WAS enabled and is not now
+(`GatePolicy.excludedByCli`, src/policy.ts:130-141, set at
+src/policy.ts:396-405 and initialised false at parse time,
+src/policy.ts:328-330). Pinned by tests/policy.test.ts:406 (the gate
+`--gate` switched off is marked and the named one is not), 419 (a gate the
+file had already disabled is NOT marked, or the user's own decision is
+read back to them as something the command line did) and 429 (nothing is
+marked when there was no `--gate` at all).
+
+It is carried on the run result as `ExcludedGate` (src/run.ts:28-42),
+read off the POLICY rather than off the enabled list, because these gates
+are exactly the ones the override took out of that list, and in role order
+so the report never depends on the order the flags were typed
+(src/run.ts:161-166). Like `DeferredGate` it is deliberately not a
+`GateOutcome`: no binary was looked for and there is no exit code to
+report. Pinned by tests/run.test.ts:320 (both excluded gates are carried,
+with only the named one running), 338 (nothing excluded without `--gate`)
+and 347, which is the one that matters: a `--gate` run gets the SAME exit
+code a policy declaring only that gate would, so reporting the excluded
+gates never gives them a vote. That test stubs an excluded gate that would
+have blocked, so the two numbers would differ if any of this reached
+`composeExitCode`.
+
+Both formats say it. One line in the text report
+(src/output-text.ts:239-244), a clause on the one-line summary of a clean
+run (src/output-text.ts:462-465), and a `conductor/gate-excluded`
+notification in the umbrella's SARIF run
+(src/output-sarif.ts:468-476). A notification rather than a result by the
+discriminator below: nothing went wrong, and how much of the policy a run
+covered is a statement about the run. Pinned by
+tests/output-text.test.ts:732 (the full report names them and says
+`--gate`), 745 (the clean run's single line still names them) and 754
+(silence on a run that had no `--gate`, verbose or not); and by
+tests/output-sarif.test.ts:146 (a notification and not a result, at note
+level, naming the role and the flag) and 168.
 
 ## The hook: one hook, one command, one exit code
 
@@ -851,6 +938,15 @@ and tests/intent-spec.test.ts:246 covers `--spec` beating a pull request
 body, which is a different question decided in a different file. Nothing
 anywhere puts a frozen contract and a `--spec` in the same repository and
 checks which one wins.
+
+If this silently stopped holding, the branch order at
+src/intent-prepare.ts:208-211 would be the only thing keeping it, and a
+reordering that tested `nativeContractIsFrozen` first would look correct
+in review: every existing test still passes, because none of them has
+both. What a user would see is `--spec` being ignored in exactly the
+repositories that have done the native flow, with the report naming the
+native contract as the source, so the run would be honest about what it
+used and silent about what it was asked for.
 
 ## Spec discovery: three sources, and the order is the whole decision
 
@@ -1287,16 +1383,42 @@ The threshold is read from `run.blocking_matches` for the secret gate and
 never from a summary count, because that gate's own documentation says an
 integrator gating a build must read the former and that the latter ignores
 the threshold. A sibling tool in this family read the summary, and that is
-the bug not to copy (src/normalize.ts:232-236 and 319-325).
+the bug not to copy (src/normalize.ts:232-236 and 324-330).
 
 The intent gate is different in kind and is handled separately: it has no
 threshold, so a budget violation is blocking because the gate raises one
 reason per violation and blocks on having any reason at all, and a drift
 finding is blocking exactly when the OVERALL action blocks, since the gate
 raises one reason for the score and none per finding
-(src/normalize.ts:437-521).
+(src/normalize.ts:439-476 for the budget half and 478-526 for the drift
+half).
 
-Pinned by tests/normalize.test.ts:44, 49, 164, 216 and 253.
+THE VERDICT HAS A CLAUSE FOR THE STATE THIS RULE PRODUCES, and it was
+added after this file was first written. Both branches of
+`reconcileBlocking` drop every flag to false while the gate's own non-zero
+exit code still stands, and `composeExitCode` returns 1 for a non-zero
+gate exit code OR a blocking finding. So a run can exit 1 with nothing on
+screen marked blocking, and "verdict: exit 1, 0 blocking finding(s)"
+contradicts the number printed beside it on the one line somebody reads
+when they read nothing else. That branch instead names the enforced gates
+that exited non-zero and says the umbrella could not reconcile a blocking
+count with what they reported (src/output-text.ts:329-348).
+
+Pinned by tests/output-text.test.ts:639 and 651, one for each branch of
+`reconcileBlocking`, both of which assert the precondition first (the
+normalizer marked nothing blocking and raised exactly one diagnostic) and
+then that the verdict carries no "0 blocking finding(s)" and does say
+which gate exited non-zero. The unenforced aside survives on that verdict
+too, tests/output-text.test.ts:663.
+
+Pinned by tests/normalize.test.ts:44 (the reconstructed flags agree with
+the count and no diagnostic is raised), 49 (a tampered count makes every
+flag drop to false and raises the diagnostic), 62 (the same for a missing
+threshold), 184 (the threshold is read from `run.blocking_matches`: with
+that count set to 0 the finding is not blocking, while `summary.secrets`
+still says 1), 236 (every budget violation blocks), 273 (a drift finding
+whose overall action is "proceed" does not) and 419 (a blocked gate never
+reports zero blocking findings).
 
 ## Nothing invents a position, a fingerprint, or a severity
 
@@ -1304,12 +1426,14 @@ Severity is carried by identity where the product's ladder is the shared
 one and `severityIsDerived` is false; it is the umbrella's own invention
 for the intent gate, which has no per-finding severity at all, and
 `severityIsDerived` is true there for every finding
-(src/envelope.ts:16-23, src/normalize.ts:370-381). An unrecognised level
+(src/envelope.ts:16-23; identity at src/normalize.ts:173-176; the
+umbrella's own two ladders for the intent gate at src/normalize.ts:369-386,
+marked derived at src/normalize.ts:463, 508 and 548). An unrecognised level
 from the secret gate lands on `info` and is marked derived, so a
 downstream consumer never sees a level outside the union
 (src/normalize.ts:257-270). The text report marks a derived severity with
 a trailing asterisk and explains the asterisk only when one is on screen
-(src/output-text.ts:48 and 484-486).
+(src/output-text.ts:48 and 529-531).
 
 Fingerprints are carried verbatim and namespaced by product; nothing is
 hashed together with anything else, because a new digest would match no
@@ -1319,13 +1443,15 @@ worth: `stable` survives edits elsewhere in the file, `positional` does
 not, `none` means there is no id to keep. Where a product mints no
 fingerprint, the field is null and no `partialFingerprints` object is
 emitted, rather than an invented id no baseline anywhere contains
-(src/normalize.ts:547-549).
+(src/normalize.ts:552-554).
 
 The umbrella's OWN findings are the one thing it fingerprints, and the
 digest is over the rule, the role and the product and deliberately NOT
-over the message (src/normalize.ts:643-648), so a repeat run is the same
+over the message (src/normalize.ts:647-654), so a repeat run is the same
 alert rather than a new one every commit and a reworded detail is not a
-new problem. Pinned by tests/normalize.test.ts:438.
+new problem. Pinned by tests/normalize.test.ts:458, which asserts two
+calls with the same role and product agree and that a different role and
+product does not.
 
 `subject` is a union rather than a lowest common denominator
 (src/envelope.ts:62-69). Flattening a package, a byte position, a path set
@@ -1337,15 +1463,24 @@ The secret gate's 0-based column becomes 1-based in the envelope, and the
 gate's own number is kept in the details bag under a key that names its
 base (`columnZeroBased`), because calling it `column` put it next to a
 1-based SARIF `startColumn` in the same result where it read as an
-off-by-one in this tool (src/normalize.ts:280-311).
+off-by-one in this tool (src/normalize.ts:283 for the conversion and 315
+for the key).
 
-Pinned by tests/normalize.test.ts:38, 62, 70, 127, 142, 150, 156, 184,
-220, 227 and 438.
+Pinned by tests/normalize.test.ts:38 (severity by identity, not derived),
+204 (an unrecognised level lands on info AND is marked derived), 82 (a
+package subject rather than a fabricated file position), 240 (a path list
+rather than an invented line number), 90, 176 and 247 (the three
+fingerprint stabilities carried verbatim), 147 and 162 (the 1-based
+subject column and the 0-based one kept under its own key, with the bag
+asserted NOT to carry a plain `column`), 170 (no `endColumn`), 230 (the
+intent gate's derived severity and that every one of its findings says
+so) and 458 (the umbrella's own deterministic fingerprint).
 
 ## No stack trace reaches a terminal or a report
 
-An error's message, never its stack (src/gate-runner.ts:229-234,
-src/normalize.ts:703-726, src/cli.ts:247-257 and 266-278). A stack
+An error's message, never its stack (`messageOf`,
+src/gate-runner.ts:229-241; src/normalize.ts:708-731; src/cli.ts:249-259
+and 276-280). A stack
 reaching the terminal puts a local filesystem path in front of a user who
 cannot act on any of it, and puts one into a report that gets uploaded.
 The message is the part that says what went wrong.
@@ -1363,7 +1498,7 @@ argument, so a child spawned from anywhere else scans the right files with
 the wrong configuration and the wrong baseline, and says nothing about it.
 The other two resolve from their own arguments, so setting the working
 directory correctly is the single approach that is right for all three
-(src/gate-runner.ts:346-351).
+(src/gate-runner.ts:353-358).
 
 The umbrella anchors everything at the working-tree root as reported by
 git, so a run from a subdirectory behaves exactly like a run from the top
@@ -1374,7 +1509,9 @@ THE SUBDIRECTORY ANCHORING IS NOT PINNED BY ANY TEST: no test invokes the
 CLI from a subdirectory of a repository, and `repoRoot` falls back to the
 working directory when git cannot answer, so a regression there would
 degrade quietly into a policy-file-not-found error. The equivalent rule
-inside the generated hook IS pinned, at tests/init.test.ts:1445.
+inside the generated hook IS pinned, at tests/init.test.ts:1487, which
+runs the hook from `packages/app` inside the repository and proves it
+still finds `node_modules/.bin` at the root.
 
 ## Public-repository hygiene is a gate, not a habit
 
@@ -1420,23 +1557,23 @@ enforcement is CI and whoever remembers to run `pnpm lint` before pushing.
 
 Recorded so a future audit does not spend time proving them.
 
-Gates run SEQUENTIALLY (src/run.ts:152-205). That is a legibility decision
+Gates run SEQUENTIALLY (src/run.ts:172-230). That is a legibility decision
 rather than a rule: interleaved stderr from three gates is unreadable
 exactly when a commit has just been refused. It is explicitly flagged in
 the source as the obvious thing to revisit with a measurement, and nothing
 depends on the ordering.
 
-The per-gate timeout is 120 seconds (src/gate-runner.ts:295) and the child
-output buffer is 64MB (src/gate-runner.ts:350). Both are values, not
+The per-gate timeout is 120 seconds (src/gate-runner.ts:302) and the child
+output buffer is 64MB (src/gate-runner.ts:357). Both are values, not
 rules; the only invariant near them is that a timeout lands in the
 could-not-run path rather than being read as a clean exit.
 
 `report.format` in the policy file is a default that `--format` overrides
-(src/cli.ts:212). There is no rule about which one a repository should
+(src/cli.ts:214). There is no rule about which one a repository should
 choose.
 
 The `dist/` directory and `schema/` are the published files
-(package.json:14-17). The schema ships because a user should be able to
+(package.json:18-21). The schema ships because a user should be able to
 point an editor at it, and because the published contract should be a
 thing on disk that can be diffed between releases; that is a reason, not
 an invariant anything else depends on.
