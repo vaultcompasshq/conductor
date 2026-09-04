@@ -807,9 +807,9 @@ Pinned by tests/intent-prepare.test.ts:271.
 
 The temporary directory is always removed. Every failure path after the
 directory exists calls `cleanup` before returning
-(src/intent-prepare.ts:342-385), and the success path is removed by the
+(src/intent-prepare.ts:338-385), and the success path is removed by the
 caller's `finally` once every gate has run, whatever happened while they
-did (src/run.ts:206-215). The failure half is pinned by
+did (src/run.ts:231-240). The failure half is pinned by
 tests/intent-prepare.test.ts:376, which counts directories carrying
 `TEMP_PREFIX` in the system temporary directory before and after.
 
@@ -830,7 +830,7 @@ for one that has (src/intent-prepare.ts:208-217).
 
 "Exists" is not the test. `frozen_by: user` and nothing else, because that
 is the marker THE GATE ITSELF reads
-(`nativeContractIsFrozen`, src/intent-prepare.ts:101-112). Accepting an
+(`nativeContractIsFrozen`, src/intent-prepare.ts:101-113). Accepting an
 `approval` block as an alternative was a guess dressed up as tolerance: a
 real freeze writes both, so the only contracts the second test admitted
 were hand-edited or half-written ones, and admitting those skipped the
@@ -840,13 +840,13 @@ which sends the run down the import path rather than handing the gate
 something it will reject.
 
 An explicit `--spec` outranks even a frozen native contract
-(src/intent-prepare.ts:209-210, where the `flag` branch is taken before
+(src/intent-prepare.ts:208-211, where the `flag` branch is taken before
 `nativeContractIsFrozen` is ever called), because a person typed it just
 now.
 
 The native-contract rule is pinned by tests/intent-prepare.test.ts:143,
 153, 159, 169 and 187. THE `--spec` PRECEDENCE IS NOT PINNED BY ANY TEST:
-the only `--spec` case in that file is the missing-path one at line 333,
+the only `--spec` case in that file is the missing-path one at line 332,
 and tests/intent-spec.test.ts:246 covers `--spec` beating a pull request
 body, which is a different question decided in a different file. Nothing
 anywhere puts a frozen contract and a `--spec` in the same repository and
@@ -888,13 +888,22 @@ plan is a fine outcome, since the gate imports a spec on its own; the
 wrong plan freezes one feature's requirements against another's change
 budget, and the resulting block or pass is about neither of them.
 
-Pinned by tests/intent-spec.test.ts:137, 149, 161, 175, 193, 206, 216,
-230, 246, 263, 401, 419, 425, 431, 440 and 446.
+Pinned by tests/intent-spec.test.ts:137 and 149 (the convention, and the
+plan paired by the same stem rule), 161, 175 and 193 (the ranking: the
+newest name only among equally good candidates, an exact stem beating a
+newer looser one, and an undated name not winning by sorting last), 206
+and 216 (the most specific match, and no plan rather than another
+feature's), 230 and 246 (a `Spec:` line beating the convention, and
+`--spec` beating the `Spec:` line), 263 (a `Spec:` path that is not there
+falls through), 401 (a `--spec` path that is not there is reported
+instead), and 419, 425, 431 and 440 (nothing matches, no directory, a
+nested spec, a non-markdown file), with 446 for a plan paired to a spec
+that came from the pull request body.
 
 ## Containment applies to the pull request body and to nothing else
 
 A path named in a pull request body must RESOLVE inside the repository
-(`resolvesInsideRoot`, src/intent-spec.ts:252-264). That body is written
+(`resolvesInsideRoot`, src/intent-spec.ts:252-265). That body is written
 by whoever opened the pull request, and on a fork pull request that is
 somebody with no write access at all. Without the check, a
 `Spec: ../../etc/something` line imports an arbitrary readable file from
@@ -926,7 +935,7 @@ Pinned by tests/intent-spec.test.ts:295, 312, 324, 332, 354, 375 and 392.
 ## A branch with no spec is advisory, and never changes the exit code
 
 A `SkippedGate` is not a deferred gate, not a could-not-run, and not a
-finding (src/run.ts:38-43 and 173-181). Nobody asked for a different
+finding (src/run.ts:54-59 and 198-206). Nobody asked for a different
 stage, nothing broke, and a branch that has no spec is a branch this gate
 has no opinion about. Turning that into a failed build is how a gate gets
 switched off repository-wide.
@@ -935,13 +944,13 @@ It never reaches the exit code, enforced or not, because a skipped gate
 produces no `GateOutcome` and `composeExitCode` only ever sees outcomes.
 It is still on screen: one line in the text report
 (src/output-text.ts:225-229), one notification in the SARIF log
-(src/output-sarif.ts:491-498), and a distinct verdict sentence when it is
-the only thing that happened (src/output-text.ts:280-286), because telling
+(src/output-sarif.ts:518-525), and a distinct verdict sentence when it is
+the only thing that happened (src/output-text.ts:295-301), because telling
 somebody to set `enabled: true` is the wrong advice for a gate that is
 already on and had nothing to check.
 
 The contract source is decided BEFORE git is touched
-(src/intent-prepare.ts:186-196). That ordering is the promise: resolving
+(src/intent-prepare.ts:182-196). That ordering is the promise: resolving
 the base ref first would turn a shallow checkout into exit 2 on a
 repository the gate was never going to check anything in.
 
@@ -954,7 +963,7 @@ checkout cannot turn a missing spec into a failure").
 The umbrella computes what the branch changed rather than handing the gate
 its own `--base`, because `--base` inside the gate resolves git relative
 to `--project`, which may be a temporary directory with no repository in
-it (src/intent-base.ts:95-107).
+it (`changedPathsSince`, src/intent-base.ts:76-107).
 
 Three flags, each one a decision. `-c core.quotePath=false`, or git
 escapes any byte outside ASCII and wraps the line in quotes, handing the
@@ -974,7 +983,7 @@ gate would then check a path that does not exist and never check the one
 that changed.
 
 A prepared run replaces `--staged` entirely rather than adding to it
-(src/gate-runner.ts:166-180), because the two path sources are ADDITIVE in
+(src/gate-runner.ts:169-187), because the two path sources are ADDITIVE in
 the gate, so leaving `--staged` on would silently widen a pull request's
 change set with whatever happens to be in the index of the machine running
 it. `--paths` is passed even when the branch changed nothing, so the empty
@@ -989,29 +998,37 @@ first, because a pull request build is on a detached head and git answers
 "HEAD" there, matching no spec at all (src/intent-base.ts:60-74).
 
 The environment is INJECTED into `runAll` and defaults to EMPTY rather
-than to `process.env` (src/run.ts:82-90). Without that, running this
-package's own suite inside a pull request build would put every gate into
-the pull-request flow, because Actions sets `GITHUB_BASE_REF` for the
-whole job.
+than to `process.env` (src/run.ts:99-111 for why, src/run.ts:168 for the
+default itself). Without that, running this package's own suite inside a
+pull request build would put every gate into the pull-request flow,
+because Actions sets `GITHUB_BASE_REF` for the whole job.
 
-Pinned by tests/intent-base.test.ts:57-91, 110, 121, 135 and 192;
-tests/intent-run.test.ts:150, 179, 372 ("is never read unless the caller
-passes it in") and 400.
+Pinned by tests/intent-base.test.ts:57, 64, 71, 78 and 82 (the base ref,
+including the empty `GITHUB_BASE_REF` a push build sets), 91 (the
+three-dot range: what landed on the base afterwards is not listed), 110
+(both sides of a rename), and 121 and 135 (the quotePath decision, and
+that an ordinary space survives it); and
+tests/intent-run.test.ts:150 (the branch diff rather than the index), 179
+(the base taken from the pull request environment), 372 ("is never read
+unless the caller passes it in") and 400.
 
 ## Reporting: a statement about coverage is a notification, a statement that something went wrong is a result
 
 This is the discriminator, and it is written here because it has now been
-taken three times and should decide the fourth case itself.
+taken four times and should decide the fifth case itself.
 
 A statement about HOW MUCH OF THE POLICY A RUN COVERED is a NOTIFICATION.
 It is true of the configuration rather than of this change, identical on
 every run until somebody edits the policy file, and on the adoption ramp
 deliberately true for weeks. A permanent alert is a dismissed alert, and
-it teaches the reader to dismiss the next one. Three cases live here:
-`conductor/gate-deferred`, `conductor/gate-not-enforced`, and the
-per-product `no-contract` advisory, all of them in
+it teaches the reader to dismiss the next one. Four cases live here:
+`conductor/gate-deferred` (src/output-sarif.ts:448-456),
+`conductor/gate-excluded` (src/output-sarif.ts:468-476), the per-product
+`no-contract` advisory (src/output-sarif.ts:518-525), and
+`conductor/gate-not-enforced` (src/output-sarif.ts:553-586), all of them
+collected at src/output-sarif.ts:640-645 and written into
 `invocations[0].toolExecutionNotifications` on the umbrella's run
-(src/output-sarif.ts:445-559 and 613-634). As results they were
+(src/output-sarif.ts:382-395 and 651-662). As results they were
 fingerprint-less note alerts that reappeared on every run, so a repository
 on the adoption ramp accrued permanent alerts about this tool's own
 configuration.
@@ -1022,12 +1039,12 @@ person who should see it. `conductor/gate-missing`,
 `conductor/gate-failed` and `conductor/gate-output-unparseable` stay
 results, because a gate that could not run means a class of problem went
 unlooked-for on this change. So do the umbrella's own normalization
-diagnostics (src/output-sarif.ts:408-428), because a disagreement between
+diagnostics (src/output-sarif.ts:411-431), because a disagreement between
 the umbrella's report and the gate's own verdict is a defect in this run
 rather than a property of anybody's configuration.
 
 The text report answers the same question the same way, and the two must
-keep agreeing. `isFullyClean` (src/output-text.ts:369-380) forces the full
+keep agreeing. `isFullyClean` (src/output-text.ts:405-416) forces the full
 report when the umbrella has a diagnostic and does NOT force it for a
 gate's own note, for exactly this reason: the standing note that pnpm
 lockfiles do not record install-script metadata is a permanent property of
@@ -1036,82 +1053,112 @@ that file format, true on every run forever.
 The notification descriptor id keeps the id the statement was filed under
 when it was a result, so a consumer that had rules for these still
 recognises them, and the descriptors are declared beside the rules so the
-reference resolves rather than dangling (src/output-sarif.ts:312-332 and
-373-375). Level is always `note`; a notification arriving as a warning
-would push these straight back into the alert list they were moved out of.
+reference resolves rather than dangling (src/output-sarif.ts:315-328,
+declared at 330-335 and attached at 376-378). Level is always `note`; a
+notification arriving as a warning would push these straight back into
+the alert list they were moved out of.
 
-Pinned by tests/output-sarif.test.ts:132, 139, 148, 155, 162, 199, 230,
-276, 287 and 977, and by tests/output-text.test.ts:367, 375, 381, 387, 399
-and 420.
+Pinned by tests/output-sarif.test.ts:139 (gate-deferred moved out of
+results and into the notifications), 146 (gate-excluded, the same way),
+168 (nothing said about exclusion when there was no `--gate`), 177
+(gate-not-enforced), 186 (the no-contract advisory, keeping the GATE'S
+own namespace on its descriptor id), 193 (that advisory at note level),
+207 (the message text unchanged in the move), 214 and 251 (gate-missing
+and gate-failed staying results, in both directions), 282 (the
+notification objects are shaped as SARIF 2.1.0 wants, every level is
+`note`, and the descriptor ids are declared on the driver), 920 (a
+normalization diagnostic as a note-level result carrying blocking: false
+and no location) and 951 (naming the gate it came from). The remaining
+result id, `conductor/gate-output-unparseable`, is pinned end to end by
+tests/cli.test.ts:141, which runs the CLI over a gate whose output has
+drifted and finds that id among the umbrella run's RESULTS.
 
-A naming disagreement to be aware of, since it will mislead a reader
-before it misleads a machine. The comments at src/output-text.ts:358 and
-src/output-sarif.ts:485, and the README, all name this diagnostic
-`conductor/blocking-mismatch`. Nothing emits that string. The codes the
-code actually emits are `conductor/blocking-count-mismatch` and
+In the text report, pinned by tests/output-text.test.ts:369 and 377 (an
+umbrella diagnostic forces the full report and is not counted as a note)
+and 293, which is the other half and was uncited here: two of a gate's
+OWN notes leave the run clean, are counted rather than printed, and do
+not force the full report.
+
+A naming disagreement used to live here, and the shape of it is worth
+keeping even though it is gone. Two source comments and the README all
+named this diagnostic `conductor/blocking-mismatch`, and nothing had ever
+emitted that string; the codes the code emits are
+`conductor/blocking-count-mismatch` and
 `conductor/blocking-threshold-unknown` (src/normalize.ts:26-27). Worse,
-two tests build fixtures using the phantom name
-(tests/output-sarif.test.ts:425, tests/output-text.test.ts:360 and 371),
-which is harmless because those tests hand-construct the diagnostic they
-then look for, but it means the phantom name has a green test beside it.
-The emitted spelling of the first code IS pinned, at
-tests/normalize.test.ts:56. THE SECOND CODE IS NOT PINNED BY ANY TEST:
-nothing exercises the `threshold === null` branch of `reconcileBlocking`
-(src/normalize.ts:110-121), so nothing would notice if that branch stopped
-firing or changed its string.
+two tests built fixtures using the phantom name and then looked for what
+they had just constructed, so the phantom had a green test beside it.
+The phantom is now gone from the code, the README and the fixtures, and
+BOTH codes are pinned at the normalizer, which is the only place either
+is minted: tests/normalize.test.ts:49 drives the count-mismatch branch by
+tampering with the gate's reported count, and tests/normalize.test.ts:62
+drives the `threshold === null` branch (src/normalize.ts:110-121) by
+deleting `run.failOn`, asserting the emitted code and that nothing is
+left marked blocking.
 
 ## The clean-run summary line, and what it may not swallow
 
 A fully clean run prints one line rather than a screenful
-(src/output-text.ts:403-453 and 455-458). Twelve lines of per-gate detail
-on a commit that found nothing is a cost paid on every commit, and it is
-what makes a team switch a hook off.
+(`summaryLine`, src/output-text.ts:439-498, reached at
+src/output-text.ts:501-503). Twelve lines of per-gate detail on a commit
+that found nothing is a cost paid on every commit, and it is what makes a
+team switch a hook off.
 
-The predicate is not simply the exit code (src/output-text.ts:369-380).
-Three extra conditions, and each one exists because collapsing it would
-swallow the only report anybody sees. A gate with `enforce: false` is left
-out of the composed code, so a run where such a gate blocked or could not
-run still exits 0. An umbrella diagnostic forces the full report. And a
-run where no gate ran at all is not clean whatever the exit code says:
-"none is enabled", "every gate was deferred" and "nothing had a contract
-to check" are three distinct states with three distinct verdict sentences,
-and a summary line naming no gates would be the exact confusion this
-family exists to prevent.
+The predicate is not simply the exit code (`isFullyClean`,
+src/output-text.ts:405-416). Three extra conditions, and each one exists
+because collapsing it would swallow the only report anybody sees. A gate
+with `enforce: false` is left out of the composed code, so a run where
+such a gate blocked or could not run still exits 0. An umbrella
+diagnostic forces the full report. And a run where no gate ran at all is
+not clean whatever the exit code says: "none is enabled", "every gate was
+deferred" and "nothing had a contract to check" are three distinct states
+with three distinct verdict sentences, and a summary line naming no gates
+would be the exact confusion this family exists to prevent.
+
+Pinned by tests/output-text.test.ts:250, 261 and 268 (one line, none of
+the per-gate detail, and how to see the rest), 272 (`--verbose` prints
+the full report anyway), 389 (an unenforced gate that blocked forces the
+full report even though the run exits 0), 401 (so does one that could not
+run), 369 (so does an umbrella diagnostic) and 422 (a run where no gate
+ran at all). The half that must NOT force it, a gate's own note, is
+pinned at tests/output-text.test.ts:293.
 
 What the one line still has to carry: which gates ran, which were deferred
-to a later stage, which had nothing to check, which could not have blocked
-because they are unenforced, a count of non-blocking findings, a count of
-the gates' own notes, and how to see the rest.
+to a later stage, which had nothing to check, which the command line left
+out, which could not have blocked because they are unenforced, a count of
+non-blocking findings, a count of the gates' own notes, and how to see the
+rest. Pinned by tests/output-text.test.ts:255, 278, 293, 325, 345 and 745.
 
 `--verbose` is a command-line flag rather than a policy key
-(src/output-text.ts:331-340), because the schema describes what a
-repository gates on and how loud one developer's terminal is is not that.
+(`TextOptions`, src/output-text.ts:365-374), because the schema describes
+what a repository gates on and how loud one developer's terminal is is
+not that.
 
 SARIF IS UNAFFECTED BY IT. `renderSarif` takes no verbosity argument at
-all (src/output-sarif.ts:568), and the format branch in the CLI passes the
-flag only to `renderText` (src/cli.ts:225-228). Pinned by
+all (src/output-sarif.ts:595), and the format branch in the CLI passes the
+flag only to `renderText` (src/cli.ts:227-230). Pinned by
 tests/cli.test.ts:254, 266 and 274, and by
-tests/output-sarif.test.ts:465, which asserts the log is byte for byte
-what it was before the summary line existed.
+tests/output-sarif.test.ts:523, which asserts the log is byte for byte
+what it was before the summary line existed, against a literal written
+out by hand rather than against whatever the renderer currently produces.
 
 ## SARIF says only what it can support
 
 One run per gate, in gate order. SARIF puts the tool name and version on
 the run, so a single run cannot honestly describe three tools
-(src/output-sarif.ts:571-597).
+(src/output-sarif.ts:598-624).
 
 A gate that never ran gets NO run. The tempting alternative is an empty
 run named for the missing product, which puts that tool's name on
 something it never did. The umbrella's own findings about it go into a
 final run whose driver is the umbrella, the only honest owner of a
 statement about a tool that is not installed
-(src/output-sarif.ts:575-577 and 606-634).
+(src/output-sarif.ts:598-604 for the skip and 633-662 for the run).
 
 No invented version. A gate whose version could not be read gets no
-`version` field rather than a placeholder (src/output-sarif.ts:366-369).
+`version` field rather than a placeholder (src/output-sarif.ts:368-372).
 
 `%SRCROOT%` is attached only to a path genuinely under the source root
-(`placeArtifact`, src/output-sarif.ts:130-170). An absolute path is
+(`placeArtifact`, src/output-sarif.ts:133-173). An absolute path is
 positive evidence the file is NOT under the root, since one of the gates
 keeps a path absolute exactly when the file is outside the directory it
 scanned; stripping the leading slash fabricates a source-root-relative
@@ -1123,13 +1170,24 @@ normalizing is real rather than a prefix test, so `a/../../b` is caught
 too.
 
 No invented region. Only the secret gate reports a line and a column, and
-even there no `endColumn`, because that gate's JSON output does not carry
-the match length so the end of the match is genuinely unknown
-(src/output-sarif.ts:219-226 and src/normalize.ts:281-287).
+even there no `endColumn` (src/output-sarif.ts:222-228 and
+src/normalize.ts:284-291).
+
+The reason is narrower than this file used to state it, and the narrower
+version is the useful one. That gate DOES know the match length: it
+hashes it into its own fingerprint and puts an end column in its own
+SARIF. What it omits is `matchLength` on the match object in the JSON
+output, which is the one channel the umbrella reads. So the end of the
+match is unknown FROM THIS CHANNEL rather than unknown to the product,
+which makes it a fixable upstream ask (carry `matchLength` on the match)
+rather than a permanent limitation of the finding. Until it is carried it
+is not guessed, and the renderer already emits `endColumn` when the
+envelope has one (src/output-sarif.ts:226-228), so the day the field
+arrives the only change needed is in the normalizer.
 
 `partialFingerprints` carries each product's own fingerprint unhashed,
 under a key naming the product and a version
-(src/output-sarif.ts:107-109 and 276-278). Hashing it together with
+(src/output-sarif.ts:110-112 and 279-281). Hashing it together with
 anything would mint a second identity for every finding, one that moves
 when the first does not, and every alert would resurface on the next scan.
 The key is versioned so a future change to a product's fingerprint inputs
@@ -1138,29 +1196,77 @@ silently comparing hashes of different things.
 
 `properties.blocking` is the gate's decision as reconciled in
 src/normalize.ts and is never recomputed in the renderer
-(src/output-sarif.ts:264-266). A second copy of the gate living in the
+(src/output-sarif.ts:268). A second copy of the gate living in the
 renderer would drift silently.
 
 `executionSuccessful` is written whenever the umbrella's run is written,
-in both directions (src/output-sarif.ts:341-352 and 628-631). Emitting it
-alongside the notifications made the field present when the answer was
-true and absent when it was false, which is the one direction that
-matters.
+in both directions (`Invocation`, src/output-sarif.ts:344-355, emitted
+unconditionally at src/output-sarif.ts:387 and computed at
+src/output-sarif.ts:658). Emitting it alongside the notifications made
+the field present when the answer was true and absent when it was false,
+which is the one direction that matters.
 
 Enforcement is recorded in two places and neither is redundant:
 `properties.enforced` on the gate's own run, emitted for enforced gates
-too so an absent property never has to be read as either answer, and a
-notification in the umbrella's run, which is the only place left to say it
-for a gate that could not run and so has no run of its own
-(src/output-sarif.ts:500-559 and 588-596). What is deliberately not done
-is touching the results: a critical finding stays critical and `blocking`
-stays whatever the gate decided, because writing this repository's policy
-about its own exit code into the field a code-scanning UI uses to describe
-a finding would make the finding lie about what the gate found.
+too so an absent property never has to be read as either answer
+(src/output-sarif.ts:615-623), and a notification in the umbrella's run,
+which is the only place left to say it for a gate that could not run and
+so has no run of its own (src/output-sarif.ts:553-586). What is
+deliberately not done is touching the results: a critical finding stays
+critical and `blocking` stays whatever the gate decided, because writing
+this repository's policy about its own exit code into the field a
+code-scanning UI uses to describe a finding would make the finding lie
+about what the gate found.
 
-Pinned by tests/output-sarif.test.ts:495, 500, 508, 515, 524, 540, 547,
-561, 577, 586, 592, 617, 628, 639, 644, 658, 667, 684, 711, 733, 745, 759,
-777, 815, 840, 871, 890, 902, 912, 922, 936, 1003 and 1010.
+Pinned, claim by claim rather than by a block of numbers, because the
+previous list here carried about ten citations that pinned envelope facts
+this section never claims and two that belong to the reporting section
+above:
+
+- One run per gate, in gate order, with each driver's name and version
+  from that gate: tests/output-sarif.test.ts:558 and 566.
+- A gate that never ran gets no run: tests/output-sarif.test.ts:857,
+  1049 (which also asserts the gate-missing result is still there), 1090
+  (a deferred gate), 1116 (no umbrella run when there is nothing to say)
+  and 1123 (a gate that ran and found nothing still gets one).
+- No invented version: tests/output-sarif.test.ts:573.
+- `%SRCROOT%` placement: tests/output-sarif.test.ts:747 (backslashes and
+  a leading dot-slash), 764 (an absolute path, posix and Windows, gets a
+  `file:` uri and no `uriBaseId`), 791 (an escaping path loses its
+  physical location and is kept in `unresolvablePaths`), 813 (one that
+  escapes only after the segments cancel), 825 (an inner `..` that stays
+  inside), and 839 (a secret finding loses its location entirely rather
+  than keeping a region over no file). `placeArtifact` is also exercised
+  directly, one rule at a time, at tests/output-sarif.test.ts:1141 to
+  1203.
+- No invented region: tests/output-sarif.test.ts:708 (a real position
+  becomes a region with the 1-based column), 719 (no `startLine` anywhere
+  for a finding with no known line), 724 (a path list gets one location
+  each and no region) and 738 (a drift finding gets a logical location
+  and no file). The absent `endColumn` is pinned at the normalizer,
+  tests/normalize.test.ts:170.
+- `partialFingerprints`: tests/output-sarif.test.ts:657 (keyed by product,
+  value unhashed), 666 (stability recorded beside it), 672 (omitted
+  entirely when the product mints none) and 1207 (the `/v1` key).
+- `properties.blocking` never recomputed: tests/output-sarif.test.ts:619,
+  which is the discriminating fixture and the one that matters. Every
+  other fixture in that file has blocking agreeing with severity, so a
+  renderer that derived blocking from the level would pass all of them;
+  this one renders a BLOCKING finding at note level and asserts both. The
+  wholesale properties assertion at tests/output-sarif.test.ts:641 cannot
+  stand for this claim on its own, which is exactly the gap that let the
+  regression through before 619 was written.
+- `executionSuccessful` in both directions: tests/output-sarif.test.ts:465
+  (false, with no notification to hang it on, which is the case that
+  produced no invocation at all before), 476 (true when every gate ran),
+  314 (false for a gate that could not run) and 492 (a gate's run gets no
+  invocation of its own).
+- Enforcement recorded twice, results untouched:
+  tests/output-sarif.test.ts:1015 (present on both an enforced and an
+  unenforced run), 1025 (the stage beside it), 1035 (the notification),
+  1049 (still said for a gate with no run of its own), 970 (an unenforced
+  gate's results keep their own level) and 982 (a gate that could not run
+  keeps an error-level, critical result).
 
 ## Blocking is reconstructed, checked against the gate, and the gate wins
 
