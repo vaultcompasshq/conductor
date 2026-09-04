@@ -190,6 +190,20 @@ describe('coverage statements are notifications rather than results', () => {
     ).toContain('intent-guard/no-contract');
   });
 
+  it('sends the no-contract advisory at note level, like every other notification', () => {
+    // The one notification whose descriptor id is a GATE'S namespace rather
+    // than the umbrella's, and the one whose level nothing pinned. A branch
+    // with no spec is the ordinary state of most branches on the adoption
+    // ramp, so this arriving as anything but a note would put a permanent
+    // alert on repositories that have done nothing wrong.
+    const entry = notificationsOf(sarif(SKIPPED)).find(
+      (candidate) =>
+        (candidate.descriptor as Record<string, unknown>).id === 'intent-guard/no-contract'
+    ) as Record<string, unknown>;
+
+    expect(entry.level).toBe('note');
+  });
+
   it('keeps the message text unchanged in the move', () => {
     const entry = notificationsOf(sarif(DEFERRED))[0];
     expect((entry.message as Record<string, unknown>).text).toBe(
@@ -278,7 +292,13 @@ describe('coverage statements are notifications rather than results', () => {
 
     for (const entry of notificationsOf(log)) {
       expect(entry.descriptor).toEqual({ id: expect.any(String) });
-      expect(['note', 'warning', 'error']).toContain(entry.level);
+      // Note, always, and asserted as that rather than as "one of the three
+      // levels SARIF allows". The claim this stands for is that a statement
+      // about coverage is never an error about the code, and a notification
+      // arriving as a warning would push these straight back into the alert
+      // list they were moved out of. The looser assertion passed whatever
+      // level they arrived at, which is exactly the regression it names.
+      expect(entry.level).toBe('note');
       expect((entry.message as Record<string, unknown>).text).toEqual(expect.any(String));
     }
 
@@ -594,6 +614,28 @@ describe('result mapping', () => {
       ])
     );
     expect((noteLevel.runs[0].results as Array<Record<string, unknown>>)[0].level).toBe('note');
+  });
+
+  it('does not recompute blocking from the severity ladder', () => {
+    // The discriminating fixture, and the reason the wholesale properties
+    // assertion below cannot stand on its own: in every fixture this file
+    // has, blocking agrees with severity, so a renderer that derived
+    // blocking from the level would pass all of them. This one is a
+    // BLOCKING finding rendered at note level, which only a renderer taking
+    // the flag from the normalizer gets right. A second copy of the gate
+    // living in here would drift silently, and the report would say
+    // "blocking: false" about a finding that had just failed a build.
+    const noteLevel = sarif(
+      result([
+        outcome({
+          findings: [{ ...depGuard.findings[0], severity: 'info' } as Finding],
+        }),
+      ])
+    );
+    const entry = (noteLevel.runs[0].results as Array<Record<string, unknown>>)[0];
+
+    expect(entry.level).toBe('note');
+    expect((entry.properties as Record<string, unknown>).blocking).toBe(true);
   });
 
   it('carries blocking, severity, severityIsDerived and the verbatim details bag', () => {
