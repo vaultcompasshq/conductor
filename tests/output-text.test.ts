@@ -610,6 +610,88 @@ describe('the verdict when enforced and unenforced gates are mixed', () => {
   });
 });
 
+describe('the verdict when the run exits 1 and nothing is marked blocking', () => {
+  // Both branches of reconcileBlocking drop every blocking flag to false while
+  // the gate's own non-zero exit code stands, so composeExitCode still returns
+  // 1. The verdict is the one line somebody reads when they read nothing else,
+  // and "exit 1, 0 blocking finding(s)" contradicts itself on that line.
+  function depGuardRaw(): { run: Record<string, unknown> } {
+    return fixture('dep-guard-0.2.0-blocking.json') as { run: Record<string, unknown> };
+  }
+
+  function verdictFor(raw: unknown): string {
+    const normalized = normalizeDepGuard(raw, '0.2.0');
+    // The precondition this whole branch is about: the gate exited non-zero
+    // and the umbrella marked nothing blocking.
+    expect(normalized.findings.some((finding) => finding.blocking)).toBe(false);
+    expect(normalized.diagnostics).toHaveLength(1);
+    const text = renderText(
+      result(
+        [outcome({ exitCode: 1, findings: normalized.findings, run: normalized.run, diagnostics: normalized.diagnostics })],
+        1
+      )
+    );
+    return text.trimEnd().split('\n').pop() as string;
+  }
+
+  it('does not print a blocking count when the threshold was never reported', () => {
+    const raw = depGuardRaw();
+    delete raw.run.failOn;
+    const last = verdictFor(raw);
+
+    expect(last).toMatch(/exit 1/);
+    expect(last).not.toMatch(/0 blocking finding\(s\)/);
+    expect(last).toMatch(/dependencies/);
+    expect(last).toMatch(/could not reconcile/);
+    expect(last).toMatch(/exit code decided the run/);
+  });
+
+  it('does not print a blocking count when the gate own count and the umbrella count disagree', () => {
+    const raw = depGuardRaw();
+    raw.run.blockingMatches = 5;
+    const last = verdictFor(raw);
+
+    expect(last).toMatch(/exit 1/);
+    expect(last).not.toMatch(/0 blocking finding\(s\)/);
+    expect(last).toMatch(/dependencies/);
+    expect(last).toMatch(/could not reconcile/);
+    expect(last).toMatch(/exit code decided the run/);
+  });
+
+  it('keeps the unenforced aside on that verdict', () => {
+    const raw = depGuardRaw();
+    delete raw.run.failOn;
+    const normalized = normalizeDepGuard(raw, '0.2.0');
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 1,
+            findings: normalized.findings,
+            run: normalized.run,
+            diagnostics: normalized.diagnostics,
+          }),
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: null,
+            exitCode: null,
+            binary: null,
+            enforce: false,
+            couldNotRun: { reason: 'binary-missing', detail: 'binary missing' },
+            findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+          }),
+        ],
+        1
+      )
+    );
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/intent could not run/);
+    expect(last).toMatch(/that is not why/);
+  });
+});
+
 describe('a gate the stage filter deferred', () => {
   // Verbose, because the run below is otherwise fully clean and would print
   // the one-line summary. The summary line's own deferred clause is covered

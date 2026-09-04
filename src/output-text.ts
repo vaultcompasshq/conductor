@@ -312,6 +312,25 @@ function verdict(result: RunResult): string {
     return `verdict: exit 2, a gate could not run (${names}), so nothing here is a clean result.${aside}`;
   }
   if (result.exitCode === EXIT_BLOCKED) {
+    // Exit 1 with nothing on screen marked blocking. The sibling of the exit 0
+    // clause below, and it exists for the same reason: composeExitCode returns
+    // 1 for a non-zero gate exit code OR a blocking finding, and both branches
+    // of reconcileBlocking in normalize.ts drop every blocking flag to false
+    // while the gate's own non-zero exit still stands. "0 blocking finding(s)"
+    // on the one line somebody reads when they read nothing else contradicts
+    // the exit code printed beside it, and sends a reader looking for a
+    // finding that this report deliberately does not claim.
+    if (blocking === 0) {
+      const names = enforcedGates
+        .filter((gate) => (gate.exitCode ?? 0) !== 0)
+        .map((gate) => `${gate.role} (exit ${gate.exitCode ?? '?'})`)
+        .join(', ');
+      return (
+        `verdict: exit 1, and no finding here is marked blocking. Enforced gate(s) that exited ` +
+        `non-zero: ${names}. The umbrella could not reconcile a blocking count with what those ` +
+        `gates reported, so the gate exit code decided the run.${aside}`
+      );
+    }
     return `verdict: exit 1, ${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
   }
 
