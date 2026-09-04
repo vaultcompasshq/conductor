@@ -40,11 +40,11 @@ outputs:
 runs:
   using: composite
   steps:
-    # No install step, on purpose. This package is unpublished, so an install
-    # here would either fail or fetch something else entirely under a name it
-    # does not own. A repository that wants this action depends on conductor
-    # the ordinary way, and this step says so in a sentence rather than
-    # failing later with a command-not-found.
+    # No install step, on purpose. A repository that wants this action
+    # depends on conductor the ordinary way, so the version gating its pull
+    # requests is the one its own lockfile pins rather than whatever an
+    # install here decided to fetch. This step says that in a sentence
+    # rather than failing later with a command-not-found.
     - name: Check conductor is installed
       shell: bash
       working-directory: ${{ inputs.working-directory }}
