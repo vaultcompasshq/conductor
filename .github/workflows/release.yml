@@ -1,0 +1,143 @@
+name: Release
+
+# IMPORTANT, read before the first tag is ever pushed:
+#
+# npm only exposes the trusted-publisher setting on a package that already
+# exists on the registry, so the very first publish of a new name cannot go
+# through OIDC. That first publish has to happen by hand, from a maintainer's
+# machine, after clearing package.json's "private": true flag. Only once
+# @vaultcompass/conductor exists on the registry can the trusted publisher be
+# configured for it, and only after that can this workflow's OIDC publish
+# step succeed. Every tag pushed after that bootstrap runs unchanged; the
+# skip-if-already-published step below is exactly what keeps the bootstrap
+# tag's own run green rather than failing on a duplicate-version publish.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+    - name: Setup Node.js
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: 22.14.0
+        cache: 'pnpm'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Build
+      run: pnpm build
+
+    - name: Typecheck
+      run: pnpm typecheck
+
+    - name: Lint (public repository hygiene guard)
+      run: pnpm lint
+
+    - name: Run tests
+      run: pnpm test
+
+    # npm Trusted Publishing (OIDC): no NPM_TOKEN, auth via id-token: write
+    # plus a trusted publisher configured on the package. Requires npm CLI
+    # >= 11.5.1 (Node >= 22.14.0). Pin major 11 -- npm@12 needs a newer Node
+    # than this job runs. Mirrors dep-guard and vault-guard's release.yml.
+    - name: Upgrade npm for OIDC trusted publishing
+      run: npm install -g npm@11
+
+    # Skips a publish whose exact version is already on the registry, so a
+    # tag run stays green after a version was published by hand. That
+    # happens on the first publish of a new package name: npm only exposes
+    # the trusted-publisher setting on a package that already exists, so the
+    # very first publish of a name cannot go through OIDC and has to be a
+    # manual bootstrap (see the note at the top of this file).
+    #
+    # Without the check, that first tag's run would try to republish the
+    # same version, npm would return E403, and because a run block executes
+    # under bash -e the step would abort and fail the whole job -- a
+    # misleading red for a release that already succeeded by hand.
+    #
+    # The skip is per exact version, so it never hides a real publish
+    # failure of a version that is genuinely new.
+    - name: Publish to npm
+      run: |
+        set -euo pipefail
+        name="$(node -p "require('./package.json').name")"
+        version="$(node -p "require('./package.json').version")"
+        published="$(npm view "$name@$version" version 2>/dev/null || true)"
+        if [ "$published" = "$version" ]; then
+          echo "SKIP: $name@$version is already on the registry"
+        else
+          echo "PUBLISH: $name@$version"
+          pnpm publish --access public --provenance --no-git-checks
+        fi
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      with:
+        generate_release_notes: true
+        body: |
+          Published @vaultcompass/conductor to npm.
+
+  smoke-published:
+    name: Smoke test published CLI
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install published CLI and run smoke commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "Smoke testing @vaultcompass/conductor@${VERSION}"
+
+          # A single package, so there is no cross-package registry
+          # propagation lag to wait out the way intent-guard's four-package
+          # smoke job does. There is still a small window right after
+          # publish where the registry has not caught up, so wait for the
+          # exact version to become visible rather than installing
+          # immediately, and fail loudly with a named timeout instead of
+          # letting npm install's own error stand in for it.
+          FOUND=0
+          for i in $(seq 1 12); do
+            if [[ "$(npm view "@vaultcompass/conductor@${VERSION}" version 2>/dev/null)" == "${VERSION}" ]]; then
+              echo "Package visible on registry."
+              FOUND=1
+              break
+            fi
+            echo "Waiting for npm registry (attempt ${i}/12)..."
+            sleep 10
+          done
+          if [[ "${FOUND}" -ne 1 ]]; then
+            echo "::error::Timed out after 120s waiting for @vaultcompass/conductor@${VERSION} on the npm registry."
+            exit 1
+          fi
+
+          TMP=$(mktemp -d)
+          cd "${TMP}"
+          npm init -y >/dev/null 2>&1
+          npm install "@vaultcompass/conductor@${VERSION}"
+          ./node_modules/.bin/conductor --version
+          ./node_modules/.bin/conductor init --dry-run
+          echo "Release smoke passed."

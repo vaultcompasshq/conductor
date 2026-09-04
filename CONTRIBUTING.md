@@ -71,3 +71,18 @@ Plain ASCII prose. No backticks, no angle brackets, and no arrows: each of
 those has been eaten or misread by a shell somewhere in this family's
 history. Write "escalates 7d then 30d then permanent" rather than an arrow
 chain.
+
+## Releasing
+
+Open a pull request that bumps the version in `package.json`. Let it merge
+like any other change, and wait for `main`'s own CI to go green on the
+merge commit. Only then tag that commit and push the tag:
+
+    git tag v0.2.0
+    git push origin v0.2.0
+
+The tag push is what triggers the publish. Never tag and push a version
+straight from a local branch without going through a pull request and a
+green `main` first; the release workflow re-runs build, typecheck, lint,
+and test before it publishes, but that is a second check, not a substitute
+for `main`'s own CI having already passed.
