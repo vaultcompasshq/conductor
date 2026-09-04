@@ -136,7 +136,12 @@ jobs:
           echo "SKIP: $name@$version is already on the registry"
         else
           echo "PUBLISH: $name@$version"
-          pnpm publish --access public --provenance --no-git-checks
+          # No --provenance. Trusted publishing attaches a provenance
+          # attestation on its own, npm's own documentation says the flag is
+          # unnecessary under OIDC, and neither dep-guard nor vault-guard
+          # passes it. It buys no attestation and adds a way to fail.
+          # --no-git-checks stays: a tag checkout is on a detached head.
+          pnpm publish --access public --no-git-checks
         fi
 
     - name: Create GitHub Release
