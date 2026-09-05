@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { childEnv } from './helpers/child-env.js';
+import { childEnv, shimGit } from './helpers/child-env.js';
 
 const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONDUCTOR_CLI = path.join(CONDUCTOR_ROOT, 'dist', 'cli.js');
@@ -329,12 +329,18 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
   });
 
   it('reports a missing enabled gate as a blocking finding and exits 2', () => {
-    // The same policy, run with a PATH that has neither shim on it. The
+    // The same policy, run with a PATH that has neither gate shim on it. The
     // intent gate still runs, because its absolute command does not depend
     // on PATH; the other two are enabled and absent. A silent skip here is
     // the whole failure mode this umbrella exists to avoid.
+    //
+    // git IS on that PATH, and nothing else is. The CLI needs it to find the
+    // working-tree root and says so plainly when it is missing, so without
+    // the shim this test would exit 2 over git and never reach the question
+    // it is about.
     const emptyDir = path.join(path.dirname(binDir), 'empty');
     mkdirSync(emptyDir, { recursive: true });
+    shimGit(emptyDir);
     const result = spawnSync(process.execPath, [CONDUCTOR_CLI, 'run', '--staged'], {
       cwd: clone,
       encoding: 'utf8',

@@ -1632,24 +1632,35 @@ same run from the top. The equivalent rule inside the generated hook is
 pinned at tests/init.test.ts:1546, which runs the hook from `packages/app`
 and proves it still finds `node_modules/.bin` at the root.
 
-That test has to put git back on the PATH itself, and the reason is worth
-recording. `repoRoot` falls back to the working directory when git cannot
-answer (src/cli.ts:42-44), and tests/cli.test.ts replaces PATH wholesale
-so the gates resolve to stubs, which takes git away from the spawned CLI
-too. Everywhere else in that file the fallback is invisible, because the
-working directory IS the root. Underneath the root it is the whole
-question, so without the shim the test would have failed for the wrong
-reason and a fix would have been made to the wrong thing.
+Every test in tests/cli.test.ts has git on its controlled PATH, and the
+reason is worth recording. That file replaces PATH wholesale so the gates
+resolve to stubs, which takes git away from the spawned CLI too, and the
+CLI needs git to find the root. The shim used to live in the subdirectory
+suite alone, because everywhere else the working directory IS the root and
+the old fallback made the absence invisible; it now lives in `runCli`
+itself, so a spawn site cannot forget it and pass for the wrong reason.
 
-The fallback itself is a defect, not only test mechanics, and it is
-recorded here as OPEN rather than fixed in this release. A CLI that
-cannot find git silently treats the current directory as the root, so a
-run from a subdirectory with no git on PATH cannot find the policy file
-that is really at the top and exits 2 telling the user to run
-`conductor init`, in a repository that already has one. The generated
-hook does not have this problem: it names the missing git plainly
-(src/init.ts:263). The CLI's silent fallback is the same class of
-failure the hook's own message exists to avoid, and it is still there.
+THE FALLBACK IS GONE, and this paragraph used to record it as an OPEN
+defect. `repoRoot` no longer catches every failure and answers `cwd`: git
+missing from PATH and a directory outside any repository are now two
+different sentences, and anything else git can fail with is a third
+(src/cli.ts:32-79). It is called inside `run`'s own try, so each one
+arrives as one line on stderr with no stack and the could-not-run exit
+code, the same shape as every other refusal the CLI makes. What the
+fallback did instead was answer "no .guardrails.yaml here, run conductor
+init" in a repository that has one, which is a confident answer to a
+question nobody asked. The generated hook has always named a missing git
+plainly (src/init.ts:263); this is the CLI catching up with it.
+
+Pinned by tests/cli.test.ts:771 (no git on the controlled PATH: exit 2,
+the git sentence, no stack frame, no run-init message, and nothing at all
+on stdout) and 787 (a directory outside any repository: exit 2 and a
+sentence naming that directory rather than the init advice). The third
+branch, git present but unable to run at all, is NOT pinned by any test:
+constructing a spawn failure that is neither ENOENT nor an exit code needs
+a machine in a state a test cannot ask for, and the branch exists so that
+the other two sentences are never printed about something they are not
+true of.
 
 ## Public-repository hygiene is a gate, not a habit
 
