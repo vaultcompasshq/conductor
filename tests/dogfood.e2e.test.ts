@@ -56,6 +56,33 @@ const missing = [
 
 const describeE2E = missing.length === 0 ? describe : describe.skip;
 
+/**
+ * The contract the sibling intent-guard just froze, under whichever of its
+ * two state-directory names that build uses.
+ *
+ * This suite runs against WHATEVER intent-guard is checked out beside this
+ * repository, which is the whole point of it, so it cannot assume a version.
+ * 1.3.0 renamed the directory from `.conductor` to `.intent-guard`; a
+ * checkout on either side of that rename has to leave this suite green, or
+ * the suite stops being evidence about the umbrella and starts being a
+ * reading of the sibling's version number. Canonical first, matching the
+ * order the umbrella itself uses. Throwing names both, because "no such
+ * file" on one guessed path is the least useful way to learn this.
+ */
+function frozenContractIn(projectRoot: string): string {
+  const candidates = [
+    path.join(projectRoot, '.intent-guard', 'intent-contract.yaml'),
+    path.join(projectRoot, '.conductor', 'intent-contract.yaml'),
+  ];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found === undefined) {
+    throw new Error(
+      `intent-guard froze no contract this suite can find. Looked for: ${candidates.join(', ')}`
+    );
+  }
+  return found;
+}
+
 // The scratch parent is overridable so a session can point it at its own
 // scratch area; the default is the OS temp directory, never anywhere near
 // the checkouts being read.
@@ -234,7 +261,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
       [INTENT_GUARD_CLI, 'freeze', '--project', '.', '--approved-by', 'dogfood'],
       { cwd: clone }
     );
-    const contractPath = path.join(clone, '.conductor', 'intent-contract.yaml');
+    const contractPath = frozenContractIn(clone);
     writeFileSync(
       contractPath,
       readFileSync(contractPath, 'utf8').replace(

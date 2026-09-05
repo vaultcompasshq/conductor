@@ -73,7 +73,15 @@ freeze capture beside it; nothing reads either.
 against the spec's `allowed_paths: ["src/widget/**"]` and `max_files: 2`,
 which breaches both rules. `intent-guard-1.2.1-check-passing.json` is one
 path inside the budget. `intent-guard-1.2.1-check-no-contract.json` is the
-same command in a project with no `.conductor` directory at all.
+same command in a project with no state directory at all.
+
+These are captures of **1.2.1**, so the `.conductor` paths inside them are
+that version's output and must stay exactly as they are. intent-guard 1.3.0
+renamed the state directory to `.intent-guard`, and the umbrella reads both;
+rewriting these files to the new name would turn a record of what 1.2.1
+really printed into a guess about what 1.3.0 prints, which is the whole
+failure this directory exists to prevent. A 1.3.0 capture is worth adding
+beside them rather than instead of them.
 
 ### Why the spec here is not one of the real org specs
 

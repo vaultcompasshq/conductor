@@ -405,13 +405,55 @@ imports a spec on its own.
 that YAML is written into a **temporary** directory, `intent-guard freeze`
 approves it there with an `--approved-by` naming the spec and the short
 commit, and the gate runs with `--project` pointed at that directory. Nothing
-is ever written under the repository's own `.conductor`: a contract is a
-committed artifact with an approver's name on it, and one dropped into a
-working tree by a CI run is either committed by accident or read by the next
-run as though a person had approved it. Any failure in that chain is
-could-not-run for the gate, and the report names the step it failed at,
-because the gate itself said nothing and that sentence is all there is to tell
-a shallow checkout from a spec the importer choked on.
+is ever written under the repository's own state directory, under either of
+its names: a contract is a committed artifact with an approver's name on it,
+and one dropped into a working tree by a CI run is either committed by
+accident or read by the next run as though a person had approved it. Any
+failure in that chain is could-not-run for the gate, and the report names the
+step it failed at, because the gate itself said nothing and that sentence is
+all there is to tell a shallow checkout from a spec the importer choked on.
+
+### The state directory has two names, and the umbrella reads both
+
+intent-guard 1.3.0 renamed its per-project state directory from `.conductor`
+to `.intent-guard`, because `.conductor` had become the name of a different
+product in the same family: a repository adopting both showed `.conductor/`
+and `.guardrails/` side by side with nothing to say which tool owned which.
+Both versions will be installed across repositories for as long as anybody is
+slow to upgrade, so the umbrella looks in both, canonical first. A gate whose
+contract the umbrella cannot find is a pull request blocked on nothing.
+
+Three decisions sit under that, and each cost a paragraph of thought.
+
+**The ambiguity test is narrower than intent-guard's own.** intent-guard
+fails closed when both **directories** exist; conductor refuses only when both
+hold a **frozen** contract. That follows the rule already governing the single
+path: `frozen` is the test rather than `exists`, because an unfrozen contract
+is a draft somebody left behind. A stale draft in the old directory beside a
+real contract in the new one has an obvious right answer, and refusing to give
+it would fail pull requests over a file nobody has looked at in months. When
+both are frozen the gate is could-not-run, naming both paths, because the two
+can disagree about what was approved and picking one discards the other
+silently. That check sits **above** `--spec`, because the import path runs
+`import-spec --project .` in that same repository, where a 1.3.0 gate fails
+closed on the same ambiguity and reports it as an opaque non-zero exit.
+
+**The drafted contract is written under the legacy name**, into the temporary
+directory. That is the one choice that works on both versions: a 1.2.x gate
+reads only `.conductor/`, and a 1.3.0 gate reads it as the fallback and
+renames it to the canonical name on its first write, which the freeze is.
+Writing the canonical name would work on 1.3.0 and leave 1.2.x freezing an
+empty project. After the freeze the contract is looked for under both names
+and a preparation failure is raised when it is under neither, because exit 0
+is not by itself proof there is a contract to hand the gate.
+
+**Reading the old directory is a notification, not a result.** It is the
+closest call among the five notifications and worth stating: nothing went
+wrong, the gate ran, and the verdict is exactly what it will be after the
+migration. What the line says is which of two layouts the run covered, and it
+stays true on every run until somebody upgrades the gate, so as a result it
+would be a fingerprint-less alert reappearing on every pull request for as
+long as that takes.
 
 ### Which budget applies
 

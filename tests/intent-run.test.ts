@@ -5,7 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TEMP_PREFIX } from '../src/intent-prepare.js';
+import {
+  LEGACY_NATIVE_CONTRACT_PATH,
+  NATIVE_CONTRACT_PATH,
+  TEMP_PREFIX,
+} from '../src/intent-prepare.js';
 import { renderSarif } from '../src/output-sarif.js';
 import { renderText } from '../src/output-text.js';
 import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
@@ -568,5 +572,101 @@ describe('a waived run where the intent gate is the only gate', () => {
     expect(text).toMatch(/verdict: exit 0, nothing was checked/);
     expect(text).toMatch(/verdict:.*waived by the pull request body/);
     expect(text).not.toMatch(/no contract to check against/);
+  });
+});
+
+/**
+ * A repository still on intent-guard's pre-1.3 state directory.
+ *
+ * The fallback works, which is the point of it, and a working fallback is
+ * silent unless something says otherwise. A silent one is how a repository
+ * stays on the old layout for a year, so the log says which directory the
+ * verdict was actually about.
+ */
+describe('a pull-request run reading the pre-1.3 state directory', () => {
+  function legacyRun(): RunResult {
+    const root = repo();
+    write(
+      root,
+      LEGACY_NATIVE_CONTRACT_PATH,
+      'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n'
+    );
+    return run(root, binWith(CHECK_PASSING), { base: 'main' });
+  }
+
+  it('lands in the SARIF log as a notification on the umbrella run', () => {
+    const log = JSON.parse(renderSarif(legacyRun(), '0.2.3')) as {
+      runs: Array<{
+        tool: { driver: { name: string } };
+        results?: Array<{ ruleId: string }>;
+        invocations?: Array<{
+          toolExecutionNotifications: Array<{
+            descriptor: { id: string };
+            level: string;
+            message: { text: string };
+          }>;
+        }>;
+      }>;
+    };
+
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    const notice = umbrella?.invocations?.[0].toolExecutionNotifications.find(
+      (entry) => entry.descriptor.id === 'intent-guard/legacy-state-dir'
+    );
+
+    expect(notice).toBeDefined();
+    expect(notice?.level).toBe('note');
+    expect(notice?.message.text).toContain(LEGACY_NATIVE_CONTRACT_PATH);
+    expect(notice?.message.text).toContain(NATIVE_CONTRACT_PATH);
+  });
+
+  it('is never a result, because nothing went wrong', () => {
+    // The closest call of the five notifications, so it is pinned in both
+    // directions. The gate ran, the contract was read, and the verdict is
+    // exactly what it will be after the migration. As a result it would be a
+    // fingerprint-less alert reappearing on every pull request until somebody
+    // upgrades the gate, which is the permanent alert the rule excludes.
+    const log = JSON.parse(renderSarif(legacyRun(), '0.2.3')) as {
+      runs: Array<{ tool: { driver: { name: string } }; results?: Array<{ ruleId: string }> }>;
+    };
+
+    const ids = log.runs.flatMap((entry) => (entry.results ?? []).map((r) => r.ruleId));
+    expect(ids).not.toContain('intent-guard/legacy-state-dir');
+  });
+
+  it('says which directory it read in the text report too', () => {
+    // --verbose, because this run is fully clean and a clean run is one
+    // line. The aside belongs on the contract line of the per-gate section,
+    // not in the summary: it is context for somebody already reading the
+    // detail, and putting it in the one-line summary would make every clean
+    // pull request on the old layout print it.
+    const text = renderText(legacyRun(), { verbose: true });
+
+    expect(text).toContain(LEGACY_NATIVE_CONTRACT_PATH);
+    expect(text).toMatch(/pre-1\.3 directory/);
+  });
+
+  it('says nothing at all when the contract is in the canonical directory', () => {
+    const root = repo();
+    write(
+      root,
+      NATIVE_CONTRACT_PATH,
+      'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n'
+    );
+    const result = run(root, binWith(CHECK_PASSING), { base: 'main' });
+
+    const log = JSON.parse(renderSarif(result, '0.2.3')) as {
+      runs: Array<{
+        tool: { driver: { name: string } };
+        invocations?: Array<{ toolExecutionNotifications: Array<{ descriptor: { id: string } }> }>;
+      }>;
+    };
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    const ids = (umbrella?.invocations?.[0].toolExecutionNotifications ?? []).map(
+      (entry) => entry.descriptor.id
+    );
+
+    expect(ids).not.toContain('intent-guard/legacy-state-dir');
+    expect(renderText(result, { verbose: true })).not.toMatch(/pre-1\.3 directory/);
   });
 });

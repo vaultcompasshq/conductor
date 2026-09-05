@@ -291,11 +291,22 @@ gate looks like. In Actions this is almost always a shallow checkout, so
    outranks everything, and a path here that is not on disk is reported
    rather than replaced: running a different contract than the one somebody
    named is the wrong kindness.
-2. `<repo>/.conductor/intent-contract.yaml`, when it is **frozen**. The
-   native flow wins wherever a team has done it. Frozen is the test rather
-   than present: an unfrozen contract is a draft somebody left behind, and
-   running the gate against it fails every pull request on "not frozen by
-   user" without checking anything.
+2. `<repo>/.intent-guard/intent-contract.yaml`, when it is **frozen**, and
+   `<repo>/.conductor/intent-contract.yaml` after it. The native flow wins
+   wherever a team has done it. Frozen is the test rather than present: an
+   unfrozen contract is a draft somebody left behind, and running the gate
+   against it fails every pull request on "not frozen by user" without
+   checking anything.
+
+   The second path is the directory intent-guard used before 1.3.0, which
+   renamed it because `.conductor` had become the name of a different product
+   in this family. Both are read, so a repository on either version is
+   checked rather than blocked, and a run that used the old one says so: one
+   line on the gate's contract line in the text report, and an
+   `intent-guard/legacy-state-dir` notification in the SARIF log. If **both**
+   hold a frozen contract, the gate does not run and says so, naming both
+   paths: that is the state intent-guard itself refuses every command in, and
+   picking one would silently discard the other.
 3. The **first** `Spec: <path>` line in the pull request body, read from the
    event payload at `GITHUB_EVENT_PATH`. A path here that is not on disk, or
    one that leaves the repository, falls through to the next rule.
@@ -329,9 +340,9 @@ and that includes a contributor from a fork.** On the ordinary path, where a
 repository has no frozen contract of its own, `Spec: none` means the intent
 gate does not run at all on that pull request, and budget breaches are the
 thing this gate blocks on. The one thing a waiver cannot override is a frozen
-`.conductor/intent-contract.yaml`, which is checked first: a repository that
-wants the gate to be non-waivable freezes a native contract and keeps it
-committed.
+native contract, under either of the two paths above, which is checked first:
+a repository that wants the gate to be non-waivable freezes a native contract
+and keeps it committed.
 
 **What blocks is unchanged.** Blocking stays where intent-guard puts it:
 budget breaches block, subject to `enforce`. Drift on its own is reported and
