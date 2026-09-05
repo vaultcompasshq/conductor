@@ -717,16 +717,23 @@ export function normalizeMisconfiguredGate(
 export function normalizeUnparseableGate(
   role: GateRole,
   product: Product,
-  detail: string
+  detail: string,
+  stderr?: string | null
 ): Finding {
+  // Carried for the same reason gate-failed carries it, and the case that
+  // found the gap is a good one: a gate refusing to run at all exits 1 with
+  // no JSON and says why on stderr, and this result is the only place a
+  // published log can repeat it.
+  const said = summariseStderr(stderr);
   return gateProblem(
     'conductor/gate-output-unparseable',
     role,
     product,
     `The "${role}" gate ran but the umbrella could not read its output: ${detail} ` +
       'This is the umbrella being out of date with that gate, not a problem in your code. ' +
-      'Nothing was verified by this gate.',
-    { detail }
+      'Nothing was verified by this gate.' +
+      (said === null ? '' : ` The gate wrote to stderr: ${said}`),
+    { detail, stderr: said }
   );
 }
 
@@ -749,7 +756,7 @@ const STDERR_CAP = 2000;
  * was. A message that stops mid-sentence with no note reads as the gate's
  * final word, which sends a reader looking for meaning in a cut.
  */
-function summariseStderr(stderr: string | null | undefined): string | null {
+export function summariseStderr(stderr: string | null | undefined): string | null {
   if (stderr === null || stderr === undefined) {
     return null;
   }

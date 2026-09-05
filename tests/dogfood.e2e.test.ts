@@ -18,6 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { NATIVE_CONTRACT_PATHS } from '../src/intent-prepare.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
 
 const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,10 +71,10 @@ const describeE2E = missing.length === 0 ? describe : describe.skip;
  * file" on one guessed path is the least useful way to learn this.
  */
 function frozenContractIn(projectRoot: string): string {
-  const candidates = [
-    path.join(projectRoot, '.intent-guard', 'intent-contract.yaml'),
-    path.join(projectRoot, '.conductor', 'intent-contract.yaml'),
-  ];
+  // The pair comes from the source rather than being spelled again here, so
+  // "every consumer reads NATIVE_CONTRACT_PATHS" stays a fact about the
+  // repository rather than a claim in a document.
+  const candidates = NATIVE_CONTRACT_PATHS.map((relative) => path.join(projectRoot, relative));
   const found = candidates.find((candidate) => existsSync(candidate));
   if (found === undefined) {
     throw new Error(

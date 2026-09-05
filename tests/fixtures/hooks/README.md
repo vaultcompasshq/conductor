@@ -72,7 +72,15 @@ to the one an earlier hand-written fixture in the suite already carried.
     pnpm exec simple-git-hooks
 
 with a top-level `"simple-git-hooks": { "pre-commit": "npx lint-staged" }`
-key in package.json, which is where this manager keeps the hook text.
+key in package.json.
+
+**package.json is not the only home for that declaration.** The tool's own
+README also reads `.simple-git-hooks.cjs`, `.simple-git-hooks.js`,
+`.simple-git-hooks.mjs`, `.simple-git-hooks.json`, and
+`simple-git-hooks.{cjs,js,mjs,json}`. init.ts treats any of those at the
+repository root as the declaration too, and that is not belt and braces:
+a repository configured through one of them AND installed with a version
+old enough to write no marker has nothing else to recognise it by.
 
 `simple-git-hooks-2.14.0-pre-commit.sh` and
 `simple-git-hooks-2.8.0-pre-commit.sh`.

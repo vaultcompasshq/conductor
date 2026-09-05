@@ -71,6 +71,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   rmdirSync,
   statSync,
@@ -126,6 +127,22 @@ export type HookManager =
  * somebody at, only a key in the file conductor deliberately never writes.
  */
 export type ManagedHookManager = 'simple-git-hooks' | 'yorkie';
+
+/**
+ * The standalone config files simple-git-hooks reads, exactly as its own
+ * README lists them. yorkie has no equivalent: its config is the
+ * `gitHooks` key and nothing else.
+ */
+const SIMPLE_GIT_HOOKS_CONFIG_FILES = [
+  '.simple-git-hooks.cjs',
+  '.simple-git-hooks.js',
+  '.simple-git-hooks.mjs',
+  '.simple-git-hooks.json',
+  'simple-git-hooks.cjs',
+  'simple-git-hooks.js',
+  'simple-git-hooks.mjs',
+  'simple-git-hooks.json',
+];
 
 /**
  * The `.husky` directory whose generated subdirectory git has been pointed
@@ -292,6 +309,22 @@ function detectManagedHook(content: string): ManagedHookManager | null {
  * cannot be read" is not evidence that it was.
  */
 function declaredManagedHooks(root: string): ManagedHookManager | null {
+  // A standalone config file counts as a declaration on its own. Taken
+  // verbatim from simple-git-hooks' own README, which says the config may
+  // live in ".simple-git-hooks.cjs, .simple-git-hooks.js,
+  // .simple-git-hooks.mjs, .simple-git-hooks.json, or
+  // simple-git-hooks.{cjs,js,mjs,json}". It is an EXACT list rather than a
+  // prefix or extension test, so a simple-git-hooks.yaml or a
+  // simple-git-hooks.md is what it looks like -- somebody's notes -- and not
+  // a reason to refuse an install.
+  //
+  // This is the third signal and the only one that fires for the repository
+  // that has all the others against it: a standalone config plus an older
+  // simple-git-hooks, whose generated hook carries no marker at all.
+  if (SIMPLE_GIT_HOOKS_CONFIG_FILES.some((file) => isFile(path.join(root, file)))) {
+    return 'simple-git-hooks';
+  }
+
   const raw = readIfExists(path.join(root, 'package.json'));
   if (raw === undefined) {
     return null;
@@ -371,9 +404,12 @@ function managedHooksGuidance(
     `${MANIFEST_RELATIVE_PATH} still records it as installed, so the repository would report a ` +
     'guardrail it no longer has. Nothing was changed, and --force does not override this: that ' +
     `file was never conductor's to hold. To run the umbrella under ${manager}, set ${entry} in ` +
-    'package.json to "conductor run --staged --stage commit" yourself, or append that command ' +
-    `to what is there, and ${reinstall}. conductor does not edit package.json, so it cannot do ` +
-    'that for you; a later release may offer to. ' +
+    'package.json to "conductor run --staged --stage commit" yourself, and ' +
+    `${reinstall}. If something is already in that entry, put the umbrella LAST, as its own ` +
+    'command rather than chained behind && : a chain stops at the first failure, so an ' +
+    "umbrella in front of it hides the other command's verdict and one behind an && never " +
+    'runs at all once anything ahead of it fails. conductor does not edit package.json, so it ' +
+    'cannot do that for you; a later release may offer to. ' +
     exitCodes
   );
 }
@@ -611,17 +647,30 @@ interface HooksDir {
   dir: string;
   /** True when a configured hooksPath points outside the repository. */
   outside: boolean;
+  /**
+   * True when git executes hooks out of the git directory's own `hooks/`,
+   * which is where a repository with no `core.hooksPath` looks.
+   *
+   * Derived by COMPARING THE RESOLVED PATHS rather than by testing whether
+   * `core.hooksPath` is set, because a repository may set it to exactly the
+   * place git already looks. That is a no-op for every purpose here, and a
+   * rule phrased as "nothing is configured" would answer differently for two
+   * repositories git treats identically.
+   */
+  isDefault: boolean;
 }
 
 function effectiveHooksDir(cwd: string, root: string): HooksDir {
   const gitDir = gitOutput(cwd, ['rev-parse', '--git-dir']);
   const hooksPath = gitOutput(cwd, ['config', '--get', 'core.hooksPath']) ?? '';
 
+  // With no core.hooksPath, hooks live in the git DIRECTORY, which is not
+  // the working-tree root: for a linked worktree or a submodule it is
+  // somewhere else entirely, so this one resolves against gitDir.
+  const defaultDir = path.join(path.resolve(cwd, gitDir ?? '.git'), 'hooks');
+
   if (hooksPath.length === 0) {
-    // With no core.hooksPath, hooks live in the git DIRECTORY, which is not
-    // the working-tree root: for a linked worktree or a submodule it is
-    // somewhere else entirely, so this one resolves against gitDir.
-    return { dir: path.join(path.resolve(cwd, gitDir ?? '.git'), 'hooks'), outside: false };
+    return { dir: defaultDir, outside: false, isDefault: true };
   }
 
   // A RELATIVE core.hooksPath resolves against the WORKING-TREE ROOT.
@@ -630,7 +679,31 @@ function effectiveHooksDir(cwd: string, root: string): HooksDir {
   const dir = path.isAbsolute(hooksPath) ? hooksPath : path.join(root, hooksPath);
   const relative = path.relative(root, dir);
   const outside = relative.startsWith('..') || path.isAbsolute(relative);
-  return { dir, outside };
+  return { dir, outside, isDefault: samePath(dir, defaultDir) };
+}
+
+/**
+ * Whether two paths name the same directory.
+ *
+ * Through `realpath`, not string comparison, because the two sides arrive by
+ * different routes: the default is built from the working directory the
+ * caller passed in, and a configured `core.hooksPath` resolves against the
+ * root git reported, which git has already resolved. On macOS the system
+ * temporary directory is a symlink, so those two spell the same directory
+ * two ways and a string compare answers "different" for a repository git
+ * treats as one place. Falls back to the resolved strings when a path does
+ * not exist yet, which is the ordinary case for a hooks directory init is
+ * about to create.
+ */
+function samePath(left: string, right: string): boolean {
+  const real = (candidate: string): string => {
+    try {
+      return realpathSync(candidate);
+    } catch {
+      return path.resolve(candidate);
+    }
+  };
+  return real(left) === real(right);
 }
 
 function readIfExists(file: string): string | undefined {
@@ -895,11 +968,16 @@ export function planInit(options: InitOptions): InitResult {
     // opening sentence of the guidance changes, so a reader is told which of
     // the two was actually seen.
     //
-    // This is checked only on the native path. Under husky the file these
-    // managers write is not the file git runs, and the tracked hook the
-    // umbrella writes there is not the file they rewrite.
+    // This is checked only on the native path, and only where git actually
+    // runs .git/hooks. BOTH conditions are about the same fact: these two
+    // managers write .git/hooks/pre-commit directly and neither one reads
+    // core.hooksPath. Under husky, and under any other configured hooks
+    // directory, the file they rewrite is not the file git runs, so the
+    // umbrella's hook is in no danger from them and a refusal would name a
+    // file the manager never touches while blocking an install that is
+    // perfectly safe.
     const fromHook = executedHook === undefined ? null : detectManagedHook(executedHook);
-    const managedBy = fromHook ?? declaredManagedHooks(root);
+    const managedBy = hooks.isDefault ? (fromHook ?? declaredManagedHooks(root)) : null;
     if (managedBy !== null) {
       conflicts.push({
         path: rel,

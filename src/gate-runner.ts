@@ -286,7 +286,12 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
       ...progress,
       durationMs: Date.now() - started,
       couldNotRun: { reason: 'unparseable-output', detail },
-      findings: [normalizeUnparseableGate(gate.role, gate.product, detail)],
+      // progress.stderr, because the comment on progress promises exactly
+      // this: it is kept current so an unexpected throw still reports which
+      // binary ran and what it printed. Leaving it off here made that
+      // promise false for the finding, which is the only part of it a
+      // published log ever sees.
+      findings: [normalizeUnparseableGate(gate.role, gate.product, detail, progress.stderr)],
       run: EMPTY_RUN,
       diagnostics: [],
     };
@@ -422,7 +427,7 @@ function runGateInner(
       ...withRun,
       exitCode,
       couldNotRun: { reason: 'unparseable-output', detail },
-      findings: [normalizeUnparseableGate(gate.role, gate.product, detail)],
+      findings: [normalizeUnparseableGate(gate.role, gate.product, detail, withRun.stderr)],
       run: EMPTY_RUN,
       diagnostics: [],
     };
@@ -454,7 +459,7 @@ function runGateInner(
       ...withRun,
       exitCode,
       couldNotRun: { reason: 'unparseable-output', detail },
-      findings: [normalizeUnparseableGate(gate.role, gate.product, detail)],
+      findings: [normalizeUnparseableGate(gate.role, gate.product, detail, withRun.stderr)],
       run: EMPTY_RUN,
       diagnostics: [],
     };

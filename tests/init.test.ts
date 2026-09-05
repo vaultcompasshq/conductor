@@ -1887,6 +1887,83 @@ describe('hook managers that keep the hook text in package.json', () => {
     }
   );
 
+  it.each(DECLARATIONS)(
+    'says nothing about %s when core.hooksPath takes .git/hooks out of play',
+    (_name, declaration) => {
+      // Both managers write .git/hooks/pre-commit and neither reads
+      // core.hooksPath. A repository that has pointed git somewhere else has
+      // therefore taken the file they rewrite out of the picture: the
+      // umbrella's hook goes to the configured directory, the manager keeps
+      // rewriting a file git no longer runs, and nothing is lost. Refusing
+      // here would name a file the manager never touches and block an
+      // install that is perfectly safe.
+      const repo = repoDeclaring(declaration);
+      execFileSync('git', ['config', 'core.hooksPath', 'githooks'], { cwd: repo });
+
+      const result = init(repo);
+
+      expect(result.ok).toBe(true);
+      expect(result.conflicts).toEqual([]);
+      expect(result.hookManager).toBe('native');
+      expect(existsSync(path.join(repo, 'githooks', 'pre-commit'))).toBe(true);
+    }
+  );
+
+  it.each(DECLARATIONS)(
+    'still refuses %s when core.hooksPath is set to the default .git/hooks',
+    (_name, declaration) => {
+      // Setting the value explicitly to where git already looks changes
+      // nothing about who rewrites that file, so the refusal has to survive
+      // it. A rule written as "no core.hooksPath is configured" would not.
+      const repo = repoDeclaring(declaration);
+      execFileSync('git', ['config', 'core.hooksPath', '.git/hooks'], { cwd: repo });
+
+      const result = init(repo);
+
+      expect(result.ok).toBe(false);
+      expect(result.conflicts[0].reason).toBe('managed-hooks');
+    }
+  );
+
+  // Exactly the list simple-git-hooks' own README gives, in its words:
+  // ".simple-git-hooks.cjs, .simple-git-hooks.js, .simple-git-hooks.mjs,
+  // .simple-git-hooks.json, or simple-git-hooks.{cjs,js,mjs,json}".
+  it.each([
+    ['.simple-git-hooks.cjs'],
+    ['.simple-git-hooks.js'],
+    ['.simple-git-hooks.mjs'],
+    ['.simple-git-hooks.json'],
+    ['simple-git-hooks.cjs'],
+    ['simple-git-hooks.js'],
+    ['simple-git-hooks.mjs'],
+    ['simple-git-hooks.json'],
+  ])('refuses on a standalone %s with no package.json key at all', (config) => {
+    // package.json is not the only home for the declaration, and this
+    // matters more than it looks: on 2.8.0 the generated hook carries no
+    // marker, so a repository configured through a standalone file and
+    // installed with an older version is invisible to BOTH other signals.
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, config), '{}\n');
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('managed-hooks');
+    expect(result.hookManager).toBe('simple-git-hooks');
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('is not fooled by a file that merely looks like one of those', () => {
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, 'simple-git-hooks.yaml'), 'pre-commit: x\n');
+    writeFileSync(path.join(repo, 'simple-git-hooks.md'), 'notes\n');
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.hookManager).toBe('native');
+  });
+
   it('leaves an ordinary package.json alone and takes the native path', () => {
     const repo = repoDeclaring({ scripts: { test: 'jest' }, husky: { hooks: {} } });
 

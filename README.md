@@ -224,11 +224,17 @@ Init recognises the hook manager already wired into the repository. husky is
 redirected to the tracked hook it maintains rather than the generated
 dispatcher git runs. lefthook and the pre-commit framework are refused, with
 the stanza to add to their own config file. simple-git-hooks and yorkie are
-refused too, and recognised from the `simple-git-hooks` or `gitHooks` key in
-package.json as well as from the hook file, because that key is there on a
-fresh clone where the generated hook is not yet; their hook text lives in
-package.json, which conductor does not write, so the guidance names the
-entry to add and `--force` does not override the refusal.
+refused too, and recognised from the declaration as well as from the hook
+file, because the declaration is there on a fresh clone where the generated
+hook is not yet: the `simple-git-hooks` or `gitHooks` key in package.json, or
+any of the standalone config files simple-git-hooks reads. Their hook text
+lives in package.json, which conductor does not write, so the guidance names
+the entry to add and `--force` does not override the refusal.
+
+That refusal applies only where git actually runs `.git/hooks`. Both managers
+write that directory and neither reads `core.hooksPath`, so a repository that
+has pointed git somewhere else has taken their file out of play, and init
+proceeds normally without mentioning them.
 
 `conductor run` runs every enabled gate and prints one report.
 
@@ -303,10 +309,12 @@ gate looks like. In Actions this is almost always a shallow checkout, so
    in this family. Both are read, so a repository on either version is
    checked rather than blocked, and a run that used the old one says so: one
    line on the gate's contract line in the text report, and an
-   `intent-guard/legacy-state-dir` notification in the SARIF log. If **both**
-   hold a frozen contract, the gate does not run and says so, naming both
-   paths: that is the state intent-guard itself refuses every command in, and
-   picking one would silently discard the other.
+   `intent-guard/legacy-state-dir` notification in the SARIF log. If the
+   repository holds **both** directories, the gate does not run and says so,
+   naming both: that is the state intent-guard itself refuses every command
+   in, so the umbrella refuses on exactly the gate's rule rather than a
+   softer one. A `.conductor` holding nothing intent-guard wrote belongs to
+   something else and is ignored.
 3. The **first** `Spec: <path>` line in the pull request body, read from the
    event payload at `GITHUB_EVENT_PATH`. A path here that is not on disk, or
    one that leaves the repository, falls through to the next rule.

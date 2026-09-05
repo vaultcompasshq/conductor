@@ -449,6 +449,26 @@ describe("a failing gate's own error", () => {
     );
   });
 
+  it('reaches gate-output-unparseable too, which is the same reader problem', () => {
+    // A gate that exits 1 with no JSON is the shape a rejected config takes,
+    // and the gate has almost always said why on stderr. That result had the
+    // same gap gate-failed did: the umbrella's own sentence and nothing the
+    // reader could act on. The classic case is the one that found this,
+    // where a state-directory conflict makes the gate refuse every command.
+    const bin = tempDir();
+    const line = 'intent-guard: both .intent-guard/ and .conductor/ exist';
+    stubGate(bin, 'dep-guard', { stdout: 'not json', stderr: `${line}\n`, exit: 1 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+
+    const finding = runWith(bin).findings.find(
+      (entry) => entry.ruleId === 'conductor/gate-output-unparseable'
+    );
+
+    expect(finding?.message).toContain(line);
+    expect(finding?.details.stderr).toBe(line);
+  });
+
   it('leaves the fingerprint alone, so a reworded gate error is not a new alert', () => {
     // The fingerprint is deliberately over the rule, the role and the
     // product and never over the message. Carrying stderr into the message
