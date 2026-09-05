@@ -104,6 +104,24 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     git(['config', 'user.email', 'dogfood@example.com']);
     git(['config', 'user.name', 'Dogfood']);
 
+    // The guard repositories now run the umbrella over themselves, so the
+    // one cloned here tracks its own .guardrails.yaml. This suite is the
+    // FRESH ADOPTION case: it asserts what init writes into a repository
+    // that has none, and init deliberately never rewrites a policy file it
+    // finds. Without this the clone arrives with the sibling's committed
+    // policy, the assertion about what init enabled reads that file instead
+    // of one init wrote, and the revert tests then run against a manifest
+    // that never recorded a policy file at all.
+    //
+    // Removed by commit rather than by deleting the file, so the clone is a
+    // clean tree and the later tests can stage and revert against it. The
+    // existence check is for the day the sibling stops tracking one: nothing
+    // to remove is the state this wants, not a reason to fail in beforeAll.
+    if (existsSync(path.join(clone, '.guardrails.yaml'))) {
+      git(['rm', '--quiet', '.guardrails.yaml']);
+      git(['commit', '--quiet', '-m', 'dogfood fixture: start from no policy file']);
+    }
+
     shim(binDir, 'conductor', `#!/bin/sh\nexec ${process.execPath} ${CONDUCTOR_CLI} "$@"\n`);
     shim(binDir, 'dep-guard', `#!/bin/sh\nexec ${process.execPath} ${DEP_GUARD_CLI} "$@"\n`);
     shim(binDir, 'vault-guard', `#!/bin/sh\nexec ${VAULT_GUARD as string} "$@"\n`);
