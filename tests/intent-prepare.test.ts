@@ -507,3 +507,46 @@ describe('the changed-path set handed to the gate', () => {
     expect(result.kind === 'ready' && result.preparation.contractSource.kind).toBe('imported');
   });
 });
+
+describe('a pull request body that waives the spec', () => {
+  /** An environment pointing at an event payload carrying this body. */
+  function eventWith(body: string): NodeJS.ProcessEnv {
+    const file = path.join(tempDir(), 'event.json');
+    writeFileSync(file, JSON.stringify({ pull_request: { body } }));
+    return { GITHUB_EVENT_PATH: file };
+  }
+
+  it('is a skip whose reason is the waiver, not a missing spec', () => {
+    // The branch's own spec IS on disk here, so a run that reported
+    // no-contract would be reporting the wrong thing twice over: the spec
+    // exists, and the body said not to use one.
+    const root = repoWithSpec();
+
+    const result = prepare(root, stubbedBin(), { env: eventWith('Spec: none\n') });
+
+    expect(result.kind).toBe('skip');
+    expect(result.kind === 'skip' && result.reason).toBe('contract-waived');
+    expect(result.kind === 'skip' && result.detail).toMatch(/pull request body/);
+  });
+
+  it('still loses to a frozen contract the repository has of its own', () => {
+    // A waiver says there is nothing to IMPORT. It does not switch off a
+    // contract somebody in this repository froze and committed.
+    const root = repoWithSpec();
+    write(
+      root,
+      NATIVE_CONTRACT_PATH,
+      ['contract_id: ic-native', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join(
+        '\n'
+      )
+    );
+
+    const result = prepare(root, stubbedBin(), { env: eventWith('Spec: none\n') });
+
+    expect(result.kind).toBe('ready');
+    expect(result.kind === 'ready' && result.preparation.contractSource).toEqual({
+      kind: 'native',
+      path: NATIVE_CONTRACT_PATH,
+    });
+  });
+});

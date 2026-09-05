@@ -11,7 +11,7 @@ import { renderText } from '../src/output-text.js';
 import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
 import { runAll } from '../src/run.js';
 import type { RunResult } from '../src/run.js';
-import { stubIntentGuard } from './helpers/stub-gate.js';
+import { CLEAN_DEP_GUARD, stubGate, stubIntentGuard } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -418,6 +418,91 @@ describe('the ambient environment', () => {
         process.env.GITHUB_BASE_REF = previous;
       }
     }
+  });
+});
+
+describe('a pull request body that waives the spec', () => {
+  // One clean gate beside the waived one, so the clean run collapses to the
+  // one-line summary and this can check the waiver is named there. With the
+  // intent gate alone there are no gates left in the result and the report
+  // takes its other branch entirely.
+  const DEPS_AND_INTENT = parsePolicy(
+    'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  intent:\n    product: intent-guard\n',
+    POLICY_FILE_NAME
+  );
+
+  function waivedRun(): RunResult {
+    // The branch's own spec IS on disk, so nothing here is skipped for want
+    // of one: the body is the only reason the gate had nothing to check.
+    const root = repo();
+    const bin = binWith(CHECK_PASSING);
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    const event = path.join(tempDir(), 'event.json');
+    writeFileSync(event, JSON.stringify({ pull_request: { body: 'Spec: none\n' } }));
+
+    return runAll(DEPS_AND_INTENT, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: { GITHUB_EVENT_PATH: event },
+      base: 'main',
+    });
+  }
+
+  it('reports the gate as skipped for the waiver, and never moves the exit code', () => {
+    const result = waivedRun();
+
+    expect(result.exitCode).toBe(0);
+    expect(result.skipped).toEqual([
+      {
+        role: 'intent',
+        product: 'intent-guard',
+        reason: 'contract-waived',
+        detail: expect.stringContaining('pull request body') as unknown as string,
+      },
+    ]);
+  });
+
+  it('is a notification in the umbrella SARIF run under its own id, not a result', () => {
+    // A waiver is a statement about configuration in its purest form: a
+    // person wrote it in the pull request body on purpose. As a result it
+    // would be a fingerprint-less note alert on every run of the branch.
+    const log = JSON.parse(renderSarif(waivedRun(), '0.2.2')) as {
+      runs: Array<{
+        tool: { driver: { name: string } };
+        results: Array<{ ruleId: string }>;
+        invocations?: Array<{
+          toolExecutionNotifications: Array<{ descriptor: { id: string }; level: string }>;
+        }>;
+      }>;
+    };
+
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    expect(umbrella?.results.map((entry) => entry.ruleId)).not.toContain(
+      'intent-guard/contract-waived'
+    );
+    const advisory = umbrella?.invocations?.[0].toolExecutionNotifications.find(
+      (entry) => entry.descriptor.id === 'intent-guard/contract-waived'
+    );
+    expect(advisory?.level).toBe('note');
+    // And never the id a branch with no spec at all files under.
+    expect(
+      umbrella?.invocations?.[0].toolExecutionNotifications.map((entry) => entry.descriptor.id)
+    ).not.toContain('intent-guard/no-contract');
+  });
+
+  it('is one line in the text report, and is named on the clean summary line', () => {
+    const result = waivedRun();
+
+    const summary = renderText(result);
+    expect(summary.trimEnd().split('\n')).toHaveLength(1);
+    expect(summary).toMatch(/clean, nothing blocked/);
+    expect(summary).toMatch(/Nothing to check against: intent \(intent-guard\)/);
+
+    const full = renderText(result, { verbose: true });
+    expect(full).toMatch(/skipped\s+intent/);
+    expect(full).toMatch(/spec waived/);
+    expect(full).not.toMatch(/no contract/);
   });
 });
 

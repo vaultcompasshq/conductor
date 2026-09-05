@@ -517,7 +517,13 @@ function excludedNotifications(result: RunResult): Notification[] {
  */
 function skippedNotifications(result: RunResult): Notification[] {
   return result.skipped.map((gate) => ({
-    id: `${gate.product}/no-contract`,
+    // The reason IS the second half of the id, which keeps
+    // intent-guard/no-contract exactly where consumers already have it and
+    // gives the waiver its own id rather than filing two different facts
+    // under one. A waiver is a statement about configuration in the purest
+    // form the rule above describes: a person wrote it in the pull request
+    // body on purpose, so it is a notification and never a result.
+    id: `${gate.product}/${gate.reason}`,
     message:
       `The ${gate.role} gate (${gate.product}) checked nothing on this branch. ${gate.detail}`,
     details: { role: gate.role, product: gate.product, reason: gate.reason },

@@ -224,8 +224,21 @@ function deferredLines(result: RunResult): string[] {
  */
 function skippedLines(result: RunResult): string[] {
   return result.skipped.map(
-    (gate) => `  skipped   ${gate.role}  ${gate.product}  no contract: ${gate.detail}`
+    (gate) =>
+      `  skipped   ${gate.role}  ${gate.product}  ${skippedLabel(gate.reason)}: ${gate.detail}`
   );
+}
+
+/**
+ * The short label in front of a skipped gate's sentence.
+ *
+ * Two words rather than one shared phrase, because the reader's next move
+ * differs: "no contract" is an invitation to write a spec, and printing it
+ * over a waiver would send somebody off to write the spec whoever opened the
+ * pull request had just said there is none of.
+ */
+function skippedLabel(reason: RunResult['skipped'][number]['reason']): string {
+  return reason === 'contract-waived' ? 'spec waived' : 'no contract';
 }
 
 /**

@@ -289,6 +289,11 @@ gate looks like. In Actions this is almost always a shallow checkout, so
 3. The **first** `Spec: <path>` line in the pull request body, read from the
    event payload at `GITHUB_EVENT_PATH`. A path here that is not on disk, or
    one that leaves the repository, falls through to the next rule.
+   `Spec: none` is a **waiver**: it says this pull request deliberately has
+   no spec, so rule 4 is not tried and the gate reports itself skipped with
+   `intent-guard/contract-waived` instead of `intent-guard/no-contract`. The
+   token is exact and lowercase, a frozen contract at rule 2 still wins over
+   it, and `--spec` at rule 1 still overrides it.
 4. A markdown file **directly under** `docs/superpowers/specs` whose name
    relates to the branch. The branch slug is the branch name with its first
    segment (`feat/`, `fix/`) removed; a filename is reduced by stripping a
@@ -303,7 +308,9 @@ line in the text report and one `intent-guard/no-contract` notification
 in the `conductor` run, and it **never** reaches the exit code, enforced or
 not. A branch with no spec is a branch this gate has no opinion about, and
 turning that into a failed build is how a gate gets switched off across a
-repository.
+repository. A waived pull request lands in the same state and is reported
+the same way, under the `intent-guard/contract-waived` id, so a reader can
+tell "nobody has written one" from "somebody decided against one".
 
 **What blocks is unchanged.** Blocking stays where intent-guard puts it:
 budget breaches block, subject to `enforce`. Drift on its own is reported and

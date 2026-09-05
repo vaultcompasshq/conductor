@@ -1042,6 +1042,16 @@ two (src/intent-spec.ts:103-106). A path here that does not exist falls
 through to the convention, because a typo in a pull request description
 must not be able to fail a build.
 
+`Spec: none` in that same first line is the one value that does NOT fall
+through. It is a WAIVER: a statement that this pull request deliberately
+has no spec, answered with a `waived` discovery before the convention is
+tried, because an explicit statement beats an inferred one. The token is
+exact and lowercase; anything else unusable keeps the silent fall-through,
+so a sentence with "None" in it cannot switch a gate off. The waiver sits
+BELOW `--spec` in this file and below a frozen native contract in
+prepareIntent, which is the whole meaning of it: it says there is nothing
+to import, never that a contract this repository froze should be ignored.
+
 The convention is a markdown file DIRECTLY under `docs/superpowers/specs`
 whose stem relates to the branch slug. Directly under, not nested, because
 that is the layout the gate's own importer discovers and an archive
@@ -1074,6 +1084,13 @@ falls through), 401 (a `--spec` path that is not there is reported
 instead), and 419, 425, 431 and 440 (nothing matches, no directory, a
 nested spec, a non-markdown file), with 446 for a plan paired to a spec
 that came from the pull request body.
+
+The waiver is pinned by tests/intent-spec.test.ts:460 (it beats the
+convention with a matching spec sitting on disk), 475 (it answers `waived`
+rather than `none`, which is what lets the report tell the two apart), 483
+(`--spec` still wins), 500 (`Spec: None` with a capital falls through to
+the convention instead), and 518 (the first `Spec:` line decides, so a
+later real path does not undo it).
 
 ## Containment applies to the pull request body and to nothing else
 
@@ -1129,9 +1146,24 @@ The contract source is decided BEFORE git is touched
 the base ref first would turn a shallow checkout into exit 2 on a
 repository the gate was never going to check anything in.
 
+There are TWO reasons a gate lands here, and they are carried apart rather
+than flattened into one sentence: `no-contract`, the ordinary state of a
+branch nobody has written a spec for, and `contract-waived`, a pull request
+body that said `Spec: none`. The reason travels from prepareIntent through
+`SkippedGate` into both reports, and in the SARIF log it IS the second half
+of the notification id, so `intent-guard/no-contract` stays exactly where
+consumers already have it and the waiver gets an id of its own. Reporting a
+waiver as a missing spec would send a reviewer off to write the spec
+somebody had just decided against.
+
 Pinned by tests/intent-run.test.ts:244, 258, 262, 266 and 293, and
 tests/intent-prepare.test.ts:355 and 364 ("never runs git, so a shallow
-checkout cannot turn a missing spec into a failure").
+checkout cannot turn a missing spec into a failure"). The waiver half is
+pinned at tests/intent-prepare.test.ts:519 and 532 (the reason is the
+waiver, and a frozen native contract still outranks it) and
+tests/intent-run.test.ts:452, 466 and 494 (the reason reaching the run
+result, the SARIF notification under its own id, and the text report
+saying "spec waived" rather than "no contract").
 
 ## The change set is the umbrella's own, and each flag is a decision
 
@@ -1199,7 +1231,9 @@ deliberately true for weeks. A permanent alert is a dismissed alert, and
 it teaches the reader to dismiss the next one. Four cases live here:
 `conductor/gate-deferred` (src/output-sarif.ts:448-456),
 `conductor/gate-excluded` (src/output-sarif.ts:468-476), the per-product
-`no-contract` advisory (src/output-sarif.ts:518-525), and
+skipped advisory, whose id is the product and the skip reason and so is
+either `no-contract` or `contract-waived` (src/output-sarif.ts:518-525),
+and
 `conductor/gate-not-enforced` (src/output-sarif.ts:553-586), all of them
 collected at src/output-sarif.ts:640-645 and written into
 `invocations[0].toolExecutionNotifications` on the umbrella's run

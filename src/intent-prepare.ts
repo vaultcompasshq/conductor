@@ -70,8 +70,17 @@ export type PrepareStep = 'spec' | 'base' | 'import-spec' | 'write-contract' | '
 
 export type IntentPrepareResult =
   | { kind: 'ready'; preparation: IntentPreparation }
-  /** No contract and no spec: an advisory, never an exit code. */
-  | { kind: 'skip'; reason: 'no-contract'; detail: string }
+  /**
+   * Nothing to check against: an advisory, never an exit code.
+   *
+   * Two reasons, and they are different facts about the same run.
+   * `no-contract` is the ordinary state of a branch nobody has written a
+   * spec for; `contract-waived` is somebody saying in the pull request body
+   * that there is deliberately no spec for this one. Reporting the second as
+   * the first tells a reviewer to go and write a spec that was already
+   * decided against.
+   */
+  | { kind: 'skip'; reason: 'no-contract' | 'contract-waived'; detail: string }
   | { kind: 'failed'; step: PrepareStep; detail: string };
 
 export interface IntentPrepareOptions {
@@ -210,6 +219,19 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
     source = { kind: 'imported', spec: discovery.spec, plan: discovery.plan };
   } else if (nativeContractIsFrozen(repoRoot)) {
     source = { kind: 'native', path: NATIVE_CONTRACT_PATH };
+  } else if (discovery.kind === 'waived') {
+    // BELOW the native check, and the order is the whole meaning of the
+    // token: "Spec: none" says there is no spec to import, not that this
+    // repository's own frozen contract should be ignored. Above the
+    // convention, though, which discoverSpec has already settled: an
+    // explicit statement beats an inferred one.
+    return {
+      kind: 'skip',
+      reason: 'contract-waived',
+      detail:
+        'The pull request body waived the spec with a "Spec: none" line, so there was ' +
+        `nothing to import and no frozen ${NATIVE_CONTRACT_PATH} to fall back on.`,
+    };
   } else if (discovery.kind === 'none') {
     source = { kind: 'none' };
   } else {
