@@ -880,6 +880,31 @@ describe('revert after adopting a gate hook', () => {
     expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(false);
   });
 
+  it('restores it when the umbrella hook was deleted by hand, even on a partial revert', () => {
+    // The restore condition is read off the world: is the hook this manifest
+    // records still on disk. Here it is not, because somebody deleted it, so
+    // the gate's own hook goes back even though the policy file was edited
+    // and revert cannot finish. A condition derived from what this pass
+    // REMOVED rather than from what is there would get this wrong, and the
+    // user would be left with no pre-commit hook at all.
+    const repo = adopted();
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    rmSync(hookPath);
+    writeFileSync(path.join(repo, POLICY_FILE_NAME), '# edited by hand\nversion: 1\ngates: {}\n');
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(hookPath, 'utf8')).toBe(ORIGINAL);
+    expect(result.actions.filter((action) => action.kind === 'restore')).toHaveLength(1);
+    // And the manifest stops claiming an adoption, so a second revert does
+    // not write the gate's hook back over whatever is there by then.
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { adopted: unknown };
+    expect(manifest.adopted).toBeNull();
+  });
+
   it('restores it without --force when the umbrella hook was left untouched', () => {
     const repo = adopted();
 
@@ -896,6 +921,39 @@ describe('revert, continued', () => {
     const result = revertInit({ cwd: gitRepo(), pathValue: '' });
     expect(result.ok).toBe(false);
     expect(result.conflicts[0].reason).toBe('no-manifest');
+  });
+
+  it('refuses when the manifest will not parse, and says so as a conflict', () => {
+    // A corrupt manifest used to throw a raw parser error out of revert, so
+    // the hook stayed installed and the message was a JSON parser's rather
+    // than an answer. Unreadable is its own conflict, not the same one as
+    // missing: a missing manifest means there is nothing to act on, while an
+    // unreadable one means there is a record and it cannot be trusted, and
+    // the two send a reader to different fixes.
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const policyPath = path.join(repo, POLICY_FILE_NAME);
+    const manifestPath = path.join(repo, MANIFEST_RELATIVE_PATH);
+    const hookBefore = readFileSync(hookPath, 'utf8');
+    const policyBefore = readFileSync(policyPath, 'utf8');
+    const corrupt = '{"version": 1, "files": [';
+    writeFileSync(manifestPath, corrupt);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].reason).toBe('manifest-unreadable');
+    expect(result.conflicts[0].path).toBe(MANIFEST_RELATIVE_PATH);
+    expect(result.conflicts[0].guidance).toMatch(/[Nn]othing was removed/);
+    expect(result.conflicts[0].guidance).toMatch(/by hand/);
+
+    // Nothing is guessed, so nothing moves.
+    expect(readFileSync(hookPath, 'utf8')).toBe(hookBefore);
+    expect(readFileSync(policyPath, 'utf8')).toBe(policyBefore);
+    expect(readFileSync(manifestPath, 'utf8')).toBe(corrupt);
+    expect(result.actions).toHaveLength(0);
   });
 });
 

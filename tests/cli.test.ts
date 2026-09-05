@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -352,6 +360,73 @@ describe('conductor run --output', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/conductor\.sarif/);
     expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+});
+
+describe('conductor run from a subdirectory', () => {
+  // The umbrella anchors everything at the working-tree root as reported by
+  // git, so a run from a subdirectory behaves exactly like a run from the top.
+  // Nothing pinned that: repoRoot falls back to the working directory when git
+  // cannot answer, so a regression would degrade quietly into a policy file
+  // nobody can find. The hook's equivalent rule is pinned at
+  // tests/init.test.ts:1546; this is the CLI's half.
+  // This suite replaces PATH wholesale so the gates resolve to stubs, which
+  // also takes git away from the spawned CLI. Everywhere else that does not
+  // matter, because repoRoot falls back to the working directory and the
+  // working directory IS the root. Here it is the whole point, so git goes
+  // back on the controlled PATH as a shim, the same way tests/init.test.ts
+  // does it for the hook. Without this the test passes for the wrong reason
+  // at the root and fails for the wrong reason underneath it.
+  const GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+
+  function allThreeStubbed(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    const gitShim = path.join(bin, 'git');
+    writeFileSync(gitShim, `#!/bin/sh\nexec ${GIT} "$@"\n`);
+    chmodSync(gitShim, 0o755);
+    return bin;
+  }
+
+  it('finds the policy file at the root and reports exactly what a run from the top does', () => {
+    const repo = repoWithPolicy();
+    const nested = path.join(repo, 'packages', 'app');
+    mkdirSync(nested, { recursive: true });
+    const bin = allThreeStubbed();
+    const fromRoot = path.join(tempDir(), 'root.sarif');
+    const fromNested = path.join(tempDir(), 'nested.sarif');
+
+    const rootRun = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', fromRoot],
+      bin
+    );
+    const nestedRun = runCli(
+      nested,
+      ['run', '--staged', '--format', 'sarif', '--output', fromNested],
+      bin
+    );
+
+    expect(rootRun.status).toBe(0);
+    // Two levels down, so a fix that only walked up one would still fail here.
+    expect(nestedRun.status).toBe(0);
+    // The failure this guards against: anchoring at the subdirectory means no
+    // policy file, which is exit 2 and a message telling the user to run init.
+    expect(nestedRun.stderr).not.toMatch(/conductor init/);
+
+    const report = JSON.parse(readFileSync(fromNested, 'utf8')) as {
+      runs: Array<{ tool: { driver: { name: string } } }>;
+    };
+    const tools = report.runs.map((run) => run.tool.driver.name);
+    expect(tools).toContain('dep-guard');
+    expect(tools).toContain('vault-guard');
+    expect(tools).toContain('intent-guard');
+
+    expect(readFileSync(fromNested, 'utf8')).toBe(readFileSync(fromRoot, 'utf8'));
+    // And nothing was anchored at the subdirectory on the way.
+    expect(existsSync(path.join(nested, '.guardrails.yaml'))).toBe(false);
   });
 });
 

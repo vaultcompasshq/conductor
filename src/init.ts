@@ -55,6 +55,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -309,6 +310,7 @@ export type ConflictReason =
   | 'generated-hook'
   | 'hooks-path-outside-repository'
   | 'no-manifest'
+  | 'manifest-unreadable'
   | 'changed-since-init'
   | 'write-failed';
 
@@ -1006,7 +1008,29 @@ export function revertInit(options: InitOptions): RevertResult {
     return { ok: false, actions, conflicts };
   }
 
-  const manifest = JSON.parse(raw) as Manifest;
+  // Not routed through readManifest, which answers null for both a missing
+  // file and an unparseable one. Revert has to tell those apart: a missing
+  // manifest means there is no record to act on, an unreadable one means the
+  // record exists and cannot be trusted, and the second is a file somebody
+  // has to look at by hand.
+  let manifest: Manifest;
+  try {
+    manifest = JSON.parse(raw) as Manifest;
+  } catch {
+    conflicts.push({
+      path: MANIFEST_RELATIVE_PATH,
+      reason: 'manifest-unreadable',
+      guidance:
+        `${MANIFEST_RELATIVE_PATH} will not parse, so there is no usable record of what init ` +
+        'wrote. Nothing was removed and nothing was guessed. Repair the file by hand if you ' +
+        'know what belongs in it. If init ran with --adopt, this file holds the only copy of ' +
+        'the hook that --adopt replaced, so recover that content from it before deleting ' +
+        'anything. Only then delete it and remove the hook and the policy file yourself, and ' +
+        're-run init.',
+    });
+    return { ok: false, actions, conflicts };
+  }
+
   const relative = (file: string): string => path.relative(root, file).split(path.sep).join('/');
 
   // Classify first, act second. Deciding as it goes is what let the old
@@ -1046,15 +1070,11 @@ export function revertInit(options: InitOptions): RevertResult {
   }
 
   const remaining: ManifestFile[] = [];
-  let hookRemoved = false;
 
   for (const { file, state } of planned) {
     const rel = relative(file.path);
     if (state === 'gone') {
       actions.push({ kind: 'skip', path: rel, detail: 'already gone' });
-      if (file.kind === 'hook') {
-        hookRemoved = true;
-      }
       continue;
     }
     if (state === 'changed' && !force) {
@@ -1073,16 +1093,27 @@ export function revertInit(options: InitOptions): RevertResult {
       path: rel,
       detail: state === 'changed' ? 'removed (--force, it had changed)' : 'removed',
     });
-    if (file.kind === 'hook') {
-      hookRemoved = true;
-    }
   }
 
   // Only restore an adopted hook once the umbrella hook that replaced it is
   // actually gone. Putting the old hook back next to a hook the user has
-  // since edited would give them two.
+  // since edited would give them two at one path, and the edit they asked to
+  // keep is the one that gets written over.
+  //
+  // Read off the world rather than off a flag raised while removing. This
+  // used to be a `hookRemoved` boolean, and every path that reached here with
+  // a hook in the manifest had already set it, because a hook that changed
+  // with no --force returns at the changed-hook check far above. So the flag
+  // said what this pass INTENDED and the early return was what actually held
+  // the rule, which meant a refactor that flattened that return would satisfy
+  // the flag and restore a hook next to a surviving one. existsSync says what
+  // is there, which is the thing the rule is about.
+  const recordedHooks = planned.filter((entry) => entry.file.kind === 'hook');
+  const umbrellaHookGone =
+    recordedHooks.length > 0 && recordedHooks.every((entry) => !existsSync(entry.file.path));
+
   let adopted = manifest.adopted;
-  if (adopted !== null && hookRemoved) {
+  if (adopted !== null && umbrellaHookGone) {
     mkdirSync(path.dirname(adopted.path), { recursive: true });
     writeFileSync(adopted.path, adopted.content, 'utf8');
     chmodSync(adopted.path, 0o755);

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TEMP_PREFIX } from '../src/intent-prepare.js';
 import { renderSarif } from '../src/output-sarif.js';
 import { renderText } from '../src/output-text.js';
 import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
@@ -145,6 +146,30 @@ describe('a pull-request run against an imported spec', () => {
       },
       baseRef: 'main',
     });
+  });
+
+  it('leaves no temporary directory behind when every gate ran and passed', () => {
+    // The other half of the rule intent-prepare.test.ts:426 pins. There the
+    // preparation itself cleans up after a step that failed; here the whole
+    // chain succeeded, so the only thing that removes the directory is the
+    // caller's finally in runAll. Counted the same way and for the same
+    // reason: a leak here is one directory per pull request on a shared CI
+    // runner, with nothing in any report pointing at the cause.
+    const before = readdirSync(os.tmpdir()).filter((entry) =>
+      entry.startsWith(TEMP_PREFIX)
+    ).length;
+
+    const result = run(repo(), binWith(CHECK_PASSING), { base: 'main' });
+
+    // The run has to have gone through the import and the freeze, or this
+    // would pass on a directory that was never created.
+    expect(result.exitCode).toBe(0);
+    expect(result.gates[0].intent?.contractSource.kind).toBe('imported');
+
+    const after = readdirSync(os.tmpdir()).filter((entry) =>
+      entry.startsWith(TEMP_PREFIX)
+    ).length;
+    expect(after).toBe(before);
   });
 
   it('hands the gate the branch diff rather than the index', () => {
