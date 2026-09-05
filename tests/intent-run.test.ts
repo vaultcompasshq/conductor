@@ -149,7 +149,7 @@ describe('a pull-request run against an imported spec', () => {
   });
 
   it('leaves no temporary directory behind when every gate ran and passed', () => {
-    // The other half of the rule intent-prepare.test.ts:376 pins. There the
+    // The other half of the rule intent-prepare.test.ts:426 pins. There the
     // preparation itself cleans up after a step that failed; here the whole
     // chain succeeded, so the only thing that removes the directory is the
     // caller's finally in runAll. Counted the same way and for the same

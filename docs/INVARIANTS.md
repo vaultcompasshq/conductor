@@ -88,12 +88,16 @@ one of them by fixing a real bug rather than only testing around it:
    which runs the built CLI from two levels down and asserts it produces
    the same report, byte for byte, as the same run from the top.
 
-Two more things belong on this list without being invariants of the same
-kind, and neither has changed. `ExitInput.enforce` is REQUIRED rather
-than defaulted, which is a compile-time property that no test pins and no
-test could. And the generated hook's own `exit 1` is asserted on one of
-its two fail-closed branches only, which is a partial gap rather than an
-absent one; the section on it says which half is which.
+Three more things belong on this list without being invariants of the
+same kind, and none of them has changed. `ExitInput.enforce` is REQUIRED
+rather than defaulted, which is a compile-time property that no test pins
+and no test could. The generated hook's own `exit 1` is asserted on one
+of its two fail-closed branches only, which is a partial gap rather than
+an absent one; the section on it says which half is which. And
+revertInit's `umbrellaHookGone` derivation is never exercised on its own,
+because every state a test can construct short-circuits at the
+changed-hook early return first; the section on what revert guarantees
+says why.
 
 ## The exit code is composed, not maximised
 
@@ -201,7 +205,7 @@ also called a gate that blocked), 536, 549 and 557 (only enforced gates
 are named as the reason and counted), and especially 577 ("lets the
 header count everything on screen while the verdict counts what failed",
 which asserts the header says 3 findings while the verdict says 2 across
-1 gate); tests/cli.test.ts:400, 416, 446 and 461, end to end through the
+1 gate); tests/cli.test.ts:476, 492, 522 and 537, end to end through the
 CLI; and tests/output-sarif.test.ts:970, 982, 1015, 1035 and 1049.
 
 ## A gate that could not run is a result, never a note
@@ -226,7 +230,7 @@ that exits 1 with stdout that will not parse as JSON is could-not-run
 would tell a user their code is at fault when their config is.
 
 Pinned by tests/gate-runner.test.ts:165, 175 and 199, and end to end by
-tests/run.test.ts:73 and tests/cli.test.ts:95.
+tests/run.test.ts:73 and tests/cli.test.ts:104.
 
 AGENTS.md and README.md both used to say the umbrella raises no findings
 of its own "beyond conductor/gate-missing". That was false and always had
@@ -261,7 +265,7 @@ The umbrella has no built-in default policy. A missing `.guardrails.yaml`
 is a `PolicyError` naming the file and telling the user to run
 `conductor init` (src/policy.ts:350-356). A run that gates a commit has to
 be explainable from a file in the repository rather than from something
-compiled into a binary. Pinned by tests/cli.test.ts:130.
+compiled into a binary. Pinned by tests/cli.test.ts:139.
 
 An unusable changed-path set fails closed. `changedPathsSince` returns a
 failure rather than an empty list on any git error, because an empty path
@@ -272,7 +276,7 @@ breach and hiding another, and it refuses a path with leading or trailing
 whitespace for the same reason (src/intent-base.ts:133-158). A space in
 the middle of a filename is ordinary and passes through untouched. Pinned
 by tests/intent-base.test.ts:144, 162, 174, 181 and 202, and end to end by
-tests/intent-run.test.ts:309 and 331.
+tests/intent-run.test.ts:334 and 356.
 
 A missing umbrella binary blocks the commit. The generated hook exits 1
 rather than warning and letting the commit through (src/init.ts:260-267).
@@ -284,34 +288,47 @@ two different things depending on whether git was available to locate
 
 The coverage here is uneven and worth stating precisely, because the two
 halves are pinned differently. That the commit is REFUSED is pinned by
-tests/init.test.ts:1409 and 1507, which drive a real `git commit` with no
+tests/init.test.ts:1468 and 1566, which drive a real `git commit` with no
 conductor anywhere and assert git's own status is non-zero and the
 message says NOT checked. That the HOOK ITSELF exits 1 is asserted in one
-place only, tests/init.test.ts:1426, and only on the git-missing branch:
+place only, tests/init.test.ts:1485, and only on the git-missing branch:
 it runs the hook directly and asserts `run.status` is 1. Nothing asserts
 the hook's own exit code on the ordinary "conductor: command not found"
 branch, where a hook that exited 127 or 2 would still make the commit
 fail and still pass those tests. The message on that branch IS pinned
-(tests/init.test.ts:1423). A neighbouring test also asserts `run.status`
-is 1 (tests/init.test.ts:1487), but that 1 is passed through from the
+(tests/init.test.ts:1482). A neighbouring test also asserts `run.status`
+is 1 (tests/init.test.ts:1546), but that 1 is passed through from the
 stub conductor it installs and is not this branch of the hook at all.
 
 An unknown `--stage` is a usage error and never a silent full run
 (src/cli.ts:73-81). Both directions of the quiet failure look like
 success: a typo that runs every gate reads as a passing build with more
 coverage than it has, and a typo that runs none reads as a passing build
-with no coverage at all. Pinned by tests/cli.test.ts:204.
+with no coverage at all. Pinned by tests/cli.test.ts:213.
 
 One place reads the same file two ways, on purpose, and the reason is
 worth stating because it used to be an asymmetry rather than a decision.
 `readManifest` treats an unparseable manifest as a missing one, because
 "the record is unreadable" is not evidence that a file on disk is the
-umbrella's (src/init.ts:471-481). `revertInit` does NOT reuse it, because
+umbrella's (src/init.ts:472-482). `revertInit` does NOT reuse it, because
 revert has to tell the two apart: a missing manifest means there is no
 record to act on, an unreadable one means there is a record and it cannot
 be trusted, and those send a reader to different fixes. It answers
 `no-manifest` for the first and `manifest-unreadable` for the second, and
-removes nothing either way (src/init.ts:998-1030).
+removes nothing either way (src/init.ts:998-1032).
+
+What `manifest-unreadable` actually covers is narrower than the names
+above suggest. It is raised when the file does not PARSE at all:
+truncation, conflict markers left behind by a bad merge, anything
+`JSON.parse` itself rejects (src/init.ts:1017-1032). It is not raised for
+valid JSON of the wrong shape: an empty object, a `files` key that is
+`null`, a manifest missing `files` entirely all parse cleanly and then
+reach `manifest.files.map` a few lines later, where they throw a raw
+TypeError instead of returning either named conflict. That reaches the
+user as a one-line exit 2 with a runtime message, which is the pre-fix
+behaviour the rest of this section describes as fixed; it is not, for
+this shape of file. `recordedHookSha` (src/init.ts:486) makes the same
+shape assumption on the init side, and that one predates this release.
 
 `revertInit` used to parse that file with a bare `JSON.parse` and no
 guard, so a corrupt manifest made `--revert` throw. The throw was caught
@@ -524,7 +541,7 @@ gates run at each stage, and an explicit stage over the role default),
 an empty PATH and an empty repository root and still gets exit 0 and no
 findings, so nothing was looked for), 268 ("never lets a deferred gate
 reach the exit code"), and 367 (a disabled gate is not also reported as
-deferred); and end to end by tests/cli.test.ts:170, 184, 196 and 221.
+deferred); and end to end by tests/cli.test.ts:179, 193, 205 and 230.
 
 ## A gate `--gate` left out is recorded, not silently dropped
 
@@ -613,14 +630,14 @@ own mode when written through and git will not run a hook it cannot
 execute (src/init.ts:893-899).
 
 Pinned by tests/init.test.ts:235 (one hook, running the umbrella and not
-three gates), 246 (`--stage commit` is in the hook text), 1095 and 1274
+three gates), 246 (`--stage commit` is in the hook text), 1154 and 1333
 (a real commit through husky 9's dispatcher and through husky 8, not a
-fixture), 1409 to 1507 (fail closed), 1524 (`sh -e`: the explanation
-survives, which is the half `-e` destroys), 1546 (the exit code passed
-through: a stub conductor exits 2 and the hook exits 2), 1563 (a clean
-run commits), 1590 to 1640 (one message per code, each taken by running
+fixture), 1468 to 1566 (fail closed), 1583 (`sh -e`: the explanation
+survives, which is the half `-e` destroys), 1605 (the exit code passed
+through: a stub conductor exits 2 and the hook exits 2), 1622 (a clean
+run commits), 1649 to 1698 (one message per code, each taken by running
 the generated script against a stub rather than by reading the template)
-and 1642 (no bypass advertised in either the native or the husky hook).
+and 1701 (no bypass advertised in either the native or the husky hook).
 
 ## What init refuses to touch
 
@@ -629,17 +646,17 @@ Five refusals, each returning early with a conflict and writing nothing:
 A foreign hook is never replaced (src/init.ts:780-785). That hook is
 somebody's working setup and init has no standing to have an opinion about
 it. A whitespace-only file is treated as absent rather than foreign
-(src/init.ts:780), pinned by tests/init.test.ts:972. The refusal itself
-is pinned by tests/init.test.ts:902.
+(src/init.ts:780), pinned by tests/init.test.ts:1031. The refusal itself
+is pinned by tests/init.test.ts:960.
 
 Another gate's own pre-commit hook is reported and left alone unless
 `--adopt` is passed (src/init.ts:786-800). Adding the umbrella's hook
 alongside it would run that gate twice and report its findings twice.
 `--adopt` replaces it and stores the original in the manifest so revert can
-put it back. Pinned by tests/init.test.ts:927, a parameterised case over
-all three gates' own hooks, and by 945 and 960 for the adopt-and-restore
+put it back. Pinned by tests/init.test.ts:986, a parameterised case over
+all three gates' own hooks, and by 1004 and 1019 for the adopt-and-restore
 pair. `--adopt` never touches a FOREIGN hook, pinned by
-tests/init.test.ts:914.
+tests/init.test.ts:973.
 
 A hook generated by lefthook or by the pre-commit framework is left alone
 and the user is told the stanza to add to that manager's own config
@@ -653,23 +670,23 @@ tests/fixtures/hooks, and the code comment records honestly that the
 and is kept only because a spare alternative in an OR cannot cause a false
 negative (src/init.ts:165-179).
 
-The BEHAVIOURAL pin is tests/init.test.ts:1366, a parameterised case that
+The BEHAVIOURAL pin is tests/init.test.ts:1425, a parameterised case that
 writes each captured file into a real repository, runs init, and asserts
 the conflict, the manager it was classified as, and that nothing was
 written. That is the test to keep. Two others beside it assert only what
 is IN the captured text, that lefthook's real hooks carry `call_lefthook`
-and never `lefthook_version:` (tests/init.test.ts:1389) and that the
+and never `lefthook_version:` (tests/init.test.ts:1448) and that the
 pre-commit framework's marker line is character for character the string
-init.ts looks for (tests/init.test.ts:1401). Those two are worth having,
+init.ts looks for (tests/init.test.ts:1460). Those two are worth having,
 because they are what would catch an upstream rewording, but neither one
 runs init, so neither is evidence about what init does with the file.
-The pair at tests/init.test.ts:1323 and 1342 exercise the same refusal
+The pair at tests/init.test.ts:1382 and 1401 exercise the same refusal
 against HAND-WRITTEN approximations, which proves only that the code
 agrees with whoever wrote the approximation.
 
 A `core.hooksPath` pointing outside the repository is refused
 (src/init.ts:663-674). Writing there would install this repository's hook
-on every repository on the machine. Pinned by tests/init.test.ts:1012.
+on every repository on the machine. Pinned by tests/init.test.ts:1071.
 
 An existing policy file is never rewritten (src/init.ts:834-842). It is
 the one artifact a user edits by hand. Pinned by tests/init.test.ts:379.
@@ -680,7 +697,7 @@ resolves against the WORKING-TREE ROOT, not against the `.git` directory
 directory and the test covering the case asserted the same wrong location,
 so the two agreed with each other and neither was ever checked against
 git. The test here drives a real commit instead
-(tests/init.test.ts:982).
+(tests/init.test.ts:1041).
 
 ## The husky rule is structural, and content is never a signal
 
@@ -724,15 +741,15 @@ The husky redirect is decided before the generated-hook detection runs
 (src/init.ts:690-693), so a husky dispatcher is never misread as
 lefthook's or the pre-commit framework's.
 
-Pinned by tests/init.test.ts:1042 (the tracked hook, not the dispatcher,
-decides what is there), 1055 and 1080 (adopts the tracked hook, leaves
-the dispatcher alone, restores byte for byte), 1095 (a real commit
-through the dispatcher), 1129 (survives the reinstall that rewrites the
-generated directory), 1151 (redirects on the path alone with no shim),
-1175 (redirects after a clean), 1189 (survives the install that
-repopulates a wiped generated directory), 1214 (does not redirect out of
-a generated directory that is not husky's), 1242, 1255 and 1274 (husky 8
-takes the native path, and a real commit proves it), and 1296 (a
+Pinned by tests/init.test.ts:1101 (the tracked hook, not the dispatcher,
+decides what is there), 1114 and 1139 (adopts the tracked hook, leaves
+the dispatcher alone, restores byte for byte), 1154 (a real commit
+through the dispatcher), 1188 (survives the reinstall that rewrites the
+generated directory), 1210 (redirects on the path alone with no shim),
+1234 (redirects after a clean), 1248 (survives the install that
+repopulates a wiped generated directory), 1273 (does not redirect out of
+a generated directory that is not husky's), 1301, 1314 and 1333 (husky 8
+takes the native path, and a real commit proves it), and 1355 (a
 dispatcher-shaped hook sitting in the ORDINARY hooks directory is foreign
 rather than a reason to write somewhere else).
 
@@ -762,9 +779,9 @@ So the marker settles WHOSE hook this is, and the digest decides the rest
   sits at the top of it. Conflict, nothing written.
 
 Pinned by tests/init.test.ts:436, 453, 475, 542, 560, 569, 588, 609, 622,
-635 (no manifest at all treated the same way) and 1669 to 1727, which
+635 (no manifest at all treated the same way) and 1728 to 1787, which
 drive the upgrade using the captured previous hook body in
-tests/fixtures/hooks, with tests/init.test.ts:1696 guarding the fixture
+tests/fixtures/hooks, with tests/init.test.ts:1755 guarding the fixture
 against drifting into being what init writes today, which would make
 every assertion in that block pass for the wrong reason.
 
@@ -811,7 +828,7 @@ all four were bugs here first.
 IF THE HOOK SURVIVES, NOTHING IS REMOVED. Files are classified first and
 acted on second (src/init.ts:1012-1021), and a hook that has changed
 since init wrote it returns before the removal loop is ever entered
-(src/init.ts:1023-1046), because deciding as it went is what let the old
+(src/init.ts:1023-1048), because deciding as it went is what let the old
 version remove the policy file before discovering it could not remove the
 hook. Removing the policy file while leaving an edited hook in place
 leaves that hook running the umbrella with nothing to read, so every
@@ -824,19 +841,19 @@ rather than a list of paths: no action on the result is a `remove` and
 every one is a `skip`, so a file added to what init writes is covered
 without anybody remembering to come back to this test.
 
-A CHANGED FILE IS LEFT ALONE AND REPORTED (src/init.ts:1060-1068). That
+A CHANGED FILE IS LEFT ALONE AND REPORTED (src/init.ts:1062-1070). That
 file is now the user's whatever it started as, and a revert that deletes
 edited work is a revert nobody runs twice. Pinned by
 tests/init.test.ts:723 (an edited policy file survives and the run is not
 a success) and 797 (the conflict says `changed-since-init` and names
 `--force`).
 
-THE MANIFEST OUTLIVES A PARTIAL REVERT (src/init.ts:1097-1134). It is
+THE MANIFEST OUTLIVES A PARTIAL REVERT (src/init.ts:1099-1136). It is
 deleted only once it holds nothing, because it is the only record of what
 is left and, after an `--adopt`, the only copy of the replaced hook. The
 `.guardrails` directory goes with it only when it is empty, using
 `rmdirSync` rather than `rmSync`, and when it is not empty that is
-REPORTED rather than passed over (src/init.ts:1097-1119). Pinned by
+REPORTED rather than passed over (src/init.ts:1099-1121). Pinned by
 tests/init.test.ts:783 (the manifest survives and still holds entries),
 680 (the directory goes with the last file), 692 (it stays, and is
 reported as skipped, when somebody else's file is in it) and 713 (it is
@@ -852,7 +869,10 @@ AN ADOPTED HOOK IS NOT WRITTEN BACK WHILE THE UMBRELLA HOOK SURVIVES, or
 the user ends up with two hooks at one path and the edit they asked to
 keep is gone. Pinned by tests/init.test.ts:851, which edits the umbrella
 hook after an `--adopt`, reverts, and asserts the file on disk is still
-the edit and that no action on the result is a `restore`. The positive
+the edit and that no action on the result is a `restore`. That test
+exercises the changed-hook early return below, not the `umbrellaHookGone`
+condition itself: an edited umbrella hook is a `changed` hook, so revert
+refuses before the condition is ever read. The positive
 half, that the gate's own hook does come back once the umbrella hook is
 gone, is pinned at tests/init.test.ts:870 (under `--force`), 883 (the
 hook deleted by hand, on a revert too partial to finish) and 908 (without
@@ -871,18 +891,29 @@ flattening that return would have satisfied the flag and broken the rule.
 
 The condition is now read off the world rather than off the flag: the
 manifest records at least one hook, and no path it records is on disk any
-more (src/init.ts:1109-1114). That is a statement about what is there,
+more (src/init.ts:1111-1116). That is a statement about what is there,
 which is what the rule is about, so a future refactor of the early return
 cannot restore a hook next to a surviving one. The flag is gone rather
 than kept as a second line, because two conditions that must agree are a
 place for them to disagree.
+
+No test distinguishes this derivation from the flag it replaced. Every
+state a test can construct short-circuits at the changed-hook early
+return (src/init.ts:1051) before `umbrellaHookGone` is read at all: a
+changed hook refuses there directly, and a hook that is gone, matched, or
+force-replaced reaches the condition only after the early return has
+already let it through, so the condition and the flag it replaced would
+agree either way. The early return is what actually holds the guarantee,
+and the derivation is defence in depth rather than a condition any test
+exercises in its own right. Confirmed by making the condition always
+true and watching all 93 init tests stay green.
 
 No manifest shape with an adoption and no hook entry is reachable from
 init's own writes, which is what makes the removal safe. Init sets
 `adopted` in exactly two ways (src/init.ts:881-888): the run that adopts,
 which pushes the hook it writes into the same manifest, and the carry
 across a re-init, which keeps a previous manifest's entries that this run
-did not rewrite. Revert's own rewrite (src/init.ts:1153) can only drop
+did not rewrite. Revert's own rewrite (src/init.ts:1155) can only drop
 the hook entry on a pass that also nulls `adopted`. A hand-edited
 manifest could hold that shape, and there the code does what the old flag
 did: nothing is restored.
@@ -891,7 +922,7 @@ No manifest at all means nothing is removed and the command fails
 (src/init.ts:998-1009). Pinned by tests/init.test.ts:920.
 
 A manifest that will not parse is a SECOND conflict rather than the same
-one (src/init.ts:1017-1031). Revert deliberately does not go through
+one (src/init.ts:1017-1033). Revert deliberately does not go through
 `readManifest`, which answers null for both: missing means there is no
 record to act on, unreadable means there is a record and it cannot be
 trusted, and the two send a reader to different fixes. Nothing is removed
@@ -901,7 +932,7 @@ which corrupts the manifest of a real install and asserts the reason is
 sends the user to the file by hand, and that the hook, the policy file and
 the manifest itself are all still exactly as they were.
 
-End to end by tests/dogfood.e2e.test.ts:330 and 348, which revert a real
+End to end by tests/dogfood.e2e.test.ts:350 and 368, which revert a real
 repository with a hand-edited policy file and then finish the job under
 `--force`. The ordinary case, that revert removes what init wrote and
 leaves an unrelated file alone, is tests/init.test.ts:666, and the second
@@ -922,20 +953,20 @@ a committed artifact with an approver's name on it. A pull-request run
 that dropped one into the working tree would either be committed by
 accident or picked up by the next run as though a person had approved it,
 and the second failure is silent. Pinned by
-tests/intent-prepare.test.ts:246, which asserts the repository has no
+tests/intent-prepare.test.ts:296, which asserts the repository has no
 `.conductor` directory afterwards.
 
 The freeze is attributed to the umbrella and to a commit, never to a
 person, and the spec path in that attribution is repository-relative
 because the string ends up inside a contract (src/intent-prepare.ts:363-368).
-Pinned by tests/intent-prepare.test.ts:271.
+Pinned by tests/intent-prepare.test.ts:321.
 
 The temporary directory is always removed. Every failure path after the
 directory exists calls `cleanup` before returning
 (src/intent-prepare.ts:338-385), and the success path is removed by the
 caller's `finally` once every gate has run, whatever happened while they
 did (src/run.ts:231-240). The failure half is pinned by
-tests/intent-prepare.test.ts:376, which counts directories carrying
+tests/intent-prepare.test.ts:426, which counts directories carrying
 `TEMP_PREFIX` in the system temporary directory before and after.
 
 THE SUCCESS HALF IS PINNED AT tests/intent-run.test.ts:151, which drives a
@@ -949,7 +980,7 @@ which is what makes it the thing holding the rule.
 
 The cost of being wrong is one leaked directory per pull request on a
 shared CI runner, with nothing in any report pointing at the cause. Note
-that tests/intent-prepare.test.ts:291 does NOT cover this: it only proves
+that tests/intent-prepare.test.ts:341 does NOT cover this: it only proves
 that calling `cleanup` yourself works.
 
 ## The repository's own frozen contract wins, and "frozen" means one specific thing
@@ -1097,8 +1128,8 @@ The contract source is decided BEFORE git is touched
 the base ref first would turn a shallow checkout into exit 2 on a
 repository the gate was never going to check anything in.
 
-Pinned by tests/intent-run.test.ts:219, 233, 237, 241 and 268, and
-tests/intent-prepare.test.ts:305 and 314 ("never runs git, so a shallow
+Pinned by tests/intent-run.test.ts:244, 258, 262, 266 and 293, and
+tests/intent-prepare.test.ts:355 and 364 ("never runs git, so a shallow
 checkout cannot turn a missing spec into a failure").
 
 ## The change set is the umbrella's own, and each flag is a decision
@@ -1151,9 +1182,9 @@ including the empty `GITHUB_BASE_REF` a push build sets), 91 (the
 three-dot range: what landed on the base afterwards is not listed), 110
 (both sides of a rename), and 121 and 135 (the quotePath decision, and
 that an ordinary space survives it); and
-tests/intent-run.test.ts:150 (the branch diff rather than the index), 179
-(the base taken from the pull request environment), 372 ("is never read
-unless the caller passes it in") and 400.
+tests/intent-run.test.ts:175 (the branch diff rather than the index), 204
+(the base taken from the pull request environment), 397 ("is never read
+unless the caller passes it in") and 425.
 
 ## Reporting: a statement about coverage is a notification, a statement that something went wrong is a result
 
@@ -1213,7 +1244,7 @@ notification objects are shaped as SARIF 2.1.0 wants, every level is
 normalization diagnostic as a note-level result carrying blocking: false
 and no location) and 951 (naming the gate it came from). The remaining
 result id, `conductor/gate-output-unparseable`, is pinned end to end by
-tests/cli.test.ts:141, which runs the CLI over a gate whose output has
+tests/cli.test.ts:150, which runs the CLI over a gate whose output has
 drifted and finds that id among the umbrella run's RESULTS.
 
 In the text report, pinned by tests/output-text.test.ts:369 and 377 (an
@@ -1279,7 +1310,7 @@ not that.
 SARIF IS UNAFFECTED BY IT. `renderSarif` takes no verbosity argument at
 all (src/output-sarif.ts:595), and the format branch in the CLI passes the
 flag only to `renderText` (src/cli.ts:227-230). Pinned by
-tests/cli.test.ts:254, 266 and 274, and by
+tests/cli.test.ts:263, 275 and 283, and by
 tests/output-sarif.test.ts:523, which asserts the log is byte for byte
 what it was before the summary line existed, against a literal written
 out by hand rather than against whatever the renderer currently produces.
@@ -1532,7 +1563,7 @@ reaching the terminal puts a local filesystem path in front of a user who
 cannot act on any of it, and puts one into a report that gets uploaded.
 The message is the part that says what went wrong.
 
-Pinned by tests/cli.test.ts:77, 95, 109, 120 and 130, and by
+Pinned by tests/cli.test.ts:77, 104, 118, 129 and 139, and by
 tests/run.test.ts:102, which walks the whole outcome object looking for a
 stack frame.
 
@@ -1549,7 +1580,13 @@ directory correctly is the single approach that is right for all three
 
 The umbrella anchors everything at the working-tree root as reported by
 git, so a run from a subdirectory behaves exactly like a run from the top
-(src/cli.ts:32-45).
+(src/cli.ts:32-45). A relative `--output` is the one exception: it
+resolves against the directory the command was typed in
+(src/cli.ts:240), which is the conventional reading of a path a human
+typed, and the generated hook always runs from the root, so only a human
+running the CLI by hand from a subdirectory ever hits the difference. The
+test proves content equality against absolute paths, which is what keeps
+this exception from being a gap in that test.
 
 The child working directory is pinned by tests/gate-runner.test.ts:87.
 THE SUBDIRECTORY ANCHORING IS PINNED AT tests/cli.test.ts:393, which runs
@@ -1557,7 +1594,7 @@ the built CLI from `packages/app` two levels inside a repository and
 asserts it exits 0, never prints the run-init message, names all three
 gates in the report, and writes a report byte for byte identical to the
 same run from the top. The equivalent rule inside the generated hook is
-pinned at tests/init.test.ts:1487, which runs the hook from `packages/app`
+pinned at tests/init.test.ts:1546, which runs the hook from `packages/app`
 and proves it still finds `node_modules/.bin` at the root.
 
 That test has to put git back on the PATH itself, and the reason is worth
@@ -1568,6 +1605,16 @@ too. Everywhere else in that file the fallback is invisible, because the
 working directory IS the root. Underneath the root it is the whole
 question, so without the shim the test would have failed for the wrong
 reason and a fix would have been made to the wrong thing.
+
+The fallback itself is a defect, not only test mechanics, and it is
+recorded here as OPEN rather than fixed in this release. A CLI that
+cannot find git silently treats the current directory as the root, so a
+run from a subdirectory with no git on PATH cannot find the policy file
+that is really at the top and exits 2 telling the user to run
+`conductor init`, in a repository that already has one. The generated
+hook does not have this problem: it names the missing git plainly
+(src/init.ts:262). The CLI's silent fallback is the same class of
+failure the hook's own message exists to avoid, and it is still there.
 
 ## Public-repository hygiene is a gate, not a habit
 

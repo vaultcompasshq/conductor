@@ -1023,8 +1023,10 @@ export function revertInit(options: InitOptions): RevertResult {
       guidance:
         `${MANIFEST_RELATIVE_PATH} will not parse, so there is no usable record of what init ` +
         'wrote. Nothing was removed and nothing was guessed. Repair the file by hand if you ' +
-        'know what belongs in it, or delete it and remove the hook and the policy file ' +
-        'yourself, then re-run init.',
+        'know what belongs in it. If init ran with --adopt, this file holds the only copy of ' +
+        'the hook that --adopt replaced, so recover that content from it before deleting ' +
+        'anything. Only then delete it and remove the hook and the policy file yourself, and ' +
+        're-run init.',
     });
     return { ok: false, actions, conflicts };
   }

@@ -369,7 +369,7 @@ describe('conductor run from a subdirectory', () => {
   // Nothing pinned that: repoRoot falls back to the working directory when git
   // cannot answer, so a regression would degrade quietly into a policy file
   // nobody can find. The hook's equivalent rule is pinned at
-  // tests/init.test.ts:1487; this is the CLI's half.
+  // tests/init.test.ts:1546; this is the CLI's half.
   // This suite replaces PATH wholesale so the gates resolve to stubs, which
   // also takes git away from the spawned CLI. Everywhere else that does not
   // matter, because repoRoot falls back to the working directory and the
