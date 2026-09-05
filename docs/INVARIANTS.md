@@ -75,18 +75,28 @@ one of them by fixing a real bug rather than only testing around it:
    is deliberately a different conflict from `no-manifest`, and removes
    nothing. Pinned by tests/init.test.ts:926.
 2. THE SUCCESS HALF OF THE TEMPORARY-DIRECTORY CLEANUP. Pinned by
-   tests/intent-run.test.ts:151, which drives a full passing `runAll`
+   tests/intent-run.test.ts:158, which drives a full passing `runAll`
    through the import and freeze chain and finds no `conductor-intent-`
    entry in the temporary root it injected. The failure
    half was already pinned; this half is the caller's `finally`, and it
    was correct, so no code changed.
 3. `--spec` OUTRANKING A FROZEN NATIVE CONTRACT. Pinned by
-   tests/intent-prepare.test.ts:220 and 231, which put both in one
+   tests/intent-prepare.test.ts:221 and 232, which put both in one
    repository and assert the flag's spec is what gets imported and frozen
    and that the gate is not pointed at the repository itself.
-4. THE SUBDIRECTORY ANCHORING OF THE CLI. Pinned by tests/cli.test.ts:393,
+4. THE SUBDIRECTORY ANCHORING OF THE CLI. Pinned by tests/cli.test.ts:397,
    which runs the built CLI from two levels down and asserts it produces
    the same report, byte for byte, as the same run from the top.
+
+0.2.2 removed the last defect this section used to record as OPEN rather
+than fixed: the CLI's `repoRoot` no longer answers the working directory
+when git cannot be asked, so a missing git and a directory outside any
+repository are now two named sentences rather than one wrong diagnosis.
+Both are pinned; the section on anchoring says where. It leaves ONE NEW
+ADMISSION behind it, and it is here rather than only there: the third
+branch of `repoRoot`, git present but unable to run at all, is not pinned
+by any test, because a spawn failure that is neither ENOENT nor an exit
+code needs a machine in a state a test cannot ask for.
 
 Three more things belong on this list without being invariants of the
 same kind. The first two are unchanged since this file was first written;
@@ -168,15 +178,15 @@ Two consequences are worth stating because they look like bugs:
 A run can exit 0 with BLOCKING on the screen above it. The text verdict
 therefore carries the reason on the same line rather than leaving it to
 the sections: the clauses are built in `unenforcedClauses`
-(src/output-text.ts:254-275) and appended to the exit 0 verdict at
-src/output-text.ts:352-360, with the same clauses carried as an aside on
-the exit 1 and exit 2 verdicts (src/output-text.ts:313-317).
+(src/output-text.ts:267-288) and appended to the exit 0 verdict at
+src/output-text.ts:365-373, with the same clauses carried as an aside on
+the exit 1 and exit 2 verdicts (src/output-text.ts:326-330).
 
 An unenforced gate that could not run still produces a critical,
 error-level RESULT in the SARIF log, not a note. `conductor/gate-missing`
 and `conductor/gate-failed` keep their severity and their result standing
 whatever the policy says about enforcement (src/normalize.ts:641 for the
-severity, src/output-sarif.ts:101-107 for the level, and 633-638 for the
+severity, src/output-sarif.ts:101-107 for the level, and 639-644 for the
 findings going into the umbrella's run rather than being reclassified),
 and only the umbrella's own `gate-not-enforced` notification says the
 verdict did not reach the exit code.
@@ -185,7 +195,7 @@ This was recorded here as a disagreement with the README, which used to
 summarise enforcement as making such a gate "a note rather than exit 2".
 That was true of the exit code and false of the published log. The README
 was the wrong one and now says the same thing this section does
-(README.md:125-137), and the rule is pinned by
+(README.md:178-184), and the rule is pinned by
 tests/output-sarif.test.ts:982, which renders an unenforced gate that
 could not run and asserts the result's level is `error` and its severity
 `critical`, with the `gate-not-enforced` notification beside it.
@@ -193,9 +203,9 @@ could not run and asserts the result's level is `error` and its severity
 The report header and the verdict deliberately count different things.
 The header counts findings across every gate, because it is an inventory
 of what follows it and a reader counting lines on screen has to arrive at
-that number (src/output-text.ts:505-515). The verdict counts only
+that number (src/output-text.ts:518-528). The verdict counts only
 enforced gates, because it answers what failed the run
-(src/output-text.ts:277-285). Two questions, two numbers.
+(src/output-text.ts:290-298). Two questions, two numbers.
 
 Pinned by tests/exit-codes.test.ts:52, 58, 66 and 75;
 tests/output-text.test.ts:446, 454, 461 and 466 (an unenforced gate that
@@ -206,7 +216,7 @@ also called a gate that blocked), 536, 549 and 557 (only enforced gates
 are named as the reason and counted), and especially 577 ("lets the
 header count everything on screen while the verdict counts what failed",
 which asserts the header says 3 findings while the verdict says 2 across
-1 gate); tests/cli.test.ts:476, 492, 522 and 537, end to end through the
+1 gate); tests/cli.test.ts:480, 496, 526 and 541, end to end through the
 CLI; and tests/output-sarif.test.ts:970, 982, 1015, 1035 and 1049.
 
 ## A gate that could not run is a result, never a note
@@ -231,20 +241,20 @@ that exits 1 with stdout that will not parse as JSON is could-not-run
 would tell a user their code is at fault when their config is.
 
 Pinned by tests/gate-runner.test.ts:165, 175 and 199, and end to end by
-tests/run.test.ts:73 and tests/cli.test.ts:104.
+tests/run.test.ts:73 and tests/cli.test.ts:114.
 
 AGENTS.md and README.md both used to say the umbrella raises no findings
 of its own "beyond conductor/gate-missing". That was false and always had
 been: the union at src/normalize.ts:624-627 has three members, and the
 README named `conductor/gate-failed` elsewhere in the same document.
 Three, plus the two normalization diagnostics, is the number, and both
-documents now list all five (AGENTS.md:12-16, README.md:669-672).
+documents now list all five (AGENTS.md:12-16, README.md:422-426).
 
 ## runGate is total
 
 `runGate` never throws. That is a contract and not a hope, and the reason
 is structural: the caller maps over the enabled gates in order
-(src/run.ts:179-230), so an escaping error does not merely lose one gate's
+(src/run.ts:193-245), so an escaping error does not merely lose one gate's
 report, it loses every gate after it, and it surfaces as a stack trace
 with exit 1, which the pre-commit hook then reports as "a gate blocked".
 
@@ -266,7 +276,7 @@ The umbrella has no built-in default policy. A missing `.guardrails.yaml`
 is a `PolicyError` naming the file and telling the user to run
 `conductor init` (src/policy.ts:350-356). A run that gates a commit has to
 be explainable from a file in the repository rather than from something
-compiled into a binary. Pinned by tests/cli.test.ts:139.
+compiled into a binary. Pinned by tests/cli.test.ts:149.
 
 An unusable changed-path set fails closed. `changedPathsSince` returns a
 failure rather than an empty list on any git error, because an empty path
@@ -277,7 +287,7 @@ breach and hiding another, and it refuses a path with leading or trailing
 whitespace for the same reason (src/intent-base.ts:133-158). A space in
 the middle of a filename is ordinary and passes through untouched. Pinned
 by tests/intent-base.test.ts:144, 162, 174, 181 and 202, and end to end by
-tests/intent-run.test.ts:334 and 356.
+tests/intent-run.test.ts:344 and 366.
 
 A missing umbrella binary blocks the commit. The generated hook exits 1
 rather than warning and letting the commit through (src/init.ts:260-267).
@@ -302,10 +312,10 @@ is 1 (tests/init.test.ts:1546), but that 1 is passed through from the
 stub conductor it installs and is not this branch of the hook at all.
 
 An unknown `--stage` is a usage error and never a silent full run
-(src/cli.ts:73-81). Both directions of the quiet failure look like
+(src/cli.ts:108-116). Both directions of the quiet failure look like
 success: a typo that runs every gate reads as a passing build with more
 coverage than it has, and a typo that runs none reads as a passing build
-with no coverage at all. Pinned by tests/cli.test.ts:213.
+with no coverage at all. Pinned by tests/cli.test.ts:223.
 
 One place reads the same file two ways, on purpose, and the reason is
 worth stating because it used to be an asymmetry rather than a decision.
@@ -333,7 +343,7 @@ shape assumption on the init side, and that one predates this release.
 
 `revertInit` used to parse that file with a bare `JSON.parse` and no
 guard, so a corrupt manifest made `--revert` throw. The throw was caught
-in `main` and printed as one line with exit 2 (src/cli.ts:266-280), so
+in `main` and printed as one line with exit 2 (src/cli.ts:304-318), so
 nothing leaked a stack, but the message was a JSON parser's: a user whose
 manifest was truncated by a crash or a bad merge got `Unexpected end of
 JSON input` and no indication which file was unreadable or that the fix
@@ -513,9 +523,9 @@ remote, so the earliest stage is the only honest place for that one.
 The protective half is about what a held-back gate never reaches, and it
 is worth saying exactly rather than loosely. The partition itself is one
 filter over the enabled list, taken before the run loop starts
-(src/run.ts:147-159). Resolution is NOT hoisted out of the loop: each
+(src/run.ts:161-173). Resolution is NOT hoisted out of the loop: each
 surviving gate is resolved one at a time inside it, by `runGate`
-(src/run.ts:221-229, resolving at src/gate-runner.ts:307). What the
+(src/run.ts:236-244, resolving at src/gate-runner.ts:307). What the
 filter guarantees is therefore about the gates it holds back, not about
 the ones it keeps: A GATE THE FILTER HELD BACK NEVER REACHES RESOLUTION
 OR SPAWN AT ALL, because it never enters the loop. A gate that will not
@@ -542,7 +552,7 @@ gates run at each stage, and an explicit stage over the role default),
 an empty PATH and an empty repository root and still gets exit 0 and no
 findings, so nothing was looked for), 268 ("never lets a deferred gate
 reach the exit code"), and 367 (a disabled gate is not also reported as
-deferred); and end to end by tests/cli.test.ts:179, 193, 205 and 230.
+deferred); and end to end by tests/cli.test.ts:189, 203, 215 and 240.
 
 ## A gate `--gate` left out is recorded, not silently dropped
 
@@ -568,7 +578,7 @@ It is carried on the run result as `ExcludedGate` (src/run.ts:28-42),
 read off the POLICY rather than off the enabled list, because these gates
 are exactly the ones the override took out of that list, and in role order
 so the report never depends on the order the flags were typed
-(src/run.ts:161-166). Like `DeferredGate` it is deliberately not a
+(src/run.ts:175-180). Like `DeferredGate` it is deliberately not a
 `GateOutcome`: no binary was looked for and there is no exit code to
 report. Pinned by tests/run.test.ts:320 (both excluded gates are carried,
 with only the named one running), 338 (nothing excluded without `--gate`)
@@ -579,8 +589,8 @@ have blocked, so the two numbers would differ if any of this reached
 `composeExitCode`.
 
 Both formats say it. One line in the text report
-(src/output-text.ts:239-244), a clause on the one-line summary of a clean
-run (src/output-text.ts:462-465), and a `conductor/gate-excluded`
+(src/output-text.ts:252-257), a clause on the one-line summary of a clean
+run (src/output-text.ts:475-478), and a `conductor/gate-excluded`
 notification in the umbrella's SARIF run
 (src/output-sarif.ts:468-476). A notification rather than a result by the
 discriminator below: nothing went wrong, and how much of the policy a run
@@ -623,7 +633,7 @@ enabled gate", when it runs the commit stage, so a gate whose stage is
 `ci`, which is the intent gate's default, is deferred rather than run.
 The README said it correctly in its stages section and incorrectly in its
 opening summary. All three now say the commit stage
-(src/cli.ts:114-116, src/init.ts:625-631, README.md:24).
+(src/cli.ts:149-151, src/init.ts:625-631, README.md:31-33).
 
 The hook is written with the executable bit set after the write rather
 than through the write's mode option, because an existing file keeps its
@@ -862,9 +872,9 @@ reported as removed when it went).
 
 A PARTIAL REVERT IS NOT A SUCCESS. It returns `ok: false`, so the exit
 code is non-zero and a script does not read "some of it" as "all of it"
-(src/cli.ts:150), and the human rendering goes to stderr rather than
+(src/cli.ts:185), and the human rendering goes to stderr rather than
 stdout so a pipe cannot carry it past the reader who needed it
-(src/cli.ts:144-149).
+(src/cli.ts:179-184).
 
 AN ADOPTED HOOK IS NOT WRITTEN BACK WHILE THE UMBRELLA HOOK SURVIVES, or
 the user ends up with two hooks at one path and the edit they asked to
@@ -933,7 +943,7 @@ which corrupts the manifest of a real install and asserts the reason is
 sends the user to the file by hand, and that the hook, the policy file and
 the manifest itself are all still exactly as they were.
 
-End to end by tests/dogfood.e2e.test.ts:350 and 368, which revert a real
+End to end by tests/dogfood.e2e.test.ts:356 and 374, which revert a real
 repository with a hand-edited policy file and then finish the job under
 `--force`. The ordinary case, that revert removes what init wrote and
 leaves an unrelated file alone, is tests/init.test.ts:666, and the second
@@ -947,30 +957,30 @@ approved, and approving one is a per-task human step. That step is the
 ceremony the stopping-points design exists to keep out of a pull request,
 so the umbrella imports the document the work was actually approved from,
 freezes it in a TEMPORARY directory, and points the gate at that directory
-for the length of one run (src/intent-prepare.ts:334-341).
+for the length of one run (src/intent-prepare.ts:370-377).
 
 Nothing is written under the repository's own `.conductor`. A contract is
 a committed artifact with an approver's name on it. A pull-request run
 that dropped one into the working tree would either be committed by
 accident or picked up by the next run as though a person had approved it,
 and the second failure is silent. Pinned by
-tests/intent-prepare.test.ts:296, which asserts the repository has no
+tests/intent-prepare.test.ts:297, which asserts the repository has no
 `.conductor` directory afterwards.
 
 The freeze is attributed to the umbrella and to a commit, never to a
 person, and the spec path in that attribution is repository-relative
-because the string ends up inside a contract (src/intent-prepare.ts:363-368).
-Pinned by tests/intent-prepare.test.ts:321.
+because the string ends up inside a contract (src/intent-prepare.ts:399-404).
+Pinned by tests/intent-prepare.test.ts:322.
 
 The temporary directory is always removed. Every failure path after the
 directory exists calls `cleanup` before returning
-(src/intent-prepare.ts:338-385), and the success path is removed by the
+(src/intent-prepare.ts:374-421), and the success path is removed by the
 caller's `finally` once every gate has run, whatever happened while they
-did (src/run.ts:231-240). The failure half is pinned by
-tests/intent-prepare.test.ts:426, which drives the chain to a freeze that
+did (src/run.ts:246-255). The failure half is pinned by
+tests/intent-prepare.test.ts:427, which drives the chain to a freeze that
 refuses and then finds no directory carrying `TEMP_PREFIX`.
 
-THE SUCCESS HALF IS PINNED AT tests/intent-run.test.ts:151, which drives a
+THE SUCCESS HALF IS PINNED AT tests/intent-run.test.ts:158, which drives a
 full passing run through the import and freeze chain and looks in the same
 place, the same way. It asserts the run really did import a contract
 before it looks, so it cannot pass on a directory that was never created.
@@ -991,18 +1001,18 @@ test's `process.env` is a copy that never reaches it.
 
 The cost of being wrong is one leaked directory per pull request on a
 shared CI runner, with nothing in any report pointing at the cause. Note
-that tests/intent-prepare.test.ts:341 does NOT cover this: it only proves
+that tests/intent-prepare.test.ts:342 does NOT cover this: it only proves
 that calling `cleanup` yourself works.
 
 ## The repository's own frozen contract wins, and "frozen" means one specific thing
 
 Where a team has done the native flow, the native flow is what runs. The
 import is the fallback for a repository that has not, never a replacement
-for one that has (src/intent-prepare.ts:208-217).
+for one that has (src/intent-prepare.ts:231-253).
 
 "Exists" is not the test. `frozen_by: user` and nothing else, because that
 is the marker THE GATE ITSELF reads
-(`nativeContractIsFrozen`, src/intent-prepare.ts:101-113). Accepting an
+(`nativeContractIsFrozen`, src/intent-prepare.ts:124-136). Accepting an
 `approval` block as an alternative was a guess dressed up as tolerance: a
 real freeze writes both, so the only contracts the second test admitted
 were hand-edited or half-written ones, and admitting those skipped the
@@ -1012,13 +1022,13 @@ which sends the run down the import path rather than handing the gate
 something it will reject.
 
 An explicit `--spec` outranks even a frozen native contract
-(src/intent-prepare.ts:209-212, where the `flag` branch is taken before
+(src/intent-prepare.ts:232-235, where the `flag` branch is taken before
 `nativeContractIsFrozen` is ever called), because a person typed it just
 now.
 
-The native-contract rule is pinned by tests/intent-prepare.test.ts:143,
-153, 159, 169 and 187. THE `--spec` PRECEDENCE IS PINNED BY
-tests/intent-prepare.test.ts:220 and 231, which build one repository
+The native-contract rule is pinned by tests/intent-prepare.test.ts:144,
+154, 160, 170 and 188. THE `--spec` PRECEDENCE IS PINNED BY
+tests/intent-prepare.test.ts:221 and 232, which build one repository
 holding both a `frozen_by: user` native contract and a spec, pass the
 spec by flag, and assert the reported source is the imported spec and
 that the gate is handed a temporary directory rather than `.`, with
@@ -1028,7 +1038,7 @@ the opposite rule; and tests/intent-spec.test.ts:246 covers `--spec`
 beating a pull request body, a different question in a different file.
 Neither covers this.
 
-The branch order at src/intent-prepare.ts:209-212 is still the mechanism.
+The branch order at src/intent-prepare.ts:232-235 is still the mechanism.
 Before those two tests, a reordering that tested `nativeContractIsFrozen`
 first would have looked correct in review, because every existing test
 passed either way: none of them had both. What a user would have seen is
@@ -1042,43 +1052,47 @@ for. Swapping the two branches now turns both tests red.
 `--spec` on the command line outranks everything. A path there that does
 not exist is REPORTED rather than replaced by a discovered one, because
 running a different contract than the one a person just named is the wrong
-kindness (src/intent-spec.ts:269-275, reported at
-src/intent-prepare.ts:198-206).
+kindness (src/intent-spec.ts:284-290, reported at
+src/intent-prepare.ts:221-229).
 
 A `Spec:` line in the pull request body comes next, anchored to the start
 of a line so a sentence containing the words in prose is not read as
 somebody naming a file, and the FIRST such line wins when a body carries
-two (src/intent-spec.ts:103-106). A path here that does not exist falls
+two (src/intent-spec.ts:118-121). A path here that does not exist falls
 through to the convention, because a typo in a pull request description
 must not be able to fail a build.
 
 `Spec: none` in that same first line is the one value that does NOT fall
 through. It is a WAIVER: a statement that this pull request deliberately
 has no spec, answered with a `waived` discovery before the convention is
-tried, because an explicit statement beats an inferred one. The token is
-exact and lowercase; anything else unusable keeps the silent fall-through,
-so a sentence with "None" in it cannot switch a gate off. The waiver sits
-BELOW `--spec` in this file and below a frozen native contract in
-prepareIntent, which is the whole meaning of it: it says there is nothing
-to import, never that a contract this repository froze should be ignored.
+tried, because an explicit statement beats an inferred one
+(src/intent-spec.ts:294-302, with the token itself at
+src/intent-spec.ts:51-59). The token is exact and lowercase; anything else
+unusable keeps the silent fall-through, so a sentence with "None" in it
+cannot switch a gate off. The waiver sits BELOW `--spec` in this file and
+below a frozen native contract in prepareIntent
+(src/intent-prepare.ts:236-248, the branch after `nativeContractIsFrozen`
+rather than before it), which is the whole meaning of it: it says there is
+nothing to import, never that a contract this repository froze should be
+ignored.
 
 The convention is a markdown file DIRECTLY under `docs/superpowers/specs`
 whose stem relates to the branch slug. Directly under, not nested, because
 that is the layout the gate's own importer discovers and an archive
 subdirectory is not a candidate for this branch's contract
-(src/intent-spec.ts:131-141).
+(src/intent-spec.ts:146-156).
 
 Candidacy and victory are different questions. `stemMatches` decides who
 is a candidate; `bestMatch` decides who wins, ranking an exact stem first,
 then the most specific stem by length, and only then the newest filename
-(src/intent-spec.ts:169-188). Ranking on the newest name alone answered
+(src/intent-spec.ts:184-203). Ranking on the newest name alone answered
 the second question with the first: a loose candidate carrying a later
 date beat the spec whose stem was the branch slug exactly, and an undated
 name beat everything because it sorts after every date. A pull request was
 then measured against a different feature's requirements with nothing in
 the report saying so.
 
-A plan is paired only on an EQUAL stem (src/intent-spec.ts:204-211). No
+A plan is paired only on an EQUAL stem (src/intent-spec.ts:219-226). No
 plan is a fine outcome, since the gate imports a spec on its own; the
 wrong plan freezes one feature's requirements against another's change
 budget, and the resulting block or pass is about neither of them.
@@ -1105,7 +1119,7 @@ later real path does not undo it).
 ## Containment applies to the pull request body and to nothing else
 
 A path named in a pull request body must RESOLVE inside the repository
-(`resolvesInsideRoot`, src/intent-spec.ts:252-265). That body is written
+(`resolvesInsideRoot`, src/intent-spec.ts:267-280). That body is written
 by whoever opened the pull request, and on a fork pull request that is
 somebody with no write access at all. Without the check, a
 `Spec: ../../etc/something` line imports an arbitrary readable file from
@@ -1129,7 +1143,7 @@ unresolved root would report every path in such a tree as an escape.
 
 `--spec` is deliberately NOT held to any of this. A person typed it on the
 command line just now, and pointing at a spec kept outside the checkout is
-a real thing to want (src/intent-spec.ts:269-275 goes straight to
+a real thing to want (src/intent-spec.ts:284-290 goes straight to
 `exists`).
 
 Pinned by tests/intent-spec.test.ts:295, 312, 324, 332, 354, 375 and 392.
@@ -1137,7 +1151,7 @@ Pinned by tests/intent-spec.test.ts:295, 312, 324, 332, 354, 375 and 392.
 ## A branch with no spec is advisory, and never changes the exit code
 
 A `SkippedGate` is not a deferred gate, not a could-not-run, and not a
-finding (src/run.ts:54-59 and 198-206). Nobody asked for a different
+finding (src/run.ts:61-66 and 213-221). Nobody asked for a different
 stage, nothing broke, and a branch that has no spec is a branch this gate
 has no opinion about. Turning that into a failed build is how a gate gets
 switched off repository-wide.
@@ -1145,14 +1159,14 @@ switched off repository-wide.
 It never reaches the exit code, enforced or not, because a skipped gate
 produces no `GateOutcome` and `composeExitCode` only ever sees outcomes.
 It is still on screen: one line in the text report
-(src/output-text.ts:225-229), one notification in the SARIF log
-(src/output-sarif.ts:518-525), and a distinct verdict sentence when it is
-the only thing that happened (src/output-text.ts:295-301), because telling
+(src/output-text.ts:225-243), one notification in the SARIF log
+(src/output-sarif.ts:518-531), and a distinct verdict sentence when it is
+the only thing that happened (src/output-text.ts:308-314), because telling
 somebody to set `enabled: true` is the wrong advice for a gate that is
 already on and had nothing to check.
 
 The contract source is decided BEFORE git is touched
-(src/intent-prepare.ts:182-196). That ordering is the promise: resolving
+(src/intent-prepare.ts:205-219). That ordering is the promise: resolving
 the base ref first would turn a shallow checkout into exit 2 on a
 repository the gate was never going to check anything in.
 
@@ -1166,12 +1180,12 @@ consumers already have it and the waiver gets an id of its own. Reporting a
 waiver as a missing spec would send a reviewer off to write the spec
 somebody had just decided against.
 
-Pinned by tests/intent-run.test.ts:244, 258, 262, 266 and 293, and
-tests/intent-prepare.test.ts:355 and 364 ("never runs git, so a shallow
+Pinned by tests/intent-run.test.ts:254, 268, 272, 276 and 303, and
+tests/intent-prepare.test.ts:356 and 365 ("never runs git, so a shallow
 checkout cannot turn a missing spec into a failure"). The waiver half is
-pinned at tests/intent-prepare.test.ts:519 and 532 (the reason is the
+pinned at tests/intent-prepare.test.ts:531 and 544 (the reason is the
 waiver, and a frozen native contract still outranks it) and
-tests/intent-run.test.ts:452, 466 and 494 (the reason reaching the run
+tests/intent-run.test.ts:462, 476 and 504 (the reason reaching the run
 result, the SARIF notification under its own id, and the text report
 saying "spec waived" rather than "no contract").
 
@@ -1215,7 +1229,7 @@ first, because a pull request build is on a detached head and git answers
 "HEAD" there, matching no spec at all (src/intent-base.ts:60-74).
 
 The environment is INJECTED into `runAll` and defaults to EMPTY rather
-than to `process.env` (src/run.ts:99-111 for why, src/run.ts:168 for the
+than to `process.env` (src/run.ts:106-115 for why, src/run.ts:182 for the
 default itself). Without that, running this package's own suite inside a
 pull request build would put every gate into the pull-request flow,
 because Actions sets `GITHUB_BASE_REF` for the whole job.
@@ -1225,9 +1239,9 @@ including the empty `GITHUB_BASE_REF` a push build sets), 91 (the
 three-dot range: what landed on the base afterwards is not listed), 110
 (both sides of a rename), and 121 and 135 (the quotePath decision, and
 that an ordinary space survives it); and
-tests/intent-run.test.ts:175 (the branch diff rather than the index), 204
-(the base taken from the pull request environment), 397 ("is never read
-unless the caller passes it in") and 425.
+tests/intent-run.test.ts:185 (the branch diff rather than the index), 214
+(the base taken from the pull request environment), 407 ("is never read
+unless the caller passes it in") and 520.
 
 ## Reporting: a statement about coverage is a notification, a statement that something went wrong is a result
 
@@ -1242,12 +1256,12 @@ it teaches the reader to dismiss the next one. Four cases live here:
 `conductor/gate-deferred` (src/output-sarif.ts:448-456),
 `conductor/gate-excluded` (src/output-sarif.ts:468-476), the per-product
 skipped advisory, whose id is the product and the skip reason and so is
-either `no-contract` or `contract-waived` (src/output-sarif.ts:518-525),
+either `no-contract` or `contract-waived` (src/output-sarif.ts:518-531),
 and
-`conductor/gate-not-enforced` (src/output-sarif.ts:553-586), all of them
-collected at src/output-sarif.ts:640-645 and written into
+`conductor/gate-not-enforced` (src/output-sarif.ts:559-592), all of them
+collected at src/output-sarif.ts:646-651 and written into
 `invocations[0].toolExecutionNotifications` on the umbrella's run
-(src/output-sarif.ts:382-395 and 651-662). As results they were
+(src/output-sarif.ts:382-395 and 657-668). As results they were
 fingerprint-less note alerts that reappeared on every run, so a repository
 on the adoption ramp accrued permanent alerts about this tool's own
 configuration.
@@ -1263,7 +1277,7 @@ the umbrella's report and the gate's own verdict is a defect in this run
 rather than a property of anybody's configuration.
 
 The text report answers the same question the same way, and the two must
-keep agreeing. `isFullyClean` (src/output-text.ts:405-416) forces the full
+keep agreeing. `isFullyClean` (src/output-text.ts:418-429) forces the full
 report when the umbrella has a diagnostic and does NOT force it for a
 gate's own note, for exactly this reason: the standing note that pnpm
 lockfiles do not record install-script metadata is a permanent property of
@@ -1289,7 +1303,7 @@ notification objects are shaped as SARIF 2.1.0 wants, every level is
 normalization diagnostic as a note-level result carrying blocking: false
 and no location) and 951 (naming the gate it came from). The remaining
 result id, `conductor/gate-output-unparseable`, is pinned end to end by
-tests/cli.test.ts:150, which runs the CLI over a gate whose output has
+tests/cli.test.ts:160, which runs the CLI over a gate whose output has
 drifted and finds that id among the umbrella run's RESULTS.
 
 In the text report, pinned by tests/output-text.test.ts:369 and 377 (an
@@ -1317,13 +1331,13 @@ left marked blocking.
 ## The clean-run summary line, and what it may not swallow
 
 A fully clean run prints one line rather than a screenful
-(`summaryLine`, src/output-text.ts:439-498, reached at
-src/output-text.ts:501-503). Twelve lines of per-gate detail on a commit
+(`summaryLine`, src/output-text.ts:452-511, reached at
+src/output-text.ts:514-516). Twelve lines of per-gate detail on a commit
 that found nothing is a cost paid on every commit, and it is what makes a
 team switch a hook off.
 
 The predicate is not simply the exit code (`isFullyClean`,
-src/output-text.ts:405-416). Three extra conditions, and each one exists
+src/output-text.ts:418-429). Three extra conditions, and each one exists
 because collapsing it would swallow the only report anybody sees. A gate
 with `enforce: false` is left out of the composed code, so a run where
 such a gate blocked or could not run still exits 0. An umbrella
@@ -1348,14 +1362,14 @@ non-blocking findings, a count of the gates' own notes, and how to see the
 rest. Pinned by tests/output-text.test.ts:255, 278, 293, 325, 345 and 745.
 
 `--verbose` is a command-line flag rather than a policy key
-(`TextOptions`, src/output-text.ts:365-374), because the schema describes
+(`TextOptions`, src/output-text.ts:378-387), because the schema describes
 what a repository gates on and how loud one developer's terminal is is
 not that.
 
 SARIF IS UNAFFECTED BY IT. `renderSarif` takes no verbosity argument at
-all (src/output-sarif.ts:595), and the format branch in the CLI passes the
-flag only to `renderText` (src/cli.ts:227-230). Pinned by
-tests/cli.test.ts:263, 275 and 283, and by
+all (src/output-sarif.ts:601), and the format branch in the CLI passes the
+flag only to `renderText` (src/cli.ts:265-268). Pinned by
+tests/cli.test.ts:273, 285 and 293, and by
 tests/output-sarif.test.ts:523, which asserts the log is byte for byte
 what it was before the summary line existed, against a literal written
 out by hand rather than against whatever the renderer currently produces.
@@ -1364,14 +1378,14 @@ out by hand rather than against whatever the renderer currently produces.
 
 One run per gate, in gate order. SARIF puts the tool name and version on
 the run, so a single run cannot honestly describe three tools
-(src/output-sarif.ts:598-624).
+(src/output-sarif.ts:604-630).
 
 A gate that never ran gets NO run. The tempting alternative is an empty
 run named for the missing product, which puts that tool's name on
 something it never did. The umbrella's own findings about it go into a
 final run whose driver is the umbrella, the only honest owner of a
 statement about a tool that is not installed
-(src/output-sarif.ts:598-604 for the skip and 633-662 for the run).
+(src/output-sarif.ts:604-610 for the skip and 639-668 for the run).
 
 No invented version. A gate whose version could not be read gets no
 `version` field rather than a placeholder (src/output-sarif.ts:368-372).
@@ -1421,16 +1435,16 @@ renderer would drift silently.
 `executionSuccessful` is written whenever the umbrella's run is written,
 in both directions (`Invocation`, src/output-sarif.ts:344-355, emitted
 unconditionally at src/output-sarif.ts:387 and computed at
-src/output-sarif.ts:658). Emitting it alongside the notifications made
+src/output-sarif.ts:664). Emitting it alongside the notifications made
 the field present when the answer was true and absent when it was false,
 which is the one direction that matters.
 
 Enforcement is recorded in two places and neither is redundant:
 `properties.enforced` on the gate's own run, emitted for enforced gates
 too so an absent property never has to be read as either answer
-(src/output-sarif.ts:615-623), and a notification in the umbrella's run,
+(src/output-sarif.ts:621-629), and a notification in the umbrella's run,
 which is the only place left to say it for a gate that could not run and
-so has no run of its own (src/output-sarif.ts:553-586). What is
+so has no run of its own (src/output-sarif.ts:559-592). What is
 deliberately not done is touching the results: a critical finding stays
 critical and `blocking` stays whatever the gate decided, because writing
 this repository's policy about its own exit code into the field a
@@ -1525,7 +1539,7 @@ screen marked blocking, and "verdict: exit 1, 0 blocking finding(s)"
 contradicts the number printed beside it on the one line somebody reads
 when they read nothing else. That branch instead names the enforced gates
 that exited non-zero and says the umbrella could not reconcile a blocking
-count with what they reported (src/output-text.ts:329-348).
+count with what they reported (src/output-text.ts:342-361).
 
 Pinned by tests/output-text.test.ts:639 and 651, one for each branch of
 `reconcileBlocking`, both of which assert the precondition first (the
@@ -1556,7 +1570,7 @@ from the secret gate lands on `info` and is marked derived, so a
 downstream consumer never sees a level outside the union
 (src/normalize.ts:257-270). The text report marks a derived severity with
 a trailing asterisk and explains the asterisk only when one is on screen
-(src/output-text.ts:48 and 529-531).
+(src/output-text.ts:48 and 542-544).
 
 Fingerprints are carried verbatim and namespaced by product; nothing is
 hashed together with anything else, because a new digest would match no
@@ -1602,13 +1616,13 @@ so) and 458 (the umbrella's own deterministic fingerprint).
 ## No stack trace reaches a terminal or a report
 
 An error's message, never its stack (`messageOf`,
-src/gate-runner.ts:229-241; src/normalize.ts:708-731; src/cli.ts:249-259
-and 276-280). A stack
+src/gate-runner.ts:229-241; src/normalize.ts:708-731; src/cli.ts:287-297
+and 314-318). A stack
 reaching the terminal puts a local filesystem path in front of a user who
 cannot act on any of it, and puts one into a report that gets uploaded.
 The message is the part that says what went wrong.
 
-Pinned by tests/cli.test.ts:86, 104, 118, 129 and 139, and by
+Pinned by tests/cli.test.ts:96, 114, 128, 139 and 149, and by
 tests/run.test.ts:102, which walks the whole outcome object looking for a
 stack frame.
 
@@ -1625,16 +1639,16 @@ directory correctly is the single approach that is right for all three
 
 The umbrella anchors everything at the working-tree root as reported by
 git, so a run from a subdirectory behaves exactly like a run from the top
-(src/cli.ts:32-45). A relative `--output` is the one exception: it
+(src/cli.ts:52-80). A relative `--output` is the one exception: it
 resolves against the directory the command was typed in
-(src/cli.ts:240), which is the conventional reading of a path a human
+(src/cli.ts:278), which is the conventional reading of a path a human
 typed, and the generated hook always runs from the root, so only a human
 running the CLI by hand from a subdirectory ever hits the difference. The
 test proves content equality against absolute paths, which is what keeps
 this exception from being a gap in that test.
 
 The child working directory is pinned by tests/gate-runner.test.ts:87.
-THE SUBDIRECTORY ANCHORING IS PINNED AT tests/cli.test.ts:393, which runs
+THE SUBDIRECTORY ANCHORING IS PINNED AT tests/cli.test.ts:397, which runs
 the built CLI from `packages/app` two levels inside a repository and
 asserts it exits 0, never prints the run-init message, names all three
 gates in the report, and writes a report byte for byte identical to the
@@ -1654,7 +1668,7 @@ THE FALLBACK IS GONE, and this paragraph used to record it as an OPEN
 defect. `repoRoot` no longer catches every failure and answers `cwd`: git
 missing from PATH and a directory outside any repository are now two
 different sentences, and anything else git can fail with is a third
-(src/cli.ts:32-79). It is called inside `run`'s own try, so each one
+(src/cli.ts:32-80). It is called inside `run`'s own try, so each one
 arrives as one line on stderr with no stack and the could-not-run exit
 code, the same shape as every other refusal the CLI makes. What the
 fallback did instead was answer "no .guardrails.yaml here, run conductor
@@ -1716,7 +1730,7 @@ enforcement is CI and whoever remembers to run `pnpm lint` before pushing.
 
 Recorded so a future audit does not spend time proving them.
 
-Gates run SEQUENTIALLY (src/run.ts:172-230). That is a legibility decision
+Gates run SEQUENTIALLY (src/run.ts:186-245). That is a legibility decision
 rather than a rule: interleaved stderr from three gates is unreadable
 exactly when a commit has just been refused. It is explicitly flagged in
 the source as the obvious thing to revisit with a measurement, and nothing
@@ -1728,7 +1742,7 @@ rules; the only invariant near them is that a timeout lands in the
 could-not-run path rather than being read as a clean exit.
 
 `report.format` in the policy file is a default that `--format` overrides
-(src/cli.ts:214). There is no rule about which one a repository should
+(src/cli.ts:252). There is no rule about which one a repository should
 choose.
 
 The `dist/` directory and `schema/` are the published files
