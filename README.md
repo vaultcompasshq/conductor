@@ -377,6 +377,36 @@ runs whatever its author pushes to it next. Pin every third-party action by
 commit digest in a workflow you actually run, the way this repository's own
 workflows do.
 
+### The report as a pull request comment
+
+The SARIF upload produces no alerts on a private repository without GitHub
+Code Security, which is why that step carries `continue-on-error`. A comment
+is free there. Add `pull-requests: write` to the job's `permissions` and this
+step after the gates; it runs the gates a second time, because the Action
+writes SARIF and nothing else, and `--verbose` because a clean run otherwise
+collapses to one line.
+
+```yaml
+      - name: Comment the report on the pull request
+        # always: the report is most worth reading on the run that failed,
+        # and the gates step has already failed the job by then.
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        # || true: a blocking finding is a non-zero exit, and that verdict
+        # belongs to the gates step rather than to this one.
+        run: |
+          node_modules/.bin/conductor run --stage ci --format text --verbose --output conductor.txt || true
+          gh pr comment "$PR" --body-file conductor.txt
+```
+
+This is a substitute for code-scanning alerts, not the same thing. A comment
+is one snapshot of one run: no per-finding state, nothing to dismiss, no
+history between runs, and a new comment every time rather than an alert that
+closes when the finding goes away.
+
 ## What is in and what is out
 
 In: the policy file and its schema, `init` with dry-run, revert, and adopt,
