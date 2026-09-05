@@ -115,6 +115,13 @@ export interface RunOptions {
   env?: NodeJS.ProcessEnv;
   /** Injected in tests so a run's output is comparable between runs. */
   now?: () => Date;
+  /**
+   * Where the intent gate's per-run temporary project is created. Injected
+   * in tests so the one that counts leaked directories counts its own and
+   * not another jest worker's; nothing in production passes it. See
+   * IntentPrepareOptions.tempRoot.
+   */
+  tempRoot?: string;
 }
 
 /**
@@ -200,6 +207,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
             ...(options.base === undefined ? {} : { base: options.base }),
             ...(options.spec === undefined ? {} : { spec: options.spec }),
             ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+            ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
           });
 
           if (prepared.kind === 'skip') {

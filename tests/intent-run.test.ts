@@ -121,7 +121,13 @@ function binWith(check: string, exit = 0): string {
 function run(
   root: string,
   bin: string,
-  options: { base?: string; spec?: string; env?: NodeJS.ProcessEnv; enforce?: boolean } = {}
+  options: {
+    base?: string;
+    spec?: string;
+    env?: NodeJS.ProcessEnv;
+    enforce?: boolean;
+    tempRoot?: string;
+  } = {}
 ): RunResult {
   return runAll(options.enforce === false ? INTENT_UNENFORCED : INTENT_ONLY, {
     repoRoot: root,
@@ -130,6 +136,7 @@ function run(
     env: options.env ?? {},
     ...(options.base === undefined ? {} : { base: options.base }),
     ...(options.spec === undefined ? {} : { spec: options.spec }),
+    ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
   });
 }
 
@@ -149,27 +156,30 @@ describe('a pull-request run against an imported spec', () => {
   });
 
   it('leaves no temporary directory behind when every gate ran and passed', () => {
-    // The other half of the rule intent-prepare.test.ts:426 pins. There the
-    // preparation itself cleans up after a step that failed; here the whole
-    // chain succeeded, so the only thing that removes the directory is the
-    // caller's finally in runAll. Counted the same way and for the same
-    // reason: a leak here is one directory per pull request on a shared CI
+    // The other half of the rule the failure-half test in
+    // tests/intent-prepare.test.ts pins. There the preparation itself cleans
+    // up after a step that failed; here the whole chain succeeded, so the
+    // only thing that removes the directory is the caller's finally in
+    // runAll. A leak is one directory per pull request on a shared CI
     // runner, with nothing in any report pointing at the cause.
-    const before = readdirSync(os.tmpdir()).filter((entry) =>
-      entry.startsWith(TEMP_PREFIX)
-    ).length;
+    //
+    // Counted in a temporary root of this test's OWN, never in the shared
+    // one. Both halves used to count entries in os.tmpdir() itself, and the
+    // two files can run in parallel jest workers, so each was counting the
+    // other's directories and the number could move in either direction
+    // between the two reads. TMPDIR cannot steer this from here: node reads
+    // that from the real process environment and a jest test's process.env
+    // is a copy, so the root is injected instead, the same way the
+    // environment already is.
+    const tempRoot = tempDir();
 
-    const result = run(repo(), binWith(CHECK_PASSING), { base: 'main' });
+    const result = run(repo(), binWith(CHECK_PASSING), { base: 'main', tempRoot });
 
     // The run has to have gone through the import and the freeze, or this
     // would pass on a directory that was never created.
     expect(result.exitCode).toBe(0);
     expect(result.gates[0].intent?.contractSource.kind).toBe('imported');
-
-    const after = readdirSync(os.tmpdir()).filter((entry) =>
-      entry.startsWith(TEMP_PREFIX)
-    ).length;
-    expect(after).toBe(before);
+    expect(readdirSync(tempRoot).filter((entry) => entry.startsWith(TEMP_PREFIX))).toEqual([]);
   });
 
   it('hands the gate the branch diff rather than the index', () => {

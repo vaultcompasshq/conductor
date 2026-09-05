@@ -91,6 +91,20 @@ export interface IntentPrepareOptions {
   base?: string;
   spec?: string;
   timeoutMs?: number;
+  /**
+   * The directory the per-run temporary project is created under.
+   *
+   * Injected exactly like `env` and `pathValue` are, and for the same kind
+   * of reason: the two tests that prove nothing is leaked count the
+   * `conductor-intent-` directories either side of a run, and counting them
+   * in the shared temporary directory made each of those tests depend on
+   * what the other jest worker happened to be doing at that moment. Nothing
+   * in production passes it, so a real run still uses the system temporary
+   * directory. It cannot be steered with TMPDIR from a test either: node
+   * reads that from the real process environment, and a jest test's
+   * `process.env` is a copy that never reaches it.
+   */
+  tempRoot?: string;
 }
 
 /**
@@ -353,7 +367,7 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
     };
   }
 
-  const projectDir = mkdtempSync(path.join(os.tmpdir(), TEMP_PREFIX));
+  const projectDir = mkdtempSync(path.join(options.tempRoot ?? os.tmpdir(), TEMP_PREFIX));
   const cleanup = (): void => {
     rmSync(projectDir, { recursive: true, force: true });
   };

@@ -109,7 +109,7 @@ function stubbedBin(options: Parameters<typeof stubIntentGuard>[1] = {}): string
 function prepare(
   repoRoot: string,
   bin: string,
-  options: { base?: string; spec?: string; env?: NodeJS.ProcessEnv } = {}
+  options: { base?: string; spec?: string; env?: NodeJS.ProcessEnv; tempRoot?: string } = {}
 ): IntentPrepareResult {
   const binary = resolveGateBinary(INTENT_GATE, repoRoot, bin);
   const result = prepareIntent({
@@ -118,6 +118,7 @@ function prepare(
     env: options.env ?? {},
     ...(options.base === undefined ? {} : { base: options.base }),
     ...(options.spec === undefined ? {} : { spec: options.spec }),
+    ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
   });
   if (result.kind === 'ready') {
     cleanups.push(result.preparation.cleanup);
@@ -427,16 +428,27 @@ describe('every step of the chain names itself when it fails', () => {
     // A failed run still created a directory and wrote a contract into it.
     // Counting them either side is the only way to see that from out here,
     // and a leak here is a leak per pull request on a CI runner.
-    const before = readdirSync(os.tmpdir()).filter((entry) =>
-      entry.startsWith(TEMP_PREFIX)
-    ).length;
+    //
+    // Counted in a temporary root of this test's OWN, never in the shared
+    // one. This half and the success half in tests/intent-run.test.ts both
+    // used to count entries in os.tmpdir() itself, and the two files can run
+    // in parallel jest workers, so each was counting the other's directories
+    // and the number could move in either direction between the two reads.
+    // TMPDIR cannot steer this from here: node reads that from the real
+    // process environment and a jest test's process.env is a copy, so the
+    // root is injected instead, the same way the environment already is.
+    const tempRoot = tempDir();
 
-    prepare(repoWithSpec(), stubbedBin({ freeze: { stdout: '', stderr: 'refused', exit: 1 } }));
+    const result = prepare(
+      repoWithSpec(),
+      stubbedBin({ freeze: { stdout: '', stderr: 'refused', exit: 1 } }),
+      { tempRoot }
+    );
 
-    const after = readdirSync(os.tmpdir()).filter((entry) =>
-      entry.startsWith(TEMP_PREFIX)
-    ).length;
-    expect(after).toBe(before);
+    // The chain has to have got as far as writing the contract, or this
+    // would pass on a directory that was never created.
+    expect(result.kind === 'failed' && result.step).toBe('freeze');
+    expect(readdirSync(tempRoot).filter((entry) => entry.startsWith(TEMP_PREFIX))).toEqual([]);
   });
 
   it('names the import-spec step when only the per-command binary is installed', () => {

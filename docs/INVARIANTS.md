@@ -76,8 +76,8 @@ one of them by fixing a real bug rather than only testing around it:
    nothing. Pinned by tests/init.test.ts:926.
 2. THE SUCCESS HALF OF THE TEMPORARY-DIRECTORY CLEANUP. Pinned by
    tests/intent-run.test.ts:151, which drives a full passing `runAll`
-   through the import and freeze chain and counts `conductor-intent-`
-   entries in the system temporary directory either side. The failure
+   through the import and freeze chain and finds no `conductor-intent-`
+   entry in the temporary root it injected. The failure
    half was already pinned; this half is the caller's `finally`, and it
    was correct, so no code changed.
 3. `--spec` OUTRANKING A FROZEN NATIVE CONTRACT. Pinned by
@@ -967,17 +967,27 @@ directory exists calls `cleanup` before returning
 (src/intent-prepare.ts:338-385), and the success path is removed by the
 caller's `finally` once every gate has run, whatever happened while they
 did (src/run.ts:231-240). The failure half is pinned by
-tests/intent-prepare.test.ts:426, which counts directories carrying
-`TEMP_PREFIX` in the system temporary directory before and after.
+tests/intent-prepare.test.ts:426, which drives the chain to a freeze that
+refuses and then finds no directory carrying `TEMP_PREFIX`.
 
 THE SUCCESS HALF IS PINNED AT tests/intent-run.test.ts:151, which drives a
-full passing run through the import and freeze chain and counts entries
-carrying `TEMP_PREFIX` either side, the same way the failure test does.
-It asserts the run really did import a contract before it counts, so it
-cannot pass on a directory that was never created. Nothing in the code
-changed: removing the `cleanup()` call from the `finally` in src/run.ts
-turns that one test red and leaves every other test in the file green,
-which is what makes it the thing holding the rule.
+full passing run through the import and freeze chain and looks in the same
+place, the same way. It asserts the run really did import a contract
+before it looks, so it cannot pass on a directory that was never created.
+Nothing in the code changed for it: removing the `cleanup()` call from the
+`finally` in src/run.ts turns that one test red and leaves every other
+test in the file green, which is what makes it the thing holding the rule.
+
+BOTH LOOK IN A ROOT OF THEIR OWN rather than in the system temporary
+directory, and that is not cosmetic. They live in two files, jest runs
+those in separate workers, and each was counting the other's directories:
+the count could move in either direction between the two reads for reasons
+that had nothing to do with a leak. The root is injected
+(`IntentPrepareOptions.tempRoot`, threaded through `RunOptions.tempRoot`),
+the same seam the environment and the clock already use, and nothing in
+production passes it. TMPDIR would have been the smaller change and does
+not work: node reads it from the real process environment, and a jest
+test's `process.env` is a copy that never reaches it.
 
 The cost of being wrong is one leaked directory per pull request on a
 shared CI runner, with nothing in any report pointing at the cause. Note
