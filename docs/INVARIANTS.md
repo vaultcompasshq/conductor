@@ -61,33 +61,39 @@ The whole list, in one place, so the next audit starts here rather than
 reading for it. Each is stated again in its own section with the reason
 it is there and what would break in practice.
 
-Six were admitted when this file was written. Two have since been pinned:
-the `RESERVED_OPTIONS` list is now derived from `gateArgs` in one
-direction and held to three justified exceptions in the other
-(tests/policy.test.ts:338 and 347), and `conductor/blocking-threshold-unknown`
-is now exercised at the normalizer (tests/normalize.test.ts:62). FOUR
-REMAIN, each re-checked by searching for a test rather than assumed:
+Six were admitted when this file was written. ALL SIX ARE NOW PINNED.
+Two went first: the `RESERVED_OPTIONS` list is derived from `gateArgs` in
+one direction and held to three justified exceptions in the other
+(tests/policy.test.ts:338 and 347), and
+`conductor/blocking-threshold-unknown` is exercised at the normalizer
+(tests/normalize.test.ts:62). The remaining four were closed in 0.2.1,
+one of them by fixing a real bug rather than only testing around it:
 
-1. A MALFORMED MANIFEST ON REVERT. `revertInit` parses it with a bare
-   `JSON.parse`, so a corrupt one throws where `readManifest` treats the
-   same file as missing. Nothing writes a malformed manifest anywhere in
-   tests/init.test.ts.
-2. THE SUCCESS HALF OF THE TEMPORARY-DIRECTORY CLEANUP. Nothing asserts
-   that a successful `runAll` leaves no `conductor-intent-` directory
-   behind. The failure half is pinned; this half is the caller's
-   `finally`.
-3. `--spec` OUTRANKING A FROZEN NATIVE CONTRACT. Nothing puts both in one
-   repository and checks which wins. It is held only by branch order.
-4. THE SUBDIRECTORY ANCHORING OF THE CLI. No test invokes `conductor run`
-   from a subdirectory of a repository. The hook's equivalent rule IS
-   pinned.
+1. A MALFORMED MANIFEST ON REVERT. `revertInit` parsed it with a bare
+   `JSON.parse`, so a corrupt one threw where `readManifest` treats the
+   same file as missing. Revert now answers `manifest-unreadable`, which
+   is deliberately a different conflict from `no-manifest`, and removes
+   nothing. Pinned by tests/init.test.ts:926.
+2. THE SUCCESS HALF OF THE TEMPORARY-DIRECTORY CLEANUP. Pinned by
+   tests/intent-run.test.ts:151, which drives a full passing `runAll`
+   through the import and freeze chain and counts `conductor-intent-`
+   entries in the system temporary directory either side. The failure
+   half was already pinned; this half is the caller's `finally`, and it
+   was correct, so no code changed.
+3. `--spec` OUTRANKING A FROZEN NATIVE CONTRACT. Pinned by
+   tests/intent-prepare.test.ts:220 and 231, which put both in one
+   repository and assert the flag's spec is what gets imported and frozen
+   and that the gate is not pointed at the repository itself.
+4. THE SUBDIRECTORY ANCHORING OF THE CLI. Pinned by tests/cli.test.ts:393,
+   which runs the built CLI from two levels down and asserts it produces
+   the same report, byte for byte, as the same run from the top.
 
 Two more things belong on this list without being invariants of the same
-kind. `ExitInput.enforce` is REQUIRED rather than defaulted, which is a
-compile-time property that no test pins and no test could. And the
-generated hook's own `exit 1` is asserted on one of its two fail-closed
-branches only, which is a partial gap rather than an absent one; the
-section on it says which half is which.
+kind, and neither has changed. `ExitInput.enforce` is REQUIRED rather
+than defaulted, which is a compile-time property that no test pins and no
+test could. And the generated hook's own `exit 1` is asserted on one of
+its two fail-closed branches only, which is a partial gap rather than an
+absent one; the section on it says which half is which.
 
 ## The exit code is composed, not maximised
 
@@ -932,14 +938,19 @@ did (src/run.ts:231-240). The failure half is pinned by
 tests/intent-prepare.test.ts:376, which counts directories carrying
 `TEMP_PREFIX` in the system temporary directory before and after.
 
-THE SUCCESS HALF IS NOT PINNED BY ANY TEST. Nothing anywhere asserts that
-a successful `runAll` leaves no `conductor-intent-` directory behind;
-tests/intent-prepare.test.ts:291 only proves that calling `cleanup`
-yourself works, and tests/intent-run.test.ts never looks. The cost of
-being wrong is one leaked directory per pull request on a shared CI
-runner, with nothing in any report pointing at the cause, which is exactly
-why the `finally` is there and exactly why it deserves a test it does not
-have.
+THE SUCCESS HALF IS PINNED AT tests/intent-run.test.ts:151, which drives a
+full passing run through the import and freeze chain and counts entries
+carrying `TEMP_PREFIX` either side, the same way the failure test does.
+It asserts the run really did import a contract before it counts, so it
+cannot pass on a directory that was never created. Nothing in the code
+changed: removing the `cleanup()` call from the `finally` in src/run.ts
+turns that one test red and leaves every other test in the file green,
+which is what makes it the thing holding the rule.
+
+The cost of being wrong is one leaked directory per pull request on a
+shared CI runner, with nothing in any report pointing at the cause. Note
+that tests/intent-prepare.test.ts:291 does NOT cover this: it only proves
+that calling `cleanup` yourself works.
 
 ## The repository's own frozen contract wins, and "frozen" means one specific thing
 
@@ -959,26 +970,30 @@ which sends the run down the import path rather than handing the gate
 something it will reject.
 
 An explicit `--spec` outranks even a frozen native contract
-(src/intent-prepare.ts:208-211, where the `flag` branch is taken before
+(src/intent-prepare.ts:209-212, where the `flag` branch is taken before
 `nativeContractIsFrozen` is ever called), because a person typed it just
 now.
 
 The native-contract rule is pinned by tests/intent-prepare.test.ts:143,
-153, 159, 169 and 187. THE `--spec` PRECEDENCE IS NOT PINNED BY ANY TEST:
-the only `--spec` case in that file is the missing-path one at line 332,
-and tests/intent-spec.test.ts:246 covers `--spec` beating a pull request
-body, which is a different question decided in a different file. Nothing
-anywhere puts a frozen contract and a `--spec` in the same repository and
-checks which one wins.
+153, 159, 169 and 187. THE `--spec` PRECEDENCE IS PINNED BY
+tests/intent-prepare.test.ts:220 and 231, which build one repository
+holding both a `frozen_by: user` native contract and a spec, pass the
+spec by flag, and assert the reported source is the imported spec and
+that the gate is handed a temporary directory rather than `.`, with
+`import-spec` and `freeze` both recorded as having run. Note that the
+native tests above have a DISCOVERED spec beside the contract, which is
+the opposite rule; and tests/intent-spec.test.ts:246 covers `--spec`
+beating a pull request body, a different question in a different file.
+Neither covers this.
 
-If this silently stopped holding, the branch order at
-src/intent-prepare.ts:208-211 would be the only thing keeping it, and a
-reordering that tested `nativeContractIsFrozen` first would look correct
-in review: every existing test still passes, because none of them has
-both. What a user would see is `--spec` being ignored in exactly the
-repositories that have done the native flow, with the report naming the
-native contract as the source, so the run would be honest about what it
-used and silent about what it was asked for.
+The branch order at src/intent-prepare.ts:209-212 is still the mechanism.
+Before those two tests, a reordering that tested `nativeContractIsFrozen`
+first would have looked correct in review, because every existing test
+passed either way: none of them had both. What a user would have seen is
+`--spec` ignored in exactly the repositories that have done the native
+flow, with the report naming the native contract as the source, so the run
+would be honest about what it used and silent about what it was asked
+for. Swapping the two branches now turns both tests red.
 
 ## Spec discovery: three sources, and the order is the whole decision
 
@@ -1537,13 +1552,22 @@ git, so a run from a subdirectory behaves exactly like a run from the top
 (src/cli.ts:32-45).
 
 The child working directory is pinned by tests/gate-runner.test.ts:87.
-THE SUBDIRECTORY ANCHORING IS NOT PINNED BY ANY TEST: no test invokes the
-CLI from a subdirectory of a repository, and `repoRoot` falls back to the
-working directory when git cannot answer, so a regression there would
-degrade quietly into a policy-file-not-found error. The equivalent rule
-inside the generated hook IS pinned, at tests/init.test.ts:1487, which
-runs the hook from `packages/app` inside the repository and proves it
-still finds `node_modules/.bin` at the root.
+THE SUBDIRECTORY ANCHORING IS PINNED AT tests/cli.test.ts:393, which runs
+the built CLI from `packages/app` two levels inside a repository and
+asserts it exits 0, never prints the run-init message, names all three
+gates in the report, and writes a report byte for byte identical to the
+same run from the top. The equivalent rule inside the generated hook is
+pinned at tests/init.test.ts:1487, which runs the hook from `packages/app`
+and proves it still finds `node_modules/.bin` at the root.
+
+That test has to put git back on the PATH itself, and the reason is worth
+recording. `repoRoot` falls back to the working directory when git cannot
+answer (src/cli.ts:42-44), and tests/cli.test.ts replaces PATH wholesale
+so the gates resolve to stubs, which takes git away from the spawned CLI
+too. Everywhere else in that file the fallback is invisible, because the
+working directory IS the root. Underneath the root it is the whole
+question, so without the shim the test would have failed for the wrong
+reason and a fix would have been made to the wrong thing.
 
 ## Public-repository hygiene is a gate, not a habit
 

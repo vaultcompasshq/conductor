@@ -393,8 +393,8 @@ promotion would want and which the audits do by hand today; and anything that
 runs inside an agent session or on save, which intent-guard's own optional
 session hooks already cover.
 
-0.2.0 is the first release, of a young tool rather than a finished one. The
-gates are still the product; this is the convenience layer over them.
+This is a young tool rather than a finished one. The gates are still the
+product; this is the convenience layer over them.
 
 ## Design notes
 
