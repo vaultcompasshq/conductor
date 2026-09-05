@@ -235,6 +235,20 @@ from either of those is subject to that manager's exit code rather than
 the umbrella's, so 1 and 2 stop meaning different things there; that is
 why init names the file rather than editing it.
 
+simple-git-hooks and yorkie are the same refusal with one difference that
+changes how they have to be found: their hook text lives in a package.json
+key (`simple-git-hooks`, `gitHooks`) rather than in a config file of the
+manager's own, so the declaration exists on a fresh clone where the
+generated hook does not, and reading only the hook file misses exactly the
+repository somebody is most likely to run init in. Either signal alone is
+enough, and the package.json one is not corroboration: simple-git-hooks
+2.8.0 writes a hook containing nothing but the shebang and the user's
+command, so no content rule can recognise it at all. The refusal points at
+the package.json entry to edit rather than offering to edit it, because
+init writes a hook, a policy file and a manifest, and the manifest is what
+makes `--revert` honest: a merge into somebody's package.json has no revert
+story that is not a guess about which later edits were theirs.
+
 ## The report
 
 The line names the gates that ran, names any gate deferred to a later stage

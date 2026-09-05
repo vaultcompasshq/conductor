@@ -220,6 +220,16 @@ that gate, for pointing at a build that is not installed anywhere.
   `--adopt`: those hooks were never conductor's, and no flag here turns
   somebody else's file into one this tool may overwrite.
 
+Init recognises the hook manager already wired into the repository. husky is
+redirected to the tracked hook it maintains rather than the generated
+dispatcher git runs. lefthook and the pre-commit framework are refused, with
+the stanza to add to their own config file. simple-git-hooks and yorkie are
+refused too, and recognised from the `simple-git-hooks` or `gitHooks` key in
+package.json as well as from the hook file, because that key is there on a
+fresh clone where the generated hook is not yet; their hook text lives in
+package.json, which conductor does not write, so the guidance names the
+entry to add and `--force` does not override the refusal.
+
 `conductor run` runs every enabled gate and prints one report.
 
 - `--staged` gates the git index against HEAD, which is what the hook does.

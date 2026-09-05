@@ -12,16 +12,20 @@ The manager version is in each file name, so a fixture that stops matching
 a newer release is visible as a stale name rather than as a silent
 disagreement.
 
-**One redaction, applied by hand to two of the three files and listed here
-rather than left for a reader to spot.** `lefthook-2.1.12-pre-commit.sh`
-and `pre-commit-4.6.2-pre-commit.sh` each embed an absolute path to what
+**One redaction, applied by hand to four files and listed here rather than
+left for a reader to spot.** `lefthook-2.1.12-pre-commit.sh` and
+`pre-commit-4.6.2-pre-commit.sh` each embed an absolute path to what
 installed them, which on the capture machine sat under a temporary
 directory carrying a user name; both paths are rewritten to sit under
-`/opt/probe/` in the committed copy. `lefthook-1.7.18-pre-commit.sh` is
-unmodified: that version's generated hook names no absolute path at all,
-which is itself one of the differences between the two lefthook captures.
-Nothing else is changed in any of the three, and no line the detection
-depends on is touched.
+`/opt/probe/` in the committed copy. Both yorkie captures name the capture
+machine's home directory in their `load_nvm` line, and
+`yorkie-1.0.2-pre-commit.sh` names an absolute path to its own runner as
+well; those are rewritten under `/opt/probe/` the same way.
+`lefthook-1.7.18-pre-commit.sh` is unmodified: that version's generated
+hook names no absolute path at all, which is itself one of the differences
+between the two lefthook captures. The two simple-git-hooks captures are
+unmodified as well. Nothing else is changed in any file here, and no line
+the detection depends on is touched.
 
 **One file here is not another tool's.** `conductor-0.2.0-pre-commit.sh` is
 conductor's own hook body as v0.2 shipped it, the bytes actually sitting in
@@ -61,3 +65,46 @@ with a `.pre-commit-config.yaml` declaring one local hook.
 init.ts matches, and the `ID:` line below it is a constant of the
 framework rather than of the repository: this capture's value is identical
 to the one an earlier hand-written fixture in the suite already carried.
+
+## simple-git-hooks 2.14.0 and 2.8.0
+
+    pnpm add -D simple-git-hooks@<version>
+    pnpm exec simple-git-hooks
+
+with a top-level `"simple-git-hooks": { "pre-commit": "npx lint-staged" }`
+key in package.json, which is where this manager keeps the hook text.
+
+`simple-git-hooks-2.14.0-pre-commit.sh` and
+`simple-git-hooks-2.8.0-pre-commit.sh`.
+
+The finding worth recording, and the reason init.ts reads package.json at
+all: **2.8.0 writes no marker of any kind.** Its whole generated hook is
+`#!/bin/sh` and the user's own command, so there is no string in that file
+that belongs to simple-git-hooks and no content rule can recognise it. The
+`SKIP_SIMPLE_GIT_HOOKS` opt-out that 2.14.0 tests on its first line arrived
+somewhere between the two; 2.11.1 was installed during the same capture
+session and carries it as well, differing from 2.14.0 only in blank lines,
+which is why it is not committed here. A repository on an older version is
+identifiable only by the package.json key.
+
+## yorkie 2.0.0 and 1.0.2
+
+    npm install --save-dev yorkie@<version>
+
+with a top-level `"gitHooks": { "pre-commit": "lint-staged" }` key. yorkie
+installs from its own postinstall script and has no CLI to run afterwards.
+npm rather than pnpm on purpose: under pnpm's store layout the installer
+finds itself inside a nested `node_modules` and skips the installation,
+saying so, which is a capture of nothing.
+
+`yorkie-2.0.0-pre-commit.sh` and `yorkie-1.0.2-pre-commit.sh`.
+
+Two things worth recording. **The path to the runner differs between the
+versions**: 2.0.0 writes `./node_modules/yorkie/src/runner.js` relative,
+1.0.2 writes the same suffix under an absolute path, so the suffix is what
+both captures have in common and what init.ts matches. **The generated hook
+collapses every non-zero exit into 1**, in both versions, with
+`... || { echo; echo "pre-commit hook failed"; exit 1; }`. That is the
+claim the refusal guidance makes to a yorkie user about the umbrella's exit
+2, and a test holds it against these files rather than against anybody's
+memory of them.
