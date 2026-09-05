@@ -55,6 +55,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -1067,15 +1068,11 @@ export function revertInit(options: InitOptions): RevertResult {
   }
 
   const remaining: ManifestFile[] = [];
-  let hookRemoved = false;
 
   for (const { file, state } of planned) {
     const rel = relative(file.path);
     if (state === 'gone') {
       actions.push({ kind: 'skip', path: rel, detail: 'already gone' });
-      if (file.kind === 'hook') {
-        hookRemoved = true;
-      }
       continue;
     }
     if (state === 'changed' && !force) {
@@ -1094,16 +1091,27 @@ export function revertInit(options: InitOptions): RevertResult {
       path: rel,
       detail: state === 'changed' ? 'removed (--force, it had changed)' : 'removed',
     });
-    if (file.kind === 'hook') {
-      hookRemoved = true;
-    }
   }
 
   // Only restore an adopted hook once the umbrella hook that replaced it is
   // actually gone. Putting the old hook back next to a hook the user has
-  // since edited would give them two.
+  // since edited would give them two at one path, and the edit they asked to
+  // keep is the one that gets written over.
+  //
+  // Read off the world rather than off a flag raised while removing. This
+  // used to be a `hookRemoved` boolean, and every path that reached here with
+  // a hook in the manifest had already set it, because a hook that changed
+  // with no --force returns at the changed-hook check far above. So the flag
+  // said what this pass INTENDED and the early return was what actually held
+  // the rule, which meant a refactor that flattened that return would satisfy
+  // the flag and restore a hook next to a surviving one. existsSync says what
+  // is there, which is the thing the rule is about.
+  const recordedHooks = planned.filter((entry) => entry.file.kind === 'hook');
+  const umbrellaHookGone =
+    recordedHooks.length > 0 && recordedHooks.every((entry) => !existsSync(entry.file.path));
+
   let adopted = manifest.adopted;
-  if (adopted !== null && hookRemoved) {
+  if (adopted !== null && umbrellaHookGone) {
     mkdirSync(path.dirname(adopted.path), { recursive: true });
     writeFileSync(adopted.path, adopted.content, 'utf8');
     chmodSync(adopted.path, 0o755);

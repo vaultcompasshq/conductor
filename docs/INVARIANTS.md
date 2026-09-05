@@ -296,23 +296,26 @@ success: a typo that runs every gate reads as a passing build with more
 coverage than it has, and a typo that runs none reads as a passing build
 with no coverage at all. Pinned by tests/cli.test.ts:204.
 
-One place is NOT symmetrical with the rest, and it is recorded here rather
-than described as if it were fine. `readManifest` treats an unparseable
-manifest as a missing one, deliberately, because "the record is
-unreadable" is not evidence that a file on disk is the umbrella's
-(src/init.ts:470-480). But `revertInit` parses the same file with a bare
-`JSON.parse` and no guard (src/init.ts:1009), so a corrupt manifest makes
-`--revert` throw. The throw is caught in `main` and printed as one line
-with exit 2 (src/cli.ts:266-280), so nothing leaks a stack, but the
-message is a JSON parser's rather than the "no record of what init wrote"
-conflict the missing-manifest path produces. THIS IS NOT PINNED BY ANY
-TEST: nothing anywhere writes a malformed manifest and reverts, and every
-test in tests/init.test.ts that touches the manifest writes valid JSON
-back. If this silently stopped holding, a user whose manifest was
-truncated by a crash or a bad merge would get `Unexpected end of JSON
-input` from `conductor init --revert` and no indication which file was
-unreadable or that the fix is to delete it and remove the hook by hand.
-The asymmetry with `readManifest` is the finding here, not the throw.
+One place reads the same file two ways, on purpose, and the reason is
+worth stating because it used to be an asymmetry rather than a decision.
+`readManifest` treats an unparseable manifest as a missing one, because
+"the record is unreadable" is not evidence that a file on disk is the
+umbrella's (src/init.ts:471-481). `revertInit` does NOT reuse it, because
+revert has to tell the two apart: a missing manifest means there is no
+record to act on, an unreadable one means there is a record and it cannot
+be trusted, and those send a reader to different fixes. It answers
+`no-manifest` for the first and `manifest-unreadable` for the second, and
+removes nothing either way (src/init.ts:998-1030).
+
+`revertInit` used to parse that file with a bare `JSON.parse` and no
+guard, so a corrupt manifest made `--revert` throw. The throw was caught
+in `main` and printed as one line with exit 2 (src/cli.ts:266-280), so
+nothing leaked a stack, but the message was a JSON parser's: a user whose
+manifest was truncated by a crash or a bad merge got `Unexpected end of
+JSON input` and no indication which file was unreadable or that the fix
+is to repair or delete it by hand. Nothing pinned it, because every test
+that touched the manifest wrote valid JSON back. Now pinned by
+tests/init.test.ts:926.
 
 ## Gate resolution: the name outranks the location, and the location outranks nothing
 
@@ -841,28 +844,56 @@ stdout so a pipe cannot carry it past the reader who needed it
 
 AN ADOPTED HOOK IS NOT WRITTEN BACK WHILE THE UMBRELLA HOOK SURVIVES, or
 the user ends up with two hooks at one path and the edit they asked to
-keep is gone. Pinned by tests/init.test.ts:850, which edits the umbrella
+keep is gone. Pinned by tests/init.test.ts:851, which edits the umbrella
 hook after an `--adopt`, reverts, and asserts the file on disk is still
 the edit and that no action on the result is a `restore`. The positive
 half, that the gate's own hook does come back once the umbrella hook is
-gone, is pinned at tests/init.test.ts:869 (under `--force`) and 882
-(without it, when the umbrella hook was never touched).
+gone, is pinned at tests/init.test.ts:870 (under `--force`), 883 (the
+hook deleted by hand, on a revert too partial to finish) and 908 (without
+`--force`, when the umbrella hook was never touched).
 
-WHAT ENFORCES IT IS NOT THE FLAG THIS FILE USED TO POINT AT. The restore
-is guarded by `hookRemoved` (src/init.ts:1049 and 1085), and that guard
-is dead defence: a manifest that records an adoption also records the
-hook init wrote in the same run, and every path that reaches line 1085
-with a hook entry in the manifest has already set `hookRemoved` to true.
-The hook is either gone (line 1055), removed (line 1076), or removed
-under `--force`; the one remaining case, a hook that changed and no
-`--force`, returned at src/init.ts:1027 long before. So THE CHANGED-HOOK
-EARLY RETURN is what actually holds this guarantee, and a refactor that
-kept `hookRemoved` while flattening that early return would satisfy the
-flag and break the rule. The flag is worth keeping as a second line, but
-it should not be read as the enforcement.
+THE FLAG THIS FILE USED TO POINT AT HAS BEEN REMOVED. The restore used to
+be guarded by a `hookRemoved` boolean raised while removing files, and
+that guard was dead defence: a manifest that records an adoption also
+records the hook init wrote in the same run, and every path that reached
+the restore with a hook entry in the manifest had already set the flag.
+The hook was either gone, removed, or removed under `--force`; the one
+remaining case, a hook that changed with no `--force`, returned at the
+changed-hook check long before. So the changed-hook early return was what
+actually held the guarantee, and a refactor that kept the flag while
+flattening that return would have satisfied the flag and broken the rule.
+
+The condition is now read off the world rather than off the flag: the
+manifest records at least one hook, and no path it records is on disk any
+more (src/init.ts:1109-1114). That is a statement about what is there,
+which is what the rule is about, so a future refactor of the early return
+cannot restore a hook next to a surviving one. The flag is gone rather
+than kept as a second line, because two conditions that must agree are a
+place for them to disagree.
+
+No manifest shape with an adoption and no hook entry is reachable from
+init's own writes, which is what makes the removal safe. Init sets
+`adopted` in exactly two ways (src/init.ts:881-888): the run that adopts,
+which pushes the hook it writes into the same manifest, and the carry
+across a re-init, which keeps a previous manifest's entries that this run
+did not rewrite. Revert's own rewrite (src/init.ts:1153) can only drop
+the hook entry on a pass that also nulls `adopted`. A hand-edited
+manifest could hold that shape, and there the code does what the old flag
+did: nothing is restored.
 
 No manifest at all means nothing is removed and the command fails
-(src/init.ts:996-1007). Pinned by tests/init.test.ts:894.
+(src/init.ts:998-1009). Pinned by tests/init.test.ts:920.
+
+A manifest that will not parse is a SECOND conflict rather than the same
+one (src/init.ts:1017-1031). Revert deliberately does not go through
+`readManifest`, which answers null for both: missing means there is no
+record to act on, unreadable means there is a record and it cannot be
+trusted, and the two send a reader to different fixes. Nothing is removed
+and nothing is guessed either way. Pinned by tests/init.test.ts:926,
+which corrupts the manifest of a real install and asserts the reason is
+`manifest-unreadable`, that the guidance says nothing was removed and
+sends the user to the file by hand, and that the hook, the policy file and
+the manifest itself are all still exactly as they were.
 
 End to end by tests/dogfood.e2e.test.ts:330 and 348, which revert a real
 repository with a hand-edited policy file and then finish the job under
