@@ -289,6 +289,15 @@ export function buildProgram(): Command {
         // reaches here; anything that does is the umbrella's own problem and
         // still must not put a local filesystem path in front of a user who
         // cannot act on it, or into a pre-commit hook's output.
+        //
+        // The working directory in repoRoot's "not a git repository" sentence
+        // is the deliberate exception, and it is the shape of the rule rather
+        // than a hole in it: the user typed the command in that directory, it
+        // is the one thing they have to check, and a message that withheld it
+        // would be telling somebody their directory is wrong without saying
+        // which one. What the rule is really about is a path this tool knows
+        // and the reader does not, in a stack frame or a message they cannot
+        // act on.
         process.exitCode = fail(
           err instanceof PolicyError
             ? err.message

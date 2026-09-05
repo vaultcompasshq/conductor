@@ -309,8 +309,19 @@ in the `conductor` run, and it **never** reaches the exit code, enforced or
 not. A branch with no spec is a branch this gate has no opinion about, and
 turning that into a failed build is how a gate gets switched off across a
 repository. A waived pull request lands in the same state and is reported
-the same way, under the `intent-guard/contract-waived` id, so a reader can
-tell "nobody has written one" from "somebody decided against one".
+under its own `intent-guard/contract-waived` id, with its own wording on the
+skipped line, in the verdict and on the one-line summary of a clean run, so a
+reader can tell "nobody has written one" from "somebody decided against one"
+wherever they meet it.
+
+**A waiver is a decision, recorded by whoever wrote the pull request body,
+and that includes a contributor from a fork.** On the ordinary path, where a
+repository has no frozen contract of its own, `Spec: none` means the intent
+gate does not run at all on that pull request, and budget breaches are the
+thing this gate blocks on. The one thing a waiver cannot override is a frozen
+`.conductor/intent-contract.yaml`, which is checked first: a repository that
+wants the gate to be non-waivable freezes a native contract and keeps it
+committed.
 
 **What blocks is unchanged.** Blocking stays where intent-guard puts it:
 budget breaches block, subject to `enforce`. Drift on its own is reported and
@@ -382,9 +393,9 @@ workflows do.
 The SARIF upload produces no alerts on a private repository without GitHub
 Code Security, which is why that step carries `continue-on-error`. A comment
 is free there. Add `pull-requests: write` to the job's `permissions` and this
-step after the gates; it runs the gates a second time, because the Action
-writes SARIF and nothing else, and `--verbose` because a clean run otherwise
-collapses to one line.
+step after the gates. It **runs the gates a second time**, because the Action
+writes SARIF and nothing else, so the job costs roughly twice the gate time;
+`--verbose` because a clean run otherwise collapses to one line.
 
 ```yaml
       - name: Comment the report on the pull request
@@ -401,6 +412,21 @@ collapses to one line.
           node_modules/.bin/conductor run --stage ci --format text --verbose --output conductor.txt || true
           gh pr comment "$PR" --body-file conductor.txt
 ```
+
+**Mirror whatever you gave the Action**, or the two runs can report different
+contracts. The step above matches the example, which passes neither
+`base-ref` nor `spec`, so both runs read `GITHUB_BASE_REF` and the `Spec:`
+line out of the job environment themselves and land on the same contract. If
+you set either input on the gates step, pass the same values here as `--base`
+and `--spec`; if you do not, the comment is a report of a contract source the
+uploaded log never used.
+
+**On a pull request from a fork the token is read-only**, so `gh pr comment`
+fails, `continue-on-error` swallows the failure, and no comment appears on
+exactly the pull requests a reviewer knows least about. Nothing here fixes
+that: `pull_request_target` runs with a writable token and the base
+repository's own workflow, which is a different security decision to take on
+purpose rather than a flag to add.
 
 This is a substitute for code-scanning alerts, not the same thing. A comment
 is one snapshot of one run: no per-finding state, nothing to dismiss, no

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -794,6 +795,29 @@ describe('conductor run when git cannot answer', () => {
     expect(result.stderr).toContain(outside);
     expect(result.stderr).not.toMatch(STACK_FRAME);
     expect(result.stderr).not.toMatch(/conductor init/);
+  });
+
+  it('says git could not be run when the binary is there and will not start', () => {
+    // The third branch, which this file first recorded as untestable. It is
+    // not: a git that exists and cannot be executed fails the spawn with
+    // EACCES, which is neither ENOENT nor an exit code, so neither of the two
+    // sentences above is true of it. A file with no execute bit at all is
+    // refused for every user, root included, so this does not depend on who
+    // the suite runs as.
+    const bin = allThreeStubbed();
+    const unusable = path.join(bin, 'git');
+    writeFileSync(unusable, '#!/bin/sh\nexit 0\n');
+    chmodSync(unusable, 0o000);
+
+    // git: false, or runCli would overwrite the file this test just broke.
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin, { git: false });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git could not be run/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+    // Not misreported as either of the other two.
+    expect(result.stderr).not.toMatch(/not on PATH/);
+    expect(result.stderr).not.toMatch(/not a git repository/);
   });
 });
 

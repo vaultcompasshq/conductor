@@ -501,13 +501,18 @@ describe('a pull request body that waives the spec', () => {
     ).not.toContain('intent-guard/no-contract');
   });
 
-  it('is one line in the text report, and is named on the clean summary line', () => {
+  it('is one line in the text report, and is named as a waiver on the clean summary line', () => {
+    // The default report. A pre-commit hook and the pull request comment step
+    // in the README both print this line and nothing else, so a clause that
+    // reads the same for a waiver and for a missing spec means the difference
+    // never reaches the people who only ever see one line.
     const result = waivedRun();
 
     const summary = renderText(result);
     expect(summary.trimEnd().split('\n')).toHaveLength(1);
     expect(summary).toMatch(/clean, nothing blocked/);
-    expect(summary).toMatch(/Nothing to check against: intent \(intent-guard\)/);
+    expect(summary).toMatch(/Spec waived by the pull request body: intent \(intent-guard\)/);
+    expect(summary).not.toMatch(/Nothing to check against/);
 
     const full = renderText(result, { verbose: true });
     expect(full).toMatch(/skipped\s+intent/);
@@ -531,5 +536,37 @@ describe('a run that is not pull-request shaped', () => {
     expect(result.gates[0].argv).toEqual(['check', '--project', '.', '--staged', '--json']);
     expect(result.gates[0].intent).toBeUndefined();
     expect(result.skipped).toEqual([]);
+  });
+});
+
+describe('a waived run where the intent gate is the only gate', () => {
+  // The branch the waiver tests above route around. With a second, clean gate
+  // in the policy there is a GateOutcome, so the report never reaches the
+  // verdict for a run whose gate list is empty. An intent-only policy is not
+  // a corner case: it is what `--gate intent` produces, and what a repository
+  // running the intent gate at the ci stage on its own has.
+  function intentOnlyWaivedRun(): RunResult {
+    const event = path.join(tempDir(), 'event.json');
+    writeFileSync(event, JSON.stringify({ pull_request: { body: 'Spec: none\n' } }));
+
+    return run(repo(), binWith(CHECK_PASSING), {
+      base: 'main',
+      env: { GITHUB_EVENT_PATH: event },
+    });
+  }
+
+  it('says the spec was waived in the verdict, rather than asking for a spec', () => {
+    // The sentence a reader acts on. Telling somebody to write a spec, on a
+    // pull request whose author has just written down that there is none, is
+    // the report contradicting the person it is reporting to.
+    const result = intentOnlyWaivedRun();
+
+    expect(result.gates).toEqual([]);
+    expect(result.exitCode).toBe(0);
+
+    const text = renderText(result);
+    expect(text).toMatch(/verdict: exit 0, nothing was checked/);
+    expect(text).toMatch(/verdict:.*waived by the pull request body/);
+    expect(text).not.toMatch(/no contract to check against/);
   });
 });
