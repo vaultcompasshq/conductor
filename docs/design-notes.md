@@ -43,6 +43,18 @@ It gets no SARIF run of its own, for the same reason a gate that could not run
 gets none: it produced no tool output, and an empty run named for that product
 would put its name on something it never did.
 
+That rule is written for a gate that never ran, and it currently also covers
+a gate that ran and failed. The SARIF-native shape for the second is its own
+run with `invocations[0].executionSuccessful: false`; that is not done yet,
+because it changes the run list of every log with a failing gate in it. What
+follows from leaving it is that `conductor/gate-failed` in the umbrella's run
+is the only place such a log can say anything about the failure, so that
+finding carries the failing gate's own stderr, trimmed, capped and truncated
+out loud rather than silently. It used to carry only "the gate exited 2,
+which it uses for could not run", which a reader with the log and nothing
+else cannot act on: a dogfood run had dep-guard naming an unparseable
+lockfile in the text report and saying nothing in the log beside it.
+
 ### What `enforce: false` does not quieten
 
 The failure is not quietened down anywhere else. In SARIF it is still a

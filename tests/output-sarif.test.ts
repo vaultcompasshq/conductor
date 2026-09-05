@@ -7,6 +7,7 @@ import type { Finding } from '../src/envelope.js';
 import type { GateOutcome } from '../src/gate-runner.js';
 import {
   normalizeDepGuard,
+  normalizeFailedGate,
   normalizeIntentGuard,
   normalizeMissingGate,
   normalizeVaultGuard,
@@ -1212,5 +1213,85 @@ describe('the partialFingerprints key', () => {
     // hashes of different things.
     expect(fingerprintKey('dep-guard')).toBe('dep-guard/v1');
     expect(fingerprintKey('conductor')).toBe('conductor/v1');
+  });
+});
+
+/**
+ * The published log has to carry the gate's own words, not only the
+ * umbrella's.
+ *
+ * A gate that could not run gets no SARIF run of its own, by the rule at the
+ * top of output-sarif.ts, so the umbrella's `conductor/gate-failed` result is
+ * the only place in the whole log where anything about that failure can be
+ * written. Before this it said "the gate exited 2, which it uses for could
+ * not run" and nothing else, in both `message.text` and
+ * `properties.details.detail`, while the text report beside it printed the
+ * gate's actual line. A reader with only the log could not learn what was
+ * wrong.
+ */
+describe("a failing gate's own error in the published log", () => {
+  const LINE = 'dep-guard: pnpm-lock.yaml: not valid YAML (lockfile-parse)';
+
+  function gateFailedResult(stderr: string | null): Record<string, unknown> {
+    const log = sarif(
+      result([
+        outcome({
+          exitCode: 2,
+          stderr: stderr ?? '',
+          couldNotRun: {
+            reason: 'gate-error',
+            detail: 'the gate exited 2, which it uses for "could not run".',
+          },
+          findings: [
+            normalizeFailedGate(
+              'dependencies',
+              'dep-guard',
+              'the gate exited 2, which it uses for "could not run".',
+              stderr
+            ),
+          ],
+        }),
+      ])
+    );
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    return (umbrella?.results as Array<Record<string, unknown>>)[0];
+  }
+
+  it("puts the child's line in message.text, after the umbrella's own sentence", () => {
+    const entry = gateFailedResult(LINE);
+
+    const text = String((entry.message as Record<string, unknown>).text);
+    expect(text).toContain(LINE);
+    expect(text.indexOf('exited 2')).toBeLessThan(text.indexOf(LINE));
+  });
+
+  it('puts it in properties.details as its own field, beside the generic detail', () => {
+    const entry = gateFailedResult(LINE);
+
+    const properties = entry.properties as Record<string, Record<string, unknown>>;
+    expect(properties.details.stderr).toBe(LINE);
+    expect(String(properties.details.detail)).toMatch(/exited 2/);
+  });
+
+  it('leaves the result exactly as it was when the gate said nothing', () => {
+    const entry = gateFailedResult(null);
+
+    const properties = entry.properties as Record<string, Record<string, unknown>>;
+    expect(properties.details.stderr).toBeNull();
+    expect(String((entry.message as Record<string, unknown>).text)).toBe(
+      'The "dependencies" gate did not complete: the gate exited 2, which it uses for ' +
+        '"could not run". Nothing was verified by this gate.'
+    );
+  });
+
+  it('is still a result at error level rather than a notification', () => {
+    // The carry must not move where the statement lives. gate-failed stays a
+    // result because a class of problem went unlooked-for on this change.
+    const entry = gateFailedResult(LINE);
+
+    expect(entry.ruleId).toBe('conductor/gate-failed');
+    expect(entry.level).toBe('error');
   });
 });

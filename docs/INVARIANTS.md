@@ -132,7 +132,7 @@ broken config as a policy violation.
 Because 2 covers cases the products themselves report as 1, the umbrella
 cannot read the child's exit code alone. "Exited 1 and printed nothing
 parseable on stdout" is the reliable signature of a rejected config, and
-it is treated as could-not-run (src/gate-runner.ts:404-423). So the
+it is treated as could-not-run (src/gate-runner.ts:410-429). So the
 composed code can differ from the maximum of the children's, deliberately.
 
 The per-finding `blocking` flag can only ADD to the answer, never subtract
@@ -188,7 +188,7 @@ An unenforced gate that could not run still produces a critical,
 error-level RESULT in the SARIF log, not a note. `conductor/gate-missing`
 and `conductor/gate-failed` keep their severity and their result standing
 whatever the policy says about enforcement (src/normalize.ts:641 for the
-severity, src/output-sarif.ts:101-107 for the level, and 639-644 for the
+severity, src/output-sarif.ts:115-121 for the level, and 653-658 for the
 findings going into the umbrella's run rather than being reclassified),
 and only the umbrella's own `gate-not-enforced` notification says the
 verdict did not reach the exit code.
@@ -231,15 +231,15 @@ never got as far as spawning anything.
 
 Each one produces a finding of the umbrella's own, critical and blocking,
 with no location (`gateProblem`, src/normalize.ts:629-657, and the four
-functions that call it at src/normalize.ts:667-742). That is not symmetry
+functions that call it at src/normalize.ts:667-801). That is not symmetry
 for its own sake. A gate that never ran gets no SARIF run of its own, by
 the rule below, so without one of these findings the published report
 would carry no trace of the most important thing that happened.
 
 A gate that exits above 1, or does not exit normally at all because it was
-killed or timed out, is could-not-run (src/gate-runner.ts:386-402). A gate
+killed or timed out, is could-not-run (src/gate-runner.ts:388-408). A gate
 that exits 1 with stdout that will not parse as JSON is could-not-run
-(src/gate-runner.ts:404-423). Reporting the second as a policy violation
+(src/gate-runner.ts:410-429). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
 Pinned by tests/gate-runner.test.ts:165, 175 and 199, and end to end by
@@ -262,7 +262,7 @@ with exit 1, which the pre-commit hook then reports as "a gate blocked".
 
 The backstop is src/gate-runner.ts:279-293. The `catch` around
 normalization is deliberately NOT narrowed to `NormalizeError`
-(src/gate-runner.ts:435-455): that narrowing was the original defect, when
+(src/gate-runner.ts:441-461): that narrowing was the original defect, when
 a normalizer reading a property off a null array element threw a
 `TypeError`, which escaped everything. The normalizers now validate every
 field they read before reading it (src/normalize.ts:49-90), and the broad
@@ -594,7 +594,7 @@ Both formats say it. One line in the text report
 (src/output-text.ts:278-283), a clause on the one-line summary of a clean
 run (src/output-text.ts:520-523), and a `conductor/gate-excluded`
 notification in the umbrella's SARIF run
-(src/output-sarif.ts:468-476). A notification rather than a result by the
+(src/output-sarif.ts:482-490). A notification rather than a result by the
 discriminator below: nothing went wrong, and how much of the policy a run
 covered is a statement about the run. Pinned by
 tests/output-text.test.ts:732 (the full report names them and says
@@ -1206,7 +1206,7 @@ It never reaches the exit code, enforced or not, because a skipped gate
 produces no `GateOutcome` and `composeExitCode` only ever sees outcomes.
 It is still on screen: one line in the text report
 (src/output-text.ts:225-230), one notification in the SARIF log
-(src/output-sarif.ts:518-531), and a distinct verdict sentence when it is
+(src/output-sarif.ts:532-545), and a distinct verdict sentence when it is
 the only thing that happened (src/output-text.ts:334-345), because telling
 somebody to set `enabled: true` is the wrong advice for a gate that is
 already on and had nothing to check.
@@ -1319,15 +1319,15 @@ It is true of the configuration rather than of this change, identical on
 every run until somebody edits the policy file, and on the adoption ramp
 deliberately true for weeks. A permanent alert is a dismissed alert, and
 it teaches the reader to dismiss the next one. Four cases live here:
-`conductor/gate-deferred` (src/output-sarif.ts:448-456),
-`conductor/gate-excluded` (src/output-sarif.ts:468-476), the per-product
+`conductor/gate-deferred` (src/output-sarif.ts:462-470),
+`conductor/gate-excluded` (src/output-sarif.ts:482-490), the per-product
 skipped advisory, whose id is the product and the skip reason and so is
-either `no-contract` or `contract-waived` (src/output-sarif.ts:518-531),
+either `no-contract` or `contract-waived` (src/output-sarif.ts:532-545),
 and
-`conductor/gate-not-enforced` (src/output-sarif.ts:559-592), all of them
-collected at src/output-sarif.ts:646-651 and written into
+`conductor/gate-not-enforced` (src/output-sarif.ts:573-606), all of them
+collected at src/output-sarif.ts:660-665 and written into
 `invocations[0].toolExecutionNotifications` on the umbrella's run
-(src/output-sarif.ts:382-395 and 657-668). As results they were
+(src/output-sarif.ts:396-409 and 671-682). As results they were
 fingerprint-less note alerts that reappeared on every run, so a repository
 on the adoption ramp accrued permanent alerts about this tool's own
 configuration.
@@ -1338,7 +1338,7 @@ person who should see it. `conductor/gate-missing`,
 `conductor/gate-failed` and `conductor/gate-output-unparseable` stay
 results, because a gate that could not run means a class of problem went
 unlooked-for on this change. So do the umbrella's own normalization
-diagnostics (src/output-sarif.ts:411-431), because a disagreement between
+diagnostics (src/output-sarif.ts:425-445), because a disagreement between
 the umbrella's report and the gate's own verdict is a defect in this run
 rather than a property of anybody's configuration.
 
@@ -1352,8 +1352,8 @@ that file format, true on every run forever.
 The notification descriptor id keeps the id the statement was filed under
 when it was a result, so a consumer that had rules for these still
 recognises them, and the descriptors are declared beside the rules so the
-reference resolves rather than dangling (src/output-sarif.ts:315-328,
-declared at 330-335 and attached at 376-378). Level is always `note`; a
+reference resolves rather than dangling (src/output-sarif.ts:329-342,
+declared at 344-349 and attached at 390-392). Level is always `note`; a
 notification arriving as a warning would push these straight back into
 the alert list they were moved out of.
 
@@ -1433,7 +1433,7 @@ what a repository gates on and how loud one developer's terminal is is
 not that.
 
 SARIF IS UNAFFECTED BY IT. `renderSarif` takes no verbosity argument at
-all (src/output-sarif.ts:601), and the format branch in the CLI passes the
+all (src/output-sarif.ts:615), and the format branch in the CLI passes the
 flag only to `renderText` (src/cli.ts:265-268). Pinned by
 tests/cli.test.ts:274, 286 and 294, and by
 tests/output-sarif.test.ts:523, which asserts the log is byte for byte
@@ -1444,20 +1444,42 @@ out by hand rather than against whatever the renderer currently produces.
 
 One run per gate, in gate order. SARIF puts the tool name and version on
 the run, so a single run cannot honestly describe three tools
-(src/output-sarif.ts:604-630).
+(src/output-sarif.ts:618-644).
 
 A gate that never ran gets NO run. The tempting alternative is an empty
 run named for the missing product, which puts that tool's name on
 something it never did. The umbrella's own findings about it go into a
 final run whose driver is the umbrella, the only honest owner of a
 statement about a tool that is not installed
-(src/output-sarif.ts:604-610 for the skip and 639-668 for the run).
+(src/output-sarif.ts:618-624 for the skip and 653-682 for the run).
+
+THE SAME RULE CURRENTLY CATCHES A GATE THAT RAN AND FAILED, and those are
+two different things. A gate that exited 2 did run; the SARIF-native shape
+for it is its own run with `invocations[0].executionSuccessful: false`,
+and that is deliberately NOT done, because it changes the run list of
+every log with a failing gate in it. The consequence is load-bearing
+rather than cosmetic: `conductor/gate-failed` in the umbrella's run is
+then the only place in the whole log that can say anything about the
+failure, which is why that finding carries the failing child's own stderr
+(`normalizeFailedGate`, src/normalize.ts:786-801, fed from
+src/gate-runner.ts:400-404). Before it did, a dogfood run against a
+repository with an unparseable lockfile printed dep-guard naming the file
+and the reason in the text report, and put "the gate exited 2, which it
+uses for could not run" and nothing else in both `message.text` and
+`properties.details.detail` of the log beside it. The stderr is trimmed,
+capped at 2000 characters and truncated out loud rather than silently
+(`summariseStderr`, src/normalize.ts:742 and 752-764), and a gate that
+failed silently keeps the
+message it had. The fingerprint is unaffected, because it is computed over
+the rule, the role and the product and never over the message. Pinned by
+tests/run.test.ts:418, 428, 442 and 452, and by
+tests/output-sarif.test.ts:1262, 1270, 1278 and 1289.
 
 No invented version. A gate whose version could not be read gets no
-`version` field rather than a placeholder (src/output-sarif.ts:368-372).
+`version` field rather than a placeholder (src/output-sarif.ts:382-386).
 
 `%SRCROOT%` is attached only to a path genuinely under the source root
-(`placeArtifact`, src/output-sarif.ts:133-173). An absolute path is
+(`placeArtifact`, src/output-sarif.ts:147-187). An absolute path is
 positive evidence the file is NOT under the root, since one of the gates
 keeps a path absolute exactly when the file is outside the directory it
 scanned; stripping the leading slash fabricates a source-root-relative
@@ -1469,7 +1491,7 @@ normalizing is real rather than a prefix test, so `a/../../b` is caught
 too.
 
 No invented region. Only the secret gate reports a line and a column, and
-even there no `endColumn` (src/output-sarif.ts:222-228 and
+even there no `endColumn` (src/output-sarif.ts:236-242 and
 src/normalize.ts:284-291).
 
 The reason is narrower than this file used to state it, and the narrower
@@ -1481,12 +1503,12 @@ match is unknown FROM THIS CHANNEL rather than unknown to the product,
 which makes it a fixable upstream ask (carry `matchLength` on the match)
 rather than a permanent limitation of the finding. Until it is carried it
 is not guessed, and the renderer already emits `endColumn` when the
-envelope has one (src/output-sarif.ts:226-228), so the day the field
+envelope has one (src/output-sarif.ts:240-242), so the day the field
 arrives the only change needed is in the normalizer.
 
 `partialFingerprints` carries each product's own fingerprint unhashed,
 under a key naming the product and a version
-(src/output-sarif.ts:110-112 and 279-281). Hashing it together with
+(src/output-sarif.ts:124-126 and 293-295). Hashing it together with
 anything would mint a second identity for every finding, one that moves
 when the first does not, and every alert would resurface on the next scan.
 The key is versioned so a future change to a product's fingerprint inputs
@@ -1495,22 +1517,22 @@ silently comparing hashes of different things.
 
 `properties.blocking` is the gate's decision as reconciled in
 src/normalize.ts and is never recomputed in the renderer
-(src/output-sarif.ts:268). A second copy of the gate living in the
+(src/output-sarif.ts:282). A second copy of the gate living in the
 renderer would drift silently.
 
 `executionSuccessful` is written whenever the umbrella's run is written,
-in both directions (`Invocation`, src/output-sarif.ts:344-355, emitted
-unconditionally at src/output-sarif.ts:387 and computed at
-src/output-sarif.ts:664). Emitting it alongside the notifications made
+in both directions (`Invocation`, src/output-sarif.ts:358-369, emitted
+unconditionally at src/output-sarif.ts:401 and computed at
+src/output-sarif.ts:678). Emitting it alongside the notifications made
 the field present when the answer was true and absent when it was false,
 which is the one direction that matters.
 
 Enforcement is recorded in two places and neither is redundant:
 `properties.enforced` on the gate's own run, emitted for enforced gates
 too so an absent property never has to be read as either answer
-(src/output-sarif.ts:621-629), and a notification in the umbrella's run,
+(src/output-sarif.ts:635-643), and a notification in the umbrella's run,
 which is the only place left to say it for a gate that could not run and
-so has no run of its own (src/output-sarif.ts:559-592). What is
+so has no run of its own (src/output-sarif.ts:573-606). What is
 deliberately not done is touching the results: a critical finding stays
 critical and `blocking` stays whatever the gate decided, because writing
 this repository's policy about its own exit code into the field a

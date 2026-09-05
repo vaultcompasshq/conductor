@@ -374,7 +374,9 @@ function runGateInner(
       ...withRun,
       exitCode: null,
       couldNotRun: { reason: 'spawn-failed', detail: child.error.message },
-      findings: [normalizeFailedGate(gate.role, gate.product, child.error.message)],
+      findings: [
+        normalizeFailedGate(gate.role, gate.product, child.error.message, withRun.stderr),
+      ],
       run: EMPTY_RUN,
       diagnostics: [],
     };
@@ -395,7 +397,11 @@ function runGateInner(
       ...withRun,
       exitCode,
       couldNotRun: { reason: 'gate-error', detail },
-      findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+      // The child's own stderr goes with it. The text report prints it from
+      // the outcome, but a gate that could not run gets no SARIF run of its
+      // own, so this finding is the only place a published log can say what
+      // the gate actually complained about.
+      findings: [normalizeFailedGate(gate.role, gate.product, detail, withRun.stderr)],
       run: EMPTY_RUN,
       diagnostics: [],
     };

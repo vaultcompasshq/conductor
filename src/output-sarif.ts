@@ -21,6 +21,20 @@
 //    umbrella, which is the only honest owner of a statement about a tool
 //    that is not installed.
 //
+//    The rule is written for a gate that never ran, and it currently also
+//    covers a gate that RAN AND FAILED, which is a different thing: the
+//    SARIF-native shape for that one is its own run carrying
+//    invocations[0].executionSuccessful: false. That is deliberately not
+//    done here yet, because it changes the run list of every log with a
+//    failing gate in it and this release is a fix rather than a format
+//    change. The consequence is that conductor/gate-failed in the
+//    umbrella's run is the ONLY place such a log can say anything at all
+//    about the failure, which is why that finding carries the child's own
+//    stderr (normalizeFailedGate in normalize.ts). A dogfood run found the
+//    gap the other way round: the text report printed dep-guard naming an
+//    unparseable lockfile and the log beside it said only that the gate had
+//    exited 2.
+//
 //  - A STATEMENT ABOUT COVERAGE OR CONFIGURATION IS A NOTIFICATION, NOT A
 //    FINDING. A gate deferred to a later stage, a gate the policy told not
 //    to decide anything, and a branch with no contract to check against are
