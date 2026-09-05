@@ -224,8 +224,47 @@ function deferredLines(result: RunResult): string[] {
  */
 function skippedLines(result: RunResult): string[] {
   return result.skipped.map(
-    (gate) => `  skipped   ${gate.role}  ${gate.product}  no contract: ${gate.detail}`
+    (gate) =>
+      `  skipped   ${gate.role}  ${gate.product}  ${skipWording(gate.reason).line}: ${gate.detail}`
   );
+}
+
+/**
+ * How a skipped gate is worded, in each of the three places it is worded.
+ *
+ * ONE function rather than a phrase at each call site, because the report has
+ * three of them and the first attempt changed one: the full report's own line
+ * said "spec waived" while the verdict under it still said "had no contract
+ * to check against" and the one-line summary still said "Nothing to check
+ * against". Both of those tell a reader to go and write the spec that
+ * whoever opened the pull request had just written down there is none of, and
+ * the summary line is the one a pre-commit hook and a pull request comment
+ * actually print.
+ *
+ * The `no-contract` wording is unchanged, deliberately: it was right, and a
+ * repository on the adoption ramp reads it on most branches.
+ */
+interface SkipWording {
+  /** The label in front of the skipped line in the full report. */
+  line: string;
+  /** The clause naming what happened, for the verdict sentence. */
+  verdict: string;
+  /** The lead-in on the one-line summary of an otherwise clean run. */
+  summary: string;
+}
+
+function skipWording(reason: RunResult['skipped'][number]['reason']): SkipWording {
+  return reason === 'contract-waived'
+    ? {
+        line: 'spec waived',
+        verdict: 'had its spec waived by the pull request body',
+        summary: 'Spec waived by the pull request body',
+      }
+    : {
+        line: 'no contract',
+        verdict: 'had no contract to check against',
+        summary: 'Nothing to check against',
+      };
 }
 
 /**
@@ -295,9 +334,14 @@ function verdict(result: RunResult): string {
   if (result.gates.length === 0 && result.skipped.length > 0) {
     // A third distinct state, and telling somebody to switch a gate on is
     // wrong advice here too: the gate IS on, it ran, and it had nothing to
-    // check. The fix is a spec, which the skipped line above names.
-    const names = result.skipped.map((gate) => gate.role).join(', ');
-    return `verdict: exit 0, nothing was checked: ${names} had no contract to check against.`;
+    // check. What to do about that is NOT the same in both cases, which is
+    // why the clause comes from the skip reason rather than being written
+    // here: for a missing spec the fix is to write one, and for a waiver
+    // there is nothing to fix, because a person decided it.
+    const clauses = result.skipped
+      .map((gate) => `${gate.role} ${skipWording(gate.reason).verdict}`)
+      .join(', ');
+    return `verdict: exit 0, nothing was checked: ${clauses}.`;
   }
   if (result.gates.length === 0) {
     // Exit 0 with an empty report is indistinguishable from a clean run at a
@@ -450,9 +494,23 @@ function summaryLine(result: RunResult): string {
   // Same reasoning as the deferred clause. A gate that ran and had nothing to
   // check covered none of this commit, and silence there makes a branch with
   // no spec read as a branch that passed the intent gate.
-  if (result.skipped.length > 0) {
-    const names = result.skipped.map((gate) => `${gate.role} (${gate.product})`).join(', ');
-    parts.push(`Nothing to check against: ${names}.`);
+  //
+  // One clause per REASON, not one clause for all of them. This line is the
+  // whole report on a clean run, which is what a pre-commit hook and a pull
+  // request comment print, so a shared "nothing to check against" would hide
+  // the difference between nobody having written a spec and somebody having
+  // decided there is none exactly where most readers stop reading. Grouped in
+  // first-seen order so the sentence does not reorder itself between runs.
+  const skippedByWording = new Map<string, string[]>();
+  for (const gate of result.skipped) {
+    const lead = skipWording(gate.reason).summary;
+    skippedByWording.set(lead, [
+      ...(skippedByWording.get(lead) ?? []),
+      `${gate.role} (${gate.product})`,
+    ]);
+  }
+  for (const [lead, names] of skippedByWording) {
+    parts.push(`${lead}: ${names.join(', ')}.`);
   }
 
   // Same reasoning again, for the gates the command line left out. This one

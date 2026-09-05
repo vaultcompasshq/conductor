@@ -29,18 +29,53 @@ import { runAll } from './run.js';
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
 
+/**
+ * The working-tree root, or a thrown one-line diagnosis of why there is none.
+ *
+ * The policy file, the hook, and every child's working directory are all
+ * anchored at the working-tree root, so a run from a subdirectory behaves
+ * exactly like a run from the top.
+ *
+ * This used to catch everything and return the working directory. Two quite
+ * different failures hid in that: git is not on PATH, and this directory is
+ * not inside a repository. Both then produced "no .guardrails.yaml here, run
+ * conductor init" from a subdirectory of a repository that has one, which is
+ * a confident answer to a question nobody asked. The generated hook has
+ * always named a missing git in its own words (src/init.ts), for the same
+ * reason.
+ *
+ * Errors rather than a fallback root, because the alternative is silently
+ * gating a commit against the wrong tree. `run`'s own catch turns these into
+ * one line on stderr with no stack and the could-not-run exit code, so
+ * nothing here has to know about either.
+ */
 function repoRoot(cwd: string): string {
-  // The policy file, the hook, and every child's working directory are all
-  // anchored at the working-tree root, so a run from a subdirectory behaves
-  // exactly like a run from the top.
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-  } catch {
-    return cwd;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(
+        'git is not on PATH, so the repository root could not be found. Install git, or ' +
+          'run conductor from a shell that has it.'
+      );
+    }
+    if (typeof (err as { status?: unknown }).status === 'number') {
+      // git ran and refused. The directory is named because it is the one
+      // thing the reader has to check, and it is the directory they typed
+      // the command in rather than anything internal to this tool.
+      throw new Error(
+        `not a git repository: ${cwd}. conductor anchors every gate at the working-tree ` +
+          'root, so run it inside a checkout.'
+      );
+    }
+    // git is there and never got as far as an exit code: a permissions
+    // problem, or a machine out of processes. Neither of the two sentences
+    // above would be true, so this says what actually happened.
+    throw new Error(`git could not be run to find the repository root: ${(err as Error).message}`);
   }
 }
 
@@ -203,9 +238,12 @@ export function buildProgram(): Command {
     .exitOverride()
     .action((options: RunCliOptions) => {
       const cwd = process.cwd();
-      const root = repoRoot(cwd);
 
       try {
+        // Inside the try, because repoRoot now reports rather than guesses,
+        // and the catch below is what turns any of its three sentences into
+        // one line on stderr and the could-not-run exit code.
+        const root = repoRoot(cwd);
         const policy = applyCliOverrides(loadPolicy(root), {
           ...(parseRoles(options.gate) === undefined
             ? {}
@@ -251,6 +289,15 @@ export function buildProgram(): Command {
         // reaches here; anything that does is the umbrella's own problem and
         // still must not put a local filesystem path in front of a user who
         // cannot act on it, or into a pre-commit hook's output.
+        //
+        // The working directory in repoRoot's "not a git repository" sentence
+        // is the deliberate exception, and it is the shape of the rule rather
+        // than a hole in it: the user typed the command in that directory, it
+        // is the one thing they have to check, and a message that withheld it
+        // would be telling somebody their directory is wrong without saying
+        // which one. What the rule is really about is a path this tool knows
+        // and the reader does not, in a stack frame or a message they cannot
+        // act on.
         process.exitCode = fail(
           err instanceof PolicyError
             ? err.message

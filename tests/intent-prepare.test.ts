@@ -109,7 +109,7 @@ function stubbedBin(options: Parameters<typeof stubIntentGuard>[1] = {}): string
 function prepare(
   repoRoot: string,
   bin: string,
-  options: { base?: string; spec?: string; env?: NodeJS.ProcessEnv } = {}
+  options: { base?: string; spec?: string; env?: NodeJS.ProcessEnv; tempRoot?: string } = {}
 ): IntentPrepareResult {
   const binary = resolveGateBinary(INTENT_GATE, repoRoot, bin);
   const result = prepareIntent({
@@ -118,6 +118,7 @@ function prepare(
     env: options.env ?? {},
     ...(options.base === undefined ? {} : { base: options.base }),
     ...(options.spec === undefined ? {} : { spec: options.spec }),
+    ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
   });
   if (result.kind === 'ready') {
     cleanups.push(result.preparation.cleanup);
@@ -427,16 +428,27 @@ describe('every step of the chain names itself when it fails', () => {
     // A failed run still created a directory and wrote a contract into it.
     // Counting them either side is the only way to see that from out here,
     // and a leak here is a leak per pull request on a CI runner.
-    const before = readdirSync(os.tmpdir()).filter((entry) =>
-      entry.startsWith(TEMP_PREFIX)
-    ).length;
+    //
+    // Counted in a temporary root of this test's OWN, never in the shared
+    // one. This half and the success half in tests/intent-run.test.ts both
+    // used to count entries in os.tmpdir() itself, and the two files can run
+    // in parallel jest workers, so each was counting the other's directories
+    // and the number could move in either direction between the two reads.
+    // TMPDIR cannot steer this from here: node reads that from the real
+    // process environment and a jest test's process.env is a copy, so the
+    // root is injected instead, the same way the environment already is.
+    const tempRoot = tempDir();
 
-    prepare(repoWithSpec(), stubbedBin({ freeze: { stdout: '', stderr: 'refused', exit: 1 } }));
+    const result = prepare(
+      repoWithSpec(),
+      stubbedBin({ freeze: { stdout: '', stderr: 'refused', exit: 1 } }),
+      { tempRoot }
+    );
 
-    const after = readdirSync(os.tmpdir()).filter((entry) =>
-      entry.startsWith(TEMP_PREFIX)
-    ).length;
-    expect(after).toBe(before);
+    // The chain has to have got as far as writing the contract, or this
+    // would pass on a directory that was never created.
+    expect(result.kind === 'failed' && result.step).toBe('freeze');
+    expect(readdirSync(tempRoot).filter((entry) => entry.startsWith(TEMP_PREFIX))).toEqual([]);
   });
 
   it('names the import-spec step when only the per-command binary is installed', () => {
@@ -505,5 +517,48 @@ describe('the changed-path set handed to the gate', () => {
     });
 
     expect(result.kind === 'ready' && result.preparation.contractSource.kind).toBe('imported');
+  });
+});
+
+describe('a pull request body that waives the spec', () => {
+  /** An environment pointing at an event payload carrying this body. */
+  function eventWith(body: string): NodeJS.ProcessEnv {
+    const file = path.join(tempDir(), 'event.json');
+    writeFileSync(file, JSON.stringify({ pull_request: { body } }));
+    return { GITHUB_EVENT_PATH: file };
+  }
+
+  it('is a skip whose reason is the waiver, not a missing spec', () => {
+    // The branch's own spec IS on disk here, so a run that reported
+    // no-contract would be reporting the wrong thing twice over: the spec
+    // exists, and the body said not to use one.
+    const root = repoWithSpec();
+
+    const result = prepare(root, stubbedBin(), { env: eventWith('Spec: none\n') });
+
+    expect(result.kind).toBe('skip');
+    expect(result.kind === 'skip' && result.reason).toBe('contract-waived');
+    expect(result.kind === 'skip' && result.detail).toMatch(/pull request body/);
+  });
+
+  it('still loses to a frozen contract the repository has of its own', () => {
+    // A waiver says there is nothing to IMPORT. It does not switch off a
+    // contract somebody in this repository froze and committed.
+    const root = repoWithSpec();
+    write(
+      root,
+      NATIVE_CONTRACT_PATH,
+      ['contract_id: ic-native', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join(
+        '\n'
+      )
+    );
+
+    const result = prepare(root, stubbedBin(), { env: eventWith('Spec: none\n') });
+
+    expect(result.kind).toBe('ready');
+    expect(result.kind === 'ready' && result.preparation.contractSource).toEqual({
+      kind: 'native',
+      path: NATIVE_CONTRACT_PATH,
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { childEnv } from './helpers/child-env.js';
+import { childEnv, shimGit } from './helpers/child-env.js';
 import {
   CLEAN_DEP_GUARD,
   CLEAN_INTENT_GUARD,
@@ -57,7 +57,18 @@ function repoWithPolicy(policy = ALL_THREE_POLICY): string {
   return dir;
 }
 
-function runCli(cwd: string, args: string[], pathValue: string) {
+function runCli(
+  cwd: string,
+  args: string[],
+  pathValue: string,
+  options: { git?: boolean } = {}
+) {
+  // Every run gets git on its controlled PATH, because the CLI needs git to
+  // find the working-tree root and this file replaces PATH wholesale. One
+  // test asks for it back off, which is the case that used to be invisible.
+  if (options.git !== false) {
+    shimGit(pathValue);
+  }
   const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
     cwd,
     encoding: 'utf8',
@@ -371,22 +382,16 @@ describe('conductor run from a subdirectory', () => {
   // nobody can find. The hook's equivalent rule is pinned at
   // tests/init.test.ts:1546; this is the CLI's half.
   // This suite replaces PATH wholesale so the gates resolve to stubs, which
-  // also takes git away from the spawned CLI. Everywhere else that does not
-  // matter, because repoRoot falls back to the working directory and the
-  // working directory IS the root. Here it is the whole point, so git goes
-  // back on the controlled PATH as a shim, the same way tests/init.test.ts
-  // does it for the hook. Without this the test passes for the wrong reason
-  // at the root and fails for the wrong reason underneath it.
-  const GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-
+  // also takes git away from the spawned CLI. That used to matter only here,
+  // because repoRoot fell back to the working directory and everywhere else
+  // the working directory IS the root; the shim it needed has since moved
+  // into runCli, so every test in this file gets git and a run without it
+  // says so rather than guessing.
   function allThreeStubbed(): string {
     const bin = tempDir();
     stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
     stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
     stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
-    const gitShim = path.join(bin, 'git');
-    writeFileSync(gitShim, `#!/bin/sh\nexec ${GIT} "$@"\n`);
-    chmodSync(gitShim, 0o755);
     return bin;
   }
 
@@ -747,6 +752,72 @@ describe('sarif output, continued', () => {
       'intent-guard',
       'conductor',
     ]);
+  });
+});
+
+describe('conductor run when git cannot answer', () => {
+  // Two different failures used to end in the same place: repoRoot caught
+  // everything and returned the working directory, so a run from a
+  // subdirectory with no git reported "no policy file, run conductor init"
+  // about a repository that has one. The generated hook has always named a
+  // missing git plainly (src/init.ts); this is the CLI catching up.
+  function allThreeStubbed(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return bin;
+  }
+
+  it('names the missing git rather than guessing at the working directory', () => {
+    // The gates are all installed and the policy file is right there, so
+    // nothing else in this run has anything to complain about.
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], allThreeStubbed(), {
+      git: false,
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git is not on PATH/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+    // Never the diagnosis it used to give, which sent the reader off to
+    // install a policy file that already exists.
+    expect(result.stderr).not.toMatch(/conductor init/);
+    expect(result.stdout).toBe('');
+  });
+
+  it('says a directory outside any repository is not one, and names it', () => {
+    const outside = tempDir();
+
+    const result = runCli(outside, ['run', '--staged'], allThreeStubbed());
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/not a git repository/);
+    expect(result.stderr).toContain(outside);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+    expect(result.stderr).not.toMatch(/conductor init/);
+  });
+
+  it('says git could not be run when the binary is there and will not start', () => {
+    // The third branch, which this file first recorded as untestable. It is
+    // not: a git that exists and cannot be executed fails the spawn with
+    // EACCES, which is neither ENOENT nor an exit code, so neither of the two
+    // sentences above is true of it. A file with no execute bit at all is
+    // refused for every user, root included, so this does not depend on who
+    // the suite runs as.
+    const bin = allThreeStubbed();
+    const unusable = path.join(bin, 'git');
+    writeFileSync(unusable, '#!/bin/sh\nexit 0\n');
+    chmodSync(unusable, 0o000);
+
+    // git: false, or runCli would overwrite the file this test just broke.
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin, { git: false });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git could not be run/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+    // Not misreported as either of the other two.
+    expect(result.stderr).not.toMatch(/not on PATH/);
+    expect(result.stderr).not.toMatch(/not a git repository/);
   });
 });
 

@@ -24,6 +24,9 @@
 //     pull request, which is a weaker claim than a command line typed now,
 //     and a path here that does not exist FALLS THROUGH to the convention. A
 //     typo in a pull request description must not be able to fail a build.
+//     The one value that does not fall through is the exact token `none`,
+//     which WAIVES the import: it is a statement rather than a path, and an
+//     explicit statement beats the inferred convention below.
 //
 //  3. The convention: a markdown file directly under docs/superpowers/specs
 //     whose name relates to the branch. Directly under, not nested, because
@@ -41,7 +44,19 @@ export type SpecDiscovery =
   | { kind: 'flag' | 'pr-body' | 'convention'; spec: string; plan: string | null }
   /** `--spec` named a file that is not there. Never silently replaced. */
   | { kind: 'missing-flag'; spec: string }
+  /** The pull request body said `Spec: none`: there is nothing to import. */
+  | { kind: 'waived' }
   | { kind: 'none' };
+
+/**
+ * The token that turns a `Spec:` line into a waiver.
+ *
+ * Exact and lowercase. "None" with a capital is somebody writing prose, and
+ * a sentence must not be able to switch a gate off; an unusable value that
+ * is not this token keeps falling through to the convention, silently, the
+ * way every other unusable value does.
+ */
+export const SPEC_WAIVER_TOKEN = 'none';
 
 export interface SpecDiscoveryOptions {
   repoRoot: string;
@@ -276,6 +291,15 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
 
   if (options.prBody !== undefined) {
     const named = specFromPrBody(options.prBody);
+    if (named === SPEC_WAIVER_TOKEN) {
+      // Before the convention, because an explicit statement beats an
+      // inferred one: whoever opened the pull request said there is no spec
+      // to import, and the branch happening to share a name with a file
+      // under docs/superpowers/specs does not overrule that. It is NOT
+      // before a frozen native contract, which prepareIntent still checks
+      // first: a waiver says "nothing to import", not "check nothing".
+      return { kind: 'waived' };
+    }
     if (named !== null) {
       const relative = relativeToRoot(repoRoot, named);
       // A path out of the tree is treated exactly as a path that is not

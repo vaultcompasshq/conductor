@@ -15,6 +15,10 @@
 // through this helper rather than spreading process.env directly, or the
 // same leak comes back the moment this suite runs inside a pull request
 // again.
+import { execFileSync } from 'node:child_process';
+import { chmodSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
 const LEAKED_ON_PULL_REQUEST_EVENT = ['GITHUB_BASE_REF', 'GITHUB_HEAD_REF', 'GITHUB_EVENT_PATH'] as const;
 
 export interface ChildEnvOptions {
@@ -41,4 +45,28 @@ export function childEnv(pathValue: string, options: ChildEnvOptions = {}): Node
     }
   }
   return env;
+}
+
+/** The real git, resolved once, so the shim below execs something real. */
+const GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+
+/**
+ * A `git` shim in a directory that is about to become a child's whole PATH.
+ *
+ * A suite that replaces PATH wholesale so the gates resolve to stubs takes
+ * git away from the spawned CLI too, and the CLI needs git to find the
+ * working-tree root. Every such spawn site needs this, which is why it lives
+ * here beside childEnv rather than in one test that noticed: a test that
+ * forgets it now gets "conductor: git is not on PATH" instead of a report,
+ * where before the CLI silently treated the working directory as the root
+ * and the whole file passed for the wrong reason.
+ *
+ * A shim rather than putting git's own directory on PATH: that directory is
+ * shared, so whatever else a machine keeps beside git would come with it and
+ * the suite's verdict would depend on the laptop running it.
+ */
+export function shimGit(binDir: string): void {
+  const file = path.join(binDir, 'git');
+  writeFileSync(file, `#!/bin/sh\nexec ${GIT} "$@"\n`);
+  chmodSync(file, 0o755);
 }

@@ -44,17 +44,24 @@ export interface ExcludedGate {
 /**
  * An enabled gate that had nothing to check.
  *
- * Exactly one thing produces this today: an intent gate on a branch with no
- * frozen contract and no spec to import. It is not a deferred gate (nobody
- * asked for a different stage), it is not a could-not-run (nothing broke),
- * and it must never reach the exit code, enforced or not. A branch that has
- * no spec is a branch this gate has no opinion about, and turning that into
- * a failed build is how a gate gets switched off repository-wide.
+ * Two things produce this today, both of them an intent gate with no frozen
+ * contract: a branch with no spec to import (`no-contract`), and a pull
+ * request body that waived the spec with a `Spec: none` line
+ * (`contract-waived`). Neither is a deferred gate (nobody asked for a
+ * different stage), neither is a could-not-run (nothing broke), and neither
+ * must ever reach the exit code, enforced or not. A branch that has no spec
+ * is a branch this gate has no opinion about, and turning that into a failed
+ * build is how a gate gets switched off repository-wide.
+ *
+ * The reason is carried rather than flattened because the two ask different
+ * things of a reader: one wants a spec written, the other says a person
+ * already decided there is none. It is also the second half of the
+ * notification id in the SARIF log.
  */
 export interface SkippedGate {
   role: GateRole;
   product: Product;
-  reason: 'no-contract';
+  reason: 'no-contract' | 'contract-waived';
   detail: string;
 }
 
@@ -108,6 +115,13 @@ export interface RunOptions {
   env?: NodeJS.ProcessEnv;
   /** Injected in tests so a run's output is comparable between runs. */
   now?: () => Date;
+  /**
+   * Where the intent gate's per-run temporary project is created. Injected
+   * in tests so the one that counts leaked directories counts its own and
+   * not another jest worker's; nothing in production passes it. See
+   * IntentPrepareOptions.tempRoot.
+   */
+  tempRoot?: string;
 }
 
 /**
@@ -193,6 +207,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
             ...(options.base === undefined ? {} : { base: options.base }),
             ...(options.spec === undefined ? {} : { spec: options.spec }),
             ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+            ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
           });
 
           if (prepared.kind === 'skip') {

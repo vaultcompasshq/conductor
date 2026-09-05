@@ -455,3 +455,75 @@ describe('discoverSpec', () => {
     expect(found).toMatchObject({ plan: 'docs/superpowers/plans/2026-09-01-other.md' });
   });
 });
+
+describe('Spec: none, the explicit waiver', () => {
+  it('beats the branch-slug convention, even with a matching spec on disk', () => {
+    // An explicit statement beats an inferred one. Without this the token
+    // fell through as an unusable path and the branch's own spec was
+    // imported anyway, which is the opposite of what the body asked for.
+    const root = repoWith(['2026-09-03-widget-cache-design.md']);
+
+    const found = discoverSpec({
+      repoRoot: root,
+      branch: 'feat/widget-cache',
+      prBody: 'No contract for this one.\nSpec: none\n',
+    });
+
+    expect(found).toEqual({ kind: 'waived' });
+  });
+
+  it('is waived rather than none, so the report can tell the two apart', () => {
+    const root = repoWith([]);
+
+    expect(
+      discoverSpec({ repoRoot: root, branch: 'feat/widget-cache', prBody: 'Spec: none\n' })
+    ).toEqual({ kind: 'waived' });
+  });
+
+  it('loses to --spec, which is the most explicit statement of all', () => {
+    const root = repoWith(['2026-09-03-widget-cache-design.md']);
+
+    const found = discoverSpec({
+      repoRoot: root,
+      branch: 'feat/widget-cache',
+      prBody: 'Spec: none\n',
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+    });
+
+    expect(found).toEqual({
+      kind: 'flag',
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      plan: null,
+    });
+  });
+
+  it('is the exact lowercase token and nothing else', () => {
+    // "None" is somebody writing prose, and a capital letter must not be
+    // able to waive a gate. Any other unusable value keeps the old
+    // behaviour: fall through to the convention, silently, by design.
+    const root = repoWith(['2026-09-03-widget-cache-design.md']);
+
+    const found = discoverSpec({
+      repoRoot: root,
+      branch: 'feat/widget-cache',
+      prBody: 'Spec: None\n',
+    });
+
+    expect(found).toMatchObject({
+      kind: 'convention',
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+    });
+  });
+
+  it('takes the FIRST Spec: line, so a later real path does not undo it', () => {
+    const root = repoWith(['2026-09-03-widget-cache-design.md']);
+
+    const found = discoverSpec({
+      repoRoot: root,
+      branch: 'feat/widget-cache',
+      prBody: 'Spec: none\nand later\nSpec: docs/superpowers/specs/2026-09-03-widget-cache-design.md\n',
+    });
+
+    expect(found).toEqual({ kind: 'waived' });
+  });
+});
