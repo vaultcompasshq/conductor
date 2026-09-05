@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TEMP_PREFIX, prepareIntent } from '../src/intent-prepare.js';
+import { NATIVE_CONTRACT_PATH, TEMP_PREFIX, prepareIntent } from '../src/intent-prepare.js';
 import type { IntentPrepareResult } from '../src/intent-prepare.js';
 import { resolveGateBinary } from '../src/resolve.js';
 import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
@@ -194,6 +194,56 @@ describe('a repository whose own contract is frozen', () => {
     const result = prepare(root, stubbedBin());
 
     expect(result.kind === 'ready' && result.preparation.contractSource.kind).toBe('imported');
+  });
+});
+
+describe('a --spec and a frozen native contract in the same repository', () => {
+  // Which one wins is held only by branch order in prepareIntent, and nothing
+  // put both in one repository to find out. A person passing --spec has named
+  // the document the work was approved from, by hand, for this run; silently
+  // running the repository's own contract instead would check the change
+  // against a different agreement and report a clean result for it.
+  function repoWithBoth(): string {
+    const root = repoWithSpec();
+    write(
+      root,
+      NATIVE_CONTRACT_PATH,
+      ['contract_id: ic-native', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join(
+        '\n'
+      )
+    );
+    return root;
+  }
+
+  const FLAGGED_SPEC = 'docs/superpowers/specs/2026-09-03-widget-cache-design.md';
+
+  it('imports the spec the flag named rather than using the native contract', () => {
+    const result = prepare(repoWithBoth(), stubbedBin(), { spec: FLAGGED_SPEC });
+
+    expect(result.kind).toBe('ready');
+    expect(result.kind === 'ready' && result.preparation.contractSource).toEqual({
+      kind: 'imported',
+      spec: FLAGGED_SPEC,
+      plan: 'docs/superpowers/plans/2026-09-03-widget-cache.md',
+    });
+  });
+
+  it('actually imports and freezes it, rather than pointing the gate at the repository', () => {
+    const bin = tempDir();
+    const log = path.join(bin, 'argv.log');
+    stubIntentGuard(bin, {
+      argvLog: log,
+      importSpec: { stdout: IMPORT_DRY_RUN },
+      freeze: { stdout: FREEZE },
+    });
+
+    const result = prepare(repoWithBoth(), bin, { spec: FLAGGED_SPEC });
+
+    // "." is what the native path hands the gate. A temporary directory is the
+    // evidence the import ran.
+    expect(result.kind === 'ready' && result.preparation.projectDir).not.toBe('.');
+    expect(argvLines(log).some((line) => line.includes('import-spec'))).toBe(true);
+    expect(argvLines(log).some((line) => line.includes('freeze'))).toBe(true);
   });
 });
 
