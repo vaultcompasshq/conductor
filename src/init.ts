@@ -309,6 +309,7 @@ export type ConflictReason =
   | 'generated-hook'
   | 'hooks-path-outside-repository'
   | 'no-manifest'
+  | 'manifest-unreadable'
   | 'changed-since-init'
   | 'write-failed';
 
@@ -1006,7 +1007,27 @@ export function revertInit(options: InitOptions): RevertResult {
     return { ok: false, actions, conflicts };
   }
 
-  const manifest = JSON.parse(raw) as Manifest;
+  // Not routed through readManifest, which answers null for both a missing
+  // file and an unparseable one. Revert has to tell those apart: a missing
+  // manifest means there is no record to act on, an unreadable one means the
+  // record exists and cannot be trusted, and the second is a file somebody
+  // has to look at by hand.
+  let manifest: Manifest;
+  try {
+    manifest = JSON.parse(raw) as Manifest;
+  } catch {
+    conflicts.push({
+      path: MANIFEST_RELATIVE_PATH,
+      reason: 'manifest-unreadable',
+      guidance:
+        `${MANIFEST_RELATIVE_PATH} will not parse, so there is no usable record of what init ` +
+        'wrote. Nothing was removed and nothing was guessed. Repair the file by hand if you ' +
+        'know what belongs in it, or delete it and remove the hook and the policy file ' +
+        'yourself, then re-run init.',
+    });
+    return { ok: false, actions, conflicts };
+  }
+
   const relative = (file: string): string => path.relative(root, file).split(path.sep).join('/');
 
   // Classify first, act second. Deciding as it goes is what let the old

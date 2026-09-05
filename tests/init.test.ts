@@ -897,6 +897,39 @@ describe('revert, continued', () => {
     expect(result.ok).toBe(false);
     expect(result.conflicts[0].reason).toBe('no-manifest');
   });
+
+  it('refuses when the manifest will not parse, and says so as a conflict', () => {
+    // A corrupt manifest used to throw a raw parser error out of revert, so
+    // the hook stayed installed and the message was a JSON parser's rather
+    // than an answer. Unreadable is its own conflict, not the same one as
+    // missing: a missing manifest means there is nothing to act on, while an
+    // unreadable one means there is a record and it cannot be trusted, and
+    // the two send a reader to different fixes.
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const policyPath = path.join(repo, POLICY_FILE_NAME);
+    const manifestPath = path.join(repo, MANIFEST_RELATIVE_PATH);
+    const hookBefore = readFileSync(hookPath, 'utf8');
+    const policyBefore = readFileSync(policyPath, 'utf8');
+    const corrupt = '{"version": 1, "files": [';
+    writeFileSync(manifestPath, corrupt);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].reason).toBe('manifest-unreadable');
+    expect(result.conflicts[0].path).toBe(MANIFEST_RELATIVE_PATH);
+    expect(result.conflicts[0].guidance).toMatch(/[Nn]othing was removed/);
+    expect(result.conflicts[0].guidance).toMatch(/by hand/);
+
+    // Nothing is guessed, so nothing moves.
+    expect(readFileSync(hookPath, 'utf8')).toBe(hookBefore);
+    expect(readFileSync(policyPath, 'utf8')).toBe(policyBefore);
+    expect(readFileSync(manifestPath, 'utf8')).toBe(corrupt);
+    expect(result.actions).toHaveLength(0);
+  });
 });
 
 describe('hook collisions', () => {
