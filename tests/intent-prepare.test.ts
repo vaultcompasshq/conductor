@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -685,6 +686,44 @@ describe('the intent-guard state directory, under both of its names', () => {
     const root = repoWithSpec();
     write(root, NATIVE_CONTRACT_PATH, FROZEN);
     write(root, `.conductor/${marker}`, 'x\n');
+
+    const result = prepare(root, stubbedBin());
+
+    expect(result.kind).toBe('failed');
+    expect(result.kind === 'failed' && result.step).toBe('contract-source');
+  });
+
+  it('does not call a .conductor SYMLINK to the canonical directory a conflict', () => {
+    // `ln -s .intent-guard .conductor` is the obvious workaround for a script
+    // that still names the old path, and following it makes one directory
+    // look like two: the legacy path holds state, the canonical path exists,
+    // and the run fails closed on a conflict that is not one. The gate uses
+    // lstat on the legacy side for exactly this, so the umbrella does too.
+    const root = repoWithSpec();
+    write(root, NATIVE_CONTRACT_PATH, FROZEN);
+    symlinkSync('.intent-guard', path.join(root, '.conductor'));
+
+    const result = prepare(root, stubbedBin());
+
+    expect(result.kind).toBe('ready');
+    expect(result.kind === 'ready' && result.preparation.contractSource).toEqual({
+      kind: 'native',
+      path: NATIVE_CONTRACT_PATH,
+    });
+  });
+
+  it('still follows a symlink on the CANONICAL side, which is the other half of the rule', () => {
+    // The asymmetry, pinned so it cannot be tidied away. The legacy side
+    // uses lstat and the canonical side does not, because a canonical
+    // directory reached through a symlink is still a canonical directory
+    // intent-guard will read and write. Making both sides lstat would look
+    // neater and would miss this conflict.
+    const root = repoWithSpec();
+    const real = tempDir();
+    mkdirSync(path.join(real, 'state'), { recursive: true });
+    writeFileSync(path.join(real, 'state', 'intent-contract.yaml'), FROZEN);
+    symlinkSync(path.join(real, 'state'), path.join(root, '.intent-guard'));
+    write(root, LEGACY_NATIVE_CONTRACT_PATH, FROZEN);
 
     const result = prepare(root, stubbedBin());
 

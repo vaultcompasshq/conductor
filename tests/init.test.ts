@@ -1953,6 +1953,22 @@ describe('hook managers that keep the hook text in package.json', () => {
     expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
   });
 
+  it('points a standalone-config repository at that file, not at package.json', () => {
+    // simple-git-hooks reads package.json LAST. While a standalone config
+    // file exists, an entry added to package.json is the one it ignores, so
+    // guidance naming package.json here sends somebody to edit the file that
+    // will not be read and leaves them with the umbrella still uninstalled
+    // and no error to explain it.
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, '.simple-git-hooks.json'), '{"pre-commit":"npx lint-staged"}\n');
+
+    const guidance = init(repo).conflicts[0].guidance;
+
+    expect(guidance).toContain('.simple-git-hooks.json');
+    expect(guidance).toContain('conductor run --staged --stage commit');
+    expect(guidance).not.toContain('package.json');
+  });
+
   it('is not fooled by a file that merely looks like one of those', () => {
     const repo = gitRepo();
     writeFileSync(path.join(repo, 'simple-git-hooks.yaml'), 'pre-commit: x\n');

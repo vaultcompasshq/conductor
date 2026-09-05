@@ -33,6 +33,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -257,8 +258,32 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
+/**
+ * A real directory, not a symlink to one.
+ *
+ * `ln -s .intent-guard .conductor` is the obvious workaround for a script
+ * that still names the old path, and following it makes ONE directory look
+ * like two: the legacy path would hold state, the canonical path would
+ * exist, and the run would fail closed on a conflict that is not one. lstat
+ * does not follow the link, so a symlink is simply not a legacy state
+ * directory.
+ *
+ * THE ASYMMETRY WITH `isDirectory` ABOVE IS DELIBERATE AND IS THE GATE'S
+ * OWN: the canonical side follows symlinks and the legacy side does not.
+ * Making both sides lstat would be tidier and wrong, because a canonical
+ * directory reached through a symlink is still a canonical directory that
+ * intent-guard will read and write.
+ */
+function isRealDirectory(candidate: string): boolean {
+  try {
+    return lstatSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function holdsIntentGuardState(dir: string): boolean {
-  if (!isDirectory(dir)) {
+  if (!isRealDirectory(dir)) {
     return false;
   }
   return STATE_MARKERS.some((marker) => existsSync(path.join(dir, marker)));

@@ -81,7 +81,7 @@ one of them by fixing a real bug rather than only testing around it:
    half was already pinned; this half is the caller's `finally`, and it
    was correct, so no code changed.
 3. `--spec` OUTRANKING A FROZEN NATIVE CONTRACT. Pinned by
-   tests/intent-prepare.test.ts:229 and 240, which put both in one
+   tests/intent-prepare.test.ts:230 and 241, which put both in one
    repository and assert the flag's spec is what gets imported and frozen
    and that the gate is not pointed at the repository itself.
 4. THE SUBDIRECTORY ANCHORING OF THE CLI. Pinned by tests/cli.test.ts:398,
@@ -194,7 +194,7 @@ not reach the exit code.
 
 This is the adoption ramp. `conductor init` writes `enforce: false` for
 the intent gate and `enforce: true` for the other two
-(src/init.ts:845-851), so a fresh repository gets the ramp rather than
+(src/init.ts:878-884), so a fresh repository gets the ramp rather than
 three repositories being hand-edited into it.
 
 The rule that makes it safe is that nothing reads a gate's output and
@@ -318,7 +318,7 @@ by tests/intent-base.test.ts:144, 162, 174, 181 and 202, and end to end by
 tests/intent-run.test.ts:348 and 370.
 
 A missing umbrella binary blocks the commit. The generated hook exits 1
-rather than warning and letting the commit through (src/init.ts:470-477).
+rather than warning and letting the commit through (src/init.ts:503-510).
 A guardrail that switches itself off when the tool is missing is a
 guardrail an attacker turns off by making the tool missing. The hook says
 two different things depending on whether git was available to locate
@@ -349,24 +349,24 @@ One place reads the same file two ways, on purpose, and the reason is
 worth stating because it used to be an asymmetry rather than a decision.
 `readManifest` treats an unparseable manifest as a missing one, because
 "the record is unreadable" is not evidence that a file on disk is the
-umbrella's (src/init.ts:726-736). `revertInit` does NOT reuse it, because
+umbrella's (src/init.ts:759-769). `revertInit` does NOT reuse it, because
 revert has to tell the two apart: a missing manifest means there is no
 record to act on, an unreadable one means there is a record and it cannot
 be trusted, and those send a reader to different fixes. It answers
 `no-manifest` for the first and `manifest-unreadable` for the second, and
-removes nothing either way (src/init.ts:1281-1315).
+removes nothing either way (src/init.ts:1323-1357).
 
 What `manifest-unreadable` actually covers is narrower than the names
 above suggest. It is raised when the file does not PARSE at all:
 truncation, conflict markers left behind by a bad merge, anything
-`JSON.parse` itself rejects (src/init.ts:1300-1315). It is not raised for
+`JSON.parse` itself rejects (src/init.ts:1342-1357). It is not raised for
 valid JSON of the wrong shape: an empty object, a `files` key that is
 `null`, a manifest missing `files` entirely all parse cleanly and then
 reach `manifest.files.map` a few lines later, where they throw a raw
 TypeError instead of returning either named conflict. That reaches the
 user as a one-line exit 2 with a runtime message, which is the pre-fix
 behaviour the rest of this section describes as fixed; it is not, for
-this shape of file. `recordedHookSha` (src/init.ts:740) makes the same
+this shape of file. `recordedHookSha` (src/init.ts:773) makes the same
 shape assumption on the init side, and that one predates this release.
 
 `revertInit` used to parse that file with a bare `JSON.parse` and no
@@ -632,16 +632,16 @@ level, naming the role and the flag) and 168.
 ## The hook: one hook, one command, one exit code
 
 `conductor init` writes exactly one pre-commit hook, and it runs the
-umbrella once rather than three gates (src/init.ts:433-514). It runs
+umbrella once rather than three gates (src/init.ts:466-547). It runs
 `conductor run --staged --stage commit`, not every stage: a pre-commit
 hook IS the commit stopping point, and running the intent gate's ceremony
 there is what makes a team switch the hook off.
 
-The exit code is passed through unchanged (src/init.ts:513). The hook
+The exit code is passed through unchanged (src/init.ts:546). The hook
 written the natural way, `if conductor run; then exit 0; fi; exit 1`,
 collapses 2 into 1 and so reports findings that were never looked for.
 There is one message per code and not one message for both
-(src/init.ts:500-509), because calling exit 2 a blocked commit describes a
+(src/init.ts:533-542), because calling exit 2 a blocked commit describes a
 decision nobody made.
 
 Neither message mentions a bypass flag, in any branch. Every gate already
@@ -661,12 +661,12 @@ enabled gate", when it runs the commit stage, so a gate whose stage is
 `ci`, which is the intent gate's default, is deferred rather than run.
 The README said it correctly in its stages section and incorrectly in its
 opening summary. All three now say the commit stage
-(src/cli.ts:149-151, src/init.ts:879-885, README.md:31-33).
+(src/cli.ts:149-151, src/init.ts:912-918, README.md:31-33).
 
 The hook is written with the executable bit set after the write rather
 than through the write's mode option, because an existing file keeps its
 own mode when written through and git will not run a hook it cannot
-execute (src/init.ts:1178-1184).
+execute (src/init.ts:1220-1226).
 
 Pinned by tests/init.test.ts:235 (one hook, running the umbrella and not
 three gates), 246 (`--stage commit` is in the hook text), 1154 and 1333
@@ -682,14 +682,14 @@ and 1701 (no bypass advertised in either the native or the husky hook).
 
 Six refusals, each returning early with a conflict and writing nothing:
 
-A foreign hook is never replaced (src/init.ts:1065-1070). That hook is
+A foreign hook is never replaced (src/init.ts:1107-1112). That hook is
 somebody's working setup and init has no standing to have an opinion about
 it. A whitespace-only file is treated as absent rather than foreign
-(src/init.ts:1065), pinned by tests/init.test.ts:1031. The refusal itself
+(src/init.ts:1107), pinned by tests/init.test.ts:1031. The refusal itself
 is pinned by tests/init.test.ts:961.
 
 Another gate's own pre-commit hook is reported and left alone unless
-`--adopt` is passed (src/init.ts:1071-1085). Adding the umbrella's hook
+`--adopt` is passed (src/init.ts:1113-1127). Adding the umbrella's hook
 alongside it would run that gate twice and report its findings twice.
 `--adopt` replaces it and stores the original in the manifest so revert can
 put it back. Pinned by tests/init.test.ts:986, a parameterised case over
@@ -699,7 +699,7 @@ tests/init.test.ts:973.
 
 A hook generated by lefthook or by the pre-commit framework is left alone
 and the user is told the stanza to add to that manager's own config
-(src/init.ts:952-962, guidance at 240-253). Those managers rewrite the
+(src/init.ts:985-995, guidance at 240-253). Those managers rewrite the
 file on every install, so anything written there is lost without a word,
 and the guidance says out loud that the manager owns the commit's exit
 code so the umbrella's 1 and 2 do not survive it. Recognition is by
@@ -724,15 +724,15 @@ against HAND-WRITTEN approximations, which proves only that the code
 agrees with whoever wrote the approximation.
 
 A repository wired to simple-git-hooks or yorkie is refused too, with the
-separate conflict `managed-hooks` (src/init.ts:979-987, recognition at
-255-288, guidance at 375-415). It is separate from `generated-hook`
+separate conflict `managed-hooks` (src/init.ts:1013-1029, recognition at
+255-288, guidance at 399-448). It is separate from `generated-hook`
 because the remedy is: those two keep the hook TEXT in a declaration
 rather than in a config file the generated hook points at, so there is no
 file to name a stanza in, and the guidance names the entry to edit
 instead.
 
 THE DECLARATION IS A SIGNAL IN ITS OWN RIGHT, not corroboration of the
-hook's contents (`declaredManagedHooks`, src/init.ts:311-349, the exact
+hook's contents (`declaredManagedHooks`, src/init.ts:329-377, the exact
 config-file list at src/init.ts:136-145). It is the
 only signal that exists on a fresh clone, where the manager has never run
 and `.git/hooks/pre-commit` does not exist yet, which is exactly the state
@@ -756,15 +756,25 @@ whatever the key contains and simple-git-hooks removes hooks it previously
 managed. The cost of the wide rule is a refusal somebody has to read; the
 cost of the narrow one is a hook silently deleted.
 
+THE GUIDANCE NAMES THE FILE THE DECLARATION IS ACTUALLY IN, which is why
+the detection carries WHERE it fired rather than just which manager
+(`ManagedDetection`, src/init.ts:319-327). simple-git-hooks resolves
+package.json LAST, so while a standalone config file exists an entry added
+to package.json is exactly the one it ignores: guidance naming package.json
+there would send somebody to edit a file that will not be read and leave
+them with the umbrella uninstalled and no error to explain it. The config
+files are checked before package.json for the same reason, in the same
+order the tool resolves them. Pinned by tests/init.test.ts:1956.
+
 THE REFUSAL FIRES ONLY WHERE GIT ACTUALLY RUNS `.git/hooks`
-(`hooks.isDefault`, src/init.ts:650-660, used at src/init.ts:980). Both
+(`hooks.isDefault`, src/init.ts:683-693, used at src/init.ts:1017). Both
 managers write that directory and neither reads `core.hooksPath`, so under
 husky or any other configured hooks directory the file they rewrite is not
 the file git runs: the umbrella's hook is in no danger from them, and
 refusing would name a file the manager never touches while blocking an
 install that is safe. The test compares the RESOLVED directory against the
 git directory's own `hooks/` through `realpath` (`samePath`,
-src/init.ts:698-707) rather than asking whether `core.hooksPath` is set,
+src/init.ts:731-740) rather than asking whether `core.hooksPath` is set,
 because a repository may set it to exactly where git already looks, and a
 rule phrased as "nothing is configured" would answer differently for two
 repositories git treats identically. The realpath matters on macOS, where
@@ -791,26 +801,26 @@ both managers out of play and init says nothing about them), 1912 (setting
 `core.hooksPath` to the default `.git/hooks` does NOT, which is what makes
 the rule a path comparison rather than a "is it configured" test), 1931 (a
 standalone config file alone, parameterised over all eight the README
-lists), 1956 (a `simple-git-hooks.yaml` is not one of them), 1967 (a
+lists), 1972 (a `simple-git-hooks.yaml` is not one of them), 1983 (a
 package.json with neither key takes the native path and init writes
-normally), 1979 (a package.json that will not parse is no declaration
-rather than a throw) and 1989 (the guidance names the command, says
+normally), 1995 (a package.json that will not parse is no declaration
+rather than a throw) and 2005 (the guidance names the command, says
 conductor does not edit package.json, and mentions `--force`). Four more
-assert what is IN the captures rather than what init does with them: 2008,
-2014 (2.8.0 carries no marker at all, which is the finding the declaration
-rule rests on), 2024 and 2030 (the `exit 1` wrapper behind the claim the
+assert what is IN the captures rather than what init does with them: 2024,
+2030 (2.8.0 carries no marker at all, which is the finding the declaration
+rule rests on), 2040 and 2046 (the `exit 1` wrapper behind the claim the
 guidance makes to a yorkie user about the umbrella's exit 2).
 
 A `core.hooksPath` pointing outside the repository is refused
-(src/init.ts:919-930). Writing there would install this repository's hook
+(src/init.ts:952-963). Writing there would install this repository's hook
 on every repository on the machine. Pinned by tests/init.test.ts:1071.
 
-An existing policy file is never rewritten (src/init.ts:1119-1127). It is
+An existing policy file is never rewritten (src/init.ts:1161-1169). It is
 the one artifact a user edits by hand. Pinned by tests/init.test.ts:379.
 
 One resolution rule underneath all of these: a RELATIVE `core.hooksPath`
 resolves against the WORKING-TREE ROOT, not against the `.git` directory
-(src/init.ts:676-681). A sibling tool resolved it against the `.git`
+(src/init.ts:709-714). A sibling tool resolved it against the `.git`
 directory and the test covering the case asserted the same wrong location,
 so the two agreed with each other and neither was ever checked against
 git. The test here drives a real commit instead
@@ -829,7 +839,7 @@ directory is named `_` and its parent is named `.husky`, both halves
 required (`huskyDirectoryFor`, src/init.ts:187-196). Only husky creates
 that path. The tracked target is that `.husky` directory's own
 `pre-commit`, never a computed parent of whatever directory git happens to
-point at (src/init.ts:992).
+point at (src/init.ts:1034).
 
 Two things are deliberately excluded from the rule, and each cost a bug.
 
@@ -852,10 +862,10 @@ there is no shim and nothing to confirm, so a shim requirement sends init
 down the ordinary path to write the very file husky's next prepare step
 wipes. The shim is evidence that husky ran recently, not evidence about
 whose directory this is, so it is REPORTED in the dry-run detail line and
-never TESTED against (src/init.ts:198-201 and 1089-1102).
+never TESTED against (src/init.ts:198-201 and 1131-1144).
 
 The husky redirect is decided before the generated-hook detection runs
-(src/init.ts:946-949), so a husky dispatcher is never misread as
+(src/init.ts:979-982), so a husky dispatcher is never misread as
 lefthook's or the pre-commit framework's.
 
 Pinned by tests/init.test.ts:1101 (the tracked hook, not the dispatcher,
@@ -879,7 +889,7 @@ line after the hook text changed, and it never entered the new manifest,
 so a later `--revert` walked past it and left it behind.
 
 So the marker settles WHOSE hook this is, and the digest decides the rest
-(src/init.ts:1003-1064), in four rungs:
+(src/init.ts:1045-1106), in four rungs:
 
 - The installed bytes equal this version's hook. Nothing is written. If
   the manifest does not record that digest, the hook is RECORDED anyway,
@@ -909,17 +919,17 @@ tool's, and a tool that guesses about deletion in somebody's repository
 has to be wrong only once.
 
 The manifest records each file's path, its sha256 and its KIND
-(src/init.ts:602-617). The kind is recorded rather than inferred from the
+(src/init.ts:635-650). The kind is recorded rather than inferred from the
 path, because revert's whole decision turns on whether the HOOK survived
 and sniffing that from a filename is a guess.
 
 A rewrite carries forward everything a previous manifest held that this
-run did not rewrite (src/init.ts:1198-1209). An upgrade rewrites the hook
+run did not rewrite (src/init.ts:1240-1251). An upgrade rewrites the hook
 and nothing else, so a manifest built purely from this run's writes would
 forget the policy file it wrote last time. It also carries forward the
 adopted hook, and that one matters more: the manifest is the ONLY copy of
 the gate hook `--adopt` replaced, so forgetting it makes that hook
-unrestorable (src/init.ts:1161-1172).
+unrestorable (src/init.ts:1203-1214).
 
 Pinned by the tests that actually OPEN the manifest and read the fields
 this section is about: tests/init.test.ts:453 (the hook entry's kind and
@@ -943,9 +953,9 @@ Revert removes exactly what init wrote and nothing else. Four rules, and
 all four were bugs here first.
 
 IF THE HOOK SURVIVES, NOTHING IS REMOVED. Files are classified first and
-acted on second (src/init.ts:1319-1328), and a hook that has changed
+acted on second (src/init.ts:1361-1370), and a hook that has changed
 since init wrote it returns before the removal loop is ever entered
-(src/init.ts:1330-1352), because deciding as it went is what let the old
+(src/init.ts:1372-1394), because deciding as it went is what let the old
 version remove the policy file before discovering it could not remove the
 hook. Removing the policy file while leaving an edited hook in place
 leaves that hook running the umbrella with nothing to read, so every
@@ -958,19 +968,19 @@ rather than a list of paths: no action on the result is a `remove` and
 every one is a `skip`, so a file added to what init writes is covered
 without anybody remembering to come back to this test.
 
-A CHANGED FILE IS LEFT ALONE AND REPORTED (src/init.ts:1363-1372). That
+A CHANGED FILE IS LEFT ALONE AND REPORTED (src/init.ts:1405-1414). That
 file is now the user's whatever it started as, and a revert that deletes
 edited work is a revert nobody runs twice. Pinned by
 tests/init.test.ts:723 (an edited policy file survives and the run is not
 a success) and 797 (the conflict says `changed-since-init` and names
 `--force`).
 
-THE MANIFEST OUTLIVES A PARTIAL REVERT (src/init.ts:1411-1435). It is
+THE MANIFEST OUTLIVES A PARTIAL REVERT (src/init.ts:1453-1477). It is
 deleted only once it holds nothing, because it is the only record of what
 is left and, after an `--adopt`, the only copy of the replaced hook. The
 `.guardrails` directory goes with it only when it is empty, using
 `rmdirSync` rather than `rmSync`, and when it is not empty that is
-REPORTED rather than passed over (src/init.ts:1414-1433). Pinned by
+REPORTED rather than passed over (src/init.ts:1456-1475). Pinned by
 tests/init.test.ts:783 (the manifest survives and still holds entries),
 680 (the directory goes with the last file), 692 (it stays, and is
 reported as skipped, when somebody else's file is in it) and 713 (it is
@@ -1008,7 +1018,7 @@ flattening that return would have satisfied the flag and broken the rule.
 
 The condition is now read off the world rather than off the flag: the
 manifest records at least one hook, and no path it records is on disk any
-more (src/init.ts:1394-1399). That is a statement about what is there,
+more (src/init.ts:1436-1441). That is a statement about what is there,
 which is what the rule is about, so a future refactor of the early return
 cannot restore a hook next to a surviving one. The flag is gone rather
 than kept as a second line, because two conditions that must agree are a
@@ -1016,7 +1026,7 @@ place for them to disagree.
 
 No test distinguishes this derivation from the flag it replaced. Every
 state a test can construct short-circuits at the changed-hook early
-return (src/init.ts:1334) before `umbrellaHookGone` is read at all: a
+return (src/init.ts:1376) before `umbrellaHookGone` is read at all: a
 changed hook refuses there directly, and a hook that is gone, matched, or
 force-replaced reaches the condition only after the early return has
 already let it through, so the condition and the flag it replaced would
@@ -1027,19 +1037,19 @@ true and watching all 93 init tests stay green.
 
 No manifest shape with an adoption and no hook entry is reachable from
 init's own writes, which is what makes the removal safe. Init sets
-`adopted` in exactly two ways (src/init.ts:1164-1171): the run that adopts,
+`adopted` in exactly two ways (src/init.ts:1206-1213): the run that adopts,
 which pushes the hook it writes into the same manifest, and the carry
 across a re-init, which keeps a previous manifest's entries that this run
-did not rewrite. Revert's own rewrite (src/init.ts:1438) can only drop
+did not rewrite. Revert's own rewrite (src/init.ts:1480) can only drop
 the hook entry on a pass that also nulls `adopted`. A hand-edited
 manifest could hold that shape, and there the code does what the old flag
 did: nothing is restored.
 
 No manifest at all means nothing is removed and the command fails
-(src/init.ts:1281-1292). Pinned by tests/init.test.ts:920.
+(src/init.ts:1323-1334). Pinned by tests/init.test.ts:920.
 
 A manifest that will not parse is a SECOND conflict rather than the same
-one (src/init.ts:1300-1315). Revert deliberately does not go through
+one (src/init.ts:1342-1357). Revert deliberately does not go through
 `readManifest`, which answers null for both: missing means there is no
 record to act on, unreadable means there is a record and it cannot be
 trusted, and the two send a reader to different fixes. Nothing is removed
@@ -1063,49 +1073,49 @@ approved, and approving one is a per-task human step. That step is the
 ceremony the stopping-points design exists to keep out of a pull request,
 so the umbrella imports the document the work was actually approved from,
 freezes it in a TEMPORARY directory, and points the gate at that directory
-for the length of one run (src/intent-prepare.ts:582-598).
+for the length of one run (src/intent-prepare.ts:607-623).
 
 Nothing is written under the repository's own state directory, under
 either of its two names. A contract is a committed artifact with an
 approver's name on it. A pull-request run that dropped one into the
 working tree would either be committed by accident or picked up by the
 next run as though a person had approved it, and the second failure is
-silent. Pinned by tests/intent-prepare.test.ts:305, which asserts the
+silent. Pinned by tests/intent-prepare.test.ts:306, which asserts the
 repository has no `.conductor` AND no `.intent-guard` directory
 afterwards. Both names, because checking only the one the draft is written
 under would pass for a version that migrated the temporary project and
 then wrote into the repository under the new name.
 
 THE DRAFT IS WRITTEN UNDER THE LEGACY NAME inside that temporary
-directory (src/intent-prepare.ts:588-598), and that is a version
+directory (src/intent-prepare.ts:613-623), and that is a version
 independence decision rather than an oversight. A 1.2.x intent-guard reads
 only `.conductor/`; a 1.3.0 one reads it as the legacy fallback and
 renames it to the canonical name on its first write, which the freeze is.
 Writing the canonical name would work on 1.3.0 and leave 1.2.x freezing an
-empty project. Pinned by tests/intent-prepare.test.ts:710.
+empty project. Pinned by tests/intent-prepare.test.ts:813.
 
 FREEZE EXITING 0 IS NOT PROOF THERE IS A CONTRACT TO HAND THE GATE. After
 the freeze the contract is looked for under both names, canonical first,
 and its absence is a named preparation failure at the freeze step rather
 than a confusing verdict from the gate three steps later
-(`frozenContractIn`, src/intent-prepare.ts:306-310, called at
-src/intent-prepare.ts:651). That lookup asks EXISTS rather than FROZEN,
+(`frozenContractIn`, src/intent-prepare.ts:331-335, called at
+src/intent-prepare.ts:676). That lookup asks EXISTS rather than FROZEN,
 unlike the repository-side one, because reading `frozen_by` here would be
 the umbrella second-guessing a decision it has just asked intent-guard to
-make. Pinned by tests/intent-prepare.test.ts:722, whose stub freezes
+make. Pinned by tests/intent-prepare.test.ts:825, whose stub freezes
 successfully and removes both directories.
 
 The freeze is attributed to the umbrella and to a commit, never to a
 person, and the spec path in that attribution is repository-relative
-because the string ends up inside a contract (src/intent-prepare.ts:620-625).
-Pinned by tests/intent-prepare.test.ts:334.
+because the string ends up inside a contract (src/intent-prepare.ts:645-650).
+Pinned by tests/intent-prepare.test.ts:335.
 
 The temporary directory is always removed. Every failure path after the
 directory exists calls `cleanup` before returning
-(src/intent-prepare.ts:586-642), and the success path is removed by the
+(src/intent-prepare.ts:611-667), and the success path is removed by the
 caller's `finally` once every gate has run, whatever happened while they
 did (src/run.ts:246-255). The failure half is pinned by
-tests/intent-prepare.test.ts:439, which drives the chain to a freeze that
+tests/intent-prepare.test.ts:440, which drives the chain to a freeze that
 refuses and then finds no directory carrying `TEMP_PREFIX`.
 
 THE SUCCESS HALF IS PINNED AT tests/intent-run.test.ts:162, which drives a
@@ -1129,18 +1139,18 @@ test's `process.env` is a copy that never reaches it.
 
 The cost of being wrong is one leaked directory per pull request on a
 shared CI runner, with nothing in any report pointing at the cause. Note
-that tests/intent-prepare.test.ts:354 does NOT cover this: it only proves
+that tests/intent-prepare.test.ts:355 does NOT cover this: it only proves
 that calling `cleanup` yourself works.
 
 ## The repository's own frozen contract wins, and "frozen" means one specific thing
 
 Where a team has done the native flow, the native flow is what runs. The
 import is the fallback for a repository that has not, never a replacement
-for one that has (src/intent-prepare.ts:442-465).
+for one that has (src/intent-prepare.ts:467-490).
 
 "Exists" is not the test. `frozen_by: user` and nothing else, because that
 is the marker THE GATE ITSELF reads
-(`contractIsFrozenAt`, src/intent-prepare.ts:190-213). BOTH halves of the
+(`contractIsFrozenAt`, src/intent-prepare.ts:191-214). BOTH halves of the
 gate's own test, `frozen_by: "user"` AND an `approval` record present,
 because that is what `isContractFrozen` does and its comment says
 `frozen_by` alone, hand-set in YAML, is not enough; accepting half of it
@@ -1148,7 +1158,7 @@ calls a contract frozen that the gate will call unfrozen, which skips the
 import and then blocks the pull request on "not frozen by user" without
 checking anything. A real freeze on either version writes both, so
 requiring both excludes no contract either tool produced. Pinned by
-tests/intent-prepare.test.ts:802. Accepting an
+tests/intent-prepare.test.ts:841. Accepting an
 `approval` block as an alternative was a guess dressed up as tolerance: a
 real freeze writes both, so the only contracts the second test admitted
 were hand-edited or half-written ones, and admitting those skipped the
@@ -1164,13 +1174,13 @@ product in this same family, and a repository adopting both showed
 `.conductor/` and `.guardrails/` side by side with nothing to say which
 tool owned which. Both are read, so a repository on either version is
 checked rather than blocked; the pair and its order are declared once
-(`NATIVE_CONTRACT_PATHS`, src/intent-prepare.ts:83-86) and every consumer
+(`NATIVE_CONTRACT_PATHS`, src/intent-prepare.ts:84-87) and every consumer
 reads that rather than spelling the order itself. The filter that applies
-it is `frozenNativeContracts` (src/intent-prepare.ts:230-234).
+it is `frozenNativeContracts` (src/intent-prepare.ts:231-235).
 
 THE ORDER IS A DECLARATION WITH NO OBSERVABLE EFFECT TODAY, and saying
 otherwise would be exactly the kind of claim this file exists to catch.
-tests/intent-prepare.test.ts:595 pins the declaration and nothing else
+tests/intent-prepare.test.ts:596 pins the declaration and nothing else
 can, because no consumer currently distinguishes the two entries: the
 conflict rule below refuses every repository that could hold both, so
 `frozenNativeContracts` never returns more than one and only `[0]` is ever
@@ -1180,9 +1190,9 @@ behaviour. The order becomes load-bearing the day something reads WHICH of
 the two answered; until then this is a convention, not an invariant.
 
 A REPOSITORY WITH BOTH STATE DIRECTORIES IS COULD-NOT-RUN
-(`stateDirsConflict`, src/intent-prepare.ts:290-295, over the marker list
-at src/intent-prepare.ts:244-250 and `holdsIntentGuardState` at 260-265,
-raised at src/intent-prepare.ts:427-439 as a `contract-source` step of its
+(`stateDirsConflict`, src/intent-prepare.ts:315-320, over the marker list
+at src/intent-prepare.ts:245-251 and `holdsIntentGuardState` at 285-290,
+raised at src/intent-prepare.ts:452-464 as a `contract-source` step of its
 own).
 
 THIS MIRRORS THE GATE'S OWN CONFLICT RULE EXACTLY, and the exactness is
@@ -1192,6 +1202,19 @@ legacy directory holding any of intent-guard's own state markers
 `contracts`), frozen or not. A `.conductor` holding none of them belongs
 to something else and is left alone, which is the one case where the two
 coexist legitimately.
+
+THE TWO SIDES TEST DIRECTORY-NESS DIFFERENTLY, and the asymmetry is the
+gate's own rather than an oversight. The legacy side uses `lstat`
+(`isRealDirectory`, src/intent-prepare.ts:277-283), so
+`ln -s .intent-guard .conductor` -- the obvious workaround for a script
+that still names the old path -- is not a legacy state directory at all;
+following it would make ONE directory look like two and fail the run closed
+on a conflict that does not exist. The canonical side keeps `stat`
+(src/intent-prepare.ts:253-259), because a canonical directory reached
+through a symlink is still one intent-guard reads and writes. Making both
+sides `lstat` would look neater and would miss that conflict. Both halves
+are pinned: tests/intent-prepare.test.ts:696 (the legacy symlink is not a
+conflict) and 715 (the canonical symlink still is).
 
 An earlier version of this rule was NARROWER -- both directories holding a
 FROZEN contract -- and this file argued for it: a stale unfrozen draft
@@ -1214,19 +1237,19 @@ closed on the same conflict and reports it as an opaque non-zero exit from
 a subcommand. The guidance says to MOVE the old directory aside and never
 to delete it: conductor has not read what else is in there.
 
-Pinned by tests/intent-prepare.test.ts:639 (both frozen, the case a reader
-thinks of first, now subsumed), 655 (an unfrozen draft beside a real
-contract, which is the case the narrow rule got wrong), 674 (a
-parameterised case over all five of the gate's own state markers), 695 (a
-`.conductor` holding none of them is somebody else's and is ignored), 712
+Pinned by tests/intent-prepare.test.ts:640 (both frozen, the case a reader
+thinks of first, now subsumed), 656 (an unfrozen draft beside a real
+contract, which is the case the narrow rule got wrong), 675 (a
+parameterised case over all five of the gate's own state markers), 734 (a
+`.conductor` holding none of them is somebody else's and is ignored), 751
 (the message names both directories and says move rather than delete) and
-757 (the flag does not get past it).
+796 (the flag does not get past it).
 
 READING THE OLD DIRECTORY IS SAID OUT LOUD, as one aside on the text
 report's contract line (src/output-text.ts:113-120) and one
 `intent-guard/legacy-state-dir` notification in the SARIF log
 (src/output-sarif.ts:491-515). Both go through one predicate over the
-source path (`isLegacyContractPath`, src/intent-prepare.ts:96-98) rather
+source path (`isLegacyContractPath`, src/intent-prepare.ts:97-99) rather
 than a boolean carried beside it: the path is already the fact, and a flag
 travelling next to it is a second copy that can disagree with the first.
 It is a NOTIFICATION rather than a result, and it is the closest call of
@@ -1239,13 +1262,13 @@ direction), 637 (the text report) and 649 (silent on the canonical
 directory, in both formats).
 
 An explicit `--spec` outranks even a frozen native contract
-(src/intent-prepare.ts:443-446, where the `flag` branch is taken before
+(src/intent-prepare.ts:468-471, where the `flag` branch is taken before
 the native contract is consulted), because a person typed it just now.
 
-The native-contract rule is pinned by tests/intent-prepare.test.ts:152,
-162, 168, 178 and 196, and by 602 and 616 for the two directories. THE
+The native-contract rule is pinned by tests/intent-prepare.test.ts:153,
+163, 169, 179 and 197, and by 607 and 621 for the two directories. THE
 `--spec` PRECEDENCE IS PINNED BY
-tests/intent-prepare.test.ts:229 and 240, which build one repository
+tests/intent-prepare.test.ts:230 and 241, which build one repository
 holding both a `frozen_by: user` native contract and a spec, pass the
 spec by flag, and assert the reported source is the imported spec and
 that the gate is handed a temporary directory rather than `.`, with
@@ -1255,7 +1278,7 @@ the opposite rule; and tests/intent-spec.test.ts:246 covers `--spec`
 beating a pull request body, a different question in a different file.
 Neither covers this.
 
-The branch order at src/intent-prepare.ts:443-446 is still the mechanism.
+The branch order at src/intent-prepare.ts:468-471 is still the mechanism.
 Before those two tests, a reordering that tested `nativeContractIsFrozen`
 first would have looked correct in review, because every existing test
 passed either way: none of them had both. What a user would have seen is
@@ -1270,7 +1293,7 @@ for. Swapping the two branches now turns both tests red.
 not exist is REPORTED rather than replaced by a discovered one, because
 running a different contract than the one a person just named is the wrong
 kindness (src/intent-spec.ts:284-290, reported at
-src/intent-prepare.ts:410-418).
+src/intent-prepare.ts:435-443).
 
 A `Spec:` line in the pull request body comes next, anchored to the start
 of a line so a sentence containing the words in prose is not read as
@@ -1288,7 +1311,7 @@ src/intent-spec.ts:51-59). The token is exact and lowercase; anything else
 unusable keeps the silent fall-through, so a sentence with "None" in it
 cannot switch a gate off. The waiver sits BELOW `--spec` in this file and
 below a frozen native contract in prepareIntent
-(src/intent-prepare.ts:447-460, the branch after the native contract
+(src/intent-prepare.ts:472-485, the branch after the native contract
 rather than before it), which is the whole meaning of it: it says there is
 nothing to import, never that a contract this repository froze should be
 ignored.
@@ -1383,7 +1406,7 @@ somebody to set `enabled: true` is the wrong advice for a gate that is
 already on and had nothing to check.
 
 The contract source is decided BEFORE git is touched
-(src/intent-prepare.ts:394-408). That ordering is the promise: resolving
+(src/intent-prepare.ts:419-433). That ordering is the promise: resolving
 the base ref first would turn a shallow checkout into exit 2 on a
 repository the gate was never going to check anything in.
 
@@ -1412,9 +1435,9 @@ print. The paragraph above claimed the reason reached "both reports"
 before it did.
 
 Pinned by tests/intent-run.test.ts:258, 272, 276, 280 and 307, and
-tests/intent-prepare.test.ts:368 and 377 ("never runs git, so a shallow
+tests/intent-prepare.test.ts:369 and 378 ("never runs git, so a shallow
 checkout cannot turn a missing spec into a failure"). The waiver half is
-pinned at tests/intent-prepare.test.ts:543 and 556 (the reason is the
+pinned at tests/intent-prepare.test.ts:544 and 557 (the reason is the
 waiver, and a frozen native contract still outranks it) and
 tests/intent-run.test.ts:466, 480 and 508 (the reason reaching the run
 result, the SARIF notification under its own id, and the skipped line plus
@@ -1653,7 +1676,7 @@ run at all exits 1 with no JSON and says why on stderr, which is exactly
 what a state-directory conflict looks like from the umbrella's side.
 
 `summariseStderr` is also what the intent gate's PREPARE-step failures
-report with (`complaint`, src/intent-prepare.ts:376-378). That one
+report with (`complaint`, src/intent-prepare.ts:401-403). That one
 replaced a first-line
 guess, and the replacement was a bug fix rather than a tidy-up: the
 prepared project is written under the legacy directory name, so
@@ -1665,8 +1688,8 @@ release exists to support.
 
 Pinned by tests/run.test.ts:418, 428, 442, 452 (the unparseable carry) and
 472, by tests/output-sarif.test.ts:1262, 1270, 1278 and 1289, and by
-tests/intent-prepare.test.ts:820 (the real error survives a notice line
-ahead of it) and 840 (that stderr is capped too).
+tests/intent-prepare.test.ts:859 (the real error survives a notice line
+ahead of it) and 879 (that stderr is capped too).
 
 No invented version. A gate whose version could not be read gets no
 `version` field rather than a placeholder (src/output-sarif.ts:383-387).
@@ -1955,7 +1978,7 @@ code, the same shape as every other refusal the CLI makes. What the
 fallback did instead was answer "no .guardrails.yaml here, run conductor
 init" in a repository that has one, which is a confident answer to a
 question nobody asked. The generated hook has always named a missing git
-plainly (src/init.ts:473); this is the CLI catching up with it.
+plainly (src/init.ts:506); this is the CLI catching up with it.
 
 ALL THREE BRANCHES ARE PINNED. tests/cli.test.ts:772 (no git on the
 controlled PATH: exit 2, the git sentence, no stack frame, no run-init
