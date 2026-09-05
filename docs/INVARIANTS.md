@@ -647,7 +647,7 @@ A foreign hook is never replaced (src/init.ts:780-785). That hook is
 somebody's working setup and init has no standing to have an opinion about
 it. A whitespace-only file is treated as absent rather than foreign
 (src/init.ts:780), pinned by tests/init.test.ts:1031. The refusal itself
-is pinned by tests/init.test.ts:960.
+is pinned by tests/init.test.ts:961.
 
 Another gate's own pre-commit hook is reported and left alone unless
 `--adopt` is passed (src/init.ts:786-800). Adding the umbrella's hook
