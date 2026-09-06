@@ -160,6 +160,7 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
   const root = needRecord(raw, product, 'the output');
   const run = needRecord(root.run, product, 'run');
   const threshold = optionalString(run.failOn, product, 'run.failOn') ?? null;
+  const trustBase = readTrustBase(root.trustBase, product);
   const diagnostics: Diagnostic[] = [];
 
   const findings: Finding[] = needArray(root.findings, product, 'findings').map((entry, index) => {
@@ -206,6 +207,11 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
 
   return {
     findings,
+    // Third gate, same key, same two fields read. dep-guard carries three
+    // changed flags and three shape changes, one pair about .npmrc, which
+    // the other two have no equivalent of; none of it is read here. The
+    // sentences are that gate's claims about its own control files.
+    ...(trustBase === undefined ? {} : { trustBase }),
     run: {
       failOn: threshold,
       suppressed: typeof root.suppressed === 'number' ? root.suppressed : 0,

@@ -315,23 +315,40 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     expect(unreadable?.refused).not.toMatch(/reported no version does not understand/);
   });
 
-  it('withholds it from a gate that has no pull-request mode yet', () => {
-    // dep-guard is not in the table: its step is in flight, so the flag is
-    // never offered and nothing is refused over a version it never needed.
+  it('passes the flag to a dep-guard at the version it arrived in', () => {
     const decision = decideTrustBase(
       gate({ role: 'dependencies', product: 'dep-guard' }),
       undefined,
       'origin/main',
-      '9.9.9'
+      '0.6.0'
     );
 
-    expect(decision?.withheld).toMatch(/dep-guard has no pull-request mode yet/);
+    expect(decision).toEqual({
+      ref: 'origin/main',
+      withheld: null,
+      refused: null,
+      proposals: [],
+    });
+  });
+
+  it('withholds it from a dep-guard below that version', () => {
+    const decision = decideTrustBase(
+      gate({ role: 'dependencies', product: 'dep-guard' }),
+      undefined,
+      'origin/main',
+      '0.5.0'
+    );
+
+    expect(decision?.withheld).toMatch(/dep-guard 0\.5\.0 does not understand --trust-base/);
+    expect(decision?.withheld).toMatch(/0\.6\.0/);
     expect(decision?.refused).toBeNull();
   });
 
-  it('does not refuse a gate outside the table over an unreadable version', () => {
-    // The refusal is for gates this repository expects inside the boundary.
-    // A gate that was never going to get the flag has nothing to establish.
+  it('refuses a dep-guard whose version could not be read, like the other two', () => {
+    // All three products are in the table now, so the "no pull-request mode
+    // yet" branch is unreachable by any real gate. It is kept because the
+    // table is the thing that decides, and a fourth role arriving without an
+    // entry must not be handed a flag it would reject.
     const decision = decideTrustBase(
       gate({ role: 'dependencies', product: 'dep-guard' }),
       undefined,
@@ -339,8 +356,8 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
       null
     );
 
-    expect(decision?.refused).toBeNull();
-    expect(decision?.withheld).toMatch(/no pull-request mode yet/);
+    expect(decision?.refused).toMatch(/version could not be read/);
+    expect(decision?.withheld).toBeNull();
   });
 
   it('passes the flag to a vault-guard at the version it arrived in', () => {

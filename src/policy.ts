@@ -100,13 +100,13 @@ export const PRODUCT_FOR_ROLE: Record<GateRole, Product> = {
  * could read in their own policy file.
  */
 export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
-  // `trust-base` is reserved for ALL THREE products, including the one the
-  // umbrella does not write it for yet. A policy file is a standing document
-  // and dep-guard's pull-request mode is in flight: a key that parses today
-  // and is rejected the week that gate ships would break repositories on an
-  // upgrade they did not ask for, and the flag it names is the one that
-  // decides where a gate reads its rules from, which is the last place to
-  // leave a window open.
+  // `trust-base` is reserved for all three products, and the umbrella now
+  // writes it for all three. It was reserved here before dep-guard's own
+  // pull-request mode shipped, deliberately: a policy file is a standing
+  // document, and a key that parsed one week and was rejected the next would
+  // have broken repositories on an upgrade nobody asked for. The flag it
+  // names is the one that decides where a gate reads its rules from, which
+  // is the last place to leave a window open.
   'dep-guard': ['format', 'staged', 'base', 'trust-base'],
   'vault-guard': ['format', 'f', 'staged', 'trust-base'],
   // `base` is reserved even though the umbrella never passes it to this gate,

@@ -91,10 +91,11 @@ export interface CouldNotRun {
 export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
   'intent-guard': '1.4.0',
   'vault-guard': '1.7.0',
-  // dep-guard is deliberately absent: its pull-request mode is in flight, so
-  // it is never offered the flag and is never refused over a version it does
-  // not need. An entry here is the whole of adopting a gate into the
-  // boundary, so the day it ships this is a one-line change.
+  'dep-guard': '0.6.0',
+  // All three products are in. The table stays a table rather than becoming
+  // a boolean: a fourth role can arrive without one, and the "no
+  // pull-request mode yet" branch below is what keeps that gate from being
+  // handed a flag it would reject.
 };
 
 /**
@@ -347,7 +348,11 @@ export function gateArgs(
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
   switch (gate.product) {
     case 'dep-guard':
-      return [...(staged ? ['--staged'] : []), '--format', 'json', ...passthrough];
+      // `scan` takes --trust-base from 0.6.0. It sits beside whatever the
+      // umbrella already passes rather than replacing it: --trust-base says
+      // where the RULES come from and the mode flags say what is scanned,
+      // and a pull-request run passes both.
+      return [...(staged ? ['--staged'] : []), '--format', 'json', ...trust, ...passthrough];
     case 'vault-guard':
       // No path argument: the CLI defaults it to "." and the umbrella runs
       // with cwd at the repository root anyway. Passing one would also risk

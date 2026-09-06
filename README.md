@@ -289,8 +289,9 @@ request could point a gate at a script it added in the same commit.
 `--trust-base <ref>` the umbrella reads `.guardrails.yaml` from that ref with
 `git show` and judges the head tree against it. A `.guardrails.yaml` in the
 pull request never takes effect for that run, `command:` and `args:`
-included, so **a pull request cannot change the rules it is judged by, and it
-cannot choose the program that judges it either**. The same ref is passed
+included, so **a pull request cannot change the rules it is judged by, and
+cannot choose the program that judges it, as long as that program is
+self-contained** (see the directory rule below). The same ref is passed
 down to every gate that supports it, so their contracts, configs and
 baselines come from the base branch too.
 
@@ -377,9 +378,8 @@ commit, which is HEAD. If the base branch has no `.guardrails.yaml` at all,
 the run has no rules and exits 2 rather than using the pull request's; the
 file the pull request adds decides what runs once it is on the base branch.
 
-**Which gates are covered.** intent-guard from **1.4.0** and vault-guard from
-**1.7.0**. dep-guard's own pull-request mode is in flight and it is not in
-the table yet, so it is never offered the flag.
+**Which gates are covered.** All three: dep-guard from **0.6.0**,
+intent-guard from **1.4.0**, vault-guard from **1.7.0**.
 
 The umbrella asks each gate its version and passes the flag only to a build
 that understands it, so an older gate is not handed a flag it would reject. A

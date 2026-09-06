@@ -604,19 +604,44 @@ describe('pull-request mode through a whole run', () => {
     });
   }
 
-  it('hands the ref down to the gates in the version table and to no other', () => {
+  it('hands the ref down to every gate in the version table', () => {
     pullRequestRun(true);
     const lines = readFileSync(lastArgvLog, 'utf8').trim().split('\n');
 
     // One line per gate, in gate order: dependencies, secrets, intent. The
-    // stubs report 9.9.9, which is above both floors, so the two gates in the
-    // table carry the flag and dep-guard does not. Handing it to a gate that
-    // does not parse it would make that gate exit non-zero on an unknown
-    // flag, which is the failure the table exists to prevent.
+    // stubs report 9.9.9, which is above all three floors, so all three
+    // carry the flag. What decides this is the TABLE, not the count: a gate
+    // missing from it must not be handed a flag it would reject, which is
+    // the case the next test covers.
     expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(line).toContain('--trust-base origin/main');
+    }
+  });
+
+  it('hands it to no gate the table does not name', () => {
+    // The whole boundary rests on the table rather than on a count of
+    // products, and the count is now all of them, so this is the only place
+    // left that the withholding half is exercised through a real run. A
+    // stub below the floor stands in for a gate the table does not cover.
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, argvLog: log, version: '0.5.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: log, version: '1.7.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, argvLog: log, version: '1.4.0' });
+
+    const result = runAll(ALL_THREE, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
+    });
+    const lines = readFileSync(log, 'utf8').trim().split('\n');
+
     expect(lines[0]).not.toContain('--trust-base');
     expect(lines[1]).toContain('--trust-base origin/main');
     expect(lines[2]).toContain('--trust-base origin/main');
+    expect(result.gates[0].trustBase?.withheld).toMatch(/dep-guard 0\.5\.0/);
   });
 
   it('sums a proposal raised by the secrets gate alongside the intent gate own', () => {

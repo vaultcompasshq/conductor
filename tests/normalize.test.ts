@@ -703,6 +703,47 @@ describe("intent-guard's pull-request-mode refusals", () => {
     expect(normalized.trustBase).toBeUndefined();
   });
 
+  it('reads the same block off dep-guard, which puts it in the same place', () => {
+    // dep-guard 0.6.0 carries three changed flags and three shape changes,
+    // one pair of which is about .npmrc, a control input the other two gates
+    // do not have. The umbrella reads the ref and the sentences and nothing
+    // else, which is what keeps a third gate from needing a third mapping.
+    const normalized = normalizeDepGuard(
+      {
+        findings: [],
+        suppressed: 0,
+        ignored: 0,
+        allowed: 1,
+        allowedNames: ['left-pad'],
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['config changed in this pull request (proposed: allow left-pad)'],
+          configChanged: true,
+          baselineChanged: false,
+          npmrcChanged: false,
+          configShapeChange: null,
+          baselineShapeChange: null,
+          npmrcShapeChange: null,
+        },
+        run: { mode: 'audit', failOn: 'medium', blockingMatches: 0, diagnostics: [] },
+        exitCode: 0,
+      },
+      '0.6.0'
+    );
+
+    expect(normalized.trustBase).toEqual({
+      ref: 'origin/main',
+      proposals: ['config changed in this pull request (proposed: allow left-pad)'],
+    });
+  });
+
+  it('says nothing for a dep-guard that was not in pull-request mode', () => {
+    // Absence rather than null: dep-guard drops the key outright on an
+    // ordinary run, so those bytes are what they were before the field
+    // existed and a consumer that never enters the mode learns no new key.
+    expect(normalizeDepGuard(DEP_GUARD_CLEAN, '0.6.0').trustBase).toBeUndefined();
+  });
+
   it('refuses a trustBase of a shape it does not know rather than reading past it', () => {
     expect(() =>
       normalizeIntentGuard(
