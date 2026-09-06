@@ -88,6 +88,24 @@
 //    Everything genuinely inside keeps the relative, forward-slashed,
 //    `%SRCROOT%`-based spelling that GitHub code scanning wants.
 //
+//  - EVERY RESULT CARRIES AT LEAST ONE LOCATION, and the fallback is a real
+//    file rather than an invented one. GitHub code scanning rejects a whole
+//    uploaded log with "locationFromSarifResult: expected at least one
+//    location" the moment any single result has none, so one location-less
+//    result loses the entire report rather than one alert. That happened on
+//    every main-branch run of a sibling repository's guardrails job, and the
+//    offender was `intent-guard/gate-blocked`, whose subject is `none`.
+//
+//    This does NOT weaken the two rules above it. A location the gate gave is
+//    never overwritten, no region is invented, and no path is fabricated: the
+//    fallback is the CONTROL FILE this result is a statement about, which is
+//    a file that exists in the repository and is the one a reader would open.
+//    For the umbrella's own results and for the two gates whose control files
+//    the umbrella does not read, that is the policy file, which is where the
+//    gate that produced the result is enabled. For the intent gate it is the
+//    frozen contract, when the run recorded which of the two state
+//    directories answered.
+//
 //  - A REGION ONLY WHEN A REAL POSITION IS KNOWN. One of the three gates
 //    reports a line and a column; the other two report no position at all.
 //    An invented startLine annotates an unrelated line of somebody's file
@@ -100,7 +118,9 @@
 //    field were ever carried.
 
 import type { Finding, Severity } from './envelope.js';
+import type { GateOutcome } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
+import { POLICY_FILE_NAME } from './policy.js';
 import type { RunResult } from './run.js';
 
 const SARIF_SCHEMA =
@@ -269,7 +289,48 @@ function locationsFor(finding: Finding): Array<Record<string, unknown>> | undefi
   }
 }
 
-function toResult(finding: Finding): Record<string, unknown> {
+/**
+ * The file a result with no location of its own is filed against.
+ *
+ * A real, repository-relative path, never a placeholder: the policy file is
+ * where every gate is enabled and where a reader goes to change what ran, and
+ * for the intent gate the frozen contract is the file its gate-state findings
+ * are literally about. Both exist in the repository whenever a run happened at
+ * all, so this never points at nothing.
+ */
+export function fallbackLocationFor(gate: GateOutcome | null): string {
+  const source = gate?.intent?.contractSource;
+  if (source !== undefined && source.kind === 'native') {
+    return source.path;
+  }
+  return POLICY_FILE_NAME;
+}
+
+/**
+ * The locations for one result, with the fallback filled in where a real one
+ * is missing.
+ *
+ * TWO SEPARATE CASES, and conflating them would lose information. A finding
+ * with no locations at all gets one made of the fallback. A finding that has
+ * a LOGICAL location and no physical one (a drift finding's contract
+ * category, a package whose manifest could not be placed) keeps the logical
+ * one and gains the physical fallback beside it, because the logical location
+ * is what a consumer groups on and replacing it would drop that.
+ */
+function withFallbackLocation(
+  locations: Array<Record<string, unknown>> | undefined,
+  fallbackUri: string
+): Array<Record<string, unknown>> {
+  const physicalLocation = { artifactLocation: { uri: fallbackUri, uriBaseId: '%SRCROOT%' } };
+  if (locations === undefined || locations.length === 0) {
+    return [{ physicalLocation }];
+  }
+  return locations.map((location) =>
+    location.physicalLocation === undefined ? { ...location, physicalLocation } : location
+  );
+}
+
+function toResult(finding: Finding, fallbackUri: string): Record<string, unknown> {
   // A path that escapes the source root gets no physical location, so the
   // path itself is carried here instead. Dropping a location is honest;
   // dropping the information as well would just lose the finding's subject.
@@ -295,10 +356,9 @@ function toResult(finding: Finding): Record<string, unknown> {
     entry.partialFingerprints = { [fingerprintKey(finding.fingerprint.scope)]: finding.fingerprint.value };
   }
 
-  const locations = locationsFor(finding);
-  if (locations !== undefined) {
-    entry.locations = locations;
-  }
+  // Unconditional. The old code omitted the key when there was nothing
+  // honest to say, and one such result makes GitHub reject the whole log.
+  entry.locations = withFallbackLocation(locationsFor(finding), fallbackUri);
 
   return entry;
 }
@@ -325,6 +385,20 @@ interface Notification {
   id: string;
   message: string;
   details: Record<string, unknown>;
+  /**
+   * Note unless this says otherwise, and exactly one thing does.
+   *
+   * A statement about coverage is never an error about anybody's code, so
+   * every notification here is a note and a warning-level one would push the
+   * whole family back into the alert list they were moved out of. The single
+   * exception is a REFUSED TRUST BASE, which is not a coverage statement at
+   * all: nothing was checked, on a run whose entire job was to check. It is
+   * not a result either, because there is no code and no configuration it is
+   * about; it is the run failing closed, and a consumer reading only the log
+   * has to be able to tell it from a clean scan of a repository with no
+   * gates enabled.
+   */
+  level?: 'note' | 'error';
 }
 
 function toNotification(notification: Notification): Record<string, unknown> {
@@ -333,10 +407,7 @@ function toNotification(notification: Notification): Record<string, unknown> {
     // filed under when it was a result, so a consumer that had rules for
     // these still recognises them.
     descriptor: { id: notification.id },
-    // Note, always. A statement about coverage is never an error about the
-    // code, and a notification that arrived as a warning would push these
-    // straight back into the alert list they were moved out of.
-    level: 'note',
+    level: notification.level ?? 'note',
     message: { text: notification.message },
     properties: { details: notification.details },
   };
@@ -373,6 +444,8 @@ function makeRun(
   name: string,
   version: string | null,
   findings: Finding[],
+  /** The artifact a result with no location of its own is filed against. */
+  fallbackUri: string,
   properties?: Record<string, unknown>,
   invocation?: Invocation
 ): Record<string, unknown> {
@@ -393,7 +466,7 @@ function makeRun(
           : { notifications: notificationDeclarations(notifications) }),
       },
     },
-    results: findings.map(toResult),
+    results: findings.map((finding) => toResult(finding, fallbackUri)),
     ...(invocation === undefined
       ? {}
       : {
@@ -590,6 +663,149 @@ function skippedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The control inputs this pull request proposes to change, as notifications.
+ *
+ * A NOTIFICATION and never a result, decided by the rule at
+ * skippedNotifications below rather than by a fresh judgment. A proposed
+ * control change is a statement about CONFIGURATION in the purest form that
+ * rule describes: nothing went wrong, nobody's code is at fault, the
+ * proposal did not take effect, and it is true of every run of this pull
+ * request until it merges or the file is reverted. As a result it would be a
+ * fingerprint-less alert reappearing on every push to the branch, which is
+ * how a code scanning tab becomes something nobody reads.
+ *
+ * The id is the UMBRELLA'S, even for a line a gate wrote, and that is a
+ * deliberate departure from skippedNotifications, which uses the gate's
+ * namespace. The statement here is the umbrella's summing: it is the one
+ * place a reviewer sees that a pull request tried to change three gates'
+ * rules at once, which is the sentence the whole wave exists to produce. The
+ * gate that raised each line is in the details.
+ */
+function proposalNotifications(result: RunResult): Notification[] {
+  return result.proposals.map((proposal) => ({
+    id: 'conductor/control-change-proposed',
+    message:
+      `This pull request proposes a control change that did NOT take effect for this run: ` +
+      `${proposal.line} (${proposal.product}). The rules came from ` +
+      `${result.trustBase?.ref ?? 'the base ref'}; the proposed change decides what runs once ` +
+      'it is on the base branch.',
+    details: {
+      product: proposal.product,
+      role: proposal.role,
+      proposal: proposal.line,
+      ref: result.trustBase?.ref ?? null,
+    },
+  }));
+}
+
+/**
+ * The trust base the umbrella refused, when it refused one.
+ *
+ * ERROR LEVEL, and the only notification here that is not a note. Every other
+ * one says how much of the policy a run covered; this one says the run did
+ * not happen. It is the one statement in this file that a reader must not be
+ * able to scroll past.
+ *
+ * A NOTIFICATION rather than a result even so, and the reason is the
+ * discriminator further down: a result is about a place in somebody's code,
+ * and this is about a ref. The could-not-run RESULTS for whatever gates the
+ * inventory named sit beside it in the same run and carry the same sentence,
+ * so a consumer that reads only results still learns that nothing ran.
+ */
+function trustBaseRefusedNotifications(result: RunResult): Notification[] {
+  const refusal = result.trustBase?.refusal;
+  if (refusal === undefined || refusal === null) {
+    return [];
+  }
+  return [
+    {
+      id: 'conductor/trust-base-refused',
+      level: 'error',
+      message:
+        `conductor refused the trust base "${result.trustBase?.ref ?? ''}", so no gate ran and ` +
+        `NOTHING WAS CHECKED by this run. ${refusal}`,
+      details: { ref: result.trustBase?.ref ?? null, reason: refusal },
+    },
+  ];
+}
+
+/**
+ * The gates whose PROGRAM the umbrella refused to run.
+ *
+ * ERROR level, beside the refused trust base and for the same reason: this is
+ * not a statement about how much of the policy a run covered. A pull request
+ * put a file where the gate's binary resolves and the umbrella declined to
+ * execute it, which a reviewer has to meet rather than scroll past.
+ *
+ * The gate's could-not-run RESULT carries the same sentence, so a consumer
+ * reading only results still learns the gate did not run. This adds the
+ * structured half: which gate, which program, and which ref it was measured
+ * against.
+ */
+function programRefusedNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) => {
+    if (gate.couldNotRun?.reason !== 'gate-program-refused') {
+      return [];
+    }
+    return [
+      {
+        id: 'conductor/gate-program-refused',
+        level: 'error' as const,
+        message:
+          `The ${gate.role} gate (${gate.product}) did NOT run: its program is a file this pull ` +
+          `request controls, so running it would let the pull request choose the program that ` +
+          `judges it. ${gate.couldNotRun.detail}`,
+        details: {
+          role: gate.role,
+          product: gate.product,
+          program: gate.binary?.program ?? null,
+          ref: gate.trustBase?.ref ?? null,
+          reason: gate.couldNotRun.detail,
+        },
+      },
+    ];
+  });
+}
+
+/**
+ * The gates the umbrella could not put into pull-request mode.
+ *
+ * The loud half of the same mode, and by the discriminator below it is a
+ * close call that lands on notification: nothing went wrong with the run, and
+ * the fact is true of the configuration (an older gate is installed) rather
+ * than of this change, so it is identical on every run until somebody
+ * upgrades. What it says is how much of the pull-request boundary this run
+ * actually had, which is a coverage statement.
+ *
+ * It is still the most important notification in the log. A gate here read
+ * its own control inputs out of the tree under judgment.
+ */
+function trustBaseWithheldNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) => {
+    const withheld = gate.trustBase?.withheld;
+    if (withheld === undefined || withheld === null) {
+      return [];
+    }
+    return [
+      {
+        id: 'conductor/trust-base-not-passed',
+        message:
+          `The ${gate.role} gate (${gate.product}) did NOT run in pull-request mode, so it read ` +
+          `its own control inputs from the tree being judged rather than from ` +
+          `${gate.trustBase?.ref ?? 'the base ref'}. ${withheld}`,
+        details: {
+          role: gate.role,
+          product: gate.product,
+          productVersion: gate.productVersion,
+          ref: gate.trustBase?.ref ?? null,
+          reason: withheld,
+        },
+      },
+    ];
+  });
+}
+
+/**
  * The gates the policy file told not to decide anything, as notifications.
  *
  * These are written in TWO places on purpose, and neither one is redundant:
@@ -678,7 +894,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     // different claims, and so are one over a branch diff and one over an
     // index.
     runs.push(
-      makeRun(gate.product, gate.productVersion, own, {
+      makeRun(gate.product, gate.productVersion, own, fallbackLocationFor(gate), {
         enforced: gate.enforce,
         stage: gate.stage,
         ...(gate.intent === undefined
@@ -708,22 +924,56 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),
+    ...trustBaseRefusedNotifications(result),
+    ...programRefusedNotifications(result),
+    ...proposalNotifications(result),
+    ...trustBaseWithheldNotifications(result),
   ];
 
   // Notifications earn the run on their own. Before this, the umbrella run
   // existed only when it had findings and a deferred gate was one; without
   // this clause a commit-stage log would say nothing whatever about the gate
   // that did not run there.
-  if (umbrellaFindings.length > 0 || notifications.length > 0) {
+  //
+  // A REFUSAL EARNS IT UNCONDITIONALLY, and that clause is not redundant with
+  // the two beside it even though a refusal always adds a notification: it
+  // says out loud that the worst run this tool can have is the one case where
+  // an empty log is not acceptable. `{"runs": []}` was the output when the
+  // base ref could not be read and the head's inventory named no gate, and an
+  // empty log uploads cleanly and is indistinguishable from a repository
+  // nobody scanned.
+  if (
+    umbrellaFindings.length > 0 ||
+    notifications.length > 0 ||
+    (result.trustBase?.refusal ?? null) !== null
+  ) {
     runs.push(
-      makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings, undefined, {
-        // A claim about whether the analysis completed, taken from the gates
-        // rather than from the exit code: an unenforced gate that could not
-        // run leaves the run at exit 0, and nothing was checked by it either
-        // way. Written whenever this run is written, in both directions.
-        executionSuccessful: result.gates.every((gate) => gate.couldNotRun === null),
-        notifications,
-      })
+      makeRun(
+        UMBRELLA_DRIVER_NAME,
+        umbrellaVersion,
+        umbrellaFindings,
+        POLICY_FILE_NAME,
+        // On the umbrella's run rather than on any gate's, because it is a
+        // fact about the whole run: every gate that could take the flag was
+        // handed this same ref. A consumer reading only the log can then tell
+        // a pull-request run from an ordinary one without parsing sentences.
+        result.trustBase === null ? undefined : { trustBase: result.trustBase },
+        {
+          // A claim about whether the analysis completed, taken from the
+          // gates rather than from the exit code: an unenforced gate that
+          // could not run leaves the run at exit 0, and nothing was checked
+          // by it either way. Written whenever this run is written, in both
+          // directions.
+          // A refusal is false whatever the gate list says, and with an
+          // empty inventory `every` over nothing is vacuously true, which
+          // would have claimed the analysis completed on the one run where
+          // nothing was even attempted.
+          executionSuccessful:
+            (result.trustBase?.refusal ?? null) === null &&
+            result.gates.every((gate) => gate.couldNotRun === null),
+          notifications,
+        }
+      )
     );
   }
 

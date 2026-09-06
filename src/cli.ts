@@ -22,9 +22,19 @@ import {
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
 import { renderText } from './output-text.js';
-import { GATE_ROLES, GATE_STAGES, PolicyError, applyCliOverrides, loadPolicy } from './policy.js';
-import type { GateRole, GateStage } from './policy.js';
-import { runAll } from './run.js';
+import {
+  GATE_ROLES,
+  GATE_STAGES,
+  POLICY_FILE_NAME,
+  PolicyError,
+  applyCliOverrides,
+  loadPolicy,
+  parsePolicy,
+} from './policy.js';
+import type { CliOverrides, GateRole, GateStage, Policy } from './policy.js';
+import { refusedTrustBase, runAll } from './run.js';
+import type { RunTrustBase } from './run.js';
+import { policyDiffers, readPolicyAtRef, refuseTrustBaseRef } from './trust-base.js';
 
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
@@ -85,9 +95,104 @@ interface RunCliOptions {
   gate?: string[];
   stage?: string;
   base?: string;
+  trustBase?: string;
   spec?: string;
   output?: string;
   verbose?: boolean;
+}
+
+/**
+ * The policy for one run, and where it came from.
+ *
+ * Two shapes rather than one, because a run that could not use its trust base
+ * is not a run with a different policy: it is a run with NO policy, and it
+ * has to report every enabled gate as could-not-run rather than fall back to
+ * the head's file.
+ */
+type PolicyForRun =
+  | { kind: 'policy'; policy: Policy; trustBase?: RunTrustBase }
+  /** The trust base could not be judged against. `inventory` only names gates. */
+  | { kind: 'refused'; ref: string; detail: string; inventory: Policy };
+
+/**
+ * Reads the policy for one run, from the base ref in pull-request mode.
+ *
+ * THE HEAD'S POLICY FILE IS NEVER PARSED INTO A RUN IN PULL-REQUEST MODE, and
+ * that is the whole of the fix. A pull request that rewrites `.guardrails.yaml`
+ * to point a gate's `command:` at a script it added, or to switch off the gate
+ * that would have caught what else is in the commit, gets the base ref's
+ * policy and a line saying its own was proposed.
+ *
+ * The head's file is read for exactly two things, neither of which can change
+ * what runs: it is compared with the base's so the difference can be
+ * reported, and, when the trust base itself cannot be used, it names the
+ * gates the report says did not run.
+ */
+function policyForRun(
+  root: string,
+  trustBase: string | undefined,
+  overrides: CliOverrides
+): PolicyForRun {
+  if (trustBase === undefined) {
+    return { kind: 'policy', policy: applyCliOverrides(loadPolicy(root), overrides) };
+  }
+
+  const refusal = refuseTrustBaseRef(root, trustBase);
+  if (refusal !== null) {
+    // An inventory, and only an inventory: a list of gate NAMES for the
+    // report, taken from the one file available when the base ref cannot be
+    // read. It is head-controlled, so it can be SHORTER as well as longer
+    // than the base's -- every gate `enabled: false`, or a file that will not
+    // parse at all, leaves it empty -- and an earlier comment here claimed
+    // only the longer direction, which is how the empty case went unnoticed.
+    //
+    // Neither direction can weaken the verdict, and that is the property this
+    // rests on rather than on the inventory being right. refusedTrustBase
+    // enforces every gate it names and writes exit 2 itself, and the refusal
+    // is carried on the result so both renderers lead with it whether the
+    // inventory names three gates or none. A longer list makes the report
+    // longer; a shorter one makes it shorter; the verdict is the same
+    // sentence either way.
+    //
+    // An unreadable head file leaves the list empty rather than replacing the
+    // refusal with a policy error: the ref is what went wrong, and reporting
+    // the head's malformed file would send the reader to the wrong fix on a
+    // run that would have ignored that file anyway.
+    let inventory: Policy = { version: 1, gates: {}, report: { format: 'text' } };
+    try {
+      inventory = applyCliOverrides(loadPolicy(root), overrides);
+    } catch {
+      inventory = { version: 1, gates: {}, report: { format: 'text' } };
+    }
+    return { kind: 'refused', ref: trustBase, detail: refusal, inventory };
+  }
+
+  const baseText = readPolicyAtRef(root, trustBase);
+  const headText = readPolicyAtRef(root, 'HEAD');
+
+  if (baseText === null) {
+    throw new PolicyError(
+      `No ${POLICY_FILE_NAME} on "${trustBase}". On a pull-request run every rule comes from the ` +
+        'base ref, so this run has no policy at all and nothing was checked. ' +
+        (headText === null
+          ? `Run "conductor init" on the base branch.`
+          : `The ${POLICY_FILE_NAME} in this pull request is a proposal: it decides what runs ` +
+            'once it is on the base branch, and never on the pull request that adds it.')
+    );
+  }
+
+  return {
+    kind: 'policy',
+    policy: applyCliOverrides(
+      parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`),
+      overrides
+    ),
+    trustBase: {
+      ref: trustBase,
+      policyChanged: policyDiffers(baseText, headText),
+      refusal: null,
+    },
+  };
 }
 
 function parseFormat(value: string): 'text' | 'sarif' {
@@ -223,6 +328,10 @@ export function buildProgram(): Command {
       'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to origin/<GITHUB_BASE_REF> when it is set.'
     )
     .option(
+      '--trust-base <ref>',
+      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action passes origin/<GITHUB_BASE_REF> on a pull_request event.'
+    )
+    .option(
       '--output <path>',
       'write the report to this file instead of to stdout, for a CI step that uploads it'
     )
@@ -248,23 +357,31 @@ export function buildProgram(): Command {
         // and the catch below is what turns any of its three sentences into
         // one line on stderr and the could-not-run exit code.
         const root = repoRoot(cwd);
-        const policy = applyCliOverrides(loadPolicy(root), {
+        const overrides: CliOverrides = {
           ...(parseRoles(options.gate) === undefined
             ? {}
             : { gates: parseRoles(options.gate) as GateRole[] }),
-        });
-        const format = parseFormat(options.format ?? policy.report.format);
+        };
         const stage = parseStage(options.stage);
+        const source = policyForRun(root, options.trustBase, overrides);
+        const policy = source.kind === 'policy' ? source.policy : source.inventory;
+        const format = parseFormat(options.format ?? policy.report.format);
 
-        const result = runAll(policy, {
-          repoRoot: root,
-          staged: Boolean(options.staged),
-          pathValue: process.env.PATH ?? '',
-          env: process.env,
-          ...(stage === undefined ? {} : { stage }),
-          ...(options.base === undefined ? {} : { base: options.base }),
-          ...(options.spec === undefined ? {} : { spec: options.spec }),
-        });
+        const result =
+          source.kind === 'refused'
+            ? refusedTrustBase(source.inventory, source.ref, source.detail, {
+                ...(stage === undefined ? {} : { stage }),
+              })
+            : runAll(source.policy, {
+                repoRoot: root,
+                staged: Boolean(options.staged),
+                pathValue: process.env.PATH ?? '',
+                env: process.env,
+                ...(stage === undefined ? {} : { stage }),
+                ...(options.base === undefined ? {} : { base: options.base }),
+                ...(options.spec === undefined ? {} : { spec: options.spec }),
+                ...(source.trustBase === undefined ? {} : { trustBase: source.trustBase }),
+              });
 
         const rendered =
           format === 'sarif'

@@ -15,6 +15,19 @@ inputs:
       pull request and conductor uses origin/$GITHUB_BASE_REF itself; set it to
       run the pull-request flow somewhere that variable is not set.
     default: ''
+  trust-base:
+    description: >-
+      Pull-request mode. The ref every rule is read from: the umbrella's own
+      .guardrails.yaml and every control input of the gates that support it.
+      Leave it empty and, on a pull_request event, the action passes
+      origin/$GITHUB_BASE_REF itself; on any other event it passes nothing and
+      behaviour is unchanged. Set it to name the ref explicitly, for a
+      platform where GITHUB_BASE_REF is not set. There is deliberately no
+      value that turns pull-request mode off: base-ref judging is the floor
+      and not a knob, and on a pull_request event the workflow file itself
+      comes from the pull request's own ref, so an opt-out here would be
+      settable by the pull request it exists to judge.
+    default: ''
   spec:
     description: >-
       An explicit spec for the intent gate, outranking a Spec: line in the pull
@@ -76,6 +89,7 @@ runs:
         GITHUB_BASE_REF: ${{ github.base_ref }}
         GITHUB_HEAD_REF: ${{ github.head_ref }}
         BASE_REF: ${{ inputs.base-ref }}
+        TRUST_BASE: ${{ inputs.trust-base }}
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         OUTPUT: ${{ inputs.output }}
@@ -107,6 +121,30 @@ runs:
         # --base unconditionally would hand it the literal ref "origin/".
         if [ -n "$BASE_REF" ]; then
           ARGS+=(--base "$BASE_REF")
+        fi
+        # PULL-REQUEST MODE. On a pull_request event the rules come from the
+        # base branch, so the pull request cannot change what it is judged by.
+        #
+        # origin/$GITHUB_BASE_REF, and never a SHA. github.sha on a
+        # pull_request event is the MERGE commit, which is HEAD, and
+        # github.event.pull_request.head.sha is a different commit carrying
+        # HEAD's tree whenever the base has not moved; either one puts the
+        # rules back in the tree being judged. The umbrella refuses both, but
+        # the right ref is the one to pass rather than the one to be refused
+        # over.
+        #
+        # GITHUB_BASE_REF is a BRANCH NAME and Actions defines it EMPTY
+        # outside a pull request, so an empty value has to mean "not a pull
+        # request": passing --trust-base unconditionally would hand every push
+        # build the literal ref "origin/" and fail it closed.
+        # No opt-out value, on purpose. Base-ref judging is the floor rather
+        # than a knob, and on a pull_request event the workflow file runs from
+        # the pull request's own ref: a value here that switched the mode off
+        # would be settable by the very pull request the mode exists to judge.
+        if [ -n "$TRUST_BASE" ]; then
+          ARGS+=(--trust-base "$TRUST_BASE")
+        elif [ -n "${GITHUB_BASE_REF:-}" ]; then
+          ARGS+=(--trust-base "origin/$GITHUB_BASE_REF")
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")

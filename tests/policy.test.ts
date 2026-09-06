@@ -308,6 +308,12 @@ describe('the reserved option list against the flags the umbrella writes', () =>
       gateArgs(gate, false, undefined),
       gateArgs(gate, true, intent),
       gateArgs(gate, false, { ...intent, paths: null }),
+      // Pull-request mode, in both shapes it can take. Without these the
+      // derived direction below would not cover --trust-base at all, and a
+      // policy file could write the flag that decides where a gate reads its
+      // rules from, with the winner settled by that CLI argument parser.
+      gateArgs(gate, false, undefined, 'origin/main'),
+      gateArgs(gate, false, intent, 'origin/main'),
     ];
     const flags = new Set<string>();
     for (const argv of runs) {
@@ -327,6 +333,9 @@ describe('the reserved option list against the flags the umbrella writes', () =>
    */
   const RESERVED_WITHOUT_WRITING: Record<Product, string[]> = {
     // The umbrella passes --staged. A policy-supplied base would fight it.
+    // trust-base is no longer an exception here: it was reserved ahead of
+    // the flag being written for this gate, and now the umbrella writes it,
+    // so the derived direction covers it like any other flag.
     'dep-guard': ['base'],
     // The umbrella writes the same option under its short name, -f.
     'vault-guard': ['format'],

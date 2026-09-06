@@ -1,13 +1,18 @@
 // One run across every enabled gate.
 
 import { type Finding, compareFindings } from './envelope.js';
-import { composeExitCode } from './exit-codes.js';
+import { EXIT_COULD_NOT_RUN, composeExitCode } from './exit-codes.js';
 import { type GateOutcome, preparationFailed, runGate } from './gate-runner.js';
 import { resolveBaseRef } from './intent-base.js';
-import { type IntentPreparation, prepareIntent } from './intent-prepare.js';
+import {
+  type IntentPreparation,
+  frozenNativeContractPath,
+  prepareIntent,
+} from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Policy, Product } from './policy.js';
 import { GATE_ROLES, enabledGates, runsAtStage } from './policy.js';
 import { ResolveError, resolveGateBinary } from './resolve.js';
+import { POLICY_PROPOSAL_LINE } from './trust-base.js';
 
 /**
  * An enabled gate the stage filter held back.
@@ -65,6 +70,57 @@ export interface SkippedGate {
   detail: string;
 }
 
+/**
+ * One control input this pull request proposes to change.
+ *
+ * A statement about CONFIGURATION, never a finding. It carries no severity,
+ * no fingerprint and no blocking flag, it is not in `findings`, and nothing
+ * here reaches the exit code: a pull request is allowed to propose changing
+ * the rules, and the whole of the mechanism is that the proposal does not
+ * take effect for the run that carries it. What it must do is be VISIBLE, so
+ * a reviewer meets "this pull request also proposes to loosen the gate" as
+ * one sentence beside the verdict.
+ *
+ * `line` is the sentence the gate that owns the control input wrote, carried
+ * verbatim. The umbrella writes only its own, about its own policy file.
+ */
+export interface ControlProposal {
+  /** The gate that raised it, or the umbrella for its own policy file. */
+  product: Product | 'conductor';
+  /** The role that gate fills, or null for the umbrella's own. */
+  role: GateRole | null;
+  line: string;
+}
+
+/**
+ * Pull-request mode as the whole run saw it.
+ *
+ * `policyChanged` is decided in one place, before any gate runs, by comparing
+ * the policy file at the base ref with the one at the head commit. It is
+ * reported and never acted on: the base ref's policy is the one that ran.
+ */
+export interface RunTrustBase {
+  /** The ref the umbrella took its own policy from. */
+  ref: string;
+  /** Whether the head commit's own policy file differs from that one. */
+  policyChanged: boolean;
+  /**
+   * Why this ref could not be used at all, or null when it was.
+   *
+   * A SEPARATE FIELD RATHER THAN AN ABSENT `trustBase`, and it is load-bearing
+   * in both renderers. A refusal is the worst outcome this tool has -- nothing
+   * was checked, on a run that was supposed to be the gate -- and it has to be
+   * the first thing a reader meets rather than something inferred from an exit
+   * code. Both reports used to work the number of gates out first, and an
+   * inventory naming no gate (every gate `enabled: false` in the head's file,
+   * or a head file that will not parse) then printed "no gate ran because none
+   * is enabled" in text and `{"runs": []}` in SARIF, with the refusal sentence
+   * nowhere. That is reachable on the DEFAULT actions/checkout, which fetches
+   * depth 1 and so carries no base ref.
+   */
+  refusal: string | null;
+}
+
 export interface RunResult {
   schemaVersion: 1;
   generatedAt: string;
@@ -81,6 +137,14 @@ export interface RunResult {
    * consumer reads one list instead of three.
    */
   findings: Finding[];
+  /** Present only on a pull-request run; null means ordinary mode. */
+  trustBase: RunTrustBase | null;
+  /**
+   * Every control input this pull request proposes to change, the umbrella's
+   * own policy file first and then each gate's, in gate order. Empty outside
+   * pull-request mode, and empty inside it when nothing was proposed.
+   */
+  proposals: ControlProposal[];
   summary: {
     blocking: number;
     byProduct: Record<string, number>;
@@ -103,6 +167,14 @@ export interface RunOptions {
   base?: string;
   /** An explicit spec for the intent gate, outranking every other source. */
   spec?: string;
+  /**
+   * Pull-request mode. The policy this run was handed was ALREADY read from
+   * this ref by the caller: `runAll` does not read it, because the policy has
+   * to be parsed before there is a run to configure. What this carries is the
+   * ref, so it can be passed down to every child that can take it, and the
+   * one fact the caller established while reading it.
+   */
+  trustBase?: RunTrustBase;
   /**
    * The environment the pull-request defaults are read from.
    *
@@ -155,14 +227,25 @@ function intentBinary(gate: GatePolicy, options: RunOptions) {
   }
 }
 
-export function runAll(policy: Policy, options: RunOptions): RunResult {
+/**
+ * The three lists a stage filter and a `--gate` flag produce between them.
+ *
+ * Factored out because the trust-base refusal below needs the same partition:
+ * a run that could not read its policy from the base ref still has to report
+ * the gates it did not run and the stage each of them sits at, or the report
+ * of the most serious failure this tool has is thinner than the report of an
+ * ordinary one.
+ */
+function partitionGates(
+  policy: Policy,
+  requested: GateStage | undefined
+): { gates: GatePolicy[]; deferred: DeferredGate[]; excluded: ExcludedGate[] } {
   const enabled = enabledGates(policy);
 
   // Partitioned before anything is spawned, and before any binary is even
   // looked for: a gate that will not run at this stage must not be able to
   // fail the run by being uninstalled here. An intent gate that lives only
   // on the CI image is the ordinary case, not an error.
-  const requested = options.stage;
   const gates =
     requested === undefined ? enabled : enabled.filter((gate) => runsAtStage(gate.stage, requested));
   const deferred: DeferredGate[] =
@@ -175,9 +258,117 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
   // Read off the policy rather than off the enabled list, because these gates
   // are exactly the ones the override took out of it. In role order, so a
   // report's ordering never depends on the order the flags were typed.
-  const excluded: ExcludedGate[] = GATE_ROLES.map((role) => policy.gates[role]).filter(
-    (gate): gate is GatePolicy => gate !== undefined && gate.excludedByCli
-  ).map((gate) => ({ role: gate.role, product: gate.product }));
+  const excluded: ExcludedGate[] = GATE_ROLES.map((role) => policy.gates[role])
+    .filter((gate): gate is GatePolicy => gate !== undefined && gate.excludedByCli)
+    .map((gate) => ({ role: gate.role, product: gate.product }));
+
+  return { gates, deferred, excluded };
+}
+
+/**
+ * The run that never happened, because the trust base could not be judged
+ * against.
+ *
+ * EVERY ENABLED GATE IS COULD-NOT-RUN, which is the fail-closed half of
+ * pull-request mode. A base ref that will not resolve is not a reason to fall
+ * back to the head's policy: falling back to the head is the behaviour this
+ * release removes, and it would be reachable by anybody who could make the
+ * base ref unfetchable.
+ *
+ * TWO THINGS HERE ARE DELIBERATELY NOT READ OFF THE POLICY, and both are the
+ * point rather than shortcuts. The policy handed in is the HEAD's, used only
+ * as an inventory so the report can name the gates that did not run; it
+ * cannot be trusted, so:
+ *
+ *  - Every synthesized outcome is ENFORCED, whatever the file says. The
+ *    `enforce` flag is itself a control input, and the file it lives in is
+ *    the one that could not be read from the base. A head policy setting
+ *    `enforce: false` everywhere must not be able to turn this into exit 0.
+ *  - The exit code is written here rather than composed. A head policy
+ *    enabling NO gate at all would otherwise compose to 0 over an empty list,
+ *    which would report a run that checked nothing as a clean one.
+ */
+export function refusedTrustBase(
+  policy: Policy,
+  ref: string,
+  detail: string,
+  options: { stage?: GateStage; now?: () => Date }
+): RunResult {
+  const { gates, deferred, excluded } = partitionGates(policy, options.stage);
+  const outcomes = gates.map((gate) =>
+    preparationFailed({ ...gate, enforce: true }, `the trust base could not be used: ${detail}`)
+  );
+  const findings = outcomes.flatMap((outcome) => outcome.findings).sort(compareFindings);
+
+  const byProduct: Record<string, number> = {};
+  const bySeverity: Record<string, number> = {};
+  for (const finding of findings) {
+    byProduct[finding.product] = (byProduct[finding.product] ?? 0) + 1;
+    bySeverity[finding.severity] = (bySeverity[finding.severity] ?? 0) + 1;
+  }
+
+  return {
+    schemaVersion: 1,
+    generatedAt: (options.now?.() ?? new Date()).toISOString(),
+    gates: outcomes,
+    deferred,
+    skipped: [],
+    excluded,
+    findings,
+    // policyChanged is unknowable: the base side of the comparison is the
+    // thing that could not be read. False rather than a third state, because
+    // no proposal is reported on a run where nothing was judged. The refusal
+    // itself is carried, and it is what both renderers lead with.
+    trustBase: { ref, policyChanged: false, refusal: detail },
+    proposals: [],
+    summary: {
+      blocking: findings.filter((finding) => finding.blocking).length,
+      byProduct,
+      bySeverity,
+    },
+    exitCode: EXIT_COULD_NOT_RUN,
+  };
+}
+
+/**
+ * Every proposed control change, the umbrella's own policy first.
+ *
+ * The umbrella's line comes first because it is the one that decides what the
+ * others even are: a pull request that rewrites `.guardrails.yaml` is
+ * proposing to change which gates run at all, and reading that after a gate's
+ * own contract line would bury it.
+ */
+function collectProposals(
+  outcomes: GateOutcome[],
+  trustBase: RunTrustBase | undefined
+): ControlProposal[] {
+  const proposals: ControlProposal[] = [];
+  if (trustBase?.policyChanged === true) {
+    proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
+  }
+  for (const outcome of outcomes) {
+    for (const line of outcome.trustBase?.proposals ?? []) {
+      proposals.push({ product: outcome.product, role: outcome.role, line });
+    }
+  }
+  return proposals;
+}
+
+/**
+ * The `intentContract` option for a run with no preparation, or nothing.
+ *
+ * A small helper rather than an inline conditional because the spread at the
+ * call site is already three lines, and because "nothing" has to be an empty
+ * object rather than an undefined property: the option is optional and
+ * `exactOptionalPropertyTypes` refuses an explicit undefined.
+ */
+function nativeContractOption(repoRoot: string): { intentContract?: string } {
+  const contract = frozenNativeContractPath(repoRoot);
+  return contract === null ? {} : { intentContract: contract };
+}
+
+export function runAll(policy: Policy, options: RunOptions): RunResult {
+  const { gates, deferred, excluded } = partitionGates(policy, options.stage);
 
   const env = options.env ?? {};
   const skipped: SkippedGate[] = [];
@@ -240,6 +431,16 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           pathValue: options.pathValue,
           ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
           ...(intent === undefined ? {} : { intent }),
+          // For a run with no preparation: which contract the child will read
+          // out of the repository itself. Looked up only for the gate it is
+          // about, so no other gate pays for the two stat calls.
+          ...(intent !== undefined || gate.role !== 'intent'
+            ? {}
+            : nativeContractOption(options.repoRoot)),
+          // Offered to every child. runGate decides which ones can take it,
+          // so a gate with no pull-request mode yet is not handed a flag it
+          // would reject, and the reason it was withheld is on the outcome.
+          ...(options.trustBase === undefined ? {} : { trustBase: options.trustBase.ref }),
         })
       );
     }
@@ -280,6 +481,8 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     skipped,
     excluded,
     findings,
+    trustBase: options.trustBase ?? null,
+    proposals: collectProposals(outcomes, options.trustBase),
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
       byProduct,

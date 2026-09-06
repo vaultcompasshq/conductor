@@ -124,7 +124,7 @@ describe('action.yml', () => {
       .filter((line) => line.includes('ARGS'))
       .join('\n');
 
-    for (const name of ['BASE_REF', 'SPEC', 'STAGE', 'OUTPUT']) {
+    for (const name of ['BASE_REF', 'TRUST_BASE', 'SPEC', 'STAGE', 'OUTPUT']) {
       const quoted = new RegExp(`"\\$${name}"`, 'g');
       expect(argumentLines.replace(quoted, '')).not.toContain(`$${name}`);
     }
@@ -144,6 +144,72 @@ describe('action.yml', () => {
     expect(gatesScript.indexOf('GITHUB_OUTPUT')).toBeGreaterThan(-1);
     expect(gatesScript.indexOf('GITHUB_OUTPUT')).toBeLessThan(
       gatesScript.indexOf('"${ARGS[@]}"')
+    );
+  });
+});
+
+/**
+ * Pull-request mode, as the action enters it.
+ *
+ * Nothing in CI type-checks a workflow file, so the shape of the command line
+ * this builds is asserted here or nowhere. The one that would be silent is
+ * passing a SHA: a run with `--trust-base ${{ github.sha }}` reports
+ * pull-request mode as on while every rule still comes from the tree being
+ * judged. The umbrella refuses that, but the action must not produce it.
+ */
+describe('action.yml enters pull-request mode', () => {
+  it('passes origin/GITHUB_BASE_REF when the event set one', () => {
+    expect(gatesScript).toMatch(/--trust-base "origin\/\$GITHUB_BASE_REF"/);
+  });
+
+  it('passes nothing when GITHUB_BASE_REF is empty, which is every push build', () => {
+    // Actions defines the variable and leaves it EMPTY outside a pull
+    // request, so an unconditional pass would hand every push the literal
+    // ref "origin/" and fail it closed for no reason.
+    expect(gatesScript).toMatch(/elif \[ -n "\$\{GITHUB_BASE_REF:-\}" \]/);
+  });
+
+  it('never builds the ref out of a commit SHA', () => {
+    // github.sha on a pull_request event IS the merge commit, which is HEAD,
+    // and head.sha is a different commit carrying HEAD's tree whenever the
+    // base has not moved. Either one puts the rules back in the tree being
+    // judged.
+    // Comment lines are stripped first: the comment in the action explains
+    // why neither SHA is used, and a rule that fired on the explanation would
+    // push the explanation out of the file.
+    const code = [
+      ...steps.flatMap((step) => Object.values(step.env ?? {})),
+      ...script.split('\n').filter((line) => !line.trim().startsWith('#')),
+    ].join('\n');
+
+    expect(code).not.toMatch(/github\.sha/);
+    expect(code).not.toMatch(/head\.sha/);
+  });
+
+  it('reads every value from the environment rather than expanding it into the script', () => {
+    // An expression expanded inside a run block is pasted in as source text
+    // before the shell sees it, so a value carrying a quote rewrites the
+    // script. The trust base decides where the rules come from, which makes
+    // it the worst possible place for that.
+    const env = steps.flatMap((step) => Object.keys(step.env ?? {}));
+    expect(env).toContain('TRUST_BASE');
+    expect(gatesScript).not.toMatch(/\$\{\{/);
+  });
+
+  it('lets a caller name the ref explicitly', () => {
+    expect(action.inputs?.['trust-base']).toBeDefined();
+    expect(action.inputs?.['trust-base']?.default).toBe('');
+    expect(gatesScript).toMatch(/if \[ -n "\$TRUST_BASE" \]/);
+  });
+
+  it('offers no value that switches pull-request mode off', () => {
+    // Base-ref judging is the floor, not a knob. On a pull_request event the
+    // workflow file itself runs from the pull request's own ref, so an
+    // opt-out input would be settable by the pull request the mode exists to
+    // judge: the knob and the thing it protects against are the same file.
+    expect(gatesScript).not.toMatch(/"\$TRUST_BASE" = "off"/);
+    expect(String(action.inputs?.['trust-base']?.description)).toMatch(
+      /no value that turns pull-request mode off/
     );
   });
 });

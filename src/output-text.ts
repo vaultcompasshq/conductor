@@ -289,6 +289,58 @@ function excludedLines(result: RunResult): string[] {
 }
 
 /**
+ * The one sentence the whole of pull-request mode has to fit into.
+ *
+ * Counted even at ZERO, by the family suppression rule: the number is the
+ * answer to "did this pull request also try to change the rules", and leaving
+ * it out when the answer is none makes a run in pull-request mode
+ * indistinguishable from a run that was never in it.
+ */
+function proposalCount(result: RunResult): string {
+  return `${result.proposals.length} control change(s) proposed in this pull request`;
+}
+
+/**
+ * The gates the umbrella could not put into pull-request mode.
+ *
+ * This is the loud half and it must never be silent. A gate here read its own
+ * contract, config or baseline out of the tree being judged, which is exactly
+ * the hole pull-request mode exists to close, so a run where one gate is
+ * still exposed must not read like a run where none is. It is a statement
+ * about coverage rather than about anybody's code, so it is a line and a
+ * notification rather than a finding, and it never reaches the exit code.
+ */
+function withheldTrustBase(result: RunResult): Array<{ gate: GateOutcome; reason: string }> {
+  return result.gates.flatMap((gate) => {
+    const reason = gate.trustBase?.withheld;
+    return reason === undefined || reason === null ? [] : [{ gate, reason }];
+  });
+}
+
+/**
+ * The pull-request-mode block of the full report.
+ *
+ * Three things in one place, because they answer one question between them:
+ * where the rules came from, what this pull request proposes to change them
+ * to, and which gates were not covered by any of it.
+ */
+function trustBaseLines(result: RunResult): string[] {
+  if (result.trustBase === null) {
+    return [];
+  }
+  const lines = [
+    `  pull-request mode: rules from ${result.trustBase.ref}. ${proposalCount(result)}.`,
+  ];
+  for (const proposal of result.proposals) {
+    lines.push(`  proposed  ${proposal.product.padEnd(13)} ${proposal.line}`);
+  }
+  for (const { gate, reason } of withheldTrustBase(result)) {
+    lines.push(`  NOT in pull-request mode  ${gate.role}  ${gate.product}  ${reason}`);
+  }
+  return lines;
+}
+
+/**
  * What an unenforced gate did, as clauses for a verdict line.
  *
  * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
@@ -319,7 +371,43 @@ function unenforcedClauses(result: RunResult): string[] {
   return clauses;
 }
 
+/**
+ * The refusal, as the first line of the report and as the verdict.
+ *
+ * FIRST, and before any question about how many gates there are. The old
+ * order asked that question first, and an inventory naming no gate -- every
+ * gate `enabled: false` in the head's file, or a head file that will not
+ * parse -- fell into the "no gate ran because none is enabled" branch, which
+ * printed exit 0 and told the reader to switch a gate on while the process
+ * exited 2 and nothing had been checked. The refusal is the whole story of
+ * such a run and there is no arrangement of the other clauses that tells it.
+ */
+function refusalLines(result: RunResult): string[] {
+  const refusal = result.trustBase?.refusal;
+  if (refusal === undefined || refusal === null) {
+    return [];
+  }
+  return [
+    `conductor: refused the trust base "${result.trustBase?.ref ?? ''}". Nothing was checked.`,
+    `  ${refusal}`,
+  ];
+}
+
 function verdict(result: RunResult): string {
+  const refusal = result.trustBase?.refusal;
+  if (refusal !== undefined && refusal !== null) {
+    // Written rather than composed, exactly as the exit code is: no gate ran,
+    // so there is nothing for the clauses below to count, and every one of
+    // them would describe a different run from the one that happened.
+    return (
+      `verdict: exit 2, the trust base "${result.trustBase?.ref ?? ''}" could not be used, ` +
+      'so no gate ran and nothing here is a result of any kind.'
+    );
+  }
+  return verdictForRun(result);
+}
+
+function verdictForRun(result: RunResult): string {
   // Counted over ENFORCED gates only. The exit code came from those alone,
   // so a count taken over all of them describes a different run from the one
   // the number at the front of the line is about, and the umbrella's own
@@ -592,12 +680,28 @@ function summaryLine(result: RunResult): string {
       : `${suppressed} suppressed across all gates.`
   );
 
+  // Pull-request mode, on the one line a hook and a pull request comment
+  // actually print. A clean run is exactly where this matters most: a pull
+  // request that proposes to switch a gate off and carries nothing else
+  // produces a clean report, and without this clause the only trace of the
+  // attempt would be in a file nobody re-reads.
+  if (result.trustBase !== null) {
+    parts.push(`Rules from ${result.trustBase.ref}. ${proposalCount(result)}.`);
+    const withheld = withheldTrustBase(result);
+    if (withheld.length > 0) {
+      const names = withheld.map(({ gate }) => `${gate.role} (${gate.product})`).join(', ');
+      parts.push(`${withheld.length} gate(s) NOT in pull-request mode: ${names}.`);
+    }
+  }
+
   parts.push('Re-run with --verbose for the full report.');
   return parts.join(' ');
 }
 
 export function renderText(result: RunResult, options: TextOptions = {}): string {
-  if (!options.verbose && isFullyClean(result)) {
+  const refusal = refusalLines(result);
+
+  if (refusal.length === 0 && !options.verbose && isFullyClean(result)) {
     return `${summaryLine(result)}\n`;
   }
 
@@ -610,6 +714,8 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // different questions, so two numbers, and the section headers and the
   // "not enforced" lines are what connect them.
   const lines: string[] = [
+    ...refusal,
+    ...(refusal.length === 0 ? [] : ['']),
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];
 
@@ -620,6 +726,11 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   const aside = [...deferredLines(result), ...skippedLines(result), ...excludedLines(result)];
   if (aside.length > 0) {
     lines.push('', ...aside);
+  }
+
+  const trust = trustBaseLines(result);
+  if (trust.length > 0) {
+    lines.push('', ...trust);
   }
 
   // A derived severity is marked with a trailing asterisk above; say what

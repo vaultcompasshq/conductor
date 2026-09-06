@@ -56,6 +56,8 @@ function result(
     skipped,
     excluded,
     findings,
+    trustBase: null,
+    proposals: [],
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
       byProduct: {},
@@ -866,5 +868,221 @@ describe('the clean summary makes suppression visible', () => {
     expect(text).not.toMatch(/ignored/);
     // Still one line.
     expect(text.trimEnd().split('\n')).toHaveLength(1);
+  });
+});
+
+/**
+ * Pull-request mode in the text report.
+ *
+ * The clean one-line summary is the half that matters most, and it is easy to
+ * get wrong by leaving it to the full report: a pull request that proposes to
+ * switch a gate off and carries nothing else produces a CLEAN run, so the
+ * one line a hook and a pull request comment print is the only place the
+ * attempt is ever seen.
+ */
+describe('pull-request mode in the text report', () => {
+  const cleanIntent = {
+    failOn: null,
+    suppressed: 0,
+    ignored: 0,
+    diagnostics: [],
+    details: {},
+  };
+
+  function pullRequest(overrides: Partial<RunResult>): RunResult {
+    return {
+      ...result([outcome({ exitCode: 0, run: { ...cleanIntent, failOn: 'medium' } })], 0),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
+      proposals: [],
+      ...overrides,
+    };
+  }
+
+  it('counts the proposals on the one line a clean run prints, even at zero', () => {
+    const text = renderText(pullRequest({}));
+
+    expect(text).toMatch(/Rules from origin\/main\./);
+    expect(text).toMatch(/0 control change\(s\) proposed in this pull request\./);
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('says nothing about any of it outside pull-request mode', () => {
+    const text = renderText(
+      result([outcome({ exitCode: 0, run: { ...cleanIntent, failOn: 'medium' } })], 0)
+    );
+
+    expect(text).not.toMatch(/control change/);
+    expect(text).not.toMatch(/Rules from/);
+  });
+
+  it('counts a policy change and a gate change together on the summary line', () => {
+    const text = renderText(
+      pullRequest({
+        proposals: [
+          { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+          {
+            product: 'intent-guard',
+            role: 'intent',
+            line: 'contract changed in this pull request',
+          },
+        ],
+        trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+      })
+    );
+
+    expect(text).toMatch(/2 control change\(s\) proposed in this pull request\./);
+  });
+
+  it('prints one line per proposal in the full report, the policy line first', () => {
+    const text = renderText(
+      pullRequest({
+        proposals: [
+          { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+          {
+            product: 'intent-guard',
+            role: 'intent',
+            line: 'contract changed in this pull request',
+          },
+        ],
+        trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+      }),
+      { verbose: true }
+    );
+
+    const lines = text.split('\n').filter((line) => line.trim().startsWith('proposed'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/conductor\s+policy changed in this pull request/);
+    expect(lines[1]).toMatch(/intent-guard\s+contract changed in this pull request/);
+    expect(text).toMatch(/pull-request mode: rules from origin\/main/);
+  });
+
+  it('names a gate that was NOT put into pull-request mode, on the clean line too', () => {
+    // The loudest fact this report can carry: that gate read its own control
+    // inputs out of the tree being judged. A clean run must not hide it.
+    const text = renderText(
+      pullRequest({
+        gates: [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.3.1',
+            exitCode: 0,
+            run: { ...cleanIntent, failOn: 'medium' },
+            trustBase: {
+              ref: 'origin/main',
+              withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              refused: null,
+              proposals: [],
+            },
+          }),
+        ],
+      })
+    );
+
+    expect(text).toMatch(/1 gate\(s\) NOT in pull-request mode: intent \(intent-guard\)\./);
+  });
+
+  it('says why in the full report, in the gate own words', () => {
+    const text = renderText(
+      pullRequest({
+        gates: [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.3.1',
+            exitCode: 0,
+            run: { ...cleanIntent, failOn: 'medium' },
+            trustBase: {
+              ref: 'origin/main',
+              withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              refused: null,
+              proposals: [],
+            },
+          }),
+        ],
+      }),
+      { verbose: true }
+    );
+
+    expect(text).toMatch(
+      /NOT in pull-request mode\s+intent\s+intent-guard\s+intent-guard 1\.3\.1 does not understand/
+    );
+  });
+});
+
+/**
+ * A refused trust base renders as a refusal, whatever the inventory holds.
+ *
+ * The gap this closes was reachable on the DEFAULT actions/checkout, which
+ * fetches depth 1 and so carries no base ref. With an inventory that names no
+ * gate -- every gate `enabled: false` in the head's file, or a head file that
+ * will not parse at all, which leaves the inventory empty -- the verdict
+ * short-circuited on `gates.length === 0` and printed "verdict: exit 0, no
+ * gate ran because none is enabled", with the refusal sentence nowhere on
+ * screen. The process still exited 2, so the build failed with a report
+ * telling the reader to go and switch a gate on.
+ *
+ * A refusal is therefore its own outcome and renders FIRST, before any
+ * question about how many gates there are.
+ */
+describe('a refused trust base in the text report', () => {
+  const REFUSAL =
+    'cannot read the policy from base ref "origin/main": it does not resolve to a commit in ' +
+    'this repository. Nothing was checked. In CI, fetch the base branch (actions/checkout ' +
+    'with fetch-depth: 0) before running the gates.';
+
+  function refused(gates: GateOutcome[] = []): RunResult {
+    return {
+      ...result(gates, 2),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: REFUSAL },
+      proposals: [],
+    };
+  }
+
+  it('says exit 2 and the reason when the inventory names no gate at all', () => {
+    const text = renderText(refused());
+
+    expect(text).toMatch(/verdict: exit 2/);
+    expect(text).toMatch(/does not resolve to a commit/);
+    expect(text).not.toMatch(/verdict: exit 0/);
+    expect(text).not.toMatch(/Set enabled: true/);
+  });
+
+  it('carries the fetch-depth remedy, which is the fix in nine cases out of ten', () => {
+    expect(renderText(refused())).toMatch(/fetch-depth: 0/);
+  });
+
+  it('leads with the refusal rather than burying it under the gate sections', () => {
+    const lines = renderText(
+      refused([outcome({ role: 'secrets', product: 'vault-guard', exitCode: null })])
+    ).split('\n');
+
+    expect(lines[0]).toMatch(/refused the trust base/);
+    expect(lines[0]).toMatch(/origin\/main/);
+  });
+
+  it('still names the gates the inventory did hold', () => {
+    const text = renderText(
+      refused([
+        outcome({
+          role: 'secrets',
+          product: 'vault-guard',
+          exitCode: null,
+          couldNotRun: { reason: 'preparation-failed', detail: REFUSAL },
+        }),
+      ])
+    );
+
+    expect(text).toMatch(/secrets\s+vault-guard/);
+    expect(text).toMatch(/DID NOT RUN/);
+  });
+
+  it('never prints the clean one-line summary for a refusal', () => {
+    // The summary path is reached on exitCode 0 with every gate clean, and an
+    // empty-inventory refusal has no gate to be unclean. Belt and braces.
+    const text = renderText({ ...refused(), exitCode: 0 });
+
+    expect(text).not.toMatch(/conductor: clean, nothing blocked/);
+    expect(text).toMatch(/refused the trust base/);
   });
 });

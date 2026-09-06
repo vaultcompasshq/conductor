@@ -56,6 +56,8 @@ function result(
     skipped,
     excluded,
     findings,
+    trustBase: null,
+    proposals: [],
     summary: { blocking: 0, byProduct: {}, bySeverity: {} },
     exitCode: 1,
   };
@@ -736,12 +738,21 @@ describe('locations', () => {
     ]);
   });
 
-  it('gives a drift finding a logical contract location and no file at all', () => {
+  it('gives a drift finding a logical contract location, and the control file beside it', () => {
+    // The logical location is the claim: this is about a contract category
+    // and not about a line of anybody's file. The physical one is there
+    // because a result with no location at all makes code scanning reject the
+    // whole log, and the file it names is the one a reader would open.
     const drift = intentResults.find((entry) =>
       String(entry.ruleId).startsWith('intent-guard/drift.')
     ) as Record<string, unknown>;
     expect(drift.locations).toEqual([
-      { logicalLocations: [{ kind: 'contract', fullyQualifiedName: 'undocumented_pivot' }] },
+      {
+        logicalLocations: [{ kind: 'contract', fullyQualifiedName: 'undocumented_pivot' }],
+        physicalLocation: {
+          artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+        },
+      },
     ]);
   });
 
@@ -798,9 +809,13 @@ describe('locations', () => {
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
     const locations = entry.locations as Array<Record<string, unknown>>;
 
-    // No physical location at all: a uri of "outside/package.json" under
-    // %SRCROOT% would point at a file that is not the one the gate found.
-    expect(locations[0]).not.toHaveProperty('physicalLocation');
+    // Never "outside/package.json" under %SRCROOT%: that uri would point at a
+    // file that is not the one the gate found, and %SRCROOT% would vouch for
+    // it. The escaping path is not turned into a location; the fallback, the
+    // policy file, is what the result is filed against instead.
+    expect(locations[0].physicalLocation).toEqual({
+      artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+    });
     // The package is still named.
     expect(locations[0].logicalLocations).toEqual([
       { kind: 'package', fullyQualifiedName: 'x' },
@@ -818,9 +833,14 @@ describe('locations', () => {
     };
     const log2 = sarif(result([outcome({ findings: [sneaky] })]));
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
-    expect((entry.locations as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
-      'physicalLocation'
-    );
+    // The escaping path never becomes a uri; the fallback is what is there.
+    expect(
+      (entry.locations as Array<Record<string, Record<string, Record<string, unknown>>>>)[0]
+        .physicalLocation.artifactLocation.uri
+    ).toBe('.guardrails.yaml');
+    expect((entry.properties as Record<string, unknown>).unresolvablePaths).toEqual([
+      'a/../../outside/package.json',
+    ]);
   });
 
   it('resolves an inner .. that stays inside the root', () => {
@@ -837,7 +857,7 @@ describe('locations', () => {
     expect(location.physicalLocation.artifactLocation.uri).toBe('packages/lib/package.json');
   });
 
-  it('drops a secret finding location entirely when its file escapes the root', () => {
+  it('drops the region of a secret finding whose file escapes the root', () => {
     const escaping: Finding = {
       ...vaultGuard.findings[0],
       subject: { kind: 'location', file: '../outside/config.js', line: 2, column: 23 },
@@ -846,8 +866,17 @@ describe('locations', () => {
       result([outcome({ role: 'secrets', product: 'vault-guard', findings: [escaping] })])
     );
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
-    // A region without a resolvable file would annotate line 2 of nothing.
-    expect(entry).not.toHaveProperty('locations');
+    const location = (entry.locations as Array<Record<string, Record<string, unknown>>>)[0];
+
+    // THE REGION IS THE PART THAT MUST NOT SURVIVE. Line 2 and column 24 of
+    // the policy file is a different place from line 2 of the file the gate
+    // scanned, and once uploaded the two are indistinguishable. So the
+    // fallback carries the artifact and nothing else, and the path the gate
+    // named is kept in the properties bag rather than turned into a uri.
+    expect(location.physicalLocation).toEqual({
+      artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+    });
+    expect(location.physicalLocation).not.toHaveProperty('region');
     expect((entry.properties as Record<string, unknown>).unresolvablePaths).toEqual([
       '../outside/config.js',
     ]);
@@ -893,7 +922,7 @@ describe('the umbrella own findings', () => {
     );
   });
 
-  it('carries no location, because a missing binary is not somewhere in the tree', () => {
+  it('is filed against the policy file, because a missing binary is not somewhere in the tree', () => {
     const missing = outcome({
       couldNotRun: { reason: 'binary-missing', detail: 'x' },
       findings: [
@@ -913,9 +942,16 @@ describe('the umbrella own findings', () => {
       ],
     });
     const log = sarif(result([missing]));
-    expect((log.runs[0].results as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
-      'locations'
-    );
+    // No invented location in the scanned tree, and no result without one
+    // either: the policy file is where that gate is enabled, which is the
+    // file somebody reading this alert has to open.
+    expect((log.runs[0].results as Array<Record<string, unknown>>)[0].locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+        },
+      },
+    ]);
   });
 
   it('carries the umbrella own diagnostics as note-level results', () => {
@@ -943,10 +979,18 @@ describe('the umbrella own findings', () => {
     expect(entry.ruleId).toBe('conductor/blocking-count-mismatch');
     expect(entry.level).toBe('note');
     expect((entry.message as Record<string, string>).text).toMatch(/reconstructed 2/);
-    // A diagnostic is not a finding: it does not block, and it has no
-    // location, because it is about the run rather than about the code.
+    // A diagnostic is not a finding: it does not block, and it names no
+    // place in the scanned code, because it is about the run. It is still
+    // filed against the policy file, since a result with no location makes
+    // code scanning reject the whole log.
     expect((entry.properties as Record<string, unknown>).blocking).toBe(false);
-    expect(entry).not.toHaveProperty('locations');
+    expect(entry.locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+        },
+      },
+    ]);
   });
 
   it('names the gate a diagnostic came from, since the run it lands in is not that gate', () => {
@@ -1293,5 +1337,449 @@ describe("a failing gate's own error in the published log", () => {
 
     expect(entry.ruleId).toBe('conductor/gate-failed');
     expect(entry.level).toBe('error');
+  });
+});
+
+/**
+ * Every result carries at least one location.
+ *
+ * GitHub code scanning rejects a whole uploaded log with
+ * "locationFromSarifResult: expected at least one location" when any single
+ * result has none, so one location-less result loses the entire report. Every
+ * main-branch run of a sibling repository's guardrails job was annotated with
+ * exactly that, and running the umbrella against that checkout found the
+ * offender: `intent-guard/gate-blocked`, whose subject is `none`, rendered
+ * with no `locations` key at all.
+ *
+ * The subjects that produced no location were `none` (every umbrella
+ * gate-missing, gate-failed and gate-output-unparseable finding, both
+ * normalization diagnostics, and intent-guard's gate-blocked), `paths` with
+ * nothing placeable in it (a budget violation whose `matched` list is empty),
+ * and `location` whose file escapes the source root. A `contract` subject had
+ * a logical location and no physical one, which is not what a consumer
+ * resolving a location looks for either.
+ */
+describe('every result has a location, because a log with one that does not is rejected whole', () => {
+  /** A budget violation with no matched paths: a `paths` subject that places nothing. */
+  const EMPTY_PATHS = normalizeIntentGuard(
+    {
+      status: 'blocked',
+      exitCode: 1,
+      reasons: ['Budget hard_block: new dependency added'],
+      contractFound: true,
+      contractFrozen: true,
+      budget: {
+        action: 'hard_block',
+        violations: [
+          {
+            rule: 'allow_new_dependencies',
+            severity: 'hard_block',
+            message: 'A new dependency was added and the contract forbids it.',
+            matched: [],
+            fingerprint: 'a1b2c3',
+          },
+        ],
+      },
+    },
+    '1.4.0'
+  );
+
+  /** A gate-state block: the `none` subject that actually broke the upload. */
+  const GATE_BLOCKED = normalizeIntentGuard(
+    {
+      status: 'blocked',
+      exitCode: 1,
+      reasons: ['Intent contract exists but is not frozen by user.'],
+      contractFound: true,
+      contractFrozen: false,
+    },
+    '1.4.0'
+  );
+
+  const EVERY_SHAPE = result([
+    outcome({ role: 'dependencies', product: 'dep-guard', findings: depGuard.findings }),
+    outcome({
+      role: 'secrets',
+      product: 'vault-guard',
+      productVersion: '1.4.2',
+      findings: vaultGuard.findings,
+    }),
+    outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: '1.4.0',
+      findings: [
+        ...intentGuard.findings,
+        ...EMPTY_PATHS.findings,
+        ...GATE_BLOCKED.findings,
+        normalizeMissingGate('intent', 'intent-guard', ['intent-guard']),
+      ],
+      diagnostics: [{ code: 'conductor/blocking-count-mismatch', message: 'they disagree' }],
+    }),
+  ]);
+
+  function everyResult(log: { runs: Array<Record<string, unknown>> }): Array<
+    Record<string, unknown>
+  > {
+    return log.runs.flatMap((run) => run.results as Array<Record<string, unknown>>);
+  }
+
+  it('gives every result in a log a non-empty locations array', () => {
+    const results = everyResult(sarif(EVERY_SHAPE));
+
+    expect(results.length).toBeGreaterThan(5);
+    const withoutLocation = results
+      .filter((entry) => !Array.isArray(entry.locations) || (entry.locations as unknown[]).length === 0)
+      .map((entry) => entry.ruleId);
+    expect(withoutLocation).toEqual([]);
+  });
+
+  it('gives every location an artifact a consumer can resolve', () => {
+    const locations = everyResult(sarif(EVERY_SHAPE)).flatMap(
+      (entry) => entry.locations as Array<Record<string, unknown>>
+    );
+
+    for (const location of locations) {
+      const physical = location.physicalLocation as
+        | { artifactLocation?: { uri?: string } }
+        | undefined;
+      expect(typeof physical?.artifactLocation?.uri).toBe('string');
+    }
+  });
+
+  it("falls back to the policy file, which is where the gate that produced the result is enabled", () => {
+    const umbrella = sarif(EVERY_SHAPE).runs.find(
+      (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name) === 'conductor'
+    ) as Record<string, unknown>;
+    const results = umbrella.results as Array<Record<string, unknown>>;
+
+    expect(results.length).toBeGreaterThan(0);
+    for (const entry of results) {
+      expect(entry.locations).toEqual([
+        { physicalLocation: { artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' } } },
+      ]);
+    }
+  });
+
+  it('files a self-approval refusal against the contract on a plain native run', () => {
+    // The branch below is documented and was unreachable in the shape it
+    // matters most: on a run with no PREPARATION, `gate.intent` was undefined
+    // even though the repository has a frozen contract the child reads, so a
+    // contract-state result was filed against the policy file. runAll now
+    // records the contract for that case too.
+    const withContract = result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.4.0',
+        findings: GATE_BLOCKED.findings,
+        intent: {
+          contractSource: { kind: 'native', path: '.intent-guard/intent-contract.yaml' },
+          baseRef: null,
+        },
+      }),
+    ]);
+
+    const entry = (sarif(withContract).runs[0].results as Array<Record<string, unknown>>)[0];
+    expect(entry.locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: {
+            uri: '.intent-guard/intent-contract.yaml',
+            uriBaseId: '%SRCROOT%',
+          },
+        },
+      },
+    ]);
+  });
+
+  it("uses the intent gate's own contract file when the run says which one it read", () => {
+    // A result about the contract belongs on the contract, not on the policy
+    // file, and the run already carries which of the two state directories
+    // answered.
+    const withContract = result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.4.0',
+        findings: GATE_BLOCKED.findings,
+        intent: {
+          contractSource: { kind: 'native', path: '.intent-guard/intent-contract.yaml' },
+          baseRef: 'origin/main',
+        },
+      }),
+    ]);
+
+    const entry = (sarif(withContract).runs[0].results as Array<Record<string, unknown>>)[0];
+    expect(entry.locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: {
+            uri: '.intent-guard/intent-contract.yaml',
+            uriBaseId: '%SRCROOT%',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('keeps a logical location it already had and adds the physical one beside it', () => {
+    // The drift findings carry a `contract` subject: a logical location and,
+    // before this, nothing physical. Losing the logical one to gain a
+    // physical one would drop the category a consumer groups on.
+    const driftResults = (
+      sarif(EVERY_SHAPE).runs.find(
+        (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name) === 'intent-guard'
+      )?.results as Array<Record<string, unknown>>
+    ).filter((entry) => String(entry.ruleId).startsWith('intent-guard/drift.'));
+
+    expect(driftResults.length).toBeGreaterThan(0);
+    for (const entry of driftResults) {
+      const location = (entry.locations as Array<Record<string, unknown>>)[0];
+      expect(location.logicalLocations).toBeDefined();
+      expect(location.physicalLocation).toBeDefined();
+    }
+  });
+
+  it('leaves a result that named a real file pointing at that file', () => {
+    // The fallback must not overwrite a location the gate actually gave, or
+    // every secret in the log would point at the policy file.
+    const secrets = sarif(EVERY_SHAPE).runs.find(
+      (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name) === 'vault-guard'
+    )?.results as Array<Record<string, unknown>>;
+
+    const location = (secrets[0].locations as Array<Record<string, unknown>>)[0];
+    const physical = location.physicalLocation as { artifactLocation: { uri: string } };
+    expect(physical.artifactLocation.uri).not.toBe('.guardrails.yaml');
+    expect(physical.artifactLocation.uri).toMatch(/\./);
+  });
+});
+
+/**
+ * Pull-request mode in the published log.
+ *
+ * Both statements here are NOTIFICATIONS by the rule at the top of
+ * output-sarif.ts, and neither is a close call once the rule is applied. A
+ * proposed control change is a statement about configuration: nothing went
+ * wrong, the proposal did not take effect, and it stays true of every push to
+ * the branch until it merges, so as a result it would be a fingerprint-less
+ * alert reappearing on every run. A gate that could not be put into
+ * pull-request mode is a statement about coverage in the same shape: it is
+ * true because an older gate is installed, and stays true until somebody
+ * upgrades.
+ */
+describe('pull-request mode in the SARIF log', () => {
+  function pullRequestLog(overrides: Partial<RunResult>) {
+    return sarif({
+      ...result([outcome({ exitCode: 0, findings: [] })]),
+      trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+      proposals: [
+        { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+        {
+          product: 'intent-guard',
+          role: 'intent',
+          line: 'contract changed in this pull request',
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  it('emits one notification per proposed control change, and no result', () => {
+    const log = pullRequestLog({});
+    const proposed = notificationsOf(log).filter(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/control-change-proposed'
+    );
+
+    expect(proposed).toHaveLength(2);
+    expect(umbrellaResultIds(log)).not.toContain('conductor/control-change-proposed');
+  });
+
+  it('keeps them at note level and names the gate that raised each', () => {
+    const proposed = notificationsOf(pullRequestLog({})).filter(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/control-change-proposed'
+    );
+
+    expect(proposed.map((entry) => entry.level)).toEqual(['note', 'note']);
+    const details = proposed.map(
+      (entry) => (entry.properties as Record<string, Record<string, unknown>>).details
+    );
+    expect(details[0]).toEqual({
+      product: 'conductor',
+      role: null,
+      proposal: 'policy changed in this pull request',
+      ref: 'origin/main',
+    });
+    expect(details[1].product).toBe('intent-guard');
+    expect(details[1].role).toBe('intent');
+  });
+
+  it('says in the message that the proposal did NOT take effect', () => {
+    const first = notificationsOf(pullRequestLog({})).find(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/control-change-proposed'
+    );
+
+    expect(String((first?.message as Record<string, unknown>).text)).toMatch(
+      /did NOT take effect for this run/
+    );
+    expect(String((first?.message as Record<string, unknown>).text)).toMatch(/origin\/main/);
+  });
+
+  it('declares the descriptor beside the rules, so the reference resolves', () => {
+    const umbrella = pullRequestLog({}).runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    const declared = (
+      (umbrella?.tool as Record<string, Record<string, unknown>>).driver.notifications as Array<
+        Record<string, unknown>
+      >
+    ).map((entry) => entry.id);
+
+    expect(declared).toContain('conductor/control-change-proposed');
+  });
+
+  it('puts the ref on the umbrella run, so an ordinary run is distinguishable', () => {
+    const umbrella = pullRequestLog({}).runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+
+    expect((umbrella?.properties as Record<string, unknown>).trustBase).toEqual({
+      ref: 'origin/main',
+      policyChanged: true,
+      refusal: null,
+    });
+  });
+
+  it('emits a notification for a gate that was NOT put into pull-request mode', () => {
+    const log = pullRequestLog({
+      proposals: [],
+      gates: [
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: '1.3.1',
+          exitCode: 0,
+          trustBase: {
+            ref: 'origin/main',
+            withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+            refused: null,
+            proposals: [],
+          },
+        }),
+      ],
+    });
+
+    const withheld = notificationsOf(log).find(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/trust-base-not-passed'
+    );
+
+    expect(withheld).toBeDefined();
+    expect(String((withheld?.message as Record<string, unknown>).text)).toMatch(
+      /read its own control inputs from the tree being judged/
+    );
+    const details = (withheld?.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.product).toBe('intent-guard');
+    expect(details.productVersion).toBe('1.3.1');
+    expect(details.ref).toBe('origin/main');
+  });
+
+  it('says nothing about any of it on an ordinary run', () => {
+    const ids = notificationsOf(sarif(THREE_GATES)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+
+    expect(ids).not.toContain('conductor/control-change-proposed');
+    expect(ids).not.toContain('conductor/trust-base-not-passed');
+  });
+});
+
+/**
+ * A refused trust base always produces a log, whatever the inventory holds.
+ *
+ * `{"runs": []}` was the output for the worst run this tool can have: the
+ * base ref could not be read, so nothing was checked, and with an inventory
+ * naming no gate there were neither findings nor notifications to earn the
+ * umbrella's run. An empty log uploads cleanly and says nothing, which is
+ * indistinguishable from a repository nobody scanned. Reachable on the
+ * default actions/checkout, which fetches depth 1.
+ */
+describe('a refused trust base in the SARIF log', () => {
+  const REFUSAL =
+    'cannot read the policy from base ref "origin/main": it does not resolve to a commit ' +
+    'in this repository. Nothing was checked.';
+
+  function refused(gates: GateOutcome[] = []) {
+    return sarif({
+      ...result(gates),
+      exitCode: 2,
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: REFUSAL },
+      proposals: [],
+    });
+  }
+
+  it('writes the umbrella run even when there is no gate and no finding', () => {
+    const log = refused();
+
+    expect(log.runs).toHaveLength(1);
+    expect((log.runs[0].tool as Record<string, Record<string, unknown>>).driver.name).toBe(
+      'conductor'
+    );
+  });
+
+  it('carries a conductor/trust-base-refused notification naming the ref', () => {
+    const refusal = notificationsOf(refused()).find(
+      (entry) => (entry.descriptor as Record<string, unknown>).id === 'conductor/trust-base-refused'
+    );
+
+    expect(refusal).toBeDefined();
+    expect(String((refusal?.message as Record<string, unknown>).text)).toMatch(
+      /does not resolve to a commit/
+    );
+    const details = (refusal?.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.ref).toBe('origin/main');
+  });
+
+  it('raises it at error level, unlike every other notification here', () => {
+    // Every other notification in this file is a statement about coverage and
+    // is note level on purpose. This one says nothing was checked at all,
+    // which is not tool status: it is the run failing closed.
+    const notifications = notificationsOf(refused());
+    const refusal = notifications.find(
+      (entry) => (entry.descriptor as Record<string, unknown>).id === 'conductor/trust-base-refused'
+    );
+
+    expect(refusal?.level).toBe('error');
+  });
+
+  it('says the analysis did not complete', () => {
+    const invocations = refused().runs[0].invocations as Array<Record<string, unknown>>;
+
+    expect(invocations[0].executionSuccessful).toBe(false);
+  });
+
+  it('keeps the could-not-run results for whatever gates the inventory named', () => {
+    const log = refused([
+      outcome({
+        role: 'secrets',
+        product: 'vault-guard',
+        exitCode: null,
+        couldNotRun: { reason: 'preparation-failed', detail: REFUSAL },
+        findings: [normalizeFailedGate('secrets', 'vault-guard', REFUSAL)],
+      }),
+    ]);
+
+    expect(umbrellaResultIds(log)).toContain('conductor/gate-failed');
+  });
+
+  it('says nothing of the kind on a run that was not refused', () => {
+    const ids = notificationsOf(sarif(THREE_GATES)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+
+    expect(ids).not.toContain('conductor/trust-base-refused');
   });
 });

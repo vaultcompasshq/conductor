@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { NATIVE_CONTRACT_PATHS } from '../src/intent-prepare.js';
+import { atLeastVersion } from '../src/trust-base.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
 
 const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,6 +31,22 @@ const SIBLINGS = path.resolve(CONDUCTOR_ROOT, '..');
 const DEP_GUARD_REPO = path.join(SIBLINGS, 'dep-guard');
 const DEP_GUARD_CLI = path.join(DEP_GUARD_REPO, 'packages', 'cli', 'dist', 'cli.js');
 const DEP_GUARD_CORPUS = path.join(DEP_GUARD_REPO, '.corpus-work', 'corpus');
+/**
+ * The small committed corpus, for the composed test.
+ *
+ * The locally BUILT corpus above is whatever this machine last downloaded, so
+ * whether a given name is known to it is a fact about a download rather than
+ * about the fixture. The committed one is 53 names and is the same on every
+ * machine, which is what lets the composed test say "a name the corpus does
+ * not know" and mean it.
+ */
+const DEP_GUARD_FIXTURE_CORPUS = path.join(
+  DEP_GUARD_REPO,
+  'packages',
+  'core',
+  'fixtures',
+  'corpus'
+);
 const INTENT_GUARD_CLI = path.join(
   SIBLINGS,
   'intent-guard',
@@ -45,6 +62,22 @@ function vaultGuardOnPath(): string | null {
 }
 
 const VAULT_GUARD = vaultGuardOnPath();
+
+/**
+ * A vault-guard BUILD to drive through the policy's absolute `command:`, for
+ * the pull-request-mode case that needs a known version rather than whatever
+ * this machine installed.
+ *
+ * An environment variable first, then a sibling checkout, and nothing
+ * hardcoded. The build under test may not be a sibling of this repository at
+ * all, and a machine layout has no business in a tracked file: this
+ * repository's own lint refuses one. When neither is there the case skips
+ * with a message naming what was missing, exactly like the rest of this file,
+ * and a skip is not a pass.
+ */
+const VAULT_GUARD_CLI =
+  process.env.CONDUCTOR_VAULT_GUARD_CLI ??
+  path.join(SIBLINGS, 'vault-guard', 'packages', 'cli', 'dist', 'cli-entry.js');
 
 const missing = [
   existsSync(CONDUCTOR_CLI) ? null : 'the umbrella is not built (run pnpm build)',
@@ -406,6 +439,650 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(false);
     expect(existsSync(path.join(clone, '.guardrails', 'manifest.json'))).toBe(false);
   });
+
+  /**
+   * Pull-request mode, against the real gates and a real branch.
+   *
+   * The block above left the clone with no policy file and no hook, which is
+   * where this starts. It commits an honest policy and the contract frozen
+   * earlier as the BASE, then commits the attack as the head: the policy
+   * rewritten to point the secrets gate's `command:` at a script the same
+   * commit adds, the dependency gate switched off, a fabricated secret, and
+   * the frozen contract's approval rewritten to name the pull request itself.
+   *
+   * The attacker's script writes a marker file, so "did the pull request's
+   * own code run on the runner" is answered by looking on disk rather than by
+   * reading a command line. This is the case the whole release exists for and
+   * the one thing in this file no unit test can stand in for: every stub in
+   * the suite prints what the test told it to, and the question here is what
+   * a real intent-guard, a real vault-guard and a real dep-guard do when the
+   * rules are taken away from the tree they are judging.
+   */
+  describe('a pull request that rewrites the rules it is judged by', () => {
+    let marker = '';
+    let attacker = '';
+
+    beforeAll(() => {
+      marker = path.join(path.dirname(clone), 'attacker-ran.txt');
+
+      // The base: an honest policy, and the contract frozen earlier in this
+      // file, which is still on disk.
+      writeFileSync(
+        path.join(clone, '.guardrails.yaml'),
+        [
+          'version: 1',
+          'gates:',
+          '  dependencies:',
+          '    product: dep-guard',
+          '    enabled: true',
+          '    options:',
+          `      corpus-dir: ${DEP_GUARD_CORPUS}`,
+          '  secrets:',
+          '    product: vault-guard',
+          '    enabled: true',
+          '  intent:',
+          '    product: intent-guard',
+          '    enabled: true',
+          `    command: ${INTENT_GUARD_CLI}`,
+          '    enforce: false',
+          '',
+        ].join('\n')
+      );
+      git(['add', '-A']);
+      git(['commit', '--quiet', '-m', 'base: an honest policy and a frozen contract']);
+      git(['branch', '-f', 'trust-base-fixture']);
+
+      // The pull request.
+      attacker = path.join(clone, 'tools', 'nice-gate.sh');
+      shim(
+        path.dirname(attacker),
+        'nice-gate.sh',
+        [
+          '#!/bin/sh',
+          `printf 'ran\\n' > ${JSON.stringify(marker)}`,
+          `echo '{"version":"1","summary":{"files":0,"secrets":0},"run":{"files_scanned":0,"patterns_active":0,"fail_on":"medium","blocking_matches":0},"results":[]}'`,
+          'exit 0',
+        ].join('\n') + '\n'
+      );
+      writeFileSync(
+        path.join(clone, '.guardrails.yaml'),
+        [
+          'version: 1',
+          'gates:',
+          '  dependencies:',
+          '    product: dep-guard',
+          '    enabled: false',
+          '  secrets:',
+          '    product: vault-guard',
+          '    enabled: true',
+          `    command: ${attacker}`,
+          '    args: []',
+          '  intent:',
+          '    product: intent-guard',
+          '    enabled: true',
+          `    command: ${INTENT_GUARD_CLI}`,
+          '    enforce: false',
+          '',
+        ].join('\n')
+      );
+      // Fabricated. The shape of a GitHub token and no real account.
+      writeFileSync(
+        path.join(clone, 'leak.js'),
+        "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+      );
+      // And the contract's approval rewritten to name the pull request.
+      const contractPath = frozenContractIn(clone);
+      writeFileSync(
+        contractPath,
+        readFileSync(contractPath, 'utf8').replace(/approved_by: .*/, 'approved_by: this branch')
+      );
+      git(['add', '-A']);
+      git(['commit', '--quiet', '-m', 'feat: a helpful refactor']);
+    });
+
+    it('runs the pull request own script when no trust base is passed, which is the hole', () => {
+      rmSync(marker, { force: true });
+
+      const result = conductor(['run']);
+
+      expect(existsSync(marker)).toBe(true);
+      expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+      expect(result.stdout).not.toMatch(/dependencies\s+dep-guard/);
+    });
+
+    it('never runs it with a trust base, and the real gates report what it hid', () => {
+      rmSync(marker, { force: true });
+
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(existsSync(marker)).toBe(false);
+      // The base policy's gates, including the one the pull request switched
+      // off, and the secret its own gate would have swallowed.
+      expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
+      expect(result.stdout).toMatch(/vault-guard\/github-token/);
+      expect(result.stdout).toMatch(/leak\.js:1:/);
+    });
+
+    it('sums the umbrella own proposal and the gate own into one sentence', () => {
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(result.stdout).toMatch(/2 control change\(s\) proposed in this pull request\./);
+      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      expect(result.stdout).toMatch(
+        /proposed\s+intent-guard\s+contract changed in this pull request/
+      );
+    });
+
+    it('refuses the forged approval, as an ordinary blocking finding', () => {
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(result.stdout).toMatch(/BLOCKING.*intent-guard\/gate-blocked/);
+      expect(result.stdout).toMatch(/Self-approval refused:/);
+    });
+
+    it('says of each gate whether it was put into pull-request mode', () => {
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      // Every gate here is whatever this machine has installed or has built
+      // beside this repository, which is the whole point of this suite, so
+      // the assertion is about the RULE and not about a version number: at
+      // or above its floor a gate is inside the boundary and silent, below
+      // it the line is there. BOTH directions have to hold, or the withheld
+      // line is decoration that nothing would notice the loss of.
+      const floors: Array<[string, string, string]> = [
+        ['dependencies', 'dep-guard', '0.6.0'],
+        ['secrets', 'vault-guard', '1.7.0'],
+        ['intent', 'intent-guard', '1.4.0'],
+      ];
+
+      for (const [role, product, floor] of floors) {
+        const version =
+          new RegExp(`${role}\\s+${product}\\s+(\\S+)`).exec(result.stdout)?.[1] ?? null;
+        const withheld = new RegExp(
+          `NOT in pull-request mode\\s+${role}\\s+${product}`
+        ).test(result.stdout);
+        expect({ role, inBoundary: !withheld }).toEqual({
+          role,
+          inBoundary: atLeastVersion(version, floor),
+        });
+      }
+    });
+
+    it('fails closed for every enabled gate on a base ref that does not resolve', () => {
+      rmSync(marker, { force: true });
+
+      const result = conductor(['run', '--trust-base', 'origin/does-not-exist']);
+
+      expect(result.status).toBe(2);
+      expect(existsSync(marker)).toBe(false);
+      expect(result.stdout).toMatch(/does not resolve to a commit/);
+      expect(result.stdout).toMatch(/verdict: exit 2/);
+    });
+
+    it('writes a SARIF log whose every result has a location', () => {
+      // The adjacent fix, checked where it was found: against a real
+      // repository's real gate output rather than against a constructed
+      // result. One result without a location makes code scanning reject the
+      // whole log.
+      const result = conductor([
+        'run',
+        '--trust-base',
+        'trust-base-fixture',
+        '--format',
+        'sarif',
+      ]);
+      const log = JSON.parse(result.stdout) as {
+        runs: Array<{
+          results: Array<{ ruleId: string; locations?: unknown[] }>;
+          invocations?: Array<{ toolExecutionNotifications?: Array<{ descriptor: { id: string } }> }>;
+        }>;
+      };
+
+      const results = log.runs.flatMap((run) => run.results);
+      expect(results.length).toBeGreaterThan(0);
+      expect(
+        results.filter((entry) => (entry.locations?.length ?? 0) === 0).map((entry) => entry.ruleId)
+      ).toEqual([]);
+
+      const notificationIds = log.runs.flatMap((run) =>
+        (run.invocations ?? []).flatMap((invocation) =>
+          (invocation.toolExecutionNotifications ?? []).map((entry) => entry.descriptor.id)
+        )
+      );
+      expect(notificationIds).toContain('conductor/control-change-proposed');
+      // Nothing about trust-base-not-passed here. This test is about
+      // locations and about a proposal reaching the log; whether any gate
+      // was left OUTSIDE the boundary depends on what this machine has
+      // installed, and asserting it either way here would make this test a
+      // second, weaker copy of the version-aware one above. It used to
+      // assert the notification was PRESENT, which stopped being true the
+      // week dep-guard shipped its half.
+    });
+  });
+
+  /**
+   * The secrets gate inside the boundary, against a known vault-guard build.
+   *
+   * Reached through the policy's absolute `command:`, the same way the intent
+   * gate is, so this case pins the version rather than reading whatever the
+   * machine installed. The pull request changes vault-guard's own config to
+   * ignore the file the secret is in: without pull-request mode that config
+   * is obeyed and the secret is missed, and with it the config comes from the
+   * base ref, the secret is reported anyway, and the attempt shows as a
+   * proposal beside the umbrella's own.
+   */
+  (existsSync(VAULT_GUARD_CLI) ? describe : describe.skip)(
+    'the secrets gate reading its own config from the base ref',
+    () => {
+      beforeAll(() => {
+        git(['checkout', '--quiet', 'trust-base-fixture']);
+        git(['checkout', '--quiet', '-B', 'vault-guard-base']);
+        writeFileSync(
+          path.join(clone, '.guardrails.yaml'),
+          [
+            'version: 1',
+            'gates:',
+            '  secrets:',
+            '    product: vault-guard',
+            '    enabled: true',
+            `    command: ${VAULT_GUARD_CLI}`,
+            '',
+          ].join('\n')
+        );
+        git(['add', '-A']);
+        git(['commit', '--quiet', '-m', 'base: the secrets gate on a known build']);
+        git(['branch', '-f', 'vault-guard-fixture']);
+
+        writeFileSync(
+          path.join(clone, 'leak.js'),
+          "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+        );
+        // The pull request's own muting: ignore the file it just added.
+        writeFileSync(
+          path.join(clone, '.vault-guard.json'),
+          `${JSON.stringify({ ignore: ['leak.js'] }, null, 2)}\n`
+        );
+        git(['add', '-A']);
+        git(['commit', '--quiet', '-m', 'feat: tidy up the scanner config']);
+      });
+
+      it('obeys the pull request own config when no trust base is passed', () => {
+        const result = conductor(['run', '--verbose']);
+
+        expect(result.stdout).toMatch(/vault-guard 1\.7\.0/);
+        expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+      });
+
+      it('takes the config from the base ref and reports the secret anyway', () => {
+        const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
+
+        expect(result.stdout).toMatch(/vault-guard\/github-token/);
+        expect(result.stdout).toMatch(/leak\.js:1:/);
+        expect(result.stdout).not.toMatch(/NOT in pull-request mode\s+secrets/);
+      });
+
+      it("reports the muting attempt as that gate's own proposal", () => {
+        const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
+
+        // The sentence is vault-guard's, carried verbatim: this package does
+        // not read that gate's control files and has no standing to describe
+        // what changed in them.
+        expect(result.stdout).toMatch(/proposed\s+vault-guard\s+config added in this pull request/);
+        expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+      });
+
+      it('raises no policy line, because this pull request left the policy alone', () => {
+        // The other direction, and it is what keeps the count worth reading:
+        // the head and base policies are identical here, so the umbrella's
+        // own line is absent and the only proposal is the gate's.
+        const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
+
+        expect(result.stdout).not.toMatch(/policy changed in this pull request/);
+      });
+    }
+  );
+});
+
+/**
+ * THE COMPOSED TEST. The design document calls this the acceptance criterion
+ * for the whole trust-boundary wave, and it is the only test here that
+ * exercises all three gates in pull-request mode at once.
+ *
+ * One fixture repository with all three gates adopted and a frozen contract.
+ * One pull request that, in a single commit, does everything the design says
+ * an attacker would: rewrites the contract's scope AND its approval, adds
+ * `severity_overrides` and `ignore: **` to vault-guard's config, adds an
+ * allow entry to dep-guard's config, points conductor's own `command:` for
+ * one gate at a script the same commit adds, and carries the three things
+ * those four changes exist to hide -- a real-shaped secret, a dependency name
+ * the corpus does not know, and a file outside the contract's scope.
+ *
+ * The run must execute NONE of the head-side controls, report EVERY one of
+ * them as proposed, and block on the secret, the dependency and the contract
+ * exactly as it would have on the base configuration.
+ *
+ * It runs twice: once against the sibling checkouts' built CLIs through the
+ * policy's absolute `command:`, which pins the versions, and once against
+ * whatever is on PATH, which is what an adopter actually gets. The second
+ * skips unless every PATH binary is at or above its floor, and says so.
+ */
+interface ComposedFixture {
+  repo: string;
+  bin: string;
+  marker: string;
+}
+
+/** Versions of the three gates on PATH, or null where one could not be read. */
+function pathVersions(): Record<string, string | null> {
+  const read = (name: string): string | null => {
+    const probe = spawnSync(name, ['--version'], { encoding: 'utf8' });
+    const value = (probe.stdout ?? '').trim().split('\n')[0]?.trim() ?? '';
+    return probe.status === 0 && /^v?\d+\.\d+\.\d+/.test(value) ? value.replace(/^v/, '') : null;
+  };
+  return {
+    'dep-guard': read('dep-guard'),
+    'vault-guard': read('vault-guard'),
+    'intent-guard': read('intent-guard'),
+  };
+}
+
+/** A binary on PATH, resolved once so a shim can exec something real. */
+function onPath(name: string): string | null {
+  const found = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' });
+  const value = (found.stdout ?? '').trim();
+  return found.status === 0 && value.length > 0 ? value : null;
+}
+
+const PATH_VERSIONS = pathVersions();
+const PATH_READY =
+  atLeastVersion(PATH_VERSIONS['dep-guard'], '0.6.0') &&
+  atLeastVersion(PATH_VERSIONS['vault-guard'], '1.7.0') &&
+  atLeastVersion(PATH_VERSIONS['intent-guard'], '1.4.0');
+
+const composedMissing = [
+  ...missing,
+  existsSync(DEP_GUARD_FIXTURE_CORPUS) ? null : 'dep-guard has no committed fixture corpus',
+  existsSync(VAULT_GUARD_CLI) ? null : 'no vault-guard build to drive through command:',
+].filter((entry): entry is string => entry !== null);
+
+const describeComposed = composedMissing.length === 0 ? describe : describe.skip;
+
+describeComposed('the composed test: a pull request that tries to mute all three gates', () => {
+  const scratch: string[] = [];
+
+  afterAll(() => {
+    for (const dir of scratch) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Builds the fixture. `commands` names an absolute binary per role, or is
+   * null to leave every gate to resolution, which is the PATH variant.
+   */
+  function composedFixture(commands: Record<string, string> | null): ComposedFixture {
+    const root = mkdtempSync(path.join(SCRATCH_PARENT, 'conductor-composed-'));
+    scratch.push(root);
+    const repo = path.join(root, 'repo');
+    const bin = path.join(root, 'bin');
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    const marker = path.join(root, 'attacker-ran.txt');
+
+    const run = (args: string[]): void => {
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+    };
+    const put = (relative: string, body: string, mode?: number): string => {
+      const file = path.join(repo, relative);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, body);
+      if (mode !== undefined) chmodSync(file, mode);
+      return file;
+    };
+
+    shim(bin, 'node', `#!/bin/sh\nexec ${process.execPath} "$@"\n`);
+    const gitBinary = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    shim(bin, 'git', `#!/bin/sh\nexec ${gitBinary} "$@"\n`);
+    if (commands === null) {
+      // Shimmed rather than inheriting PATH, for the reason the block above
+      // records at length: a global install sits in the same directory as
+      // node, so naming that directory re-adds gates this fixture did not
+      // choose and the suite's verdict becomes a fact about a laptop.
+      for (const name of ['dep-guard', 'vault-guard', 'intent-guard']) {
+        shim(bin, name, `#!/bin/sh\nexec ${onPath(name) as string} "$@"\n`);
+      }
+    }
+
+    run(['init', '--quiet', '-b', 'main']);
+    run(['config', 'user.email', 'composed@example.com']);
+    run(['config', 'user.name', 'Composed']);
+
+    const policy = (secretsCommand: string | null): string =>
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '    enabled: true',
+        // No `args:` beside a real gate's `command:`. An empty args list
+        // REPLACES the candidate table's argument prefix, which is how each
+        // of these binaries is told which subcommand to run, so `args: []`
+        // hands dep-guard `--format` as its first token and it exits 2 on an
+        // unknown option. Resolution infers the prefix from the basename, or
+        // falls back to the product's first candidate, which is what these
+        // dist entry points need. The attacker script below DOES take
+        // `args: []`, because it is not a real gate and takes no subcommand.
+        ...(commands === null ? [] : [`    command: ${commands['dep-guard']}`]),
+        '    options:',
+        `      corpus-dir: ${DEP_GUARD_FIXTURE_CORPUS}`,
+        '      online: false',
+        '  secrets:',
+        '    product: vault-guard',
+        '    enabled: true',
+        ...(secretsCommand === null
+          ? commands === null
+            ? []
+            : [`    command: ${commands['vault-guard']}`]
+          : [`    command: ${secretsCommand}`, '    args: []']),
+        '  intent:',
+        '    product: intent-guard',
+        '    enabled: true',
+        ...(commands === null ? [] : [`    command: ${commands['intent-guard']}`]),
+        '',
+      ].join('\n');
+
+    // -- the base: three gates adopted, a frozen contract, nothing to find --
+    put('package.json', `${JSON.stringify({ name: 'composed', version: '1.0.0', dependencies: { lodash: '^4.17.21' } }, null, 2)}\n`);
+    put('docs/readme.md', '# the only thing this branch is allowed to touch\n');
+    put('src/app.js', 'module.exports = () => 1;\n');
+    put('.guardrails.yaml', policy(null));
+
+    // The contract is made by the SAME intent-guard the run will use, so the
+    // fixture cannot be frozen by one version and judged by another.
+    const intentGuard = commands === null ? (onPath('intent-guard') as string) : commands['intent-guard'];
+    const runIntent = (rest: string[]): void => {
+      if (intentGuard.endsWith('.js')) {
+        execFileSync(process.execPath, [intentGuard, ...rest], { cwd: repo });
+      } else {
+        execFileSync(intentGuard, rest, { cwd: repo });
+      }
+    };
+    runIntent(['init', '--project', '.']);
+    runIntent([
+      'extract',
+      '--project',
+      '.',
+      '--text',
+      'Update docs/readme.md only. Do not add dependencies. Do not touch src.',
+    ]);
+    runIntent(['freeze', '--project', '.', '--approved-by', 'a human reviewer', '--yes']);
+
+    run(['add', '-A']);
+    run(['commit', '--quiet', '-m', 'base: three gates, a frozen contract']);
+    run(['branch', 'base']);
+
+    // -- the pull request: four control changes and three things to hide --
+
+    // 1. conductor's own policy, pointing the secrets gate at a script this
+    //    same commit adds. The script writes a marker and reports clean.
+    const attacker = put(
+      'tools/nice-gate.sh',
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi',
+        `printf 'ran\\n' > ${JSON.stringify(marker)}`,
+        `echo '{"version":"1","summary":{"files":0,"secrets":0},"run":{"files_scanned":0,"patterns_active":0,"fail_on":"medium","blocking_matches":0},"results":[]}'`,
+        'exit 0',
+      ].join('\n') + '\n',
+      0o755
+    );
+    put('.guardrails.yaml', policy(attacker));
+
+    // 2. vault-guard's config: ignore everything, and downgrade what is left.
+    put(
+      '.vault-guard.json',
+      `${JSON.stringify({ ignore: ['**'], severity_overrides: { 'github-token': 'low' }, fail_on: 'critical' }, null, 2)}\n`
+    );
+
+    // 3. dep-guard's config: allow the name this commit is about to add.
+    put('.dep-guard.json', `${JSON.stringify({ allow: ['lodahs'] }, null, 2)}\n`);
+
+    // 4. the frozen contract: widen the scope and re-approve it in the same
+    //    breath, which is the forgery the self-approval refusal exists for.
+    // Two edits in one file: the scope is widened to everything, and the
+    // approval is rewritten in the same breath. The indentation matches the
+    // list the freeze wrote, so the head contract stays VALID YAML: an
+    // invalid one would be refused for the wrong reason and the run without
+    // a trust base would not show the widened scope being obeyed, which is
+    // the half that makes the other half evidence.
+    const contractPath = frozenContractIn(repo);
+    writeFileSync(
+      contractPath,
+      readFileSync(contractPath, 'utf8')
+        .replace(/approved_by: .*/, 'approved_by: this pull request')
+        // A phrase rather than a glob: the contract schema refuses a scope
+        // entry under five characters, so "**" is rejected as invalid before
+        // it is rejected as a proposal, which would prove the wrong thing.
+        .replace(/^in_scope:\n/m, 'in_scope:\n  - Everything anywhere in this repository\n')
+    );
+
+    // And the three things those four changes exist to hide. The token is
+    // built from fragments so no string in THIS repository matches a secret
+    // pattern; what lands in the fixture is the assembled, real-shaped value.
+    const token = `ghp${'_'}${['A1b2C3d4E5f6', 'G7h8I9j0K1l2', 'M3n4O5p6Q7r8'].join('')}`;
+    put('src/leak.js', `const token = '${token}';\nmodule.exports = token;\n`);
+    put(
+      'package.json',
+      `${JSON.stringify({ name: 'composed', version: '1.0.0', dependencies: { lodash: '^4.17.21', lodahs: '^1.0.0' } }, null, 2)}\n`
+    );
+    put('src/out-of-scope.js', 'module.exports = "not docs/readme.md";\n');
+
+    run(['add', '-A', '--force']);
+    run(['commit', '--quiet', '-m', 'feat: a helpful refactor']);
+
+    return { repo, bin, marker };
+  }
+
+  function conductorIn(fixture: ComposedFixture, args: string[]) {
+    const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
+      cwd: fixture.repo,
+      encoding: 'utf8',
+      env: childEnv(fixture.bin),
+    });
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  }
+
+  /** How many control changes the summary line reported. */
+  function proposalCount(stdout: string): number {
+    const match = /(\d+) control change\(s\) proposed in this pull request/.exec(stdout);
+    return match === null ? -1 : Number(match[1]);
+  }
+
+  const SIBLING_COMMANDS = {
+    'dep-guard': DEP_GUARD_CLI,
+    'vault-guard': VAULT_GUARD_CLI,
+    'intent-guard': INTENT_GUARD_CLI,
+  };
+
+  describe('driven through the sibling builds, which pins the versions', () => {
+    let fixture: ComposedFixture;
+
+    beforeAll(() => {
+      fixture = composedFixture(SIBLING_COMMANDS);
+    });
+
+    it('obeys every head-side control when no trust base is passed, which is the hole', () => {
+      rmSync(fixture.marker, { force: true });
+
+      const result = conductorIn(fixture, ['run', '--verbose']);
+
+      // The pull request's own gate ran, and the other two obeyed the
+      // configs it added: nothing is reported and the run is green.
+      expect(existsSync(fixture.marker)).toBe(true);
+      expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+      expect(result.stdout).not.toMatch(/lodahs/);
+      expect(proposalCount(result.stdout)).toBe(-1);
+    });
+
+    it('executes none of them under a trust base', () => {
+      rmSync(fixture.marker, { force: true });
+
+      const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
+
+      expect(existsSync(fixture.marker)).toBe(false);
+      expect(result.stdout).toMatch(/secrets\s+vault-guard/);
+    });
+
+    it('reports all four control changes as proposed', () => {
+      const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
+
+      expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
+      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      expect(result.stdout).toMatch(/proposed\s+intent-guard\s+contract changed/);
+      expect(result.stdout).toMatch(/proposed\s+vault-guard\s+config added/);
+      expect(result.stdout).toMatch(/proposed\s+dep-guard\s+config added/);
+    });
+
+    it('blocks on the secret, the dependency and the contract', () => {
+      const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
+
+      expect(result.stdout).toMatch(/vault-guard\/github-token/);
+      expect(result.stdout).toMatch(/lodahs/);
+      expect(result.stdout).toMatch(/Self-approval refused:/);
+      expect(result.status).toBe(1);
+    });
+
+    it('puts every gate inside the boundary, so nothing is withheld', () => {
+      const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
+
+      expect(result.stdout).not.toMatch(/NOT in pull-request mode/);
+    });
+  });
+
+  (PATH_READY ? describe : describe.skip)(
+    'driven through the PATH binaries, which is what an adopter gets',
+    () => {
+      let fixture: ComposedFixture;
+
+      beforeAll(() => {
+        fixture = composedFixture(null);
+      });
+
+      it('reaches the same verdict with no command: override anywhere', () => {
+        rmSync(fixture.marker, { force: true });
+
+        const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
+
+        expect(existsSync(fixture.marker)).toBe(false);
+        expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
+        expect(result.stdout).toMatch(/vault-guard\/github-token/);
+        expect(result.stdout).toMatch(/lodahs/);
+        expect(result.stdout).toMatch(/Self-approval refused:/);
+        expect(result.stdout).not.toMatch(/NOT in pull-request mode/);
+        expect(result.status).toBe(1);
+      });
+    }
+  );
 });
 
 if (missing.length > 0) {
@@ -413,4 +1090,30 @@ if (missing.length > 0) {
   // the same problem as a gate that is switched on and not installed.
   // eslint-disable-next-line no-console
   console.warn(`dogfood e2e skipped: ${missing.join('; ')}`);
+}
+
+if (composedMissing.length > 0) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `dogfood: the COMPOSED test skipped: ${composedMissing.join('; ')}. ` +
+      'That is the acceptance criterion for the whole trust-boundary wave, ' +
+      'and nothing in it has been proven.'
+  );
+} else if (!PATH_READY) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    'dogfood: the composed test ran against the sibling builds only. The PATH ' +
+      `binaries are dep-guard ${PATH_VERSIONS['dep-guard'] ?? 'unknown'}, vault-guard ` +
+      `${PATH_VERSIONS['vault-guard'] ?? 'unknown'}, intent-guard ` +
+      `${PATH_VERSIONS['intent-guard'] ?? 'unknown'}, and at least one is below its floor.`
+  );
+}
+
+if (missing.length === 0 && !existsSync(VAULT_GUARD_CLI)) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    'dogfood: the vault-guard pull-request case skipped, no build at ' +
+      'CONDUCTOR_VAULT_GUARD_CLI and none beside this repository. ' +
+      'Nothing in that block has been proven.'
+  );
 }

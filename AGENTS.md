@@ -14,7 +14,13 @@ the gates themselves, `conductor/gate-missing`,
 diagnostics it raises when it cannot reconcile a gate's own blocking count,
 `conductor/blocking-count-mismatch` and
 `conductor/blocking-threshold-unknown`. It never writes into a gate's own
-config. If this repository disappeared, all three gates
+config.
+
+Pull-request mode does not change that. On a run with `--trust-base` the
+umbrella reads its OWN policy file from the base ref and passes the same ref
+down to each gate that understands the flag; what a gate then does with its
+own control files is that gate's decision, and the umbrella only reports
+what each one said was proposed. If this repository disappeared, all three gates
 would still install, configure, and run exactly as they do today, each on
 its own. Keep every change consistent with that: nothing here should make a
 gate depend on the umbrella to function.

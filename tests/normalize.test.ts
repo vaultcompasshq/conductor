@@ -407,11 +407,13 @@ describe('intent-guard 1.2.0 normalization', () => {
       ).toBe(null);
     });
 
-    it('lists exactly the three kinds the gate can raise', () => {
+    it('lists exactly the kinds the gate can raise', () => {
       expect([...GATE_STATE_REASON_KINDS]).toEqual([
         'contract-invalid',
         'contract-missing',
         'contract-unfrozen',
+        'self-approval-refused',
+        'control-input-refused',
       ]);
     });
   });
@@ -461,5 +463,300 @@ describe('the umbrella own missing-gate finding', () => {
     expect(finding.fingerprint?.stability).toBe('stable');
     const other = normalizeMissingGate('secrets', 'vault-guard', ['vault-guard']);
     expect(other.fingerprint?.value).not.toBe(finding.fingerprint?.value);
+  });
+});
+
+/**
+ * The no-contract classifier under BOTH state-directory names.
+ *
+ * intent-guard 1.3.0 renamed its state directory, and the sentence the gate
+ * raises interpolates that name: 1.2.x says `.conductor/intent-contract.yaml`
+ * and 1.3.0 and later say `.intent-guard/intent-contract.yaml`. The umbrella
+ * matched only the first, so on every current gate the classifier was dead: a
+ * pull request against a repository with no contract got the unattributed
+ * backstop finding instead of a `contract-missing` one, and the SARIF details
+ * said `unattributed` where a consumer filters on the kind.
+ *
+ * The 1.3.0 string is quoted from the gate's own gate.ts, which builds it as
+ * `No ${STATE_DIR}/intent-contract.yaml found.` with STATE_DIR = .intent-guard.
+ */
+describe('the no-contract reason under both state-directory names', () => {
+  const LEGACY =
+    'No .conductor/intent-contract.yaml found. Draft intent with intent-guard-extract, ' +
+    'then approve with intent-guard-freeze before implementing.';
+  const CANONICAL =
+    'No .intent-guard/intent-contract.yaml found. Draft intent with intent-guard-extract, ' +
+    'then approve with intent-guard-freeze before implementing.';
+
+  it('classifies the pre-1.3 wording as contract-missing', () => {
+    expect(classifyGateStateReason(LEGACY)).toBe('contract-missing');
+  });
+
+  it('classifies the 1.3.0 and later wording as contract-missing', () => {
+    expect(classifyGateStateReason(CANONICAL)).toBe('contract-missing');
+  });
+
+  it('files the 1.3.0 wording as contract-missing rather than as the unattributed backstop', () => {
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: [CANONICAL],
+        contractFound: false,
+        contractFrozen: false,
+      },
+      '1.4.0'
+    );
+    const blocked = normalized.findings.filter(
+      (finding) => finding.ruleId === 'intent-guard/gate-blocked'
+    );
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].details.kind).toBe('contract-missing');
+    expect(blocked[0].message).toBe(CANONICAL);
+  });
+
+  it('still refuses to classify a sentence that only mentions a contract', () => {
+    expect(classifyGateStateReason('No contract was needed for this branch.')).toBe(null);
+  });
+});
+
+/**
+ * The two pull-request-mode refusals intent-guard 1.4.0 raises.
+ *
+ * Both arrive as ordinary reasons in the same array as budget and drift
+ * reasons, with nothing structured saying which is which, so they are matched
+ * by prefix exactly as the three contract-state reasons are. The strings are
+ * quoted from intent-guard's trust-base.ts, which exports both prefixes as
+ * constants for this purpose.
+ *
+ * THE REASON THEY ARE CLASSIFIED RATHER THAN LEFT TO THE BACKSTOP is the
+ * whole point, and it was found by running the real gate against a crafted
+ * pull request. The backstop fires only when nothing else blocked, so a pull
+ * request that forged a contract approval AND breached a change budget
+ * reported only the budget breach. The run still failed; the report never
+ * said the approval was self-granted, which is the one sentence a reviewer
+ * needs from pull-request mode.
+ */
+describe("intent-guard's pull-request-mode refusals", () => {
+  // Verbatim from a real 1.4.0 run against a scratch repository whose pull
+  // request rewrote the frozen contract's approval block.
+  const SELF_APPROVAL =
+    'Self-approval refused: this pull request changes .intent-guard/intent-contract.yaml and ' +
+    'gives it an approval that is not the one on "base". The approval that counts is the base ' +
+    "ref's, which a pull request cannot write. Land the contract change on the base branch " +
+    'first, or require a human approval for contract changes in the workflow.';
+  const CONTROL_INPUT =
+    'Control input refused: .intent-guard/intent-contract.yaml is a symlink at the head commit, ' +
+    'not a regular file. A link makes the contract point at a file the base ref never approved.';
+
+  it('classifies a self-approval refusal', () => {
+    expect(classifyGateStateReason(SELF_APPROVAL)).toBe('self-approval-refused');
+  });
+
+  it('classifies a refused control input', () => {
+    expect(classifyGateStateReason(CONTROL_INPUT)).toBe('control-input-refused');
+  });
+
+  it('renders and blocks like any other reason', () => {
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: [SELF_APPROVAL],
+        contractFound: true,
+        contractFrozen: true,
+        trustBase: {
+          ref: 'base',
+          proposals: ['contract changed in this pull request'],
+          contractChanged: true,
+          configChanged: false,
+          baseContractFound: true,
+          selfApproval: true,
+          contractShapeChange: null,
+        },
+      },
+      '1.4.0'
+    );
+
+    expect(normalized.findings).toHaveLength(1);
+    expect(normalized.findings[0].ruleId).toBe('intent-guard/gate-blocked');
+    expect(normalized.findings[0].blocking).toBe(true);
+    expect(normalized.findings[0].severity).toBe('critical');
+    expect(normalized.findings[0].message).toBe(SELF_APPROVAL);
+    expect(normalized.findings[0].details.kind).toBe('self-approval-refused');
+  });
+
+  it('keeps the refusal in the report when a budget violation blocked as well', () => {
+    // The failure this classification exists to prevent. Left to the
+    // backstop, this run reported only the budget breach.
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: [SELF_APPROVAL, 'Budget hard_block: a new dependency was added'],
+        contractFound: true,
+        contractFrozen: true,
+        budget: {
+          action: 'hard_block',
+          violations: [
+            {
+              rule: 'allow_new_dependencies',
+              severity: 'hard_block',
+              message: 'A new dependency was added and the contract forbids it.',
+              matched: ['package.json'],
+              fingerprint: 'abc123',
+            },
+          ],
+        },
+      },
+      '1.4.0'
+    );
+
+    const kinds = normalized.findings
+      .filter((finding) => finding.ruleId === 'intent-guard/gate-blocked')
+      .map((finding) => finding.details.kind);
+    expect(kinds).toEqual(['self-approval-refused']);
+    expect(normalized.findings.filter((finding) => finding.blocking)).toHaveLength(2);
+  });
+
+  it('carries the gate own trustBase summary through, proposals and all', () => {
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'ok',
+        exitCode: 0,
+        reasons: [],
+        contractFound: true,
+        contractFrozen: true,
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['contract changed in this pull request', 'config changed in this pull request'],
+          contractChanged: true,
+          configChanged: true,
+          baseContractFound: true,
+          selfApproval: false,
+          contractShapeChange: null,
+        },
+      },
+      '1.4.0'
+    );
+
+    expect(normalized.trustBase).toEqual({
+      ref: 'origin/main',
+      proposals: [
+        'contract changed in this pull request',
+        'config changed in this pull request',
+      ],
+    });
+  });
+
+  it('says nothing at all when the gate was not in pull-request mode', () => {
+    // Absence is the gate's own signal: the field is present only on a run
+    // it was given --trust-base for, so an ordinary run has nothing here and
+    // no report has to guess.
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'ok',
+        exitCode: 0,
+        reasons: [],
+        contractFound: true,
+        contractFrozen: true,
+      },
+      '1.4.0'
+    );
+
+    expect(normalized.trustBase).toBeUndefined();
+  });
+
+  it('reads the same block off vault-guard, which puts it in the same place', () => {
+    // vault-guard 1.7.0 carries more than the umbrella reads: configChanged,
+    // baselineChanged and a shape change for each. Only the ref and the
+    // sentences are taken, which is the passthrough rule applied to a second
+    // gate rather than a second opinion about that gate's control files.
+    const normalized = normalizeVaultGuard(
+      {
+        version: '1',
+        scannedAt: '2026-09-06T00:00:00.000Z',
+        summary: { files: 1, secrets: 0 },
+        run: { files_scanned: 1, patterns_active: 59, fail_on: 'medium', blocking_matches: 0 },
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['config changed in this pull request'],
+          configChanged: true,
+          baselineChanged: false,
+          configShapeChange: null,
+          baselineShapeChange: null,
+        },
+        results: [],
+      },
+      '1.7.0'
+    );
+
+    expect(normalized.trustBase).toEqual({
+      ref: 'origin/main',
+      proposals: ['config changed in this pull request'],
+    });
+  });
+
+  it('says nothing for a vault-guard that was not in pull-request mode', () => {
+    const normalized = normalizeVaultGuard(VAULT_GUARD_CLEAN, '1.7.0');
+
+    expect(normalized.trustBase).toBeUndefined();
+  });
+
+  it('reads the same block off dep-guard, which puts it in the same place', () => {
+    // dep-guard 0.6.0 carries three changed flags and three shape changes,
+    // one pair of which is about .npmrc, a control input the other two gates
+    // do not have. The umbrella reads the ref and the sentences and nothing
+    // else, which is what keeps a third gate from needing a third mapping.
+    const normalized = normalizeDepGuard(
+      {
+        findings: [],
+        suppressed: 0,
+        ignored: 0,
+        allowed: 1,
+        allowedNames: ['left-pad'],
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['config changed in this pull request (proposed: allow left-pad)'],
+          configChanged: true,
+          baselineChanged: false,
+          npmrcChanged: false,
+          configShapeChange: null,
+          baselineShapeChange: null,
+          npmrcShapeChange: null,
+        },
+        run: { mode: 'audit', failOn: 'medium', blockingMatches: 0, diagnostics: [] },
+        exitCode: 0,
+      },
+      '0.6.0'
+    );
+
+    expect(normalized.trustBase).toEqual({
+      ref: 'origin/main',
+      proposals: ['config changed in this pull request (proposed: allow left-pad)'],
+    });
+  });
+
+  it('says nothing for a dep-guard that was not in pull-request mode', () => {
+    // Absence rather than null: dep-guard drops the key outright on an
+    // ordinary run, so those bytes are what they were before the field
+    // existed and a consumer that never enters the mode learns no new key.
+    expect(normalizeDepGuard(DEP_GUARD_CLEAN, '0.6.0').trustBase).toBeUndefined();
+  });
+
+  it('refuses a trustBase of a shape it does not know rather than reading past it', () => {
+    expect(() =>
+      normalizeIntentGuard(
+        {
+          status: 'ok',
+          exitCode: 0,
+          reasons: [],
+          contractFound: true,
+          contractFrozen: true,
+          trustBase: { ref: 'origin/main', proposals: [{ line: 'an object' }] },
+        },
+        '1.4.0'
+      )
+    ).toThrow(/trustBase\.proposals\[0\] should be a string/);
   });
 });

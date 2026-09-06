@@ -248,6 +248,12 @@ proceeds normally without mentioning them.
 - `--base <ref>` measures the intent gate against what this branch changed
   since `<ref>`, rather than against the index. See "Intent at a pull
   request" below.
+- `--trust-base <ref>` reads the **rules** from `<ref>` instead of from the
+  tree being judged: this repository's own `.guardrails.yaml`, and every
+  control input of the gates that support it. See "The pull-request trust
+  boundary" below. `--base` and `--trust-base` are independent and a
+  pull-request run passes both: `--base` decides which paths are judged,
+  `--trust-base` decides what they are judged by.
 - `--spec <path>` names the spec the intent gate imports its contract from.
 - `--output <path>` writes the report to a file instead of to stdout, for a
   CI step that uploads it. One line still goes to stdout, because a job whose
@@ -269,6 +275,127 @@ proceeds normally without mentioning them.
   its own could-not-run code, or it exited 1 with nothing parseable on
   stdout, which is what a rejected config file looks like from two of the
   three.
+
+## The pull-request trust boundary
+
+Every gate reads its own rules out of the repository it is judging. On a pull
+request the author controls that repository, so without this a pull request
+could turn a gate off in the same commit that carries the thing the gate
+exists to catch, and the report would say the run was clean. For the umbrella
+the sharpest version is `command:`, which names a program to run: a pull
+request could point a gate at a script it added in the same commit.
+
+**On a pull-request run the rules come from the base branch.** With
+`--trust-base <ref>` the umbrella reads `.guardrails.yaml` from that ref with
+`git show` and judges the head tree against it. A `.guardrails.yaml` in the
+pull request never takes effect for that run, `command:` and `args:`
+included, so **a pull request cannot change the rules it is judged by, and
+cannot choose the program that judges it, as long as that program is
+self-contained** (see the directory rule below). The same ref is passed
+down to every gate that supports it, so their contracts, configs and
+baselines come from the base branch too.
+
+**The program is checked as well as the rules.** Reading the rules from the
+base ref is worth nothing if the pull request supplies the binary that
+applies them, and without this it could, two ways that both look ordinary in
+a diff: a base `command:` pointing at a path inside the repository, where the
+head replaces the file behind the approved path; and no `command:` at all,
+where a head-committed `node_modules/.bin/<gate>` shadows the real gate,
+because resolution prefers the repository's own copy over PATH so that a
+project pin beats a global install.
+
+So on a pull-request run a gate's program must be **outside the working tree**
+(on PATH, or an absolute `command:` elsewhere on the machine), or else meet
+**both** of these:
+
+- it is a **tracked regular file whose contents are identical** at the base
+  ref and at the head commit; and
+- **the tree object id of its containing directory is identical** at those
+  two refs, which is to say the pull request changed nothing anywhere in that
+  directory's subtree.
+
+Both are compared with `git ls-tree` on both refs and never read from the
+working tree. The second is not belt and braces. A vendored gate is rarely
+one file: `vendor/vault-guard` execs `vendor/impl.sh`, and a pull request
+that leaves the wrapper byte for byte alone and rewrites the helper beside it
+passes a per-file check while running its own code. Comparing the directory
+covers every file under it at once, without this tool having to know what a
+wrapper calls.
+
+**What is and is not vetted**, exactly: the program file and everything in
+its directory subtree. Anything the program reaches **outside** that
+directory is not vetted at all, so an in-repo gate must be **self-contained
+within its own directory**. A program at the repository ROOT is refused, and
+the message says to give it a directory: at the root the containing directory
+is the whole repository, so the rule would mean "no pull request may change
+anything".
+
+A symlink inside the repository is refused on **its own entry**, before its
+target is considered: it is either untracked, or its tree entry is a link
+rather than a regular file, and either refuses. (A symlink whose own path is
+outside the tree but which points into it has its target vetted; that is the
+case following the link exists for.)
+
+Anything else is could-not-run for that gate, naming the path, and it reaches
+the exit code even where the policy sets `enforce: false`, because the gate
+produced no findings to un-enforce: the umbrella declined to run a program
+the pull request chose.
+
+Nothing under `node_modules` is ever base-approved, and that is the right
+answer rather than a limitation: what is there is chosen by the head's own
+manifest and lockfile and installed by a step that runs before the gates, so
+git has no record of those bytes at either ref. A pull request that edits its
+lockfile to pull a different build of a gate has chosen its own judge just as
+surely as one that commits a stub. **Vendoring a gate still works**, on those
+terms: put it in its own directory, keep everything it needs inside that
+directory, and leave the whole directory alone in a pull request the gate is
+meant to judge. Changing it is not forbidden, it just has to land on the base
+branch first, like any other rule change.
+
+**A change to the rules is not refused, it is proposed.** Rules legitimately
+change, and a gate that blocked every such pull request would train people to
+bypass it. So a policy file that differs from the base ref's is reported as
+one line, `policy changed in this pull request`, the run continues under the
+base ref's rules, and the change takes effect **after merge**, on the first
+run whose base branch carries it. The gates' own proposals are summed with it
+into one sentence, `N control change(s) proposed in this pull request`, on the
+one-line summary and on the verdict, with a line each under `--verbose` and a
+`conductor/control-change-proposed` notification each in the SARIF log. A
+reflow, a re-quote or an edited comment is not a proposal: the two files are
+compared as parsed documents.
+
+**It fails closed.** A `--trust-base` that does not resolve is not a reason to
+fall back to the pull request's own file, because that fallback is the hole:
+the run exits 2 and the report **leads with the refusal**, naming the ref and
+the remedy, whether or not it can name any gate. That last part matters: with
+no base ref there is no base policy, so the only list of gates available is
+the head's, and a head that switches every gate off leaves it empty. So is a
+base ref that resolves to the head commit, or to a different commit carrying
+the head's tree, both of which would put the rules back inside the tree being
+judged while still reporting pull-request mode as on. Pass the base
+**branch**, never a SHA: on a `pull_request` event `github.sha` is the merge
+commit, which is HEAD. If the base branch has no `.guardrails.yaml` at all,
+the run has no rules and exits 2 rather than using the pull request's; the
+file the pull request adds decides what runs once it is on the base branch.
+
+**Which gates are covered.** All three: dep-guard from **0.6.0**,
+intent-guard from **1.4.0**, vault-guard from **1.7.0**.
+
+The umbrella asks each gate its version and passes the flag only to a build
+that understands it, so an older gate is not handed a flag it would reject. A
+gate that was not put into pull-request mode read its own rules out of the
+tree being judged, which is the thing this exists to prevent, so it is never
+silent: it gets a line in the report, a clause on the clean one-line summary,
+and a `conductor/trust-base-not-passed` notification in the SARIF log. For a
+gate that IS in the table, a version that cannot be read at all is
+could-not-run rather than a quiet downgrade: the umbrella cannot establish
+that the gate would take its rules from the base ref, and running it anyway
+would put it outside the boundary on exactly the runs where something is
+already wrong.
+
+Outside pull-request mode nothing changes. A pre-commit hook and a direct run
+on your own checkout are already inside the trust boundary, and neither passes
+the flag.
 
 ## Intent at a pull request
 
@@ -371,6 +498,21 @@ with a sentence saying to add it as a devDependency. `--base` is passed only whe
 itself and treats an empty value as "not a pull request", which is what a
 push build wants.
 
+On a `pull_request` event the action passes
+**`--trust-base origin/$GITHUB_BASE_REF`** of its own accord, so the run takes
+its configuration from the base branch and the pull request cannot change the
+rules it is judged by; a change to the rules shows as a proposal line and
+takes effect after merge. See "The pull-request trust boundary" above. On any
+other event it passes nothing and behaviour is unchanged. The `trust-base`
+input names the ref explicitly, for a platform where `GITHUB_BASE_REF` is not
+set.
+
+There is deliberately **no input that turns pull-request mode off**.
+Base-ref judging is the floor rather than a knob, and on a `pull_request`
+event the workflow file itself runs from the pull request's own ref, so an
+opt-out here would be settable by the very pull request the mode exists to
+judge: the knob and the thing it protects against would be the same file.
+
 ```yaml
 name: guardrails
 on: pull_request
@@ -384,8 +526,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Required. Without it there is no merge base to diff against, and
-          # the intent gate fails closed rather than checking an empty set.
+          # Required, for two reasons now. Without it there is no merge base
+          # to diff against, and the intent gate fails closed rather than
+          # checking an empty set. And the base ref itself has to be in the
+          # clone, because on a pull request the rules are read from it: a
+          # base ref that will not resolve is exit 2 for every enabled gate.
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4

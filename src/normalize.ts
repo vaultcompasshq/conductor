@@ -160,6 +160,7 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
   const root = needRecord(raw, product, 'the output');
   const run = needRecord(root.run, product, 'run');
   const threshold = optionalString(run.failOn, product, 'run.failOn') ?? null;
+  const trustBase = readTrustBase(root.trustBase, product);
   const diagnostics: Diagnostic[] = [];
 
   const findings: Finding[] = needArray(root.findings, product, 'findings').map((entry, index) => {
@@ -206,6 +207,11 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
 
   return {
     findings,
+    // Third gate, same key, same two fields read. dep-guard carries three
+    // changed flags and three shape changes, one pair about .npmrc, which
+    // the other two have no equivalent of; none of it is read here. The
+    // sentences are that gate's claims about its own control files.
+    ...(trustBase === undefined ? {} : { trustBase }),
     run: {
       failOn: threshold,
       suppressed: typeof root.suppressed === 'number' ? root.suppressed : 0,
@@ -234,6 +240,7 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
   // because the latter ignores the threshold. A sibling tool in this family
   // read summary.secrets and that is the bug not to copy.
   const threshold = optionalString(run.fail_on, product, 'run.fail_on') ?? null;
+  const trustBase = readTrustBase(root.trustBase, product);
   const diagnostics: Diagnostic[] = [];
 
   const findings: Finding[] = [];
@@ -331,6 +338,14 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
 
   return {
     findings,
+    // vault-guard 1.7.0 puts its pull-request summary at the TOP LEVEL, the
+    // same place intent-guard puts its own, and carries more fields than the
+    // umbrella reads (configChanged, baselineChanged, and a shape change for
+    // each). Only `ref` and `proposals` are read, which is the passthrough
+    // rule applied to a second gate: the sentences are that gate's claims
+    // about its own control files, and this package has no standing to
+    // rewrite them or to act on the structured half.
+    ...(trustBase === undefined ? {} : { trustBase }),
     run: {
       failOn: threshold,
       suppressed: typeof run.baseline_suppressed === 'number' ? run.baseline_suppressed : 0,
@@ -400,19 +415,52 @@ const DRIFT_SEVERITY: Record<string, Severity> = {
  * interpolates an error message, and they are enumerated in a test against
  * the real strings, so an upstream rewording turns that test red instead of
  * silently dropping a reason out of every report.
+ *
+ * THE NO-CONTRACT SENTENCE INTERPOLATES THE STATE DIRECTORY NAME, so it has
+ * two spellings and needs two entries. The gate builds it as
+ * `No ${STATE_DIR}/intent-contract.yaml found.`, and 1.3.0 renamed STATE_DIR
+ * from `.conductor` to `.intent-guard`. Matching only the old name left this
+ * classifier DEAD against every gate anybody can install today: the reason
+ * fell through to the unattributed backstop, so the finding said
+ * `kind: unattributed` where a consumer filters on `contract-missing`, and a
+ * run that also had a budget violation dropped the no-contract reason out of
+ * the report entirely, since the backstop only fires when nothing else
+ * blocked. Both names stay, because the umbrella reads both state
+ * directories elsewhere and a repository on either version has to be
+ * classified the same way.
  */
 export const GATE_STATE_REASON_KINDS = [
   'contract-invalid',
   'contract-missing',
   'contract-unfrozen',
+  /**
+   * The two pull-request-mode refusals, from intent-guard 1.4.0.
+   *
+   * They are here rather than left to the backstop for the reason the whole
+   * list exists. The backstop fires only when NOTHING ELSE BLOCKED, so a pull
+   * request that forged a contract approval AND breached a change budget
+   * reported only the budget breach: the run still failed, but the report
+   * never said the approval was self-granted, which is the single most
+   * important sentence pull-request mode produces. Found by running the real
+   * gate against a crafted pull request rather than by reading the code.
+   */
+  'self-approval-refused',
+  'control-input-refused',
 ] as const;
 
 export type GateStateReasonKind = (typeof GATE_STATE_REASON_KINDS)[number];
 
 const GATE_STATE_REASON_PREFIXES: ReadonlyArray<[string, GateStateReasonKind]> = [
   ['Intent contract is invalid:', 'contract-invalid'],
+  ['No .intent-guard/intent-contract.yaml found', 'contract-missing'],
   ['No .conductor/intent-contract.yaml found', 'contract-missing'],
   ['Intent contract exists but is not frozen', 'contract-unfrozen'],
+  // Copied from intent-guard's own trust-base.ts, where both are exported
+  // constants for exactly this: SELF_APPROVAL_REASON_PREFIX and
+  // CONTROL_INPUT_REASON_PREFIX. Prefixes, because each interpolates the ref
+  // and the path.
+  ['Self-approval refused:', 'self-approval-refused'],
+  ['Control input refused:', 'control-input-refused'],
 ];
 
 /** Which gate-state reason this is, or null when it is a budget or drift reason. */
@@ -425,12 +473,44 @@ export function classifyGateStateReason(reason: string): GateStateReasonKind | n
   return null;
 }
 
+/**
+ * The pull-request-mode summary intent-guard 1.4.0 puts on its check output,
+ * or undefined when the run was not in pull-request mode.
+ *
+ * ABSENCE IS THE SIGNAL, and it is the gate's own: the field is present only
+ * on a run that was given `--trust-base`, so an ordinary run has nothing here
+ * and no report has to guess. Validated element by element like everything
+ * else, because a malformed proposal reaching String() would put
+ * "[object Object]" on the one line a reviewer reads.
+ *
+ * The proposal SENTENCES are the gate's, carried verbatim and never
+ * rewritten. Every one of them is a claim about that gate's own control
+ * files, which the umbrella does not read and has no standing to describe.
+ */
+function readTrustBase(
+  raw: unknown,
+  product: string
+): NormalizedGateOutput['trustBase'] | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const record = needRecord(raw, product, 'trustBase');
+  return {
+    ref: needString(record.ref, product, 'trustBase.ref'),
+    proposals:
+      record.proposals === undefined
+        ? []
+        : needStringArray(record.proposals, product, 'trustBase.proposals'),
+  };
+}
+
 export function normalizeIntentGuard(raw: unknown, version: string | null): NormalizedGateOutput {
   const product = 'intent-guard';
   const root = needRecord(raw, product, 'the output');
   if (root.status !== 'blocked' && root.status !== 'ok') {
     fail(product, 'status', 'either "ok" or "blocked"');
   }
+  const trustBase = readTrustBase(root.trustBase, product);
 
   const findings: Finding[] = [];
   const budget = root.budget === undefined ? undefined : needRecord(root.budget, product, 'budget');
@@ -591,6 +671,7 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
 
   return {
     findings,
+    ...(trustBase === undefined ? {} : { trustBase }),
     run: {
       // intent-guard has no threshold flag and no reported threshold: its
       // drift thresholds live in its own config file and its budget rules
