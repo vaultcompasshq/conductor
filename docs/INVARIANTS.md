@@ -224,7 +224,7 @@ summarise enforcement as making such a gate "a note rather than exit 2".
 That was true of the exit code and false of the published log. The README
 was the wrong one and now says the same thing this section does
 (README.md:178-184), and the rule is pinned by
-tests/output-sarif.test.ts:982, which renders an unenforced gate that
+tests/output-sarif.test.ts:983, which renders an unenforced gate that
 could not run and asserts the result's level is `error` and its severity
 `critical`, with the `gate-not-enforced` notification beside it.
 
@@ -245,7 +245,7 @@ are named as the reason and counted), and especially 577 ("lets the
 header count everything on screen while the verdict counts what failed",
 which asserts the header says 3 findings while the verdict says 2 across
 1 gate); tests/cli.test.ts:481, 497, 527 and 542, end to end through the
-CLI; and tests/output-sarif.test.ts:970, 982, 1015, 1035 and 1049.
+CLI; and tests/output-sarif.test.ts:971, 983, 1016, 1036 and 1050.
 
 ## A gate that could not run is a result, never a note
 
@@ -626,8 +626,8 @@ covered is a statement about the run. Pinned by
 tests/output-text.test.ts:732 (the full report names them and says
 `--gate`), 745 (the clean run's single line still names them) and 754
 (silence on a run that had no `--gate`, verbose or not); and by
-tests/output-sarif.test.ts:146 (a notification and not a result, at note
-level, naming the role and the flag) and 168.
+tests/output-sarif.test.ts:147 (a notification and not a result, at note
+level, naming the role and the flag) and 169.
 
 ## The hook: one hook, one command, one exit code
 
@@ -668,8 +668,8 @@ than through the write's mode option, because an existing file keeps its
 own mode when written through and git will not run a hook it cannot
 execute (src/init.ts:1220-1226).
 
-Pinned by tests/init.test.ts:235 (one hook, running the umbrella and not
-three gates), 246 (`--stage commit` is in the hook text), 1154 and 1333
+Pinned by tests/init.test.ts:236 (one hook, running the umbrella and not
+three gates), 247 (`--stage commit` is in the hook text), 1154 and 1333
 (a real commit through husky 9's dispatcher and through husky 8, not a
 fixture), 1468 to 1566 (fail closed), 1583 (`sh -e`: the explanation
 survives, which is the half `-e` destroys), 1605 (the exit code passed
@@ -816,7 +816,7 @@ A `core.hooksPath` pointing outside the repository is refused
 on every repository on the machine. Pinned by tests/init.test.ts:1071.
 
 An existing policy file is never rewritten (src/init.ts:1161-1169). It is
-the one artifact a user edits by hand. Pinned by tests/init.test.ts:379.
+the one artifact a user edits by hand. Pinned by tests/init.test.ts:380.
 
 One resolution rule underneath all of these: a RELATIVE `core.hooksPath`
 resolves against the WORKING-TREE ROOT, not against the `.git` directory
@@ -905,8 +905,8 @@ So the marker settles WHOSE hook this is, and the digest decides the rest
   more, and an edited hook is somebody's working setup whatever comment
   sits at the top of it. Conflict, nothing written.
 
-Pinned by tests/init.test.ts:436, 453, 475, 542, 560, 569, 588, 609, 622,
-635 (no manifest at all treated the same way) and 1728 to 1787, which
+Pinned by tests/init.test.ts:437, 454, 476, 543, 561, 570, 589, 610, 623,
+636 (no manifest at all treated the same way) and 1728 to 1787, which
 drive the upgrade using the captured previous hook body in
 tests/fixtures/hooks, with tests/init.test.ts:1755 guarding the fixture
 against drifting into being what init writes today, which would make
@@ -932,15 +932,15 @@ the gate hook `--adopt` replaced, so forgetting it makes that hook
 unrestorable (src/init.ts:1203-1214).
 
 Pinned by the tests that actually OPEN the manifest and read the fields
-this section is about: tests/init.test.ts:453 (the hook entry's kind and
+this section is about: tests/init.test.ts:454 (the hook entry's kind and
 sha256 are the new hook's, and not the old digest still sitting there),
-542 (a lost manifest is rebuilt with a hook entry carrying the digest of
-the file on disk), 487 (the policy entry survives an upgrade that
-rewrote only the hook) and 498 (the adopted hook survives one). The
-restore side is pinned by tests/init.test.ts:834, which reads
+543 (a lost manifest is rebuilt with a hook entry carrying the digest of
+the file on disk), 488 (the policy entry survives an upgrade that
+rewrote only the hook) and 499 (the adopted hook survives one). The
+restore side is pinned by tests/init.test.ts:835, which reads
 `adopted.content` back out after a partial revert.
 
-Not by tests/init.test.ts:258, which this file used to cite first. That
+Not by tests/init.test.ts:259, which this file used to cite first. That
 test inits and then reverts and asserts the hook file is gone; it never
 opens the manifest, so it is evidence that the round trip works and no
 evidence at all about what the manifest records. It is the clearest
@@ -961,9 +961,9 @@ hook. Removing the policy file while leaving an edited hook in place
 leaves that hook running the umbrella with nothing to read, so every
 commit afterwards is refused with exit 2, while revert reported success.
 
-Pinned in BOTH directions now. tests/init.test.ts:750 asserts the policy
+Pinned in BOTH directions now. tests/init.test.ts:751 asserts the policy
 file and the hook are both still there, which is the specific pair that
-caused the incident. tests/init.test.ts:765 asserts the guarantee itself
+caused the incident. tests/init.test.ts:766 asserts the guarantee itself
 rather than a list of paths: no action on the result is a `remove` and
 every one is a `skip`, so a file added to what init writes is covered
 without anybody remembering to come back to this test.
@@ -971,8 +971,8 @@ without anybody remembering to come back to this test.
 A CHANGED FILE IS LEFT ALONE AND REPORTED (src/init.ts:1405-1414). That
 file is now the user's whatever it started as, and a revert that deletes
 edited work is a revert nobody runs twice. Pinned by
-tests/init.test.ts:723 (an edited policy file survives and the run is not
-a success) and 797 (the conflict says `changed-since-init` and names
+tests/init.test.ts:724 (an edited policy file survives and the run is not
+a success) and 798 (the conflict says `changed-since-init` and names
 `--force`).
 
 THE MANIFEST OUTLIVES A PARTIAL REVERT (src/init.ts:1453-1477). It is
@@ -981,9 +981,9 @@ is left and, after an `--adopt`, the only copy of the replaced hook. The
 `.guardrails` directory goes with it only when it is empty, using
 `rmdirSync` rather than `rmSync`, and when it is not empty that is
 REPORTED rather than passed over (src/init.ts:1456-1475). Pinned by
-tests/init.test.ts:783 (the manifest survives and still holds entries),
-680 (the directory goes with the last file), 692 (it stays, and is
-reported as skipped, when somebody else's file is in it) and 713 (it is
+tests/init.test.ts:784 (the manifest survives and still holds entries),
+681 (the directory goes with the last file), 693 (it stays, and is
+reported as skipped, when somebody else's file is in it) and 714 (it is
 reported as removed when it went).
 
 A PARTIAL REVERT IS NOT A SUCCESS. It returns `ok: false`, so the exit
@@ -1062,9 +1062,9 @@ the manifest itself are all still exactly as they were.
 End to end by tests/dogfood.e2e.test.ts:384 and 402, which revert a real
 repository with a hand-edited policy file and then finish the job under
 `--force`. The ordinary case, that revert removes what init wrote and
-leaves an unrelated file alone, is tests/init.test.ts:666, and the second
+leaves an unrelated file alone, is tests/init.test.ts:667, and the second
 `--force` revert that cleans up after a refused one is
-tests/init.test.ts:808.
+tests/init.test.ts:809.
 
 ## Intent at pull request time: nothing is ever written under the repository's own state directory
 
@@ -1444,8 +1444,8 @@ result, the SARIF notification under its own id, and the skipped line plus
 the summary clause, which asserts the summary does NOT say "Nothing to
 check against"). The verdict is pinned separately at
 tests/intent-run.test.ts:562, with an INTENT-ONLY policy, because that is
-the only shape that reaches it: the test at 504 puts a second, clean gate
-in the policy, so its run has a `GateOutcome` and never takes the
+the only shape that reaches it: the policy declared at line 443 puts a
+second, clean gate beside the waived one, so its run has a `GateOutcome` and never takes the
 empty-gates branch. An intent-only policy is not a corner case, it is what
 `--gate intent` produces.
 
@@ -1551,17 +1551,17 @@ declared at 345-350 and attached at 391-393). Level is always `note`; a
 notification arriving as a warning would push these straight back into
 the alert list they were moved out of.
 
-Pinned by tests/output-sarif.test.ts:139 (gate-deferred moved out of
-results and into the notifications), 146 (gate-excluded, the same way),
-168 (nothing said about exclusion when there was no `--gate`), 177
-(gate-not-enforced), 186 (the no-contract advisory, keeping the GATE'S
-own namespace on its descriptor id), 193 (that advisory at note level),
-207 (the message text unchanged in the move), 214 and 251 (gate-missing
-and gate-failed staying results, in both directions), 282 (the
+Pinned by tests/output-sarif.test.ts:140 (gate-deferred moved out of
+results and into the notifications), 147 (gate-excluded, the same way),
+169 (nothing said about exclusion when there was no `--gate`), 178
+(gate-not-enforced), 187 (the no-contract advisory, keeping the GATE'S
+own namespace on its descriptor id), 194 (that advisory at note level),
+208 (the message text unchanged in the move), 215 and 252 (gate-missing
+and gate-failed staying results, in both directions), 283 (the
 notification objects are shaped as SARIF 2.1.0 wants, every level is
-`note`, and the descriptor ids are declared on the driver), 920 (a
+`note`, and the descriptor ids are declared on the driver), 921 (a
 normalization diagnostic as a note-level result carrying blocking: false
-and no location) and 951 (naming the gate it came from). The remaining
+and no location) and 952 (naming the gate it came from). The remaining
 result id, `conductor/gate-output-unparseable`, is pinned end to end by
 tests/cli.test.ts:161, which runs the CLI over a gate whose output has
 drifted and finds that id among the umbrella run's RESULTS.
@@ -1630,7 +1630,7 @@ SARIF IS UNAFFECTED BY IT. `renderSarif` takes no verbosity argument at
 all (src/output-sarif.ts:660), and the format branch in the CLI passes the
 flag only to `renderText` (src/cli.ts:265-268). Pinned by
 tests/cli.test.ts:274, 286 and 294, and by
-tests/output-sarif.test.ts:523, which asserts the log is byte for byte
+tests/output-sarif.test.ts:524, which asserts the log is byte for byte
 what it was before the summary line existed, against a literal written
 out by hand rather than against whatever the renderer currently produces.
 
@@ -1761,48 +1761,48 @@ this section never claims and two that belong to the reporting section
 above:
 
 - One run per gate, in gate order, with each driver's name and version
-  from that gate: tests/output-sarif.test.ts:558 and 566.
-- A gate that never ran gets no run: tests/output-sarif.test.ts:857,
-  1049 (which also asserts the gate-missing result is still there), 1090
-  (a deferred gate), 1116 (no umbrella run when there is nothing to say)
-  and 1123 (a gate that ran and found nothing still gets one).
-- No invented version: tests/output-sarif.test.ts:573.
-- `%SRCROOT%` placement: tests/output-sarif.test.ts:747 (backslashes and
-  a leading dot-slash), 764 (an absolute path, posix and Windows, gets a
-  `file:` uri and no `uriBaseId`), 791 (an escaping path loses its
-  physical location and is kept in `unresolvablePaths`), 813 (one that
-  escapes only after the segments cancel), 825 (an inner `..` that stays
-  inside), and 839 (a secret finding loses its location entirely rather
+  from that gate: tests/output-sarif.test.ts:559 and 567.
+- A gate that never ran gets no run: tests/output-sarif.test.ts:858,
+  1050 (which also asserts the gate-missing result is still there), 1091
+  (a deferred gate), 1117 (no umbrella run when there is nothing to say)
+  and 1124 (a gate that ran and found nothing still gets one).
+- No invented version: tests/output-sarif.test.ts:574.
+- `%SRCROOT%` placement: tests/output-sarif.test.ts:748 (backslashes and
+  a leading dot-slash), 765 (an absolute path, posix and Windows, gets a
+  `file:` uri and no `uriBaseId`), 792 (an escaping path loses its
+  physical location and is kept in `unresolvablePaths`), 814 (one that
+  escapes only after the segments cancel), 826 (an inner `..` that stays
+  inside), and 840 (a secret finding loses its location entirely rather
   than keeping a region over no file). `placeArtifact` is also exercised
   directly, one rule at a time, at tests/output-sarif.test.ts:1141 to
   1203.
-- No invented region: tests/output-sarif.test.ts:708 (a real position
-  becomes a region with the 1-based column), 719 (no `startLine` anywhere
-  for a finding with no known line), 724 (a path list gets one location
-  each and no region) and 738 (a drift finding gets a logical location
+- No invented region: tests/output-sarif.test.ts:709 (a real position
+  becomes a region with the 1-based column), 720 (no `startLine` anywhere
+  for a finding with no known line), 725 (a path list gets one location
+  each and no region) and 739 (a drift finding gets a logical location
   and no file). The absent `endColumn` is pinned at the normalizer,
   tests/normalize.test.ts:170.
-- `partialFingerprints`: tests/output-sarif.test.ts:657 (keyed by product,
-  value unhashed), 666 (stability recorded beside it), 672 (omitted
-  entirely when the product mints none) and 1207 (the `/v1` key).
-- `properties.blocking` never recomputed: tests/output-sarif.test.ts:619,
+- `partialFingerprints`: tests/output-sarif.test.ts:658 (keyed by product,
+  value unhashed), 667 (stability recorded beside it), 673 (omitted
+  entirely when the product mints none) and 1208 (the `/v1` key).
+- `properties.blocking` never recomputed: tests/output-sarif.test.ts:620,
   which is the discriminating fixture and the one that matters. Every
   other fixture in that file has blocking agreeing with severity, so a
   renderer that derived blocking from the level would pass all of them;
   this one renders a BLOCKING finding at note level and asserts both. The
-  wholesale properties assertion at tests/output-sarif.test.ts:641 cannot
+  wholesale properties assertion at tests/output-sarif.test.ts:642 cannot
   stand for this claim on its own, which is exactly the gap that let the
-  regression through before 619 was written.
-- `executionSuccessful` in both directions: tests/output-sarif.test.ts:465
+  regression through before 620 was written.
+- `executionSuccessful` in both directions: tests/output-sarif.test.ts:466
   (false, with no notification to hang it on, which is the case that
-  produced no invocation at all before), 476 (true when every gate ran),
-  314 (false for a gate that could not run) and 492 (a gate's run gets no
+  produced no invocation at all before), 477 (true when every gate ran),
+  315 (false for a gate that could not run) and 493 (a gate's run gets no
   invocation of its own).
 - Enforcement recorded twice, results untouched:
-  tests/output-sarif.test.ts:1015 (present on both an enforced and an
-  unenforced run), 1025 (the stage beside it), 1035 (the notification),
-  1049 (still said for a gate with no run of its own), 970 (an unenforced
-  gate's results keep their own level) and 982 (a gate that could not run
+  tests/output-sarif.test.ts:1016 (present on both an enforced and an
+  unenforced run), 1026 (the stage beside it), 1036 (the notification),
+  1050 (still said for a gate with no run of its own), 971 (an unenforced
+  gate's results keep their own level) and 983 (a gate that could not run
   keeps an error-level, critical result).
 
 ## Blocking is reconstructed, checked against the gate, and the gate wins
