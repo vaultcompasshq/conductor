@@ -24,6 +24,19 @@
 //     no say in that; a LOCATION is a statement about which build, and the
 //     repository does.
 //
+//  1c. ON A PULL-REQUEST RUN node_modules/.bin IS NOT A LOCATION AT ALL.
+//     Rule 1b says a LOCATION is a statement about which build and the
+//     repository gets to make it. On a pull request the repository making
+//     that statement IS the pull request: what is under node_modules was
+//     chosen by the head's own manifest and lockfile, installed by a step
+//     that runs before the gates, and git has no record of those bytes at
+//     either ref. 0.3.0 let resolution take it and then refused the program,
+//     which was safe and made every ordinary pull request in a
+//     devDependency-installed repository exit 2 with three refusals. Not
+//     trying that location at all is the same safety with the gate still
+//     running, from a build the base branch pinned. The skip is never
+//     silent: the caller reports the candidate it declined.
+//
 //  2. Only a unified binary is asked for its version. `intent-guard`
 //     answers --version; a per-command binary once did not parse the flag at
 //     all and RAN THE GATE against the current directory instead, and a
@@ -40,19 +53,6 @@
 //     resolved binary is a per-command one, the unified binary of the same
 //     product is resolved separately and asked instead, and when that is not
 //     installed either the version is reported unknown rather than guessed.
-//
-//  1c. ON A PULL-REQUEST RUN node_modules/.bin IS NOT A LOCATION AT ALL.
-//     Rule 1b says a LOCATION is a statement about which build and the
-//     repository gets to make it. On a pull request the repository making
-//     that statement IS the pull request: what is under node_modules was
-//     chosen by the head's own manifest and lockfile, installed by a step
-//     that runs before the gates, and git has no record of those bytes at
-//     either ref. 0.3.0 let resolution take it and then refused the program,
-//     which was safe and made every ordinary pull request in a
-//     devDependency-installed repository exit 2 with three refusals. Not
-//     trying that location at all is the same safety with the gate still
-//     running, from a build the base branch pinned. The skip is never
-//     silent: the caller reports the candidate it declined.
 //
 //  3. There is no npx fallback. The draft proposed `npx --no-install` as a
 //     last resort, and it is dropped here on purpose: it makes what ran
