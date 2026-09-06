@@ -56,6 +56,8 @@ function result(
     skipped,
     excluded,
     findings,
+    trustBase: null,
+    proposals: [],
     summary: { blocking: 0, byProduct: {}, bySeverity: {} },
     exitCode: 1,
   };
@@ -1518,5 +1520,145 @@ describe('every result has a location, because a log with one that does not is r
     const physical = location.physicalLocation as { artifactLocation: { uri: string } };
     expect(physical.artifactLocation.uri).not.toBe('.guardrails.yaml');
     expect(physical.artifactLocation.uri).toMatch(/\./);
+  });
+});
+
+/**
+ * Pull-request mode in the published log.
+ *
+ * Both statements here are NOTIFICATIONS by the rule at the top of
+ * output-sarif.ts, and neither is a close call once the rule is applied. A
+ * proposed control change is a statement about configuration: nothing went
+ * wrong, the proposal did not take effect, and it stays true of every push to
+ * the branch until it merges, so as a result it would be a fingerprint-less
+ * alert reappearing on every run. A gate that could not be put into
+ * pull-request mode is a statement about coverage in the same shape: it is
+ * true because an older gate is installed, and stays true until somebody
+ * upgrades.
+ */
+describe('pull-request mode in the SARIF log', () => {
+  function pullRequestLog(overrides: Partial<RunResult>) {
+    return sarif({
+      ...result([outcome({ exitCode: 0, findings: [] })]),
+      trustBase: { ref: 'origin/main', policyChanged: true },
+      proposals: [
+        { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+        {
+          product: 'intent-guard',
+          role: 'intent',
+          line: 'contract changed in this pull request',
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  it('emits one notification per proposed control change, and no result', () => {
+    const log = pullRequestLog({});
+    const proposed = notificationsOf(log).filter(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/control-change-proposed'
+    );
+
+    expect(proposed).toHaveLength(2);
+    expect(umbrellaResultIds(log)).not.toContain('conductor/control-change-proposed');
+  });
+
+  it('keeps them at note level and names the gate that raised each', () => {
+    const proposed = notificationsOf(pullRequestLog({})).filter(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/control-change-proposed'
+    );
+
+    expect(proposed.map((entry) => entry.level)).toEqual(['note', 'note']);
+    const details = proposed.map(
+      (entry) => (entry.properties as Record<string, Record<string, unknown>>).details
+    );
+    expect(details[0]).toEqual({
+      product: 'conductor',
+      role: null,
+      proposal: 'policy changed in this pull request',
+      ref: 'origin/main',
+    });
+    expect(details[1].product).toBe('intent-guard');
+    expect(details[1].role).toBe('intent');
+  });
+
+  it('says in the message that the proposal did NOT take effect', () => {
+    const first = notificationsOf(pullRequestLog({})).find(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/control-change-proposed'
+    );
+
+    expect(String((first?.message as Record<string, unknown>).text)).toMatch(
+      /did NOT take effect for this run/
+    );
+    expect(String((first?.message as Record<string, unknown>).text)).toMatch(/origin\/main/);
+  });
+
+  it('declares the descriptor beside the rules, so the reference resolves', () => {
+    const umbrella = pullRequestLog({}).runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+    const declared = (
+      (umbrella?.tool as Record<string, Record<string, unknown>>).driver.notifications as Array<
+        Record<string, unknown>
+      >
+    ).map((entry) => entry.id);
+
+    expect(declared).toContain('conductor/control-change-proposed');
+  });
+
+  it('puts the ref on the umbrella run, so an ordinary run is distinguishable', () => {
+    const umbrella = pullRequestLog({}).runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+
+    expect((umbrella?.properties as Record<string, unknown>).trustBase).toEqual({
+      ref: 'origin/main',
+      policyChanged: true,
+    });
+  });
+
+  it('emits a notification for a gate that was NOT put into pull-request mode', () => {
+    const log = pullRequestLog({
+      proposals: [],
+      gates: [
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: '1.3.1',
+          exitCode: 0,
+          trustBase: {
+            ref: 'origin/main',
+            withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+            proposals: [],
+          },
+        }),
+      ],
+    });
+
+    const withheld = notificationsOf(log).find(
+      (entry) =>
+        (entry.descriptor as Record<string, unknown>).id === 'conductor/trust-base-not-passed'
+    );
+
+    expect(withheld).toBeDefined();
+    expect(String((withheld?.message as Record<string, unknown>).text)).toMatch(
+      /read its own control inputs from the tree being judged/
+    );
+    const details = (withheld?.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.product).toBe('intent-guard');
+    expect(details.productVersion).toBe('1.3.1');
+    expect(details.ref).toBe('origin/main');
+  });
+
+  it('says nothing about any of it on an ordinary run', () => {
+    const ids = notificationsOf(sarif(THREE_GATES)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+
+    expect(ids).not.toContain('conductor/control-change-proposed');
+    expect(ids).not.toContain('conductor/trust-base-not-passed');
   });
 });

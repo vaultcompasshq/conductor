@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runGate } from '../src/gate-runner.js';
+import { decideTrustBase, runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
 import { stubGate } from './helpers/stub-gate.js';
 
@@ -240,5 +240,192 @@ describe('running one gate', () => {
     });
 
     expect(readFileSync(log, 'utf8').trim()).toBe('check --project . --staged --json');
+  });
+});
+
+/**
+ * The capability gate on --trust-base.
+ *
+ * Two failures are possible here and they are opposite, which is why the
+ * decision is its own function rather than a condition inside gateArgs.
+ * Handing the flag to a gate that does not parse it makes that gate exit
+ * non-zero with no JSON, which the umbrella correctly reports as
+ * could-not-run: a wrong guess turns a working repository's pull requests
+ * red. WITHHOLDING it silently leaves that gate reading its own control
+ * inputs out of the tree under judgment, which is the hole pull-request mode
+ * exists to close. So every withholding carries a reason, and the reason is
+ * printed and put in the log.
+ */
+describe('deciding whether a gate can be put into pull-request mode', () => {
+  const intentGate = gate({ role: 'intent', product: 'intent-guard' });
+  const nativeIntent = {
+    projectDir: '.',
+    paths: ['a.ts'],
+    contractSource: { kind: 'native' as const, path: '.intent-guard/intent-contract.yaml' },
+    baseRef: 'origin/main',
+    baseSource: 'flag' as const,
+    cleanup: () => undefined,
+  };
+
+  it('says nothing at all when the run is not in pull-request mode', () => {
+    expect(decideTrustBase(intentGate, nativeIntent, undefined, '1.4.0')).toBeUndefined();
+  });
+
+  it('passes the flag to an intent-guard at the version it arrived in', () => {
+    expect(decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.4.0')).toEqual({
+      ref: 'origin/main',
+      withheld: null,
+      proposals: [],
+    });
+  });
+
+  it('withholds it from an intent-guard below that version, and says which', () => {
+    const decision = decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.3.1');
+    expect(decision?.withheld).toMatch(/1\.3\.1 does not understand --trust-base/);
+    expect(decision?.withheld).toMatch(/1\.4\.0/);
+    expect(decision?.withheld).toMatch(/tree being judged/);
+  });
+
+  it('withholds it when the version could not be read at all', () => {
+    const decision = decideTrustBase(intentGate, nativeIntent, 'origin/main', null);
+    expect(decision?.withheld).toMatch(/reported no version/);
+  });
+
+  it('withholds it from the two gates that have no pull-request mode yet', () => {
+    for (const [role, product] of [
+      ['dependencies', 'dep-guard'],
+      ['secrets', 'vault-guard'],
+    ] as const) {
+      const decision = decideTrustBase(
+        gate({ role, product }),
+        undefined,
+        'origin/main',
+        '9.9.9'
+      );
+      expect(decision?.withheld).toMatch(new RegExp(`${product} has no pull-request mode yet`));
+    }
+  });
+
+  it('withholds it when the contract was imported into a temporary directory', () => {
+    // The flag names a git ref and the gate resolves it against its own
+    // --project. On an imported run that directory is one the umbrella made,
+    // holding a contract and nothing else, with no repository in it: the
+    // child would exit 2 on a ref it could not resolve.
+    const decision = decideTrustBase(
+      intentGate,
+      {
+        ...nativeIntent,
+        projectDir: '/tmp/conductor-intent-abc',
+        contractSource: { kind: 'imported', spec: 'docs/spec.md', plan: null },
+      },
+      'origin/main',
+      '1.4.0'
+    );
+    expect(decision?.withheld).toMatch(/temporary directory with no repository in it/);
+  });
+
+  it('passes it on a plain run with no prepared contract, where --project is the repository', () => {
+    expect(decideTrustBase(intentGate, undefined, 'origin/main', '1.4.0')?.withheld).toBeNull();
+  });
+});
+
+describe('the trust base on the command line and on the outcome', () => {
+  const CLEAN_INTENT = JSON.stringify({
+    status: 'ok',
+    exitCode: 0,
+    reasons: [],
+    contractFound: true,
+    contractFrozen: true,
+    trustBase: {
+      ref: 'origin/main',
+      proposals: ['contract changed in this pull request'],
+      contractChanged: true,
+      configChanged: false,
+      baseContractFound: true,
+      selfApproval: false,
+      contractShapeChange: null,
+    },
+  });
+
+  it('writes --trust-base for a gate at the floor, and carries what it proposed', () => {
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT, argvLog: log, version: '1.4.0' });
+
+    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(readFileSync(log, 'utf8').trim()).toBe(
+      'check --project . --staged --trust-base origin/main --json'
+    );
+    expect(outcome.trustBase).toEqual({
+      ref: 'origin/main',
+      withheld: null,
+      proposals: ['contract changed in this pull request'],
+    });
+  });
+
+  it('writes no such flag for a gate below the floor, and says so on the outcome', () => {
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'intent-guard', {
+      stdout: '{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}',
+      argvLog: log,
+      version: '1.3.1',
+    });
+
+    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(readFileSync(log, 'utf8').trim()).toBe('check --project . --staged --json');
+    expect(outcome.trustBase?.withheld).toMatch(/1\.3\.1/);
+    expect(outcome.couldNotRun).toBeNull();
+  });
+
+  it('keeps the withheld reason rather than replacing it with an empty proposal list', () => {
+    // A gate that was not in pull-request mode reports no proposals. Reading
+    // that as "nothing was proposed" would let the loudest fact in the log,
+    // that this gate read its own rules out of the tree being judged, be
+    // replaced by silence.
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', {
+      stdout: '{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}',
+      version: '1.3.1',
+    });
+
+    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
+      repoRoot: tempDir(),
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(outcome.trustBase?.withheld).not.toBeNull();
+    expect(outcome.trustBase?.proposals).toEqual([]);
+  });
+
+  it('carries the decision on a gate that could not run at all', () => {
+    // Which contract a gate WOULD have judged against is exactly as
+    // interesting when it broke as when it did not.
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: 'not json', exit: 1, version: '1.4.0' });
+
+    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
+      repoRoot: tempDir(),
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(outcome.couldNotRun?.reason).toBe('unparseable-output');
+    expect(outcome.trustBase).toEqual({ ref: 'origin/main', withheld: null, proposals: [] });
   });
 });

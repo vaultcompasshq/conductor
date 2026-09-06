@@ -439,12 +439,44 @@ export function classifyGateStateReason(reason: string): GateStateReasonKind | n
   return null;
 }
 
+/**
+ * The pull-request-mode summary intent-guard 1.4.0 puts on its check output,
+ * or undefined when the run was not in pull-request mode.
+ *
+ * ABSENCE IS THE SIGNAL, and it is the gate's own: the field is present only
+ * on a run that was given `--trust-base`, so an ordinary run has nothing here
+ * and no report has to guess. Validated element by element like everything
+ * else, because a malformed proposal reaching String() would put
+ * "[object Object]" on the one line a reviewer reads.
+ *
+ * The proposal SENTENCES are the gate's, carried verbatim and never
+ * rewritten. Every one of them is a claim about that gate's own control
+ * files, which the umbrella does not read and has no standing to describe.
+ */
+function readTrustBase(
+  raw: unknown,
+  product: string
+): NormalizedGateOutput['trustBase'] | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const record = needRecord(raw, product, 'trustBase');
+  return {
+    ref: needString(record.ref, product, 'trustBase.ref'),
+    proposals:
+      record.proposals === undefined
+        ? []
+        : needStringArray(record.proposals, product, 'trustBase.proposals'),
+  };
+}
+
 export function normalizeIntentGuard(raw: unknown, version: string | null): NormalizedGateOutput {
   const product = 'intent-guard';
   const root = needRecord(raw, product, 'the output');
   if (root.status !== 'blocked' && root.status !== 'ok') {
     fail(product, 'status', 'either "ok" or "blocked"');
   }
+  const trustBase = readTrustBase(root.trustBase, product);
 
   const findings: Finding[] = [];
   const budget = root.budget === undefined ? undefined : needRecord(root.budget, product, 'budget');
@@ -605,6 +637,7 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
 
   return {
     findings,
+    ...(trustBase === undefined ? {} : { trustBase }),
     run: {
       // intent-guard has no threshold flag and no reported threshold: its
       // drift thresholds live in its own config file and its budget rules

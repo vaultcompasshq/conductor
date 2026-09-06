@@ -127,6 +127,22 @@ export interface NormalizedGateOutput {
   run: RunSummary;
   /** Problems with the normalization itself, not with the scanned code. */
   diagnostics: Diagnostic[];
+  /**
+   * What the gate said about pull-request mode, when it was in it.
+   *
+   * NOT findings, and deliberately not folded into `run.details`. A proposed
+   * control change is a statement about the configuration this pull request
+   * would like to have, so it must never reach a severity, a fingerprint, a
+   * blocking count or an exit code; it is summed by the umbrella and printed
+   * as one sentence. `run.details` is rendered as loose scalars in the text
+   * report, which would scatter these across a line instead.
+   */
+  trustBase?: {
+    /** The ref that gate took its control inputs from, as it reported it. */
+    ref: string;
+    /** One line per control input the head proposes to change. */
+    proposals: string[];
+  };
 }
 
 export class NormalizeError extends Error {

@@ -56,6 +56,8 @@ function result(
     skipped,
     excluded,
     findings,
+    trustBase: null,
+    proposals: [],
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
       byProduct: {},
@@ -866,5 +868,142 @@ describe('the clean summary makes suppression visible', () => {
     expect(text).not.toMatch(/ignored/);
     // Still one line.
     expect(text.trimEnd().split('\n')).toHaveLength(1);
+  });
+});
+
+/**
+ * Pull-request mode in the text report.
+ *
+ * The clean one-line summary is the half that matters most, and it is easy to
+ * get wrong by leaving it to the full report: a pull request that proposes to
+ * switch a gate off and carries nothing else produces a CLEAN run, so the
+ * one line a hook and a pull request comment print is the only place the
+ * attempt is ever seen.
+ */
+describe('pull-request mode in the text report', () => {
+  const cleanIntent = {
+    failOn: null,
+    suppressed: 0,
+    ignored: 0,
+    diagnostics: [],
+    details: {},
+  };
+
+  function pullRequest(overrides: Partial<RunResult>): RunResult {
+    return {
+      ...result([outcome({ exitCode: 0, run: { ...cleanIntent, failOn: 'medium' } })], 0),
+      trustBase: { ref: 'origin/main', policyChanged: false },
+      proposals: [],
+      ...overrides,
+    };
+  }
+
+  it('counts the proposals on the one line a clean run prints, even at zero', () => {
+    const text = renderText(pullRequest({}));
+
+    expect(text).toMatch(/Rules from origin\/main\./);
+    expect(text).toMatch(/0 control change\(s\) proposed in this pull request\./);
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('says nothing about any of it outside pull-request mode', () => {
+    const text = renderText(
+      result([outcome({ exitCode: 0, run: { ...cleanIntent, failOn: 'medium' } })], 0)
+    );
+
+    expect(text).not.toMatch(/control change/);
+    expect(text).not.toMatch(/Rules from/);
+  });
+
+  it('counts a policy change and a gate change together on the summary line', () => {
+    const text = renderText(
+      pullRequest({
+        proposals: [
+          { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+          {
+            product: 'intent-guard',
+            role: 'intent',
+            line: 'contract changed in this pull request',
+          },
+        ],
+        trustBase: { ref: 'origin/main', policyChanged: true },
+      })
+    );
+
+    expect(text).toMatch(/2 control change\(s\) proposed in this pull request\./);
+  });
+
+  it('prints one line per proposal in the full report, the policy line first', () => {
+    const text = renderText(
+      pullRequest({
+        proposals: [
+          { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+          {
+            product: 'intent-guard',
+            role: 'intent',
+            line: 'contract changed in this pull request',
+          },
+        ],
+        trustBase: { ref: 'origin/main', policyChanged: true },
+      }),
+      { verbose: true }
+    );
+
+    const lines = text.split('\n').filter((line) => line.trim().startsWith('proposed'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/conductor\s+policy changed in this pull request/);
+    expect(lines[1]).toMatch(/intent-guard\s+contract changed in this pull request/);
+    expect(text).toMatch(/pull-request mode: rules from origin\/main/);
+  });
+
+  it('names a gate that was NOT put into pull-request mode, on the clean line too', () => {
+    // The loudest fact this report can carry: that gate read its own control
+    // inputs out of the tree being judged. A clean run must not hide it.
+    const text = renderText(
+      pullRequest({
+        gates: [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.3.1',
+            exitCode: 0,
+            run: { ...cleanIntent, failOn: 'medium' },
+            trustBase: {
+              ref: 'origin/main',
+              withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              proposals: [],
+            },
+          }),
+        ],
+      })
+    );
+
+    expect(text).toMatch(/1 gate\(s\) NOT in pull-request mode: intent \(intent-guard\)\./);
+  });
+
+  it('says why in the full report, in the gate own words', () => {
+    const text = renderText(
+      pullRequest({
+        gates: [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.3.1',
+            exitCode: 0,
+            run: { ...cleanIntent, failOn: 'medium' },
+            trustBase: {
+              ref: 'origin/main',
+              withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              proposals: [],
+            },
+          }),
+        ],
+      }),
+      { verbose: true }
+    );
+
+    expect(text).toMatch(
+      /NOT in pull-request mode\s+intent\s+intent-guard\s+intent-guard 1\.3\.1 does not understand/
+    );
   });
 });

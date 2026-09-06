@@ -864,3 +864,275 @@ describe('the pull_request ambient environment', () => {
     }
   });
 });
+
+/**
+ * Pull-request mode, driven through the real CLI against a real repository.
+ *
+ * The attack is reproduced rather than described. The feature branch does in
+ * one commit exactly what the design document says a pull request can do
+ * today: it rewrites `.guardrails.yaml` to point the secrets gate's
+ * `command:` at a script the same commit adds, and switches the dependency
+ * gate off. The script writes a marker file, so "did the attacker's code run"
+ * is answered by looking on disk rather than by reading a command line.
+ */
+describe('pull-request mode through the CLI', () => {
+  const BASE_POLICY = [
+    'version: 1',
+    'gates:',
+    '  dependencies:',
+    '    product: dep-guard',
+    '  secrets:',
+    '    product: vault-guard',
+    '',
+  ].join('\n');
+
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  interface Attack {
+    repo: string;
+    bin: string;
+    marker: string;
+  }
+
+  /**
+   * A repository whose base branch carries an honest policy and whose head
+   * commit carries the rewritten one, plus the script that rewrite points at.
+   */
+  function attackRepo(options: { headPolicy?: string; basePolicy?: string | null } = {}): Attack {
+    const repo = tempDir();
+    const bin = tempDir();
+    const marker = path.join(tempDir(), 'attacker-ran.txt');
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+
+    const basePolicy = options.basePolicy === undefined ? BASE_POLICY : options.basePolicy;
+    if (basePolicy !== null) {
+      writeFileSync(path.join(repo, '.guardrails.yaml'), basePolicy);
+    }
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base']);
+
+    // The attacker's own gate: a script the pull request adds, which the
+    // pull request's own policy file points the secrets gate at. It prints
+    // clean JSON so a run that obeys it looks like a run that found nothing.
+    const attacker = path.join(repo, 'tools', 'nice-gate.sh');
+    mkdirSync(path.dirname(attacker), { recursive: true });
+    writeFileSync(
+      attacker,
+      [
+        '#!/bin/sh',
+        `printf 'ran\\n' > ${JSON.stringify(marker)}`,
+        `echo ${JSON.stringify(CLEAN_VAULT_GUARD)}`,
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(attacker, 0o755);
+
+    const headPolicy =
+      options.headPolicy ??
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '    enabled: false',
+        '  secrets:',
+        '    product: vault-guard',
+        `    command: ${attacker}`,
+        '    args: []',
+        '',
+      ].join('\n');
+    writeFileSync(path.join(repo, '.guardrails.yaml'), headPolicy);
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 2;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+
+    return { repo, bin, marker };
+  }
+
+  it('runs the attacker script when there is no trust base, which is the hole', () => {
+    // The before half of the reproduction. Without this the after half proves
+    // only that a script did not run, which is also true of a script that was
+    // never runnable.
+    const { repo, bin, marker } = attackRepo();
+
+    const result = runCli(repo, ['run', '--staged'], bin);
+
+    expect(existsSync(marker)).toBe(true);
+    expect(result.stdout).not.toMatch(/dep-guard/);
+  });
+
+  it('takes the policy from the base ref, so the attacker script never runs', () => {
+    const { repo, bin, marker } = attackRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base', '--verbose'], bin);
+
+    expect(existsSync(marker)).toBe(false);
+    // The base policy's own gates ran, including the one the head disabled.
+    expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
+    expect(result.stdout).toMatch(/secrets\s+vault-guard/);
+    expect(result.stdout).toMatch(/policy changed in this pull request/);
+  });
+
+  it('reports the policy change on the one-line summary of a clean run', () => {
+    const { repo, bin } = attackRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+    expect(result.stdout.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('reports a proposal when only an option changed, with no gate added or removed', () => {
+    const { repo, bin } = attackRepo({
+      headPolicy: [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '    options:',
+        '      fail-on: none',
+        '',
+      ].join('\n'),
+    });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+  });
+
+  it('reports no proposal when the head policy only differs in formatting', () => {
+    const { repo, bin } = attackRepo({
+      headPolicy:
+        '# a comment the base did not have\n' +
+        "version: 1\ngates: { dependencies: { product: 'dep-guard' }, secrets: { product: vault-guard } }\n",
+    });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.stdout).toMatch(/0 control change\(s\) proposed in this pull request\./);
+  });
+
+  it('fails closed on a base ref that does not resolve: every enabled gate, exit 2', () => {
+    const { repo, bin, marker } = attackRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'origin/nope'], bin);
+
+    expect(result.status).toBe(2);
+    expect(existsSync(marker)).toBe(false);
+    expect(result.stdout).toMatch(/does not resolve to a commit/);
+    expect(result.stdout).toMatch(/origin\/nope/);
+    // Both gates the head policy names are reported as not having run. The
+    // head's file is an inventory here and nothing else: it cannot lower the
+    // exit code, and enabled: false on the dependency gate in it is why only
+    // the secrets gate would be named if it could.
+    expect(result.stdout).toMatch(/DID NOT RUN \(preparation-failed\)/);
+    expect(result.stdout).toMatch(/verdict: exit 2/);
+  });
+
+  it('refuses a trust base that is the head commit', () => {
+    const { repo, bin } = attackRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'HEAD'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/the same commit as HEAD/);
+  });
+
+  it('exits 2 when the base ref carries no policy, and says the head one is a proposal', () => {
+    const { repo, bin, marker } = attackRepo({ basePolicy: null });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.status).toBe(2);
+    expect(existsSync(marker)).toBe(false);
+    expect(result.stderr).toMatch(/No \.guardrails\.yaml on "base"/);
+    expect(result.stderr).toMatch(/is a proposal/);
+    expect(result.stderr).toMatch(/once it is on the base branch/);
+  });
+
+  it('runs from the base policy even when the head deleted the policy file', () => {
+    const { repo, bin } = attackRepo({
+      headPolicy: 'version: 1\ngates:\n  secrets:\n    product: vault-guard\n',
+    });
+    // The working tree has none at all, which is the state a pull request
+    // that deletes the file leaves behind on a checkout of its own head.
+    rmSync(path.join(repo, '.guardrails.yaml'));
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/2 gate\(s\) ran/);
+  });
+
+  it('refuses a policy key that would write the trust-base flag a second time', () => {
+    const { repo, bin } = attackRepo({
+      basePolicy: [
+        'version: 1',
+        'gates:',
+        '  intent:',
+        '    product: intent-guard',
+        '    options:',
+        '      trust-base: HEAD',
+        '',
+      ].join('\n'),
+      headPolicy: 'version: 1\ngates:\n  secrets:\n    product: vault-guard\n',
+    });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/"trust-base" under gates\.intent\.options is reserved/);
+    expect(result.stderr).toMatch(/where a gate reads its rules from/);
+  });
+});
+
+/**
+ * intent-guard's refused state directory, which is exit 1 with no JSON.
+ *
+ * The gate raises StateDirError for a `.intent-guard` that is a symlink, and
+ * its own convention prints one line and exits 1 rather than 2, because 2 is
+ * reserved there for a config or a ref it could not read. From the umbrella's
+ * side that is a gate which "exited 1 with nothing parseable on stdout",
+ * which is the reliable signature of a rejected configuration and must be
+ * classified as COULD-NOT-RUN. Reading it as a blocked gate would tell a user
+ * their code drifted from a contract nobody read.
+ */
+describe('a gate that refuses its own state directory', () => {
+  const SYMLINK_REFUSAL =
+    'Intent Guard needs .intent-guard to be a real directory, but it is a symlink. ' +
+    'Replace the link with a real directory.';
+
+  it('is could-not-run and exit 2, never a drift verdict', () => {
+    const repo = repoWithPolicy(
+      ['version: 1', 'gates:', '  intent:', '    product: intent-guard', ''].join('\n')
+    );
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: '', stderr: SYMLINK_REFUSAL, exit: 1 });
+
+    const result = runCli(repo, ['run', '--staged'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/DID NOT RUN \(unparseable-output\)/);
+    expect(result.stdout).toMatch(/conductor\/gate-output-unparseable/);
+    // The gate's own sentence survives into the report, which is the only
+    // place a reader learns the fix is on disk rather than in their diff.
+    expect(result.stdout).toMatch(/it is a symlink/);
+    expect(result.stdout).not.toMatch(/drift/);
+  });
+});

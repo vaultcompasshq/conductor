@@ -109,7 +109,15 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   // sends intent-guard looking for git THERE, and the run exits 2 blaming git
   // for a line in the policy file. Rejecting the key at load time is the only
   // place that failure can be explained by the thing that caused it.
-  'intent-guard': ['json', 'staged', 'project', 'paths', 'base'],
+  // `trust-base` is written by the umbrella on a pull-request run, and only
+  // there. It is reserved unconditionally rather than only in that mode,
+  // because a policy file is a standing document: a key that is accepted on a
+  // push build and rejected on a pull request would be a policy file that
+  // parses on one event and not the other, which is the worst place to find
+  // out. It is also the one flag where two writers would be a security
+  // problem rather than a confusion, since the loser decides where the gate
+  // reads its rules from.
+  'intent-guard': ['json', 'staged', 'project', 'paths', 'base', 'trust-base'],
 };
 
 export type OptionValue = string | number | boolean | Array<string | number>;
@@ -222,6 +230,14 @@ function describeErrors(errors: ValidateFunction['errors'], source: string): str
  * so a fourth cannot be added without saying why.
  */
 function reservedReason(product: Product, key: string): string {
+  if (key === 'trust-base') {
+    return (
+      'That flag says where a gate reads its rules from, and on a pull-request run the umbrella ' +
+      'writes it itself, pointing at the base ref it read its own policy from. A value here ' +
+      'would be a second writer of the flag that decides the trust boundary, set in the file ' +
+      "the pull request controls. Use the umbrella own --trust-base instead."
+    );
+  }
   if (product === 'intent-guard' && key === 'base') {
     return (
       'The umbrella works the changed-path set out itself and passes --paths, because ' +

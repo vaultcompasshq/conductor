@@ -308,6 +308,12 @@ describe('the reserved option list against the flags the umbrella writes', () =>
       gateArgs(gate, false, undefined),
       gateArgs(gate, true, intent),
       gateArgs(gate, false, { ...intent, paths: null }),
+      // Pull-request mode, in both shapes it can take. Without these the
+      // derived direction below would not cover --trust-base at all, and a
+      // policy file could write the flag that decides where a gate reads its
+      // rules from, with the winner settled by that CLI argument parser.
+      gateArgs(gate, false, undefined, 'origin/main'),
+      gateArgs(gate, false, intent, 'origin/main'),
     ];
     const flags = new Set<string>();
     for (const argv of runs) {

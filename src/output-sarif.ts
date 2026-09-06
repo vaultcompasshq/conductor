@@ -652,6 +652,80 @@ function skippedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The control inputs this pull request proposes to change, as notifications.
+ *
+ * A NOTIFICATION and never a result, decided by the rule at
+ * skippedNotifications below rather than by a fresh judgment. A proposed
+ * control change is a statement about CONFIGURATION in the purest form that
+ * rule describes: nothing went wrong, nobody's code is at fault, the
+ * proposal did not take effect, and it is true of every run of this pull
+ * request until it merges or the file is reverted. As a result it would be a
+ * fingerprint-less alert reappearing on every push to the branch, which is
+ * how a code scanning tab becomes something nobody reads.
+ *
+ * The id is the UMBRELLA'S, even for a line a gate wrote, and that is a
+ * deliberate departure from skippedNotifications, which uses the gate's
+ * namespace. The statement here is the umbrella's summing: it is the one
+ * place a reviewer sees that a pull request tried to change three gates'
+ * rules at once, which is the sentence the whole wave exists to produce. The
+ * gate that raised each line is in the details.
+ */
+function proposalNotifications(result: RunResult): Notification[] {
+  return result.proposals.map((proposal) => ({
+    id: 'conductor/control-change-proposed',
+    message:
+      `This pull request proposes a control change that did NOT take effect for this run: ` +
+      `${proposal.line} (${proposal.product}). The rules came from ` +
+      `${result.trustBase?.ref ?? 'the base ref'}; the proposed change decides what runs once ` +
+      'it is on the base branch.',
+    details: {
+      product: proposal.product,
+      role: proposal.role,
+      proposal: proposal.line,
+      ref: result.trustBase?.ref ?? null,
+    },
+  }));
+}
+
+/**
+ * The gates the umbrella could not put into pull-request mode.
+ *
+ * The loud half of the same mode, and by the discriminator below it is a
+ * close call that lands on notification: nothing went wrong with the run, and
+ * the fact is true of the configuration (an older gate is installed) rather
+ * than of this change, so it is identical on every run until somebody
+ * upgrades. What it says is how much of the pull-request boundary this run
+ * actually had, which is a coverage statement.
+ *
+ * It is still the most important notification in the log. A gate here read
+ * its own control inputs out of the tree under judgment.
+ */
+function trustBaseWithheldNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) => {
+    const withheld = gate.trustBase?.withheld;
+    if (withheld === undefined || withheld === null) {
+      return [];
+    }
+    return [
+      {
+        id: 'conductor/trust-base-not-passed',
+        message:
+          `The ${gate.role} gate (${gate.product}) did NOT run in pull-request mode, so it read ` +
+          `its own control inputs from the tree being judged rather than from ` +
+          `${gate.trustBase?.ref ?? 'the base ref'}. ${withheld}`,
+        details: {
+          role: gate.role,
+          product: gate.product,
+          productVersion: gate.productVersion,
+          ref: gate.trustBase?.ref ?? null,
+          reason: withheld,
+        },
+      },
+    ];
+  });
+}
+
+/**
  * The gates the policy file told not to decide anything, as notifications.
  *
  * These are written in TWO places on purpose, and neither one is redundant:
@@ -770,6 +844,8 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),
+    ...proposalNotifications(result),
+    ...trustBaseWithheldNotifications(result),
   ];
 
   // Notifications earn the run on their own. Before this, the umbrella run
@@ -778,14 +854,26 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
   // that did not run there.
   if (umbrellaFindings.length > 0 || notifications.length > 0) {
     runs.push(
-      makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings, POLICY_FILE_NAME, undefined, {
-        // A claim about whether the analysis completed, taken from the gates
-        // rather than from the exit code: an unenforced gate that could not
-        // run leaves the run at exit 0, and nothing was checked by it either
-        // way. Written whenever this run is written, in both directions.
-        executionSuccessful: result.gates.every((gate) => gate.couldNotRun === null),
-        notifications,
-      })
+      makeRun(
+        UMBRELLA_DRIVER_NAME,
+        umbrellaVersion,
+        umbrellaFindings,
+        POLICY_FILE_NAME,
+        // On the umbrella's run rather than on any gate's, because it is a
+        // fact about the whole run: every gate that could take the flag was
+        // handed this same ref. A consumer reading only the log can then tell
+        // a pull-request run from an ordinary one without parsing sentences.
+        result.trustBase === null ? undefined : { trustBase: result.trustBase },
+        {
+          // A claim about whether the analysis completed, taken from the
+          // gates rather than from the exit code: an unenforced gate that
+          // could not run leaves the run at exit 0, and nothing was checked
+          // by it either way. Written whenever this run is written, in both
+          // directions.
+          executionSuccessful: result.gates.every((gate) => gate.couldNotRun === null),
+          notifications,
+        }
+      )
     );
   }
 

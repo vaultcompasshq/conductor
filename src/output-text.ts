@@ -289,6 +289,58 @@ function excludedLines(result: RunResult): string[] {
 }
 
 /**
+ * The one sentence the whole of pull-request mode has to fit into.
+ *
+ * Counted even at ZERO, by the family suppression rule: the number is the
+ * answer to "did this pull request also try to change the rules", and leaving
+ * it out when the answer is none makes a run in pull-request mode
+ * indistinguishable from a run that was never in it.
+ */
+function proposalCount(result: RunResult): string {
+  return `${result.proposals.length} control change(s) proposed in this pull request`;
+}
+
+/**
+ * The gates the umbrella could not put into pull-request mode.
+ *
+ * This is the loud half and it must never be silent. A gate here read its own
+ * contract, config or baseline out of the tree being judged, which is exactly
+ * the hole pull-request mode exists to close, so a run where one gate is
+ * still exposed must not read like a run where none is. It is a statement
+ * about coverage rather than about anybody's code, so it is a line and a
+ * notification rather than a finding, and it never reaches the exit code.
+ */
+function withheldTrustBase(result: RunResult): Array<{ gate: GateOutcome; reason: string }> {
+  return result.gates.flatMap((gate) => {
+    const reason = gate.trustBase?.withheld;
+    return reason === undefined || reason === null ? [] : [{ gate, reason }];
+  });
+}
+
+/**
+ * The pull-request-mode block of the full report.
+ *
+ * Three things in one place, because they answer one question between them:
+ * where the rules came from, what this pull request proposes to change them
+ * to, and which gates were not covered by any of it.
+ */
+function trustBaseLines(result: RunResult): string[] {
+  if (result.trustBase === null) {
+    return [];
+  }
+  const lines = [
+    `  pull-request mode: rules from ${result.trustBase.ref}. ${proposalCount(result)}.`,
+  ];
+  for (const proposal of result.proposals) {
+    lines.push(`  proposed  ${proposal.product.padEnd(13)} ${proposal.line}`);
+  }
+  for (const { gate, reason } of withheldTrustBase(result)) {
+    lines.push(`  NOT in pull-request mode  ${gate.role}  ${gate.product}  ${reason}`);
+  }
+  return lines;
+}
+
+/**
  * What an unenforced gate did, as clauses for a verdict line.
  *
  * Shared by the exit 0 and exit 1 branches: an unenforced gate is left out
@@ -592,6 +644,20 @@ function summaryLine(result: RunResult): string {
       : `${suppressed} suppressed across all gates.`
   );
 
+  // Pull-request mode, on the one line a hook and a pull request comment
+  // actually print. A clean run is exactly where this matters most: a pull
+  // request that proposes to switch a gate off and carries nothing else
+  // produces a clean report, and without this clause the only trace of the
+  // attempt would be in a file nobody re-reads.
+  if (result.trustBase !== null) {
+    parts.push(`Rules from ${result.trustBase.ref}. ${proposalCount(result)}.`);
+    const withheld = withheldTrustBase(result);
+    if (withheld.length > 0) {
+      const names = withheld.map(({ gate }) => `${gate.role} (${gate.product})`).join(', ');
+      parts.push(`${withheld.length} gate(s) NOT in pull-request mode: ${names}.`);
+    }
+  }
+
   parts.push('Re-run with --verbose for the full report.');
   return parts.join(' ');
 }
@@ -620,6 +686,11 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   const aside = [...deferredLines(result), ...skippedLines(result), ...excludedLines(result)];
   if (aside.length > 0) {
     lines.push('', ...aside);
+  }
+
+  const trust = trustBaseLines(result);
+  if (trust.length > 0) {
+    lines.push('', ...trust);
   }
 
   // A derived severity is marked with a trailing asterisk above; say what
