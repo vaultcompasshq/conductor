@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
-  mkdirSync,
+  mkdirSync, symlinkSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -2050,5 +2050,320 @@ describe('hook managers that keep the hook text in package.json', () => {
     for (const fixture of ['yorkie-2.0.0-pre-commit.sh', 'yorkie-1.0.2-pre-commit.sh']) {
       expect(capturedHook(fixture)).toMatch(/pre-commit \|\| \{[\s\S]*exit 1/);
     }
+  });
+});
+
+// The manifest is committed to the repository, so it is untrusted input: a
+// person who can land a commit can put any path in it. Before this fix, revert
+// resolved none of those paths against the repository, so a crafted manifest
+// could make revert delete a file anywhere on disk, or write an executable one
+// anywhere, and exit 0. Both were reproduced against the built CLI. Every path
+// a manifest names is now contained to the repository before any write or
+// delete.
+describe('a crafted manifest cannot escape the repository', () => {
+  const digest = (content: string): string =>
+    createHash('sha256').update(content).digest('hex');
+
+  function writeManifest(repo: string, manifest: unknown): void {
+    mkdirSync(path.join(repo, '.guardrails'), { recursive: true });
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+  }
+
+  it('refuses to delete a file an absolute path in files[] points outside the repo', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'precious.txt');
+    writeFileSync(outside, 'not the umbrella\n');
+    writeManifest(repo, {
+      version: 1,
+      files: [{ path: outside, sha256: digest('not the umbrella\n'), kind: 'policy' }],
+      adopted: null,
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    const conflict = result.conflicts.find(
+      (c) => c.reason === 'manifest-path-outside-repository'
+    );
+    expect(conflict?.guidance).toContain(outside);
+    // The file it was aimed at is untouched, and nothing was removed.
+    expect(existsSync(outside)).toBe(true);
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+  });
+
+  it('refuses a files[] entry that climbs out with ../ segments, and removes nothing', () => {
+    const repo = gitRepo();
+    writeManifest(repo, {
+      version: 1,
+      files: [{ path: '../../precious.txt', sha256: digest('x'), kind: 'policy' }],
+      adopted: null,
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+    // The manifest itself is left in place: nothing was acted on.
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+  });
+
+  it('refuses to write an adopted hook an escaping adopted.path points outside the repo', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'pwned.sh');
+    // A hook entry at a path that does not exist is classified 'gone', which
+    // is what satisfies umbrellaHookGone and drives the adopted-hook restore.
+    writeManifest(repo, {
+      version: 1,
+      files: [
+        { path: path.join(repo, '.git', 'hooks', 'pre-commit'), sha256: digest('x'), kind: 'hook' },
+      ],
+      adopted: { path: outside, content: '#!/bin/sh\necho pwned\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    const conflict = result.conflicts.find(
+      (c) => c.reason === 'manifest-path-outside-repository'
+    );
+    expect(conflict?.guidance).toContain(outside);
+    // Nothing was written where it was aimed, and no restore was reported.
+    expect(existsSync(outside)).toBe(false);
+    expect(result.actions.map((action) => action.kind)).not.toContain('restore');
+  });
+
+  it('still reverts an ordinary in-repo manifest', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('refuses an applyInit whose write path escapes the repository, and writes nothing', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'apply-escape.txt');
+    const plan = {
+      ok: true,
+      dryRun: false,
+      alreadyInstalled: false,
+      actions: [],
+      conflicts: [],
+      hookPath: '',
+      hookManager: 'native' as const,
+      repoRoot: repo,
+      adoptedFrom: null,
+      writes: [{ path: outside, content: 'not ours\n', executable: false, kind: 'policy' as const }],
+      records: [],
+    };
+
+    const result = applyInit(plan, { cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(existsSync(outside)).toBe(false);
+  });
+});
+
+// The CLI's --revert path routed to revertInit before dryRun was consulted,
+// and revertInit had no dry-run branch, so --revert --dry-run performed a real
+// destructive revert while its own help promised it would write nothing.
+describe('revert honours --dry-run', () => {
+  it('leaves every file byte for byte identical and still succeeds', () => {
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const policyPath = path.join(repo, POLICY_FILE_NAME);
+    const manifestPath = path.join(repo, MANIFEST_RELATIVE_PATH);
+    const hookBefore = readFileSync(hookPath, 'utf8');
+    const policyBefore = readFileSync(policyPath, 'utf8');
+    const manifestBefore = readFileSync(manifestPath, 'utf8');
+
+    const result = revertInit({ cwd: repo, pathValue: '', dryRun: true });
+
+    // A dry run of a revert that would fully succeed still reports success, so
+    // the CLI exits 0.
+    expect(result.ok).toBe(true);
+    // Nothing moved.
+    expect(readFileSync(hookPath, 'utf8')).toBe(hookBefore);
+    expect(readFileSync(policyPath, 'utf8')).toBe(policyBefore);
+    expect(readFileSync(manifestPath, 'utf8')).toBe(manifestBefore);
+    // And it still says what it would have removed.
+    expect(result.actions.some((action) => action.kind === 'remove')).toBe(true);
+  });
+
+  it('restores nothing on disk when it would put an adopted hook back', () => {
+    const repo = gitRepo();
+    const original = `#!/bin/sh\n# ${DEP_GUARD_HOOK_MARKER}\ndep-guard scan --staged\n`;
+    mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), original);
+    init(repo, { adopt: true });
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const umbrellaHook = readFileSync(hookPath, 'utf8');
+
+    const result = revertInit({ cwd: repo, pathValue: '', dryRun: true });
+
+    // The umbrella hook is still exactly there: nothing was removed and the
+    // adopted hook was not written over it.
+    expect(readFileSync(hookPath, 'utf8')).toBe(umbrellaHook);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+
+  it('exits 0 through the real CLI and changes nothing, the way its help promises', () => {
+    // The bug was in the CLI: --revert routed to revertInit before --dry-run
+    // was consulted, so this exact invocation used to perform a real revert.
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const policyPath = path.join(repo, POLICY_FILE_NAME);
+    const manifestPath = path.join(repo, MANIFEST_RELATIVE_PATH);
+    const before = [hookPath, policyPath, manifestPath].map((file) => readFileSync(file, 'utf8'));
+    const pathValue = pathLedBy(shimDirWithGit());
+
+    const result = spawnSync(
+      process.execPath,
+      [cli, 'init', '--revert', '--dry-run'],
+      { cwd: repo, encoding: 'utf8', env: childEnv(pathValue) }
+    );
+
+    expect(result.status).toBe(0);
+    expect([hookPath, policyPath, manifestPath].map((file) => readFileSync(file, 'utf8'))).toEqual(
+      before
+    );
+  });
+});
+
+// A committed symlink is a manifest path init never wrote. Containment that
+// only resolved the deepest EXISTING ancestor was bypassable: a dangling
+// symlink (its target does not exist) reads as absent to existsSync, which
+// follows it, so the path was judged a plain in-repo leaf, while writeFileSync
+// and chmodSync DO follow the final link and land the write on the outside
+// target. Every manifest path with a symlink component anywhere along it is now
+// refused, caught with lstatSync, which does not follow.
+describe('a manifest path through a symlink cannot escape the repository', () => {
+  const digest = (content: string): string =>
+    createHash('sha256').update(content).digest('hex');
+
+  function writeManifest(repo: string, manifest: unknown): void {
+    mkdirSync(path.join(repo, '.guardrails'), { recursive: true });
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+  }
+
+  function goneHook(repo: string) {
+    return { path: path.join(repo, '.git', 'hooks', 'pre-commit'), sha256: digest('x'), kind: 'hook' };
+  }
+
+  it('refuses an adopted.path that is a committed dangling relative symlink', () => {
+    const repo = gitRepo();
+    // The link lives inside the repository; its target is outside and does not
+    // exist, which is exactly what made existsSync report the link absent.
+    const outside = path.join(tempDir(), 'DOTBASHRC');
+    symlinkSync(outside, path.join(repo, 'evil-link'));
+    writeManifest(repo, {
+      version: 1,
+      files: [goneHook(repo)],
+      adopted: { path: path.join(repo, 'evil-link'), content: '#!/bin/sh\necho pwned\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    // The link's target was never written through.
+    expect(existsSync(outside)).toBe(false);
+    expect(result.actions.map((action) => action.kind)).not.toContain('restore');
+  });
+
+  it('refuses an adopted.path whose symlink points at an absolute outside target', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'ABSOLUTE-TARGET');
+    symlinkSync(outside, path.join(repo, 'abs-link'));
+    writeManifest(repo, {
+      version: 1,
+      files: [goneHook(repo)],
+      adopted: { path: path.join(repo, 'abs-link'), content: 'x\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it('refuses an adopted.path with a dangling symlink somewhere in the middle', () => {
+    const repo = gitRepo();
+    const outsideDir = path.join(tempDir(), 'outside-dir');
+    // dlink -> a directory that does not exist. mkdirSync(recursive) on
+    // dlink/sub would otherwise follow the link and build it outside.
+    symlinkSync(outsideDir, path.join(repo, 'dlink'));
+    writeManifest(repo, {
+      version: 1,
+      files: [goneHook(repo)],
+      adopted: { path: path.join(repo, 'dlink', 'sub', 'file'), content: 'x\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(existsSync(outsideDir)).toBe(false);
+  });
+
+  it('refuses a files[] path that is a committed dangling symlink, on the delete side', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'DELETE-TARGET');
+    symlinkSync(outside, path.join(repo, 'del-link'));
+    writeManifest(repo, {
+      version: 1,
+      files: [{ path: path.join(repo, 'del-link'), sha256: digest('x'), kind: 'policy' }],
+      adopted: null,
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+  });
+
+  it('still reverts an ordinary in-repo manifest with no symlink anywhere', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
   });
 });

@@ -261,7 +261,7 @@ describe('a fully clean run, which is most runs', () => {
   it('prints none of the per-gate detail', () => {
     const text = renderText(clean);
     expect(text).not.toMatch(/threshold/);
-    expect(text).not.toMatch(/suppressed/);
+    expect(text).toMatch(/0 suppressed, 0 ignored across all gates/);
     expect(text).not.toMatch(/^verdict:/m);
   });
 
@@ -342,8 +342,8 @@ describe('a fully clean run, which is most runs', () => {
     expect(text).not.toMatch(/enforce: false[^.]*dependencies/);
   });
 
-  it('says nothing about enforcement when every gate that ran was enforced', () => {
-    expect(renderText(result([outcome({ exitCode: 0 })], 0))).not.toMatch(/enforce/);
+  it('says every gate that ran was enforced, as a zero count that still prints', () => {
+    expect(renderText(result([outcome({ exitCode: 0 })], 0))).toMatch(/0 gate\(s\) not enforced/);
   });
 });
 
@@ -751,8 +751,8 @@ describe('a run restricted with --gate', () => {
     expect(text).toMatch(/intent \(intent-guard\)/);
   });
 
-  it('says nothing about exclusion on a run that had no --gate', () => {
-    expect(renderText(result([outcome({ exitCode: 0 })], 0))).not.toMatch(/excluded|--gate/);
+  it('reports exclusion as a zero count on the summary, and the full report stays silent', () => {
+    expect(renderText(result([outcome({ exitCode: 0 })], 0))).toMatch(/0 gate\(s\) left out by --gate/);
     expect(
       renderText(result([outcome({ exitCode: 0 })], 0), { verbose: true })
     ).not.toMatch(/excluded|--gate/);
@@ -795,5 +795,76 @@ describe('a run with no enabled gates', () => {
 
   it('says where to turn one on', () => {
     expect(text).toMatch(/\.guardrails\.yaml/);
+  });
+});
+
+// The family suppression rule, on the umbrella's one-line summary: a gate that
+// can be turned off, or one the command line dropped, or a baselined finding
+// count, is the user's decision, and a clean line that says nothing about it
+// lets a repository read as fully gated when a gate's result did not move the
+// exit code. Each of these prints even at zero.
+describe('the clean summary makes suppression visible', () => {
+  const runWith = (gates: Parameters<typeof result>[0], excluded: RunResult['excluded'] = []) =>
+    renderText(result(gates, 0, [], [], excluded));
+
+  const cleanRun = { failOn: 'medium', suppressed: 0, ignored: 0, diagnostics: [], details: {} };
+
+  it('prints the not-enforced count even when it is zero', () => {
+    expect(runWith([outcome({ exitCode: 0 })])).toMatch(/0 gate\(s\) not enforced/);
+  });
+
+  it('counts and names the gates that are not enforced', () => {
+    const text = runWith([
+      outcome({ exitCode: 0 }),
+      outcome({ role: 'intent', product: 'intent-guard', exitCode: 0, enforce: false }),
+    ]);
+    expect(text).toMatch(/1 gate\(s\) not enforced/);
+    expect(text).toMatch(/intent \(intent-guard\)/);
+  });
+
+  it('prints the excluded count even when it is zero', () => {
+    expect(runWith([outcome({ exitCode: 0 })])).toMatch(/0 gate\(s\) left out by --gate/);
+  });
+
+  it('counts and names the gates the command line left out', () => {
+    const text = runWith([outcome({ exitCode: 0 })], [{ role: 'secrets', product: 'vault-guard' }]);
+    expect(text).toMatch(/1 gate\(s\) left out by --gate/);
+    expect(text).toMatch(/secrets \(vault-guard\)/);
+  });
+
+  it('sums the suppressed and ignored counts across gates, even at zero', () => {
+    expect(runWith([outcome({ exitCode: 0 })])).toMatch(/0 suppressed, 0 ignored across all gates/);
+  });
+
+  it('adds the suppressed and ignored counts the gates reported', () => {
+    const text = runWith([
+      outcome({ exitCode: 0, run: { ...cleanRun, suppressed: 3, ignored: 1 } }),
+      outcome({
+        role: 'secrets',
+        product: 'vault-guard',
+        exitCode: 0,
+        run: { ...cleanRun, suppressed: 5, ignored: 2 },
+      }),
+    ]);
+    expect(text).toMatch(/8 suppressed, 3 ignored across all gates/);
+  });
+
+  it('drops the ignored total when a gate that ran reported no ignore count', () => {
+    // vault-guard drops ignored files before its own output, so "0 ignored"
+    // across all gates would state a fact no gate stated. Suppressed still
+    // shows, because that is always a number the gate reported.
+    const text = runWith([
+      outcome({ exitCode: 0, run: { ...cleanRun, suppressed: 2 } }),
+      outcome({
+        role: 'secrets',
+        product: 'vault-guard',
+        exitCode: 0,
+        run: { ...cleanRun, suppressed: 4, details: { ignoredReported: false } },
+      }),
+    ]);
+    expect(text).toMatch(/6 suppressed across all gates/);
+    expect(text).not.toMatch(/ignored/);
+    // Still one line.
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
   });
 });

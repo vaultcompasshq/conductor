@@ -68,9 +68,10 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
-  existsSync,
+  existsSync, lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   rmdirSync,
@@ -559,6 +560,13 @@ export type ConflictReason =
    */
   | 'managed-hooks'
   | 'hooks-path-outside-repository'
+  /**
+   * A path recorded in the manifest resolves outside the repository. The
+   * manifest is a committed, untrusted file, so revert and apply refuse any
+   * path in it that is not contained rather than writing or deleting where it
+   * points.
+   */
+  | 'manifest-path-outside-repository'
   | 'no-manifest'
   | 'manifest-unreadable'
   | 'changed-since-init'
@@ -651,6 +659,97 @@ interface Manifest {
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * Whether a path the manifest names is contained to the repository.
+ *
+ * The manifest is committed input, so a path in it is whatever a commit put
+ * there. Revert and apply run this over every path they would write to or
+ * delete before touching anything, and refuse the whole operation if any one
+ * of them is not contained.
+ *
+ * Two conditions, because a path can escape two ways. The resolved path,
+ * treated as plain strings, must be inside the root: this refuses an absolute
+ * path and one that climbs out with ../. And no component of the path may be a
+ * SYMLINK. A committed dangling symlink (its target does not exist) is the case
+ * that broke an earlier version of this: existsSync FOLLOWS the link, finds the
+ * missing target, and reports the link absent, so a walk that resolved only the
+ * deepest existing ancestor judged the link a plain not-yet-existing leaf and
+ * let writeFileSync and chmodSync, which DO follow the final link, land the
+ * write on the outside target. lstatSync does not follow, so it catches a
+ * symlink component even when its target is gone. init never writes through a
+ * symlink, so a symlink anywhere along the path means this is not a path init
+ * wrote, and it is refused whatever it points at.
+ *
+ * Paths here need not exist yet: an adopted hook is restored to a path revert
+ * has just removed, and a recorded file may be legitimately gone. The scan
+ * stops at the first component that does not exist, because nothing below a
+ * missing component exists either, so there is no symlink left to find. A
+ * relative candidate is taken against the repository root, which is how the
+ * real attack lands: a person running revert has cd'd into the checkout.
+ */
+function manifestPathInsideRepo(repoRoot: string, candidate: string): boolean {
+  try {
+    const root = realpathSync(repoRoot);
+    const abs = path.resolve(root, candidate);
+
+    // Deepest ancestor of abs that exists on disk. realpathSync on the whole
+    // path throws when the leaf is not there, so resolve the part that exists
+    // and keep the rest as a tail. existsSync FOLLOWS symlinks, which is why a
+    // dangling symlink is not trusted here; the tail is scanned with lstatSync
+    // below.
+    let ancestor = abs;
+    while (!existsSync(ancestor)) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        break;
+      }
+      ancestor = parent;
+    }
+    const realAncestor = realpathSync(ancestor);
+    const tail = path.relative(ancestor, abs);
+
+    // Containment, on resolved paths so a macOS temp dir reached through
+    // /var -> /private/var does not read as an escape, and so an existing
+    // symlink directory that points outside is caught by its resolved target.
+    const resolved = tail === '' ? realAncestor : path.join(realAncestor, tail);
+    const inside = path.relative(root, resolved);
+    if (
+      inside === '' ||
+      inside === '..' ||
+      inside.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(inside)
+    ) {
+      return false;
+    }
+
+    // No component of the tail may be a symlink. lstatSync does not follow, so
+    // a committed DANGLING symlink is caught even though existsSync reported it
+    // absent: existsSync followed the link to its missing target, which let an
+    // earlier version treat the link as a plain not-yet-existing leaf and then
+    // let writeFileSync and chmodSync, which DO follow the final link, land the
+    // write on the outside target. init never writes through a symlink, so any
+    // symlink component means this is not a path init wrote. The scan starts at
+    // the resolved ancestor, whose own components are already real, and walks
+    // to the leaf, stopping at the first component that does not exist.
+    let current = realAncestor;
+    for (const segment of tail === '' ? [] : tail.split(path.sep)) {
+      current = path.join(current, segment);
+      let entry;
+      try {
+        entry = lstatSync(current);
+      } catch {
+        break;
+      }
+      if (entry.isSymbolicLink()) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function gitOutput(cwd: string, args: string[]): string | null {
@@ -1213,6 +1312,32 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
           },
   };
 
+  // Contain every path before writing, the same rule revert applies. These
+  // paths are computed by planning rather than read straight from the manifest,
+  // but the adopted record is carried forward from the committed manifest, and
+  // a write that lands outside the repository is a write apply should refuse
+  // whatever produced the path.
+  const escaping = [
+    ...plan.writes.map((write) => write.path),
+    ...(manifest.adopted === null ? [] : [manifest.adopted.path]),
+  ].filter((candidate) => !manifestPathInsideRepo(plan.repoRoot, candidate));
+  if (escaping.length > 0) {
+    return {
+      ...plan,
+      ok: false,
+      conflicts: [
+        ...plan.conflicts,
+        ...escaping.map((candidate) => ({
+          path: candidate,
+          reason: 'manifest-path-outside-repository' as const,
+          guidance:
+            `${candidate} resolves outside this repository, so nothing was written. Apply ` +
+            'contains every path it writes to the repository.',
+        })),
+      ],
+    };
+  }
+
   try {
     for (const write of plan.writes) {
       mkdirSync(path.dirname(write.path), { recursive: true });
@@ -1276,6 +1401,13 @@ export interface RevertResult {
   ok: boolean;
   actions: InitAction[];
   conflicts: InitConflict[];
+  /**
+   * A dry run planned the revert and touched nothing. The actions describe
+   * what it WOULD have removed or restored, and `ok` is what the same revert
+   * would have returned for real, so `--revert --dry-run` exits the way the
+   * revert it previews would.
+   */
+  dryRun: boolean;
 }
 
 /**
@@ -1309,6 +1441,12 @@ export function revertInit(options: InitOptions): RevertResult {
   const actions: InitAction[] = [];
   const conflicts: InitConflict[] = [];
   const force = Boolean(options.force);
+  // A dry run runs every read and every decision and skips only the writes,
+  // so what it reports is exactly what a real revert from the same state would
+  // do. The CLI routed --revert past --dry-run and revertInit had no branch
+  // for it, so the flag whose help promised it would write nothing performed a
+  // real destructive revert.
+  const dryRun = Boolean(options.dryRun);
 
   const root = repoRootOf(options.cwd);
   if (root === null) {
@@ -1317,7 +1455,7 @@ export function revertInit(options: InitOptions): RevertResult {
       reason: 'not-a-git-repository',
       guidance: 'Nothing to revert: this is not a git repository.',
     });
-    return { ok: false, actions, conflicts };
+    return { ok: false, actions, conflicts, dryRun };
   }
 
   const manifestPath = path.join(root, MANIFEST_RELATIVE_PATH);
@@ -1330,7 +1468,7 @@ export function revertInit(options: InitOptions): RevertResult {
         `No ${MANIFEST_RELATIVE_PATH}, so there is no record of what init wrote. Nothing was ` +
         "removed: guessing which files were ours is how a revert deletes somebody's work.",
     });
-    return { ok: false, actions, conflicts };
+    return { ok: false, actions, conflicts, dryRun };
   }
 
   // Not routed through readManifest, which answers null for both a missing
@@ -1353,10 +1491,35 @@ export function revertInit(options: InitOptions): RevertResult {
         'anything. Only then delete it and remove the hook and the policy file yourself, and ' +
         're-run init.',
     });
-    return { ok: false, actions, conflicts };
+    return { ok: false, actions, conflicts, dryRun };
   }
 
   const relative = (file: string): string => path.relative(root, file).split(path.sep).join('/');
+
+  // The manifest is committed input, so every path it names is contained to
+  // the repository before anything is written or deleted. A crafted manifest
+  // could otherwise make revert delete a file anywhere on disk, or, through
+  // adopted.path, write an executable one anywhere, and exit 0. Refused as a
+  // whole rather than skipped one path at a time: a manifest with a path that
+  // escapes is a manifest nothing should act on.
+  const escaping = [
+    ...manifest.files.map((file) => file.path),
+    ...(manifest.adopted === null ? [] : [manifest.adopted.path]),
+  ].filter((candidate) => !manifestPathInsideRepo(root, candidate));
+  if (escaping.length > 0) {
+    for (const candidate of escaping) {
+      conflicts.push({
+        path: relative(candidate),
+        reason: 'manifest-path-outside-repository',
+        guidance:
+          `${candidate} is recorded in ${MANIFEST_RELATIVE_PATH} but resolves outside this ` +
+          'repository, so nothing was written or removed. The manifest is a committed file, and ' +
+          'a path in it that points out of the repository is not one revert will act on. Repair ' +
+          'or delete the manifest by hand.',
+      });
+    }
+    return { ok: false, actions, conflicts, dryRun };
+  }
 
   // Classify first, act second. Deciding as it goes is what let the old
   // version remove the policy file before discovering it could not remove
@@ -1391,7 +1554,7 @@ export function revertInit(options: InitOptions): RevertResult {
         detail: entry.state === 'changed' ? 'changed since init, left alone' : 'left alone',
       });
     }
-    return { ok: false, actions, conflicts };
+    return { ok: false, actions, conflicts, dryRun };
   }
 
   const remaining: ManifestFile[] = [];
@@ -1412,7 +1575,9 @@ export function revertInit(options: InitOptions): RevertResult {
       remaining.push(file);
       continue;
     }
-    rmSync(file.path, { force: true });
+    if (!dryRun) {
+      rmSync(file.path, { force: true });
+    }
     actions.push({
       kind: 'remove',
       path: rel,
@@ -1435,13 +1600,26 @@ export function revertInit(options: InitOptions): RevertResult {
   // is there, which is the thing the rule is about.
   const recordedHooks = planned.filter((entry) => entry.file.kind === 'hook');
   const umbrellaHookGone =
-    recordedHooks.length > 0 && recordedHooks.every((entry) => !existsSync(entry.file.path));
+    recordedHooks.length > 0 &&
+    recordedHooks.every((entry) =>
+      // A dry run left the hook on disk, so existsSync would say it is still
+      // there and the restore would be mispredicted. Ask the plan instead:
+      // every recorded hook that reached this point is either already gone or
+      // slated for removal, because a changed hook with no --force returns at
+      // the blocked-hook check far above, so by here a 'changed' state means
+      // --force is on.
+      dryRun
+        ? entry.state === 'gone' || entry.state === 'match' || force
+        : !existsSync(entry.file.path)
+    );
 
   let adopted = manifest.adopted;
   if (adopted !== null && umbrellaHookGone) {
-    mkdirSync(path.dirname(adopted.path), { recursive: true });
-    writeFileSync(adopted.path, adopted.content, 'utf8');
-    chmodSync(adopted.path, 0o755);
+    if (!dryRun) {
+      mkdirSync(path.dirname(adopted.path), { recursive: true });
+      writeFileSync(adopted.path, adopted.content, 'utf8');
+      chmodSync(adopted.path, 0o755);
+    }
     actions.push({
       kind: 'restore',
       path: relative(adopted.path),
@@ -1451,43 +1629,65 @@ export function revertInit(options: InitOptions): RevertResult {
   }
 
   if (remaining.length === 0 && adopted === null) {
-    rmSync(manifestPath, { force: true });
+    if (!dryRun) {
+      rmSync(manifestPath, { force: true });
+    }
     actions.push({ kind: 'remove', path: MANIFEST_RELATIVE_PATH, detail: 'removed' });
     const manifestDir = path.dirname(MANIFEST_RELATIVE_PATH);
-    try {
-      // rmdirSync, not rmSync: rmSync on a directory without recursive: true
-      // throws before it removes anything, so this swallowed its own error
-      // every time and left an empty .guardrails behind after a revert that
-      // said it had removed everything. rmdirSync removes an empty directory
-      // and refuses a non-empty one, which is exactly the rule wanted here.
-      rmdirSync(path.dirname(manifestPath));
-      actions.push({ kind: 'remove', path: manifestDir, detail: 'removed, it was empty' });
-    } catch {
-      // The directory holds something else, so it stays. Reported rather
-      // than passed over: a directory this tool created and then left
-      // behind, with nothing said about it, reads as something revert
-      // forgot rather than as something it decided.
-      actions.push({
-        kind: 'skip',
-        path: manifestDir,
-        detail: 'kept: it holds something else, which is not ours to remove',
-      });
+    const dirWouldBeEmpty = (): boolean =>
+      readdirSync(path.dirname(manifestPath)).every(
+        (entry) => path.join(path.dirname(manifestPath), entry) === manifestPath
+      );
+    if (dryRun) {
+      // A dry run cannot rmdir to find out whether the directory would be
+      // empty, so it looks: with the manifest gone, is anything else left?
+      actions.push(
+        dirWouldBeEmpty()
+          ? { kind: 'remove', path: manifestDir, detail: 'removed, it was empty' }
+          : {
+              kind: 'skip',
+              path: manifestDir,
+              detail: 'kept: it holds something else, which is not ours to remove',
+            }
+      );
+    } else {
+      try {
+        // rmdirSync, not rmSync: rmSync on a directory without recursive: true
+        // throws before it removes anything, so this swallowed its own error
+        // every time and left an empty .guardrails behind after a revert that
+        // said it had removed everything. rmdirSync removes an empty directory
+        // and refuses a non-empty one, which is exactly the rule wanted here.
+        rmdirSync(path.dirname(manifestPath));
+        actions.push({ kind: 'remove', path: manifestDir, detail: 'removed, it was empty' });
+      } catch {
+        // The directory holds something else, so it stays. Reported rather
+        // than passed over: a directory this tool created and then left
+        // behind, with nothing said about it, reads as something revert
+        // forgot rather than as something it decided.
+        actions.push({
+          kind: 'skip',
+          path: manifestDir,
+          detail: 'kept: it holds something else, which is not ours to remove',
+        });
+      }
     }
-    return { ok: true, actions, conflicts };
+    return { ok: true, actions, conflicts, dryRun };
   }
 
   // Something is left, so the manifest stays and keeps describing it.
-  writeFileSync(
-    manifestPath,
-    `${JSON.stringify({ ...manifest, files: remaining, adopted }, null, 2)}\n`,
-    'utf8'
-  );
+  if (!dryRun) {
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ ...manifest, files: remaining, adopted }, null, 2)}\n`,
+      'utf8'
+    );
+  }
   actions.push({
     kind: 'skip',
     path: MANIFEST_RELATIVE_PATH,
     detail: 'kept: it still records what was left behind',
   });
-  return { ok: false, actions, conflicts };
+  return { ok: false, actions, conflicts, dryRun };
 }
 
 export function renderInitHuman(result: InitResult): string {
@@ -1528,8 +1728,19 @@ export function renderRevertHuman(result: RevertResult): string {
     lines[0] = 'conductor init --revert:';
   }
 
+  if (result.dryRun) {
+    // Every action here is what a real revert WOULD do, so the header and the
+    // verbs say so, and the summary above is rewritten: nothing was removed
+    // because nothing is ever removed on a dry run.
+    lines[0] =
+      removed === 0
+        ? 'conductor init --revert (dry run): would remove nothing.'
+        : 'conductor init --revert (dry run): would change the files below, and write nothing now.';
+  }
+
   for (const action of result.actions) {
-    lines.push(`  ${action.kind} ${action.path} (${action.detail})`);
+    const verb = result.dryRun && action.kind !== 'skip' ? `would ${action.kind}` : action.kind;
+    lines.push(`  ${verb} ${action.path} (${action.detail})`);
   }
 
   // The conflicts go LAST rather than first, so the thing the user has to
