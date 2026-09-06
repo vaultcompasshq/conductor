@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
-  mkdirSync,
+  mkdirSync, symlinkSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -2249,5 +2249,121 @@ describe('revert honours --dry-run', () => {
     expect([hookPath, policyPath, manifestPath].map((file) => readFileSync(file, 'utf8'))).toEqual(
       before
     );
+  });
+});
+
+// A committed symlink is a manifest path init never wrote. Containment that
+// only resolved the deepest EXISTING ancestor was bypassable: a dangling
+// symlink (its target does not exist) reads as absent to existsSync, which
+// follows it, so the path was judged a plain in-repo leaf, while writeFileSync
+// and chmodSync DO follow the final link and land the write on the outside
+// target. Every manifest path with a symlink component anywhere along it is now
+// refused, caught with lstatSync, which does not follow.
+describe('a manifest path through a symlink cannot escape the repository', () => {
+  const digest = (content: string): string =>
+    createHash('sha256').update(content).digest('hex');
+
+  function writeManifest(repo: string, manifest: unknown): void {
+    mkdirSync(path.join(repo, '.guardrails'), { recursive: true });
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+  }
+
+  function goneHook(repo: string) {
+    return { path: path.join(repo, '.git', 'hooks', 'pre-commit'), sha256: digest('x'), kind: 'hook' };
+  }
+
+  it('refuses an adopted.path that is a committed dangling relative symlink', () => {
+    const repo = gitRepo();
+    // The link lives inside the repository; its target is outside and does not
+    // exist, which is exactly what made existsSync report the link absent.
+    const outside = path.join(tempDir(), 'DOTBASHRC');
+    symlinkSync(outside, path.join(repo, 'evil-link'));
+    writeManifest(repo, {
+      version: 1,
+      files: [goneHook(repo)],
+      adopted: { path: path.join(repo, 'evil-link'), content: '#!/bin/sh\necho pwned\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    // The link's target was never written through.
+    expect(existsSync(outside)).toBe(false);
+    expect(result.actions.map((action) => action.kind)).not.toContain('restore');
+  });
+
+  it('refuses an adopted.path whose symlink points at an absolute outside target', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'ABSOLUTE-TARGET');
+    symlinkSync(outside, path.join(repo, 'abs-link'));
+    writeManifest(repo, {
+      version: 1,
+      files: [goneHook(repo)],
+      adopted: { path: path.join(repo, 'abs-link'), content: 'x\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it('refuses an adopted.path with a dangling symlink somewhere in the middle', () => {
+    const repo = gitRepo();
+    const outsideDir = path.join(tempDir(), 'outside-dir');
+    // dlink -> a directory that does not exist. mkdirSync(recursive) on
+    // dlink/sub would otherwise follow the link and build it outside.
+    symlinkSync(outsideDir, path.join(repo, 'dlink'));
+    writeManifest(repo, {
+      version: 1,
+      files: [goneHook(repo)],
+      adopted: { path: path.join(repo, 'dlink', 'sub', 'file'), content: 'x\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(existsSync(outsideDir)).toBe(false);
+  });
+
+  it('refuses a files[] path that is a committed dangling symlink, on the delete side', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'DELETE-TARGET');
+    symlinkSync(outside, path.join(repo, 'del-link'));
+    writeManifest(repo, {
+      version: 1,
+      files: [{ path: path.join(repo, 'del-link'), sha256: digest('x'), kind: 'policy' }],
+      adopted: null,
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+  });
+
+  it('still reverts an ordinary in-repo manifest with no symlink anywhere', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
   });
 });

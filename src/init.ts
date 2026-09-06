@@ -68,7 +68,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
-  existsSync,
+  existsSync, lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -667,23 +667,38 @@ function sha256(content: string): string {
  * The manifest is committed input, so a path in it is whatever a commit put
  * there. Revert and apply run this over every path they would write to or
  * delete before touching anything, and refuse the whole operation if any one
- * of them resolves outside the repository.
+ * of them is not contained.
  *
- * The same containment reasoning as resolvesInsideRoot in intent-spec.ts, with
- * one difference it has to have: the paths here need not exist yet. An adopted
- * hook is restored to a path revert has just removed, and a file the manifest
- * recorded may be legitimately gone. realpathSync on the whole path throws for
- * a path that is not there, which would refuse those legitimate cases, so the
- * symlinks are resolved on the deepest ANCESTOR that does exist and the rest of
- * the path is appended to it. A relative candidate is taken against the
- * repository root, which is how the real attack lands: a person running revert
- * has cd'd into the checkout, so the root is the working directory the fs would
- * resolve it against anyway.
+ * Two conditions, because a path can escape two ways. The resolved path,
+ * treated as plain strings, must be inside the root: this refuses an absolute
+ * path and one that climbs out with ../. And no component of the path may be a
+ * SYMLINK. A committed dangling symlink (its target does not exist) is the case
+ * that broke an earlier version of this: existsSync FOLLOWS the link, finds the
+ * missing target, and reports the link absent, so a walk that resolved only the
+ * deepest existing ancestor judged the link a plain not-yet-existing leaf and
+ * let writeFileSync and chmodSync, which DO follow the final link, land the
+ * write on the outside target. lstatSync does not follow, so it catches a
+ * symlink component even when its target is gone. init never writes through a
+ * symlink, so a symlink anywhere along the path means this is not a path init
+ * wrote, and it is refused whatever it points at.
+ *
+ * Paths here need not exist yet: an adopted hook is restored to a path revert
+ * has just removed, and a recorded file may be legitimately gone. The scan
+ * stops at the first component that does not exist, because nothing below a
+ * missing component exists either, so there is no symlink left to find. A
+ * relative candidate is taken against the repository root, which is how the
+ * real attack lands: a person running revert has cd'd into the checkout.
  */
 function manifestPathInsideRepo(repoRoot: string, candidate: string): boolean {
   try {
     const root = realpathSync(repoRoot);
     const abs = path.resolve(root, candidate);
+
+    // Deepest ancestor of abs that exists on disk. realpathSync on the whole
+    // path throws when the leaf is not there, so resolve the part that exists
+    // and keep the rest as a tail. existsSync FOLLOWS symlinks, which is why a
+    // dangling symlink is not trusted here; the tail is scanned with lstatSync
+    // below.
     let ancestor = abs;
     while (!existsSync(ancestor)) {
       const parent = path.dirname(ancestor);
@@ -692,14 +707,46 @@ function manifestPathInsideRepo(repoRoot: string, candidate: string): boolean {
       }
       ancestor = parent;
     }
-    const resolved = path.join(realpathSync(ancestor), path.relative(ancestor, abs));
+    const realAncestor = realpathSync(ancestor);
+    const tail = path.relative(ancestor, abs);
+
+    // Containment, on resolved paths so a macOS temp dir reached through
+    // /var -> /private/var does not read as an escape, and so an existing
+    // symlink directory that points outside is caught by its resolved target.
+    const resolved = tail === '' ? realAncestor : path.join(realAncestor, tail);
     const inside = path.relative(root, resolved);
-    return (
-      inside !== '' &&
-      !inside.startsWith(`..${path.sep}`) &&
-      inside !== '..' &&
-      !path.isAbsolute(inside)
-    );
+    if (
+      inside === '' ||
+      inside === '..' ||
+      inside.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(inside)
+    ) {
+      return false;
+    }
+
+    // No component of the tail may be a symlink. lstatSync does not follow, so
+    // a committed DANGLING symlink is caught even though existsSync reported it
+    // absent: existsSync followed the link to its missing target, which let an
+    // earlier version treat the link as a plain not-yet-existing leaf and then
+    // let writeFileSync and chmodSync, which DO follow the final link, land the
+    // write on the outside target. init never writes through a symlink, so any
+    // symlink component means this is not a path init wrote. The scan starts at
+    // the resolved ancestor, whose own components are already real, and walks
+    // to the leaf, stopping at the first component that does not exist.
+    let current = realAncestor;
+    for (const segment of tail === '' ? [] : tail.split(path.sep)) {
+      current = path.join(current, segment);
+      let entry;
+      try {
+        entry = lstatSync(current);
+      } catch {
+        break;
+      }
+      if (entry.isSymbolicLink()) {
+        return false;
+      }
+    }
+    return true;
   } catch {
     return false;
   }
