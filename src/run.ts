@@ -2,7 +2,13 @@
 
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_COULD_NOT_RUN, composeExitCode } from './exit-codes.js';
-import { type GateOutcome, preparationFailed, runGate } from './gate-runner.js';
+import {
+  type GateOutcome,
+  gateProgramRefused,
+  preparationFailed,
+  refuseHeadControlledBinary,
+  runGate,
+} from './gate-runner.js';
 import { resolveBaseRef } from './intent-base.js';
 import {
   type IntentPreparation,
@@ -400,6 +406,22 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
         // twice, once as a failed preparation and once as a missing gate,
         // would read as two problems where there is one.
         if (binary !== null) {
+          // BEFORE ANYTHING IS SPAWNED, and that ordering is the whole of it.
+          // runGate makes this check for every other gate and makes it first;
+          // for this one the preparation gets there earlier and runs the gate
+          // three times, so the check has to be made here as well or the
+          // boundary begins after the program the pull request chose has
+          // already run. Same builder as runGate's, so the enforce override
+          // cannot drift between the two places that produce this outcome.
+          const trustBaseRef = options.trustBase?.ref;
+          if (trustBaseRef !== undefined) {
+            const refusal = refuseHeadControlledBinary(options.repoRoot, trustBaseRef, binary);
+            if (refusal !== null) {
+              outcomes.push(gateProgramRefused(gate, trustBaseRef, refusal, binary));
+              continue;
+            }
+          }
+
           const prepared = prepareIntent({
             repoRoot: options.repoRoot,
             binary,
@@ -422,7 +444,14 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           if (prepared.kind === 'failed') {
             outcomes.push(
               preparationFailed(
-                gate,
+                // ENFORCED under a trust base, by the same argument as
+                // `refusedTrustBase` below: `enforce` is itself a control
+                // input, this gate produced no findings for it to be a
+                // decision about, and a pull-request run where the intent
+                // gate could not be prepared is one where nothing judged the
+                // intent. Reading the flag here let a base policy with
+                // enforce: false report the failure and still exit 0.
+                trustBaseRef === undefined ? gate : { ...gate, enforce: true },
                 `the intent gate could not be prepared at the ${prepared.step} step: ${prepared.detail}`
               )
             );

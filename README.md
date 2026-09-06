@@ -637,24 +637,41 @@ writes SARIF and nothing else, so the job costs roughly twice the gate time;
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          # The same derivation the Action makes for its own --trust-base.
+          # github.base_ref is a BRANCH NAME and is empty outside a pull
+          # request, so an empty value has to mean "not a pull request":
+          # passing --trust-base unconditionally would hand a push build the
+          # literal ref "origin/" and fail it closed.
+          BASE: ${{ github.base_ref }}
         # || true: a blocking finding is a non-zero exit, and that verdict
         # belongs to the gates step rather than to this one.
         run: |
-          conductor run --stage ci --format text --verbose --output conductor.txt || true
+          ARGS=(run --stage ci --format text --verbose --output conductor.txt)
+          if [ -n "$BASE" ]; then
+            ARGS+=(--trust-base "origin/$BASE")
+          fi
+          conductor "${ARGS[@]}" || true
           gh pr comment "$PR" --body-file conductor.txt
 ```
 
 `conductor` and not `node_modules/.bin/conductor`: the gates step put the
-installed one on `PATH`, and it is the one that judged the run this comment is
-reporting. Reaching into `node_modules` here would report a different
-program's verdict from the one in the uploaded log.
+installed one on `PATH`. Reaching into `node_modules` here would report a
+different program's verdict from the one in the uploaded log.
+
+`--trust-base` for the same reason, and the two together are what make this
+the run the uploaded log is about: same binary AND same trust base. Without
+it this second run reads the head's own policy file, consults
+`node_modules/.bin` like any local run, and never asks where a gate's program
+came from, so a pull request that plants one gets a clean comment beside a
+SARIF log that refused it.
 
 **Mirror whatever you gave the Action**, or the two runs can report different
 contracts. The step above matches the example, which passes neither
-`base-ref` nor `spec`, so both runs read `GITHUB_BASE_REF` and the `Spec:`
-line out of the job environment themselves and land on the same contract. If
-you set either input on the gates step, pass the same values here as `--base`
-and `--spec`; if you do not, the comment is a report of a contract source the
+`base-ref`, `trust-base` nor `spec`, so both runs read `GITHUB_BASE_REF` and
+the `Spec:` line out of the job environment themselves and land on the same
+contract and the same ref. If you set any of those inputs on the gates step,
+pass the same values here as `--base`, `--trust-base` and `--spec`; if you do
+not, the comment is a report of a contract source, or of a boundary, the
 uploaded log never used.
 
 **On a pull request from a fork the token is read-only**, so `gh pr comment`

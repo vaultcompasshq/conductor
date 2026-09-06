@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -668,5 +677,239 @@ describe('a pull-request run reading the pre-1.3 state directory', () => {
 
     expect(ids).not.toContain('intent-guard/legacy-state-dir');
     expect(renderText(result, { verbose: true })).not.toMatch(/pre-1\.3 directory/);
+  });
+});
+
+/**
+ * The preparation is a SPAWN, so it is inside the program rule or outside the
+ * boundary.
+ *
+ * `runGate` checks where a gate's program came from before it runs it, and
+ * for every other gate that is the first thing that happens. The intent gate
+ * is the exception: its contract is prepared first, and preparing it runs the
+ * gate three times. A base policy that vendors the gate in the tree therefore
+ * handed a pull request three executions of a file it had just rewritten,
+ * before anything had looked at where that file came from. Measured with a
+ * marker rather than with an assertion about which branch was taken: the
+ * claim is that a program did not execute, and only the filesystem can say
+ * that.
+ */
+describe('a pull-request run whose intent gate is vendored in the tree', () => {
+  /**
+   * A repository whose base vendors an honest intent-guard in its own
+   * directory, and whose branch rewrites that program when asked to.
+   */
+  function vendored(options: { rewrite: boolean }): {
+    root: string;
+    command: string;
+    marker: string;
+  } {
+    const root = tempDir();
+    const marker = path.join(tempDir(), 'vendored-ran.txt');
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    write(root, 'docs/superpowers/specs/2026-09-03-widget-cache-design.md', SPEC_BODY);
+    write(root, 'docs/superpowers/plans/2026-09-03-widget-cache.md', PLAN_BODY);
+    const command = stubIntentGuard(path.join(root, 'vendor', 'intent-guard'), {
+      importSpec: { stdout: IMPORT_DRY_RUN },
+      freeze: { stdout: FREEZE },
+      check: { stdout: CHECK_PASSING },
+      version: '1.4.0',
+    });
+    commit(root, 'base');
+
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    if (options.rewrite) {
+      // Byte for byte what the base approved everywhere except the one file
+      // the policy names, and that file now records every invocation. The
+      // payloads beside it are untouched, so the rewritten program is still a
+      // working gate and the run it produces is clean.
+      writeFileSync(
+        command,
+        [
+          '#!/bin/sh',
+          `printf '%s\\n' "$1" >> ${JSON.stringify(marker)}`,
+          'if [ "$1" = "--version" ]; then echo "1.4.0"; exit 0; fi',
+          `cat ${JSON.stringify(command)}."$1".stdout`,
+          'exit 0',
+        ].join('\n') + '\n'
+      );
+      chmodSync(command, 0o755);
+    }
+    commit(root, 'branch work');
+    return { root, command, marker };
+  }
+
+  function vendoredPolicy(command: string, enforce: boolean) {
+    return parsePolicy(
+      'version: 1\ngates:\n  intent:\n    product: intent-guard\n' +
+        `    command: ${JSON.stringify(command)}\n` +
+        (enforce ? '' : '    enforce: false\n'),
+      POLICY_FILE_NAME
+    );
+  }
+
+  function vendoredRun(
+    fixture: { root: string; command: string },
+    options: { trustBase?: string; enforce?: boolean } = {}
+  ): RunResult {
+    return runAll(vendoredPolicy(fixture.command, options.enforce !== false), {
+      repoRoot: fixture.root,
+      staged: false,
+      pathValue: tempDir(),
+      env: {},
+      base: 'main',
+      ...(options.trustBase === undefined
+        ? {}
+        : { trustBase: { ref: options.trustBase, policyChanged: false, refusal: null } }),
+    });
+  }
+
+  it('refuses the program the head rewrote, before the preparation spawns it', () => {
+    const fixture = vendored({ rewrite: true });
+
+    const result = vendoredRun(fixture, { trustBase: 'main' });
+
+    expect(existsSync(fixture.marker)).toBe(false);
+    expect(result.gates).toHaveLength(1);
+    expect(result.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('enforces that refusal even where the policy switched the gate off', () => {
+    // enforce: false is a standing decision about what a gate's FINDINGS are
+    // worth, and this gate produced none. Reading it here would let a pull
+    // request that vendors its own gate keep the run green by unenforcing it.
+    const fixture = vendored({ rewrite: true });
+
+    const result = vendoredRun(fixture, { trustBase: 'main', enforce: false });
+
+    expect(existsSync(fixture.marker)).toBe(false);
+    expect(result.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+    expect(result.gates[0].enforce).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('prepares as usual when the branch left the vendored program alone', () => {
+    // The direction that keeps the rule usable rather than a ban on
+    // vendoring. An imported contract is proof the preparation actually ran:
+    // it exists only because import-spec and freeze were both spawned.
+    const fixture = vendored({ rewrite: false });
+
+    const result = vendoredRun(fixture, { trustBase: 'main' });
+
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(result.gates[0].intent?.contractSource.kind).toBe('imported');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('runs the rewritten program as before when there is no trust base', () => {
+    // Parity, measured the same way: outside pull-request mode the vendored
+    // program is the repository's own choice about its own checkout, and it
+    // must actually RUN or this proves only that nothing threw.
+    const fixture = vendored({ rewrite: true });
+
+    const result = vendoredRun(fixture);
+
+    expect(existsSync(fixture.marker)).toBe(true);
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(result.gates[0].intent?.contractSource.kind).toBe('imported');
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+/**
+ * A preparation that failed under a trust base is enforced.
+ *
+ * Same argument as `refusedTrustBase`: `enforce` is itself a control input,
+ * this gate produced no findings for it to be a decision about, and a
+ * pull-request run whose intent gate could not be prepared is a run where
+ * nothing judged the intent. Reading the flag here let a base policy carrying
+ * `enforce: false` report the failure and exit 0 anyway.
+ */
+describe('an intent preparation that failed', () => {
+  function brokenBin(): string {
+    const bin = tempDir();
+    stubIntentGuard(bin, {
+      importSpec: { stderr: 'import-spec: no.', exit: 2 },
+      freeze: { stdout: FREEZE },
+      check: { stdout: CHECK_PASSING },
+      version: '1.4.0',
+    });
+    return bin;
+  }
+
+  it('is enforced under a trust base, whatever the policy says', () => {
+    const result = runAll(INTENT_UNENFORCED, {
+      repoRoot: repo(),
+      staged: false,
+      pathValue: brokenBin(),
+      env: {},
+      base: 'main',
+      trustBase: { ref: 'main', policyChanged: false, refusal: null },
+    });
+
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+    expect(result.gates[0].enforce).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('still reads the policy outside pull-request mode', () => {
+    // The parity direction. Off a pull request the policy is the
+    // repository's own standing decision about its own checkout, and an
+    // unenforced gate that could not be prepared is a note.
+    const result = runAll(INTENT_UNENFORCED, {
+      repoRoot: repo(),
+      staged: false,
+      pathValue: brokenBin(),
+      env: {},
+      base: 'main',
+    });
+
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+    expect(result.gates[0].enforce).toBe(false);
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+/**
+ * The preparation takes the node_modules skip too, and it is measured.
+ *
+ * `runGate` declines to resolve out of `node_modules/.bin` on a pull-request
+ * run, and the preparation resolves its own binary separately. Both halves
+ * have to take the skip, because the preparation is what spawns first.
+ */
+describe('a pull-request run and the intent gate the head installed', () => {
+  it('prepares with the PATH copy and never with node_modules/.bin', () => {
+    const root = repo();
+    const marker = path.join(tempDir(), 'node-modules-ran.txt');
+    const planted = path.join(root, 'node_modules', '.bin', 'intent-guard');
+    mkdirSync(path.dirname(planted), { recursive: true });
+    writeFileSync(
+      planted,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' "$1" >> ${JSON.stringify(marker)}`,
+        'if [ "$1" = "--version" ]; then echo "1.4.0"; exit 0; fi',
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(planted, 0o755);
+
+    const result = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: binWith(CHECK_PASSING),
+      env: {},
+      base: 'main',
+      trustBase: { ref: 'main', policyChanged: false, refusal: null },
+    });
+
+    expect(existsSync(marker)).toBe(false);
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(result.gates[0].binary?.source).toBe('path');
+    expect(result.gates[0].intent?.contractSource.kind).toBe('imported');
+    expect(result.exitCode).toBe(0);
   });
 });

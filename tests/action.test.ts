@@ -391,7 +391,17 @@ describe('action.yml installs the gates outside the tree', () => {
     // gates to scan.
     expect(stepEnv('install')['npm_config_prefix']).toMatch(/runner\.temp/);
     expect(installScript).not.toMatch(/working-directory/);
-    expect(steps.find((step) => step.id === 'install')).not.toHaveProperty('working-directory');
+  });
+
+  it('also RUNS outside the checkout, so npm never starts in the head tree', () => {
+    // A composite step with no working-directory runs at the workspace root.
+    // npm in global mode is not known to read a project's configuration from
+    // there, and this step must not rest on that: the reason it is safe would
+    // be a property of a version of npm rather than of this file.
+    expect(steps.find((step) => step.id === 'install')).toHaveProperty(
+      'working-directory',
+      '${{ runner.temp }}'
+    );
   });
 
   it('installs unconditionally, so a push and a pull request take one code path', () => {

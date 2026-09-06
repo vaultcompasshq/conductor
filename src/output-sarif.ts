@@ -701,10 +701,11 @@ function proposalNotifications(result: RunResult): Notification[] {
 /**
  * The trust base the umbrella refused, when it refused one.
  *
- * ERROR LEVEL, and the only notification here that is not a note. Every other
- * one says how much of the policy a run covered; this one says the run did
- * not happen. It is the one statement in this file that a reader must not be
- * able to scroll past.
+ * ERROR LEVEL, one of the two notifications here that are not notes, and the
+ * wider of the two: a refused program says one gate did not run, and this one
+ * says the whole run did not. Every other notification in this file says how
+ * much of the policy a run covered. These two say what was not covered at
+ * all, and a reader must not be able to scroll past either.
  *
  * A NOTIFICATION rather than a result even so, and the reason is the
  * discriminator further down: a result is about a place in somebody's code,

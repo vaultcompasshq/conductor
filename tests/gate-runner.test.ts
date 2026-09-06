@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -15,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decideTrustBase, runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
-import { stubGate } from './helpers/stub-gate.js';
+import { CLEAN_INTENT_GUARD, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -697,5 +698,118 @@ describe('a pull-request run and the repository own node_modules', () => {
     expect(existsSync(plantMarker)).toBe(true);
     expect(outcome.binary?.source).toBe('node_modules');
     expect(outcome.nodeModulesSkipped).toBeUndefined();
+  });
+});
+
+/**
+ * The version probe is a SPAWN of its own, and not always of the same file.
+ *
+ * A per-command binary ignores `--version` and runs the gate instead, so
+ * resolution asks a version-safe SIBLING instead, which can live anywhere on
+ * PATH. Vetting only `binary.program` therefore left one executed path
+ * unchecked: the program a base policy names is byte for byte what the base
+ * approved, and the file the probe runs a moment later is whatever the head
+ * put beside it.
+ */
+describe('a pull-request run and the file the version probe would spawn', () => {
+  function git(cwd: string, args: string[]): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf8' });
+  }
+
+  function commit(root: string, message: string): void {
+    git(root, ['add', '-A']);
+    git(root, [
+      '-c',
+      'user.email=test@example.invalid',
+      '-c',
+      'user.name=test',
+      'commit',
+      '--quiet',
+      '-m',
+      message,
+    ]);
+  }
+
+  /** Something that answers --version, records having been asked, and exits. */
+  function probeSibling(file: string, marker: string, version: string): void {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' "$1" >> ${JSON.stringify(marker)}`,
+        `if [ "$1" = "--version" ]; then echo "${version}"; exit 0; fi`,
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(file, 0o755);
+  }
+
+  /**
+   * A repository vendoring intent-guard-check, which cannot be asked its own
+   * version, with the version-safe intent-guard on PATH beside it in the
+   * tree. The branch rewrites only the second one.
+   */
+  function vendored(): { root: string; command: string; toolsDir: string; marker: string } {
+    const root = tempDir();
+    const marker = path.join(tempDir(), 'probe-ran.txt');
+    const toolsDir = path.join(root, 'tools');
+    const command = path.join(root, 'vendor', 'check', 'intent-guard-check');
+
+    git(root, ['init', '--quiet', '-b', 'main']);
+    writeFileSync(path.join(root, 'README.md'), '# scratch\n');
+    mkdirSync(path.dirname(command), { recursive: true });
+    writeFileSync(command, `#!/bin/sh\necho '${CLEAN_INTENT_GUARD.replace(/'/g, "'\\''")}'\n`);
+    chmodSync(command, 0o755);
+    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.4.0');
+    commit(root, 'base');
+
+    git(root, ['checkout', '--quiet', '-b', 'feat/work']);
+    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.4.1');
+    commit(root, 'branch work');
+
+    return { root, command, toolsDir, marker };
+  }
+
+  it('refuses when the head rewrote the sibling the probe would run', () => {
+    const fixture = vendored();
+
+    const outcome = runGate(
+      gate({ role: 'intent', product: 'intent-guard', command: fixture.command }),
+      {
+        repoRoot: fixture.root,
+        staged: false,
+        pathValue: fixture.toolsDir,
+        trustBase: 'main',
+      }
+    );
+
+    // Never asked, which is the whole claim: a probe RUNS the file.
+    expect(existsSync(fixture.marker)).toBe(false);
+    expect(outcome.couldNotRun?.reason).toBe('gate-program-refused');
+    expect(outcome.couldNotRun?.detail).toMatch(/tools\/intent-guard/);
+    expect(outcome.enforce).toBe(true);
+  });
+
+  it('runs as usual when the branch left that sibling alone', () => {
+    // The direction that keeps the rule usable. Same fixture, with the
+    // branch commit reverted to the bytes the base approved.
+    const fixture = vendored();
+    probeSibling(path.join(fixture.toolsDir, 'intent-guard'), fixture.marker, '1.4.0');
+    commit(fixture.root, 'put it back');
+
+    const outcome = runGate(
+      gate({ role: 'intent', product: 'intent-guard', command: fixture.command }),
+      {
+        repoRoot: fixture.root,
+        staged: false,
+        pathValue: fixture.toolsDir,
+        trustBase: 'main',
+      }
+    );
+
+    expect(existsSync(fixture.marker)).toBe(true);
+    expect(outcome.couldNotRun).toBeNull();
+    expect(outcome.productVersion).toBe('1.4.0');
   });
 });

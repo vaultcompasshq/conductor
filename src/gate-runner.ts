@@ -335,6 +335,77 @@ const EMPTY_RUN: RunSummary = {
 };
 
 /**
+ * EVERY program this binary would spawn, vetted against the trust base.
+ *
+ * Two files and not one. `program` is what the gate runs, and
+ * `versionProbe.command` can be a DIFFERENT file: for a per-command binary
+ * that ignores `--version`, resolution finds the version-safe sibling
+ * somewhere else entirely (`versionProbeFor`, src/resolve.ts:238-262). Vetting
+ * only the first left the probe free to spawn whatever the head put at the
+ * second, and a probe RUNS a program as thoroughly as a scan does.
+ *
+ * The first refusal wins and the rest is not consulted. The verdict is the
+ * same either way, and the sentence a reader has to act on should name one
+ * file rather than two.
+ */
+export function refuseHeadControlledBinary(
+  repoRoot: string,
+  trustBase: string,
+  binary: ResolvedBinary
+): string | null {
+  for (const program of [binary.program, binary.versionProbe?.command]) {
+    if (program === undefined) {
+      continue;
+    }
+    const refusal = refuseHeadControlledProgram(repoRoot, trustBase, program);
+    if (refusal !== null) {
+      return refusal;
+    }
+  }
+  return null;
+}
+
+/**
+ * The outcome for a gate whose program the umbrella declined to run.
+ *
+ * ONE BUILDER, TWO CALLERS, and that is the point of it being here rather
+ * than written out at the return that needs it. `runGate` reaches this before
+ * it spawns anything; `runAll` reaches it earlier still, before the intent
+ * gate's preparation spawns the same program three times. A second copy of
+ * the shape would be a second chance to forget the override below.
+ *
+ * ENFORCED, whatever the policy says. `enforce: false` is a standing decision
+ * about what a gate's FINDINGS are worth, and this gate produced none: the
+ * umbrella refused to run a program the pull request chose. Letting an
+ * unenforced gate swallow that would let a pull request pick its own judge
+ * and keep the run green.
+ */
+export function gateProgramRefused(
+  gate: GatePolicy,
+  trustBase: string,
+  refusal: string,
+  binary: ResolvedBinary
+): GateOutcome {
+  return {
+    role: gate.role,
+    product: gate.product,
+    stage: gate.stage,
+    enforce: true,
+    productVersion: null,
+    argv: [],
+    binary,
+    exitCode: null,
+    durationMs: 0,
+    stderr: '',
+    trustBase: { ref: trustBase, withheld: null, refused: refusal, proposals: [] },
+    couldNotRun: { reason: 'gate-program-refused', detail: refusal },
+    findings: [normalizeFailedGate(gate.role, gate.product, refusal)],
+    run: EMPTY_RUN,
+    diagnostics: [],
+  };
+}
+
+/**
  * The arguments the umbrella adds, per product.
  *
  * These are the reserved options the policy schema refuses to let a user
@@ -647,27 +718,16 @@ function runGateInner(
   // version of this attack and it would have been run before anything checked
   // where it came from.
   if (options.trustBase !== undefined) {
-    const refusal = refuseHeadControlledProgram(
-      options.repoRoot,
-      options.trustBase,
-      binary.program
-    );
+    // BOTH SPAWNABLE PATHS, not just the program: the probe below can be a
+    // different file from binary.program, and it is executed just as
+    // thoroughly. The enforce override and the rest of the shape live in
+    // gateProgramRefused, which the intent gate's preparation shares.
+    const refusal = refuseHeadControlledBinary(options.repoRoot, options.trustBase, binary);
     if (refusal !== null) {
       return {
         ...base,
-        binary,
+        ...gateProgramRefused(gate, options.trustBase, refusal, binary),
         durationMs: Date.now() - started,
-        // ENFORCED, whatever the policy says. enforce: false is a standing
-        // decision about what a gate's FINDINGS are worth, and this gate
-        // produced none: the umbrella refused to run a program the pull
-        // request chose. Letting an unenforced gate swallow that would let a
-        // pull request pick its own judge and keep the run green.
-        enforce: true,
-        trustBase: { ref: options.trustBase, withheld: null, refused: refusal, proposals: [] },
-        couldNotRun: { reason: 'gate-program-refused', detail: refusal },
-        findings: [normalizeFailedGate(gate.role, gate.product, refusal)],
-        run: EMPTY_RUN,
-        diagnostics: [],
       };
     }
   }

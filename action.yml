@@ -132,13 +132,19 @@ runs:
     # runs that matter and another way everywhere else, and the everywhere-else
     # path would be the one nobody ever exercises before it is needed.
     #
-    # No working-directory: this must not write into the checkout. Installing
-    # into the workspace would put the programs that judge the pull request
-    # back inside the tree being judged, and leave them there for the gates to
-    # scan.
+    # IT RUNS OUTSIDE THE CHECKOUT TOO, not just installs outside it. A
+    # composite step with no working-directory runs at the workspace root,
+    # which is the head's own tree: npm would then be started with the pull
+    # request's .npmrc, package.json and lockfile under its cwd. In global
+    # mode npm does not read a project's own configuration, so nothing here
+    # is known to depend on that, and that is exactly why the step should not
+    # rest on it: the reason it is safe would be a property of a version of
+    # npm rather than of this file. Running from the runner temp costs
+    # nothing and takes the question away.
     - name: Install the gates outside the workspace
       id: install
       shell: bash
+      working-directory: ${{ runner.temp }}
       env:
         # Under the runner temp, which is outside the workspace and is cleaned
         # up by the runner. npm reads this variable itself, so nothing here has
@@ -159,6 +165,11 @@ runs:
         # On PATH for the steps after this one rather than called by an
         # absolute path. The umbrella resolves each gate by NAME, so the gates
         # have to be findable the same way the umbrella is.
+        #
+        # THE LAYOUT ASSUMED HERE IS THE LINUX AND MACOS ONE, where a global
+        # install puts its shims in <prefix>/bin. On Windows npm puts them in
+        # the prefix directory itself, so this line would put an empty
+        # directory on PATH and every gate would then be reported missing.
         printf '%s\n' "$npm_config_prefix/bin" >> "$GITHUB_PATH"
 
     - name: Run the gates
