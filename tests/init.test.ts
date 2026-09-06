@@ -2052,3 +2052,132 @@ describe('hook managers that keep the hook text in package.json', () => {
     }
   });
 });
+
+// The manifest is committed to the repository, so it is untrusted input: a
+// person who can land a commit can put any path in it. Before this fix, revert
+// resolved none of those paths against the repository, so a crafted manifest
+// could make revert delete a file anywhere on disk, or write an executable one
+// anywhere, and exit 0. Both were reproduced against the built CLI. Every path
+// a manifest names is now contained to the repository before any write or
+// delete.
+describe('a crafted manifest cannot escape the repository', () => {
+  const digest = (content: string): string =>
+    createHash('sha256').update(content).digest('hex');
+
+  function writeManifest(repo: string, manifest: unknown): void {
+    mkdirSync(path.join(repo, '.guardrails'), { recursive: true });
+    writeFileSync(
+      path.join(repo, MANIFEST_RELATIVE_PATH),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+  }
+
+  it('refuses to delete a file an absolute path in files[] points outside the repo', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'precious.txt');
+    writeFileSync(outside, 'not the umbrella\n');
+    writeManifest(repo, {
+      version: 1,
+      files: [{ path: outside, sha256: digest('not the umbrella\n'), kind: 'policy' }],
+      adopted: null,
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    const conflict = result.conflicts.find(
+      (c) => c.reason === 'manifest-path-outside-repository'
+    );
+    expect(conflict?.guidance).toContain(outside);
+    // The file it was aimed at is untouched, and nothing was removed.
+    expect(existsSync(outside)).toBe(true);
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+  });
+
+  it('refuses a files[] entry that climbs out with ../ segments, and removes nothing', () => {
+    const repo = gitRepo();
+    writeManifest(repo, {
+      version: 1,
+      files: [{ path: '../../precious.txt', sha256: digest('x'), kind: 'policy' }],
+      adopted: null,
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(result.actions.map((action) => action.kind)).not.toContain('remove');
+    // The manifest itself is left in place: nothing was acted on.
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+  });
+
+  it('refuses to write an adopted hook an escaping adopted.path points outside the repo', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'pwned.sh');
+    // A hook entry at a path that does not exist is classified 'gone', which
+    // is what satisfies umbrellaHookGone and drives the adopted-hook restore.
+    writeManifest(repo, {
+      version: 1,
+      files: [
+        { path: path.join(repo, '.git', 'hooks', 'pre-commit'), sha256: digest('x'), kind: 'hook' },
+      ],
+      adopted: { path: outside, content: '#!/bin/sh\necho pwned\n', product: 'dep-guard' },
+    });
+
+    const result = revertInit({ cwd: repo, pathValue: '', force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    const conflict = result.conflicts.find(
+      (c) => c.reason === 'manifest-path-outside-repository'
+    );
+    expect(conflict?.guidance).toContain(outside);
+    // Nothing was written where it was aimed, and no restore was reported.
+    expect(existsSync(outside)).toBe(false);
+    expect(result.actions.map((action) => action.kind)).not.toContain('restore');
+  });
+
+  it('still reverts an ordinary in-repo manifest', () => {
+    const repo = gitRepo();
+    init(repo);
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('refuses an applyInit whose write path escapes the repository, and writes nothing', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'apply-escape.txt');
+    const plan = {
+      ok: true,
+      dryRun: false,
+      alreadyInstalled: false,
+      actions: [],
+      conflicts: [],
+      hookPath: '',
+      hookManager: 'native' as const,
+      repoRoot: repo,
+      adoptedFrom: null,
+      writes: [{ path: outside, content: 'not ours\n', executable: false, kind: 'policy' as const }],
+      records: [],
+    };
+
+    const result = applyInit(plan, { cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository')).toBe(
+      true
+    );
+    expect(existsSync(outside)).toBe(false);
+  });
+});

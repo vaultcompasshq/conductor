@@ -559,6 +559,13 @@ export type ConflictReason =
    */
   | 'managed-hooks'
   | 'hooks-path-outside-repository'
+  /**
+   * A path recorded in the manifest resolves outside the repository. The
+   * manifest is a committed, untrusted file, so revert and apply refuse any
+   * path in it that is not contained rather than writing or deleting where it
+   * points.
+   */
+  | 'manifest-path-outside-repository'
   | 'no-manifest'
   | 'manifest-unreadable'
   | 'changed-since-init'
@@ -651,6 +658,50 @@ interface Manifest {
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * Whether a path the manifest names is contained to the repository.
+ *
+ * The manifest is committed input, so a path in it is whatever a commit put
+ * there. Revert and apply run this over every path they would write to or
+ * delete before touching anything, and refuse the whole operation if any one
+ * of them resolves outside the repository.
+ *
+ * The same containment reasoning as resolvesInsideRoot in intent-spec.ts, with
+ * one difference it has to have: the paths here need not exist yet. An adopted
+ * hook is restored to a path revert has just removed, and a file the manifest
+ * recorded may be legitimately gone. realpathSync on the whole path throws for
+ * a path that is not there, which would refuse those legitimate cases, so the
+ * symlinks are resolved on the deepest ANCESTOR that does exist and the rest of
+ * the path is appended to it. A relative candidate is taken against the
+ * repository root, which is how the real attack lands: a person running revert
+ * has cd'd into the checkout, so the root is the working directory the fs would
+ * resolve it against anyway.
+ */
+function manifestPathInsideRepo(repoRoot: string, candidate: string): boolean {
+  try {
+    const root = realpathSync(repoRoot);
+    const abs = path.resolve(root, candidate);
+    let ancestor = abs;
+    while (!existsSync(ancestor)) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        break;
+      }
+      ancestor = parent;
+    }
+    const resolved = path.join(realpathSync(ancestor), path.relative(ancestor, abs));
+    const inside = path.relative(root, resolved);
+    return (
+      inside !== '' &&
+      !inside.startsWith(`..${path.sep}`) &&
+      inside !== '..' &&
+      !path.isAbsolute(inside)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function gitOutput(cwd: string, args: string[]): string | null {
@@ -1213,6 +1264,32 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
           },
   };
 
+  // Contain every path before writing, the same rule revert applies. These
+  // paths are computed by planning rather than read straight from the manifest,
+  // but the adopted record is carried forward from the committed manifest, and
+  // a write that lands outside the repository is a write apply should refuse
+  // whatever produced the path.
+  const escaping = [
+    ...plan.writes.map((write) => write.path),
+    ...(manifest.adopted === null ? [] : [manifest.adopted.path]),
+  ].filter((candidate) => !manifestPathInsideRepo(plan.repoRoot, candidate));
+  if (escaping.length > 0) {
+    return {
+      ...plan,
+      ok: false,
+      conflicts: [
+        ...plan.conflicts,
+        ...escaping.map((candidate) => ({
+          path: candidate,
+          reason: 'manifest-path-outside-repository' as const,
+          guidance:
+            `${candidate} resolves outside this repository, so nothing was written. Apply ` +
+            'contains every path it writes to the repository.',
+        })),
+      ],
+    };
+  }
+
   try {
     for (const write of plan.writes) {
       mkdirSync(path.dirname(write.path), { recursive: true });
@@ -1357,6 +1434,31 @@ export function revertInit(options: InitOptions): RevertResult {
   }
 
   const relative = (file: string): string => path.relative(root, file).split(path.sep).join('/');
+
+  // The manifest is committed input, so every path it names is contained to
+  // the repository before anything is written or deleted. A crafted manifest
+  // could otherwise make revert delete a file anywhere on disk, or, through
+  // adopted.path, write an executable one anywhere, and exit 0. Refused as a
+  // whole rather than skipped one path at a time: a manifest with a path that
+  // escapes is a manifest nothing should act on.
+  const escaping = [
+    ...manifest.files.map((file) => file.path),
+    ...(manifest.adopted === null ? [] : [manifest.adopted.path]),
+  ].filter((candidate) => !manifestPathInsideRepo(root, candidate));
+  if (escaping.length > 0) {
+    for (const candidate of escaping) {
+      conflicts.push({
+        path: relative(candidate),
+        reason: 'manifest-path-outside-repository',
+        guidance:
+          `${candidate} is recorded in ${MANIFEST_RELATIVE_PATH} but resolves outside this ` +
+          'repository, so nothing was written or removed. The manifest is a committed file, and ' +
+          'a path in it that points out of the repository is not one revert will act on. Repair ' +
+          'or delete the manifest by hand.',
+      });
+    }
+    return { ok: false, actions, conflicts };
+  }
 
   // Classify first, act second. Deciding as it goes is what let the old
   // version remove the policy file before discovering it could not remove
