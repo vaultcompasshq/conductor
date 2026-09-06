@@ -183,7 +183,7 @@ broken config as a policy violation.
 Because 2 covers cases the products themselves report as 1, the umbrella
 cannot read the child's exit code alone. "Exited 1 and printed nothing
 parseable on stdout" is the reliable signature of a rejected config, and
-it is treated as could-not-run (src/gate-runner.ts:770-789). So the
+it is treated as could-not-run (src/gate-runner.ts:785-804). So the
 composed code can differ from the maximum of the children's, deliberately.
 
 The per-finding `blocking` flag can only ADD to the answer, never subtract
@@ -248,7 +248,7 @@ This was recorded here as a disagreement with the README, which used to
 summarise enforcement as making such a gate "a note rather than exit 2".
 That was true of the exit code and false of the published log. The README
 was the wrong one and now says the same thing this section does
-(README.md:178-184), and the rule is pinned by
+(README.md:186-192), and the rule is pinned by
 tests/output-sarif.test.ts:1027, which renders an unenforced gate that
 could not run and asserts the result's level is `error` and its severity
 `critical`, with the `gate-not-enforced` notification beside it.
@@ -263,10 +263,10 @@ enforced gates, because it answers what failed the run
 Pinned by tests/exit-codes.test.ts:52, 58, 66 and 75;
 tests/output-text.test.ts:448, 456, 463 and 468 (an unenforced gate that
 blocked: the findings and their BLOCKING marker survive, the header is
-marked, and the verdict does not claim none blocked), 493, 498 and 505
+marked, and the verdict does not claim none blocked), 495, 500 and 507
 (an unenforced gate that could not run is loud, is not exit 2, and is not
-also called a gate that blocked), 536, 549 and 557 (only enforced gates
-are named as the reason and counted), and especially 577 ("lets the
+also called a gate that blocked), 538, 551 and 559 (only enforced gates
+are named as the reason and counted), and especially 579 ("lets the
 header count everything on screen while the verdict counts what failed",
 which asserts the header says 3 findings while the verdict says 2 across
 1 gate); tests/cli.test.ts:482, 498, 528 and 543, end to end through the
@@ -300,9 +300,9 @@ the rule below, so without one of these findings the published report
 would carry no trace of the most important thing that happened.
 
 A gate that exits above 1, or does not exit normally at all because it was
-killed or timed out, is could-not-run (src/gate-runner.ts:748-768). A gate
+killed or timed out, is could-not-run (src/gate-runner.ts:766-783). A gate
 that exits 1 with stdout that will not parse as JSON is could-not-run
-(src/gate-runner.ts:770-789). Reporting the second as a policy violation
+(src/gate-runner.ts:785-804). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
 Pinned by tests/gate-runner.test.ts:166, 176 and 200, and end to end by
@@ -313,7 +313,7 @@ of its own "beyond conductor/gate-missing". That was false and always had
 been: the union at src/normalize.ts:705-708 has three members, and the
 README named `conductor/gate-failed` elsewhere in the same document.
 Three, plus the two normalization diagnostics, is the number, and both
-documents now list all five (AGENTS.md:12-16, README.md:591-595).
+documents now list all five (AGENTS.md:12-16, README.md:684-688).
 
 The README half of that pair was pointing at the wrong place and had been
 since it was written. It named the paragraph about mirroring the Action's
@@ -332,7 +332,7 @@ with exit 1, which the pre-commit hook then reports as "a gate blocked".
 
 The backstop is src/gate-runner.ts:549-568. The `catch` around
 normalization is deliberately NOT narrowed to `NormalizeError`
-(src/gate-runner.ts:809-829): that narrowing was the original defect, when
+(src/gate-runner.ts:824-844): that narrowing was the original defect, when
 a normalizer reading a property off a null array element threw a
 `TypeError`, which escaped everything. The normalizers now validate every
 field they read before reading it (src/normalize.ts:49-90), and the broad
@@ -689,9 +689,9 @@ Pinned at four levels. The decisions: tests/trust-base.test.ts (17 cases
 over the three refusals, reading the policy at a ref, the document
 comparison and the version floor, all against real git repositories rather
 than a mock). The capability gate: tests/gate-runner.test.ts:260-412 and
-414-566. The run: tests/run.test.ts:496-566 (the refusal, including that a
+414-588. The run: tests/run.test.ts:496-566 (the refusal, including that a
 head policy of all-unenforced or of no enabled gate still exits 2) and
-561-665. The CLI, against a real repository whose feature commit rewrites
+568-790. The CLI, against a real repository whose feature commit rewrites
 the policy to point the secrets gate at a script it adds:
 tests/cli.test.ts:879-1186, where the marker file appears without
 `--trust-base` and does not appear with it. End to end against the real
@@ -709,8 +709,8 @@ them is a way the mechanism above was true and the REPORT of it was not:
   exists, the notification and its ref, error level, `executionSuccessful`
   false, the could-not-run results survive, silence when not refused). End
   to end through the CLI on a real repository at tests/cli.test.ts:1049,
-  1080 and 1116, the last of which is a head policy that will not parse.
-- The program rule: tests/cli.test.ts:1210-1795, nineteen cases on real
+  1077 and 1116, the last of which is a head policy that will not parse.
+- The program rule: tests/cli.test.ts:1210-1795, eighteen cases on real
   repositories. All THREE attack shapes are driven BEFORE and after, so each
   refusal is measured against a run where the planted program demonstrably
   did execute rather than against an assumption that it would have. The
@@ -721,15 +721,15 @@ them is a way the mechanism above was true and the REPORT of it was not:
   those two is comparing the ROOT tree instead of the directory tree, which
   reddens four.
 - The version refusal and the vault-guard pass-down:
-  tests/gate-runner.test.ts:260-412 and 414-566, with the summed proposal at
+  tests/gate-runner.test.ts:260-412 and 414-588, with the summed proposal at
   tests/run.test.ts:647 and the real gate at
-  tests/dogfood.e2e.test.ts:777-845, which drives the sibling's built
+  tests/dogfood.e2e.test.ts:779-859, which drives the sibling's built
   vault-guard through the policy's absolute `command:` and skips, loudly,
   when there is no such build on the machine.
 
 All three gates are in the table as of 0.3.0, and THE COMPOSED TEST THE
 DESIGN CALLS THE ACCEPTANCE CRITERION FOR THIS WAVE NOW RUNS
-(tests/dogfood.e2e.test.ts:912-1188). One fixture repository with all three
+(tests/dogfood.e2e.test.ts:926-1208). One fixture repository with all three
 gates adopted and a frozen contract; one pull request that, in a single
 commit, rewrites the contract's scope and its approval, adds
 `severity_overrides` and `ignore: **` to vault-guard's config, adds an allow
@@ -806,19 +806,19 @@ the same repository.
 Pinned at three levels, and the parity direction is pinned at every one of
 them, because a skip that also fired on ordinary runs would silently change
 what a hook executes. The resolution decision:
-tests/resolve.test.ts:244-363. The gate: tests/gate-runner.test.ts:590-702,
+tests/resolve.test.ts:244-363. The gate: tests/gate-runner.test.ts:590-701,
 where each case plants a marker binary under `node_modules/.bin` so "the
 other one ran" is a fact about the filesystem rather than about a `source`
-field. The reports: tests/output-text.test.ts:1089-1147 and
-tests/output-sarif.test.ts:1789-1848. Through the CLI on a real repository:
-tests/cli.test.ts:1597-1641, where the same plant that 0.3.0 refused is now
+field. The reports: tests/output-text.test.ts:1090-1143 and
+tests/output-sarif.test.ts:1787-1841. Through the CLI on a real repository:
+tests/cli.test.ts:1597-1620, where the same plant that 0.3.0 refused is now
 unreachable AND the real gate on PATH reports the secret it was hiding. End
 to end against the real gates: tests/dogfood.e2e.test.ts:662-776, which
 plants two marker binaries in the dogfood clone's own `node_modules/.bin`,
 and the composed test's PATH variant asserts the line is ABSENT
 (tests/dogfood.e2e.test.ts:1203), which is what keeps it from being
 decoration that appears on every run. The action itself:
-tests/action.test.ts:242-411, which RUNS both scripts under bash with npm
+tests/action.test.ts:230-422, which RUNS both scripts under bash with npm
 replaced by a recorder rather than pattern-matching the YAML.
 
 WHAT THIS STILL DOES NOT DO, stated here because a reader should not infer
@@ -1108,7 +1108,7 @@ src/policy.ts:419-428 and initialised false at parse time,
 src/policy.ts:351-353). Pinned by tests/policy.test.ts:415 (the gate
 `--gate` switched off is marked and the named one is not), 428 (a gate the
 file had already disabled is NOT marked, or the user's own decision is
-read back to them as something the command line did) and 429 (nothing is
+read back to them as something the command line did) and 438 (nothing is
 marked when there was no `--gate` at all).
 
 It is carried on the run result as `ExcludedGate` (src/run.ts:33-47),
@@ -1645,8 +1645,8 @@ performed a real destructive revert.
 read and every decision, so what it reports is exactly what a real revert
 from the same state would do (src/init.ts:1444-1449, the flag; the guarded
 writes are the file removals at src/init.ts:1578-1580, the adopted-hook
-restore at 1571-1575, the manifest removal at 1585-1587 and its rewrite at
-1631-1637). `ok` is unchanged by the flag, so `--revert --dry-run` exits
+restore at 1618-1622, the manifest removal at 1632-1634 and its rewrite at
+1678-1684). `ok` is unchanged by the flag, so `--revert --dry-run` exits
 the way the revert it previews would: the CLI threads the flag through
 (src/cli.ts:277-282) and maps `ok` to the exit code as always.
 
@@ -2164,10 +2164,10 @@ own namespace on its descriptor id), 196 (that advisory at note level),
 210 (the message text unchanged in the move), 217 and 254 (gate-missing
 and gate-failed staying results, in both directions), 285 (the
 notification objects are shaped as SARIF 2.1.0 wants, every level is
-`note`, and the descriptor ids are declared on the driver), 921 (a
+`note`, and the descriptor ids are declared on the driver), 957 (a
 normalization diagnostic as a note-level result carrying blocking: false
 and, since 0.3.0, the policy file as its location rather than none at all)
-and 952 (naming the gate it came from). The remaining
+and 996 (naming the gate it came from). The remaining
 result id, `conductor/gate-output-unparseable`, is pinned end to end by
 tests/cli.test.ts:162, which runs the CLI over a gate whose output has
 drifted and finds that id among the umbrella run's RESULTS.
@@ -2231,7 +2231,7 @@ rest. Pinned by tests/output-text.test.ts:257, 280, 295, 327, 347 and 747.
 
 Three of those are suppression, and print as a count EVEN AT ZERO
 (src/output-text.ts:644-649 for gates the command line left out, 664-672
-for gates that are not enforced, 672-681 for the suppressed and ignored
+for gates that are not enforced, 699-708 for the suppressed and ignored
 totals summed across gates). This is the family rule dep-guard's stability
 policy states: a gate that can be turned off, dropped by `--gate`, or a
 finding count baselined away is the user's decision, and a clean line that
@@ -2283,7 +2283,7 @@ rather than cosmetic: `conductor/gate-failed` in the umbrella's run is
 then the only place in the whole log that can say anything about the
 failure, which is why that finding carries the failing child's own stderr
 (`normalizeFailedGate`, src/normalize.ts:885-900, fed from
-src/gate-runner.ts:760-764). Before it did, a dogfood run against a
+src/gate-runner.ts:779). Before it did, a dogfood run against a
 repository with an unparseable lockfile printed dep-guard naming the file
 and the reason in the text report, and put "the gate exited 2, which it
 uses for could not run" and nothing else in both `message.text` and
@@ -2296,8 +2296,8 @@ the rule, the role and the product and never over the message.
 
 `conductor/gate-output-unparseable` CARRIES IT TOO, for the same reason
 and through the same helper (`normalizeUnparseableGate`,
-src/normalize.ts:809-830, fed from src/gate-runner.ts:785, 825 and the
-backstop at 516). That
+src/normalize.ts:809-830, fed from src/gate-runner.ts:800, 840 and the
+backstop at 564). That
 result had the identical gap and one very live case: a gate refusing to
 run at all exits 1 with no JSON and says why on stderr, which is exactly
 what a state-directory conflict looks like from the umbrella's side.
@@ -2361,7 +2361,7 @@ resolves to an artifact uri), 1450 (the umbrella's own are filed against
 the policy file), 1496 (the intent gate's against its contract), 1526 (a
 logical location survives and gains a physical one) and 1544 (a result
 that named a real file still points at that file). End to end against the
-real gates by tests/dogfood.e2e.test.ts:614.
+real gates by tests/dogfood.e2e.test.ts:622.
 
 No invented region. Only the secret gate reports a line and a column, and
 even there no `endColumn` (src/output-sarif.ts:257-263 and
@@ -2451,11 +2451,11 @@ above:
   this one renders a BLOCKING finding at note level and asserts both. The
   wholesale properties assertion at tests/output-sarif.test.ts:644 cannot
   stand for this claim on its own, which is exactly the gap that let the
-  regression through before 620 was written.
+  regression through before 622 was written.
 - `executionSuccessful` in both directions: tests/output-sarif.test.ts:468
   (false, with no notification to hang it on, which is the case that
-  produced no invocation at all before), 477 (true when every gate ran),
-  315 (false for a gate that could not run) and 493 (a gate's run gets no
+  produced no invocation at all before), 479 (true when every gate ran),
+  317 (false for a gate that could not run) and 495 (a gate's run gets no
   invocation of its own).
 - Enforcement recorded twice, results untouched:
   tests/output-sarif.test.ts:1060 (present on both an enforced and an
@@ -2517,7 +2517,7 @@ flag drop to false and raises the diagnostic), 62 (the same for a missing
 threshold), 184 (the threshold is read from `run.blocking_matches`: with
 that count set to 0 the finding is not blocking, while `summary.secrets`
 still says 1), 236 (every budget violation blocks), 273 (a drift finding
-whose overall action is "proceed" does not) and 419 (a blocked gate never
+whose overall action is "proceed" does not) and 421 (a blocked gate never
 reports zero blocking findings).
 
 ## Nothing invents a position, a fingerprint, or a severity
@@ -2574,13 +2574,13 @@ fingerprint stabilities carried verbatim), 147 and 162 (the 1-based
 subject column and the 0-based one kept under its own key, with the bag
 asserted NOT to carry a plain `column`), 170 (no `endColumn`), 230 (the
 intent gate's derived severity and that every one of its findings says
-so) and 458 (the umbrella's own deterministic fingerprint).
+so) and 460 (the umbrella's own deterministic fingerprint).
 
 ## No stack trace reaches a terminal or a report
 
 An error's message, never its stack (`messageOf`,
 src/gate-runner.ts:456-468; src/normalize.ts:800-830; src/cli.ts:408-427
-and 440-444). A stack
+and 444-447). A stack
 reaching the terminal puts a local filesystem path in front of a user who
 cannot act on any of it, and puts one into a report that gets uploaded.
 The message is the part that says what went wrong.
@@ -2641,9 +2641,9 @@ plainly (src/init.ts:507); this is the CLI catching up with it.
 
 ALL THREE BRANCHES ARE PINNED. tests/cli.test.ts:773 (no git on the
 controlled PATH: exit 2, the git sentence, no stack frame, no run-init
-message, and nothing at all on stdout), 788 (a directory outside any
+message, and nothing at all on stdout), 789 (a directory outside any
 repository: exit 2 and a sentence naming that directory rather than the
-init advice), and 800 (a `git` file with no execute bit on the controlled
+init advice), and 801 (a `git` file with no execute bit on the controlled
 PATH: the spawn fails with EACCES, which is neither ENOENT nor an exit
 code, and the run says git could not be run rather than either of the
 other two sentences).
