@@ -42,6 +42,29 @@ inputs:
   working-directory:
     description: The repository root, when the checkout is not at the workspace root.
     default: .
+  conductor-version:
+    description: >-
+      The exact version of the umbrella this action installs and runs. An
+      exact version, never a range and never a dist-tag: the programs that
+      judge a pull request are pinned here, in a workflow file that lives on
+      the base branch, which is the protected side. A range would hand that
+      decision to whatever the registry served on the morning of the run.
+    default: 0.4.0
+  dep-guard-version:
+    description: >-
+      The exact version of the dependency gate this action installs. Same
+      rule as conductor-version.
+    default: 0.6.0
+  vault-guard-version:
+    description: >-
+      The exact version of the secrets gate this action installs. Same rule
+      as conductor-version.
+    default: 1.7.0
+  intent-guard-version:
+    description: >-
+      The exact version of the intent gate this action installs. Same rule as
+      conductor-version.
+    default: 1.4.0
 
 outputs:
   sarif:
@@ -53,28 +76,90 @@ outputs:
 runs:
   using: composite
   steps:
-    # No install step, on purpose. A repository that wants this action
-    # depends on conductor the ordinary way, so the version gating its pull
-    # requests is the one its own lockfile pins rather than whatever an
-    # install here decided to fetch. This step says that in a sentence
-    # rather than failing later with a command-not-found.
-    - name: Check conductor is installed
+    # THE PROGRAMS COME FROM OUTSIDE THE TREE THEY JUDGE. Until 0.4.0 this
+    # action installed nothing and ran the repository's own
+    # node_modules/.bin/conductor, which put the whole family of programs
+    # inside the tree under judgment: the install step runs the HEAD's
+    # lockfile, so a pull request could repoint any gate, or the umbrella
+    # itself, at a build it controls while leaving the version number alone.
+    # Now the four packages are installed from the registry at versions
+    # pinned in this file, which on a pull_request event is read from the base
+    # branch and is therefore the protected side.
+    - name: Validate the pinned versions
+      id: validate
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       env:
-        # Read as a variable rather than interpolated into the script, the
-        # same as every other input in this file: an expression expanded
-        # inside a run block is pasted in as source text before the shell
-        # ever sees it, so a value carrying a quote rewrites the script.
-        WORKDIR: ${{ inputs.working-directory }}
+        # Read as variables rather than interpolated into the script, the same
+        # as every other input in this file: an expression expanded inside a
+        # run block is pasted in as source text before the shell ever sees it,
+        # so a value carrying a quote rewrites the script. That is what makes
+        # this a check on the CONTENT of a version rather than the only thing
+        # standing between an input and a shell.
+        CONDUCTOR_VERSION: ${{ inputs.conductor-version }}
+        DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
+        VAULT_GUARD_VERSION: ${{ inputs.vault-guard-version }}
+        INTENT_GUARD_VERSION: ${{ inputs.intent-guard-version }}
       run: |
         set -eu
-        if [ ! -x node_modules/.bin/conductor ]; then
-          echo "conductor: no node_modules/.bin/conductor in ${WORKDIR}." >&2
-          echo "This action runs the conductor your repository already depends on and installs nothing." >&2
-          echo "Add it as a devDependency and run your install step before this one." >&2
+
+        # EXACT VERSIONS ONLY. Not a range, not a dist-tag, not "latest": the
+        # version that judges a pull request has to be a decision taken on the
+        # base branch, and any of those three hands it to the registry on the
+        # morning of the run instead. Every one of the four is checked, and
+        # all failures are reported before exiting, so a workflow with two
+        # bad pins does not need two runs to learn that.
+        SEMVER='^[0-9]+\.[0-9]+\.[0-9]+$'
+        status=0
+        for pair in \
+          "conductor-version:$CONDUCTOR_VERSION" \
+          "dep-guard-version:$DEP_GUARD_VERSION" \
+          "vault-guard-version:$VAULT_GUARD_VERSION" \
+          "intent-guard-version:$INTENT_GUARD_VERSION"; do
+          name="${pair%%:*}"
+          value="${pair#*:}"
+          if [[ ! "$value" =~ $SEMVER ]]; then
+            echo "conductor: the ${name} input must be an exact version like 1.2.3, and was \"${value}\"." >&2
+            status=1
+          fi
+        done
+        if [ "$status" -ne 0 ]; then
+          echo "A range, a dist-tag such as latest, or anything else is refused. The versions that judge a pull request are pinned in the workflow file on the base branch, which is the protected side." >&2
           exit 1
         fi
+
+    # UNCONDITIONAL, on push and on pull_request alike, so there is one code
+    # path. A conditional install would mean the action behaves one way on the
+    # runs that matter and another way everywhere else, and the everywhere-else
+    # path would be the one nobody ever exercises before it is needed.
+    #
+    # No working-directory: this must not write into the checkout. Installing
+    # into the workspace would put the programs that judge the pull request
+    # back inside the tree being judged, and leave them there for the gates to
+    # scan.
+    - name: Install the gates outside the workspace
+      id: install
+      shell: bash
+      env:
+        # Under the runner temp, which is outside the workspace and is cleaned
+        # up by the runner. npm reads this variable itself, so nothing here has
+        # to pass --prefix on a command line.
+        npm_config_prefix: ${{ runner.temp }}/conductor-gates
+        CONDUCTOR_VERSION: ${{ inputs.conductor-version }}
+        DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
+        VAULT_GUARD_VERSION: ${{ inputs.vault-guard-version }}
+        INTENT_GUARD_VERSION: ${{ inputs.intent-guard-version }}
+      run: |
+        set -eu
+        mkdir -p "$npm_config_prefix"
+        npm install -g \
+          "@vaultcompass/conductor@$CONDUCTOR_VERSION" \
+          "@vaultcompass/dep-guard@$DEP_GUARD_VERSION" \
+          "@vaultcompass/vault-guard@$VAULT_GUARD_VERSION" \
+          "@vaultcompass/intent-guard@$INTENT_GUARD_VERSION"
+        # On PATH for the steps after this one rather than called by an
+        # absolute path. The umbrella resolves each gate by NAME, so the gates
+        # have to be findable the same way the umbrella is.
+        printf '%s\n' "$npm_config_prefix/bin" >> "$GITHUB_PATH"
 
     - name: Run the gates
       id: gates
@@ -149,4 +234,8 @@ runs:
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")
         fi
-        node_modules/.bin/conductor "${ARGS[@]}"
+        # Off PATH, which the install step put the runner temp on. Never
+        # node_modules/.bin/conductor: that is the head's own install, chosen
+        # by the head's own lockfile, and running it would let a pull request
+        # choose the program that judges it.
+        conductor "${ARGS[@]}"
