@@ -88,6 +88,24 @@
 //    Everything genuinely inside keeps the relative, forward-slashed,
 //    `%SRCROOT%`-based spelling that GitHub code scanning wants.
 //
+//  - EVERY RESULT CARRIES AT LEAST ONE LOCATION, and the fallback is a real
+//    file rather than an invented one. GitHub code scanning rejects a whole
+//    uploaded log with "locationFromSarifResult: expected at least one
+//    location" the moment any single result has none, so one location-less
+//    result loses the entire report rather than one alert. That happened on
+//    every main-branch run of a sibling repository's guardrails job, and the
+//    offender was `intent-guard/gate-blocked`, whose subject is `none`.
+//
+//    This does NOT weaken the two rules above it. A location the gate gave is
+//    never overwritten, no region is invented, and no path is fabricated: the
+//    fallback is the CONTROL FILE this result is a statement about, which is
+//    a file that exists in the repository and is the one a reader would open.
+//    For the umbrella's own results and for the two gates whose control files
+//    the umbrella does not read, that is the policy file, which is where the
+//    gate that produced the result is enabled. For the intent gate it is the
+//    frozen contract, when the run recorded which of the two state
+//    directories answered.
+//
 //  - A REGION ONLY WHEN A REAL POSITION IS KNOWN. One of the three gates
 //    reports a line and a column; the other two report no position at all.
 //    An invented startLine annotates an unrelated line of somebody's file
@@ -100,7 +118,9 @@
 //    field were ever carried.
 
 import type { Finding, Severity } from './envelope.js';
+import type { GateOutcome } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
+import { POLICY_FILE_NAME } from './policy.js';
 import type { RunResult } from './run.js';
 
 const SARIF_SCHEMA =
@@ -269,7 +289,48 @@ function locationsFor(finding: Finding): Array<Record<string, unknown>> | undefi
   }
 }
 
-function toResult(finding: Finding): Record<string, unknown> {
+/**
+ * The file a result with no location of its own is filed against.
+ *
+ * A real, repository-relative path, never a placeholder: the policy file is
+ * where every gate is enabled and where a reader goes to change what ran, and
+ * for the intent gate the frozen contract is the file its gate-state findings
+ * are literally about. Both exist in the repository whenever a run happened at
+ * all, so this never points at nothing.
+ */
+export function fallbackLocationFor(gate: GateOutcome | null): string {
+  const source = gate?.intent?.contractSource;
+  if (source !== undefined && source.kind === 'native') {
+    return source.path;
+  }
+  return POLICY_FILE_NAME;
+}
+
+/**
+ * The locations for one result, with the fallback filled in where a real one
+ * is missing.
+ *
+ * TWO SEPARATE CASES, and conflating them would lose information. A finding
+ * with no locations at all gets one made of the fallback. A finding that has
+ * a LOGICAL location and no physical one (a drift finding's contract
+ * category, a package whose manifest could not be placed) keeps the logical
+ * one and gains the physical fallback beside it, because the logical location
+ * is what a consumer groups on and replacing it would drop that.
+ */
+function withFallbackLocation(
+  locations: Array<Record<string, unknown>> | undefined,
+  fallbackUri: string
+): Array<Record<string, unknown>> {
+  const physicalLocation = { artifactLocation: { uri: fallbackUri, uriBaseId: '%SRCROOT%' } };
+  if (locations === undefined || locations.length === 0) {
+    return [{ physicalLocation }];
+  }
+  return locations.map((location) =>
+    location.physicalLocation === undefined ? { ...location, physicalLocation } : location
+  );
+}
+
+function toResult(finding: Finding, fallbackUri: string): Record<string, unknown> {
   // A path that escapes the source root gets no physical location, so the
   // path itself is carried here instead. Dropping a location is honest;
   // dropping the information as well would just lose the finding's subject.
@@ -295,10 +356,9 @@ function toResult(finding: Finding): Record<string, unknown> {
     entry.partialFingerprints = { [fingerprintKey(finding.fingerprint.scope)]: finding.fingerprint.value };
   }
 
-  const locations = locationsFor(finding);
-  if (locations !== undefined) {
-    entry.locations = locations;
-  }
+  // Unconditional. The old code omitted the key when there was nothing
+  // honest to say, and one such result makes GitHub reject the whole log.
+  entry.locations = withFallbackLocation(locationsFor(finding), fallbackUri);
 
   return entry;
 }
@@ -373,6 +433,8 @@ function makeRun(
   name: string,
   version: string | null,
   findings: Finding[],
+  /** The artifact a result with no location of its own is filed against. */
+  fallbackUri: string,
   properties?: Record<string, unknown>,
   invocation?: Invocation
 ): Record<string, unknown> {
@@ -393,7 +455,7 @@ function makeRun(
           : { notifications: notificationDeclarations(notifications) }),
       },
     },
-    results: findings.map(toResult),
+    results: findings.map((finding) => toResult(finding, fallbackUri)),
     ...(invocation === undefined
       ? {}
       : {
@@ -678,7 +740,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     // different claims, and so are one over a branch diff and one over an
     // index.
     runs.push(
-      makeRun(gate.product, gate.productVersion, own, {
+      makeRun(gate.product, gate.productVersion, own, fallbackLocationFor(gate), {
         enforced: gate.enforce,
         stage: gate.stage,
         ...(gate.intent === undefined
@@ -716,7 +778,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
   // that did not run there.
   if (umbrellaFindings.length > 0 || notifications.length > 0) {
     runs.push(
-      makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings, undefined, {
+      makeRun(UMBRELLA_DRIVER_NAME, umbrellaVersion, umbrellaFindings, POLICY_FILE_NAME, undefined, {
         // A claim about whether the analysis completed, taken from the gates
         // rather than from the exit code: an unenforced gate that could not
         // run leaves the run at exit 0, and nothing was checked by it either

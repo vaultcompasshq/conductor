@@ -736,12 +736,21 @@ describe('locations', () => {
     ]);
   });
 
-  it('gives a drift finding a logical contract location and no file at all', () => {
+  it('gives a drift finding a logical contract location, and the control file beside it', () => {
+    // The logical location is the claim: this is about a contract category
+    // and not about a line of anybody's file. The physical one is there
+    // because a result with no location at all makes code scanning reject the
+    // whole log, and the file it names is the one a reader would open.
     const drift = intentResults.find((entry) =>
       String(entry.ruleId).startsWith('intent-guard/drift.')
     ) as Record<string, unknown>;
     expect(drift.locations).toEqual([
-      { logicalLocations: [{ kind: 'contract', fullyQualifiedName: 'undocumented_pivot' }] },
+      {
+        logicalLocations: [{ kind: 'contract', fullyQualifiedName: 'undocumented_pivot' }],
+        physicalLocation: {
+          artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+        },
+      },
     ]);
   });
 
@@ -798,9 +807,13 @@ describe('locations', () => {
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
     const locations = entry.locations as Array<Record<string, unknown>>;
 
-    // No physical location at all: a uri of "outside/package.json" under
-    // %SRCROOT% would point at a file that is not the one the gate found.
-    expect(locations[0]).not.toHaveProperty('physicalLocation');
+    // Never "outside/package.json" under %SRCROOT%: that uri would point at a
+    // file that is not the one the gate found, and %SRCROOT% would vouch for
+    // it. The escaping path is not turned into a location; the fallback, the
+    // policy file, is what the result is filed against instead.
+    expect(locations[0].physicalLocation).toEqual({
+      artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+    });
     // The package is still named.
     expect(locations[0].logicalLocations).toEqual([
       { kind: 'package', fullyQualifiedName: 'x' },
@@ -818,9 +831,14 @@ describe('locations', () => {
     };
     const log2 = sarif(result([outcome({ findings: [sneaky] })]));
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
-    expect((entry.locations as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
-      'physicalLocation'
-    );
+    // The escaping path never becomes a uri; the fallback is what is there.
+    expect(
+      (entry.locations as Array<Record<string, Record<string, Record<string, unknown>>>>)[0]
+        .physicalLocation.artifactLocation.uri
+    ).toBe('.guardrails.yaml');
+    expect((entry.properties as Record<string, unknown>).unresolvablePaths).toEqual([
+      'a/../../outside/package.json',
+    ]);
   });
 
   it('resolves an inner .. that stays inside the root', () => {
@@ -837,7 +855,7 @@ describe('locations', () => {
     expect(location.physicalLocation.artifactLocation.uri).toBe('packages/lib/package.json');
   });
 
-  it('drops a secret finding location entirely when its file escapes the root', () => {
+  it('drops the region of a secret finding whose file escapes the root', () => {
     const escaping: Finding = {
       ...vaultGuard.findings[0],
       subject: { kind: 'location', file: '../outside/config.js', line: 2, column: 23 },
@@ -846,8 +864,17 @@ describe('locations', () => {
       result([outcome({ role: 'secrets', product: 'vault-guard', findings: [escaping] })])
     );
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
-    // A region without a resolvable file would annotate line 2 of nothing.
-    expect(entry).not.toHaveProperty('locations');
+    const location = (entry.locations as Array<Record<string, Record<string, unknown>>>)[0];
+
+    // THE REGION IS THE PART THAT MUST NOT SURVIVE. Line 2 and column 24 of
+    // the policy file is a different place from line 2 of the file the gate
+    // scanned, and once uploaded the two are indistinguishable. So the
+    // fallback carries the artifact and nothing else, and the path the gate
+    // named is kept in the properties bag rather than turned into a uri.
+    expect(location.physicalLocation).toEqual({
+      artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+    });
+    expect(location.physicalLocation).not.toHaveProperty('region');
     expect((entry.properties as Record<string, unknown>).unresolvablePaths).toEqual([
       '../outside/config.js',
     ]);
@@ -893,7 +920,7 @@ describe('the umbrella own findings', () => {
     );
   });
 
-  it('carries no location, because a missing binary is not somewhere in the tree', () => {
+  it('is filed against the policy file, because a missing binary is not somewhere in the tree', () => {
     const missing = outcome({
       couldNotRun: { reason: 'binary-missing', detail: 'x' },
       findings: [
@@ -913,9 +940,16 @@ describe('the umbrella own findings', () => {
       ],
     });
     const log = sarif(result([missing]));
-    expect((log.runs[0].results as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
-      'locations'
-    );
+    // No invented location in the scanned tree, and no result without one
+    // either: the policy file is where that gate is enabled, which is the
+    // file somebody reading this alert has to open.
+    expect((log.runs[0].results as Array<Record<string, unknown>>)[0].locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+        },
+      },
+    ]);
   });
 
   it('carries the umbrella own diagnostics as note-level results', () => {
@@ -943,10 +977,18 @@ describe('the umbrella own findings', () => {
     expect(entry.ruleId).toBe('conductor/blocking-count-mismatch');
     expect(entry.level).toBe('note');
     expect((entry.message as Record<string, string>).text).toMatch(/reconstructed 2/);
-    // A diagnostic is not a finding: it does not block, and it has no
-    // location, because it is about the run rather than about the code.
+    // A diagnostic is not a finding: it does not block, and it names no
+    // place in the scanned code, because it is about the run. It is still
+    // filed against the policy file, since a result with no location makes
+    // code scanning reject the whole log.
     expect((entry.properties as Record<string, unknown>).blocking).toBe(false);
-    expect(entry).not.toHaveProperty('locations');
+    expect(entry.locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' },
+        },
+      },
+    ]);
   });
 
   it('names the gate a diagnostic came from, since the run it lands in is not that gate', () => {
@@ -1293,5 +1335,188 @@ describe("a failing gate's own error in the published log", () => {
 
     expect(entry.ruleId).toBe('conductor/gate-failed');
     expect(entry.level).toBe('error');
+  });
+});
+
+/**
+ * Every result carries at least one location.
+ *
+ * GitHub code scanning rejects a whole uploaded log with
+ * "locationFromSarifResult: expected at least one location" when any single
+ * result has none, so one location-less result loses the entire report. Every
+ * main-branch run of a sibling repository's guardrails job was annotated with
+ * exactly that, and running the umbrella against that checkout found the
+ * offender: `intent-guard/gate-blocked`, whose subject is `none`, rendered
+ * with no `locations` key at all.
+ *
+ * The subjects that produced no location were `none` (every umbrella
+ * gate-missing, gate-failed and gate-output-unparseable finding, both
+ * normalization diagnostics, and intent-guard's gate-blocked), `paths` with
+ * nothing placeable in it (a budget violation whose `matched` list is empty),
+ * and `location` whose file escapes the source root. A `contract` subject had
+ * a logical location and no physical one, which is not what a consumer
+ * resolving a location looks for either.
+ */
+describe('every result has a location, because a log with one that does not is rejected whole', () => {
+  /** A budget violation with no matched paths: a `paths` subject that places nothing. */
+  const EMPTY_PATHS = normalizeIntentGuard(
+    {
+      status: 'blocked',
+      exitCode: 1,
+      reasons: ['Budget hard_block: new dependency added'],
+      contractFound: true,
+      contractFrozen: true,
+      budget: {
+        action: 'hard_block',
+        violations: [
+          {
+            rule: 'allow_new_dependencies',
+            severity: 'hard_block',
+            message: 'A new dependency was added and the contract forbids it.',
+            matched: [],
+            fingerprint: 'a1b2c3',
+          },
+        ],
+      },
+    },
+    '1.4.0'
+  );
+
+  /** A gate-state block: the `none` subject that actually broke the upload. */
+  const GATE_BLOCKED = normalizeIntentGuard(
+    {
+      status: 'blocked',
+      exitCode: 1,
+      reasons: ['Intent contract exists but is not frozen by user.'],
+      contractFound: true,
+      contractFrozen: false,
+    },
+    '1.4.0'
+  );
+
+  const EVERY_SHAPE = result([
+    outcome({ role: 'dependencies', product: 'dep-guard', findings: depGuard.findings }),
+    outcome({
+      role: 'secrets',
+      product: 'vault-guard',
+      productVersion: '1.4.2',
+      findings: vaultGuard.findings,
+    }),
+    outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: '1.4.0',
+      findings: [
+        ...intentGuard.findings,
+        ...EMPTY_PATHS.findings,
+        ...GATE_BLOCKED.findings,
+        normalizeMissingGate('intent', 'intent-guard', ['intent-guard']),
+      ],
+      diagnostics: [{ code: 'conductor/blocking-count-mismatch', message: 'they disagree' }],
+    }),
+  ]);
+
+  function everyResult(log: { runs: Array<Record<string, unknown>> }): Array<
+    Record<string, unknown>
+  > {
+    return log.runs.flatMap((run) => run.results as Array<Record<string, unknown>>);
+  }
+
+  it('gives every result in a log a non-empty locations array', () => {
+    const results = everyResult(sarif(EVERY_SHAPE));
+
+    expect(results.length).toBeGreaterThan(5);
+    const withoutLocation = results
+      .filter((entry) => !Array.isArray(entry.locations) || (entry.locations as unknown[]).length === 0)
+      .map((entry) => entry.ruleId);
+    expect(withoutLocation).toEqual([]);
+  });
+
+  it('gives every location an artifact a consumer can resolve', () => {
+    const locations = everyResult(sarif(EVERY_SHAPE)).flatMap(
+      (entry) => entry.locations as Array<Record<string, unknown>>
+    );
+
+    for (const location of locations) {
+      const physical = location.physicalLocation as
+        | { artifactLocation?: { uri?: string } }
+        | undefined;
+      expect(typeof physical?.artifactLocation?.uri).toBe('string');
+    }
+  });
+
+  it("falls back to the policy file, which is where the gate that produced the result is enabled", () => {
+    const umbrella = sarif(EVERY_SHAPE).runs.find(
+      (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name) === 'conductor'
+    ) as Record<string, unknown>;
+    const results = umbrella.results as Array<Record<string, unknown>>;
+
+    expect(results.length).toBeGreaterThan(0);
+    for (const entry of results) {
+      expect(entry.locations).toEqual([
+        { physicalLocation: { artifactLocation: { uri: '.guardrails.yaml', uriBaseId: '%SRCROOT%' } } },
+      ]);
+    }
+  });
+
+  it("uses the intent gate's own contract file when the run says which one it read", () => {
+    // A result about the contract belongs on the contract, not on the policy
+    // file, and the run already carries which of the two state directories
+    // answered.
+    const withContract = result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.4.0',
+        findings: GATE_BLOCKED.findings,
+        intent: {
+          contractSource: { kind: 'native', path: '.intent-guard/intent-contract.yaml' },
+          baseRef: 'origin/main',
+        },
+      }),
+    ]);
+
+    const entry = (sarif(withContract).runs[0].results as Array<Record<string, unknown>>)[0];
+    expect(entry.locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: {
+            uri: '.intent-guard/intent-contract.yaml',
+            uriBaseId: '%SRCROOT%',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('keeps a logical location it already had and adds the physical one beside it', () => {
+    // The drift findings carry a `contract` subject: a logical location and,
+    // before this, nothing physical. Losing the logical one to gain a
+    // physical one would drop the category a consumer groups on.
+    const driftResults = (
+      sarif(EVERY_SHAPE).runs.find(
+        (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name) === 'intent-guard'
+      )?.results as Array<Record<string, unknown>>
+    ).filter((entry) => String(entry.ruleId).startsWith('intent-guard/drift.'));
+
+    expect(driftResults.length).toBeGreaterThan(0);
+    for (const entry of driftResults) {
+      const location = (entry.locations as Array<Record<string, unknown>>)[0];
+      expect(location.logicalLocations).toBeDefined();
+      expect(location.physicalLocation).toBeDefined();
+    }
+  });
+
+  it('leaves a result that named a real file pointing at that file', () => {
+    // The fallback must not overwrite a location the gate actually gave, or
+    // every secret in the log would point at the policy file.
+    const secrets = sarif(EVERY_SHAPE).runs.find(
+      (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name) === 'vault-guard'
+    )?.results as Array<Record<string, unknown>>;
+
+    const location = (secrets[0].locations as Array<Record<string, unknown>>)[0];
+    const physical = location.physicalLocation as { artifactLocation: { uri: string } };
+    expect(physical.artifactLocation.uri).not.toBe('.guardrails.yaml');
+    expect(physical.artifactLocation.uri).toMatch(/\./);
   });
 });
