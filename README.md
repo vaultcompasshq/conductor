@@ -56,6 +56,14 @@ become the annoying part:
 npm install -g @vaultcompass/conductor
 ```
 
+**Globally, and that is the guidance for CI too.** A devDependency is fine
+beside it for your own pre-commit hook, and nothing about a local run changed.
+It is not what gates your pull requests: on a pull-request run the umbrella
+never looks in `node_modules/.bin` at all, because what is installed there is
+chosen by the head's own manifest and lockfile. The Action installs all four
+packages itself, globally, at versions pinned in your workflow file. See "The
+pull-request trust boundary" and "The Action" below.
+
 From the repository root, look before you write:
 
 ```
@@ -304,6 +312,27 @@ where a head-committed `node_modules/.bin/<gate>` shadows the real gate,
 because resolution prefers the repository's own copy over PATH so that a
 project pin beats a global install.
 
+**On a pull-request run `node_modules/.bin` is not consulted at all.** That
+second shape is closed one step earlier than the first, and this is why: what
+is installed there is chosen by the head's own manifest and lockfile, so it is
+never approved by any ref, and a repository whose gates are devDependencies
+would otherwise meet the program refusal on every ordinary pull request. So
+that location is simply not searched when a trust base is set. PATH and an
+absolute `command:` remain, and both still go through the program check below.
+The skip is never silent: one line in the full report and one
+`conductor/node-modules-skipped` note in the SARIF log name each gate and the
+copy that was not taken, and a gate with nothing on PATH either is
+could-not-run with `npm install -g` and the Action's version input named as
+the remedy. **Outside pull-request mode nothing changes**: your own checkout
+and your pre-commit hook still run the pin, which is what `pnpm exec` does in
+the same repository.
+
+**The versions that judge a pull request are pinned in the workflow file**,
+which on a `pull_request` event is read from the base branch. That is the
+protected side, and it is the point: the pull request can change its own
+lockfile, and cannot change the pin that decides which conductor and which
+gates run over it.
+
 So on a pull-request run a gate's program must be **outside the working tree**
 (on PATH, or an absolute `command:` elsewhere on the machine), or else meet
 **both** of these:
@@ -341,12 +370,13 @@ the exit code even where the policy sets `enforce: false`, because the gate
 produced no findings to un-enforce: the umbrella declined to run a program
 the pull request chose.
 
-Nothing under `node_modules` is ever base-approved, and that is the right
-answer rather than a limitation: what is there is chosen by the head's own
-manifest and lockfile and installed by a step that runs before the gates, so
-git has no record of those bytes at either ref. A pull request that edits its
-lockfile to pull a different build of a gate has chosen its own judge just as
-surely as one that commits a stub. **Vendoring a gate still works**, on those
+Nothing under `node_modules` is ever base-approved, which is why the rule
+above does not look there at all. Were it to look, the answer would always be
+the same refusal: what is there is chosen by the head's own manifest and
+lockfile and installed by a step that runs before the gates, so git has no
+record of those bytes at either ref. A pull request that edits its lockfile to
+pull a different build of a gate has chosen its own judge just as surely as
+one that commits a stub. **Vendoring a gate still works**, on those
 terms: put it in its own directory, keep everything it needs inside that
 directory, and leave the whole directory alone in a pull request the gate is
 meant to judge. Changing it is not forbidden, it just has to land on the base
@@ -489,14 +519,28 @@ no severity threshold of its own here either.
 `action.yml` at the root is a composite action that runs the gates at the
 `ci` stage and writes one SARIF log for the caller to upload.
 
-It **installs nothing**, on purpose. It runs the conductor your repository
-already depends on, so the version gating your pull requests is the one your
-lockfile pins rather than whatever the registry serves that morning; instead
-of installing, the action checks for `node_modules/.bin/conductor` and fails
-with a sentence saying to add it as a devDependency. `--base` is passed only when the
-`base-ref` input names one; left empty, the umbrella reads `GITHUB_BASE_REF`
-itself and treats an empty value as "not a pull request", which is what a
-push build wants.
+It **installs all four packages itself**, and outside the workspace. Until
+0.4.0 it installed nothing and ran the `node_modules/.bin/conductor` your
+repository already had, which put every program in the family inside the tree
+under judgment: the install step runs the head's lockfile, so a pull request
+could repoint any gate, or the umbrella itself, at a build it controls while
+leaving the version number alone.
+
+Now four inputs name exact versions, `conductor-version`,
+`dep-guard-version`, `vault-guard-version` and `intent-guard-version`, each
+defaulting to the version this release pins. A validate step refuses anything
+that is not an exact version, a range and `latest` included: the version that
+judges a pull request has to be a decision taken on the base branch rather
+than one the registry takes on the morning of the run. An install step then
+runs `npm install -g` under the runner temp, never into the workspace, and
+prepends that bin directory to `PATH`, so the run step invokes `conductor` off
+`PATH` and each gate resolves by name the same way. The install is
+**unconditional**, on push and `pull_request` alike, so there is one code path
+rather than one that matters and one that nobody exercises.
+
+`--base` is passed only when the `base-ref` input names one; left empty, the
+umbrella reads `GITHUB_BASE_REF` itself and treats an empty value as "not a
+pull request", which is what a push build wants.
 
 On a `pull_request` event the action passes
 **`--trust-base origin/$GITHUB_BASE_REF`** of its own accord, so the run takes
@@ -537,11 +581,24 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # Your own dependencies. The gates are NOT among the things this has to
+      # install: the action installs those itself, globally, at the versions
+      # pinned below.
       - run: pnpm install --frozen-lockfile
       - id: conductor
         uses: ./
         with:
           output: conductor.sarif
+          # Exact versions, never a range and never "latest". On a
+          # pull_request event this file is read from the base branch, so
+          # these four lines are the protected side: a pull request can change
+          # its own lockfile and cannot change which programs judge it.
+          # Bump them like any other pin, in a pull request, on the base
+          # branch first.
+          conductor-version: 0.4.0
+          dep-guard-version: 0.6.0
+          vault-guard-version: 1.7.0
+          intent-guard-version: 1.4.0
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
@@ -583,9 +640,14 @@ writes SARIF and nothing else, so the job costs roughly twice the gate time;
         # || true: a blocking finding is a non-zero exit, and that verdict
         # belongs to the gates step rather than to this one.
         run: |
-          node_modules/.bin/conductor run --stage ci --format text --verbose --output conductor.txt || true
+          conductor run --stage ci --format text --verbose --output conductor.txt || true
           gh pr comment "$PR" --body-file conductor.txt
 ```
+
+`conductor` and not `node_modules/.bin/conductor`: the gates step put the
+installed one on `PATH`, and it is the one that judged the run this comment is
+reporting. Reaching into `node_modules` here would report a different
+program's verdict from the one in the uploaded log.
 
 **Mirror whatever you gave the Action**, or the two runs can report different
 contracts. The step above matches the example, which passes neither
