@@ -463,3 +463,57 @@ describe('the umbrella own missing-gate finding', () => {
     expect(other.fingerprint?.value).not.toBe(finding.fingerprint?.value);
   });
 });
+
+/**
+ * The no-contract classifier under BOTH state-directory names.
+ *
+ * intent-guard 1.3.0 renamed its state directory, and the sentence the gate
+ * raises interpolates that name: 1.2.x says `.conductor/intent-contract.yaml`
+ * and 1.3.0 and later say `.intent-guard/intent-contract.yaml`. The umbrella
+ * matched only the first, so on every current gate the classifier was dead: a
+ * pull request against a repository with no contract got the unattributed
+ * backstop finding instead of a `contract-missing` one, and the SARIF details
+ * said `unattributed` where a consumer filters on the kind.
+ *
+ * The 1.3.0 string is quoted from the gate's own gate.ts, which builds it as
+ * `No ${STATE_DIR}/intent-contract.yaml found.` with STATE_DIR = .intent-guard.
+ */
+describe('the no-contract reason under both state-directory names', () => {
+  const LEGACY =
+    'No .conductor/intent-contract.yaml found. Draft intent with intent-guard-extract, ' +
+    'then approve with intent-guard-freeze before implementing.';
+  const CANONICAL =
+    'No .intent-guard/intent-contract.yaml found. Draft intent with intent-guard-extract, ' +
+    'then approve with intent-guard-freeze before implementing.';
+
+  it('classifies the pre-1.3 wording as contract-missing', () => {
+    expect(classifyGateStateReason(LEGACY)).toBe('contract-missing');
+  });
+
+  it('classifies the 1.3.0 and later wording as contract-missing', () => {
+    expect(classifyGateStateReason(CANONICAL)).toBe('contract-missing');
+  });
+
+  it('files the 1.3.0 wording as contract-missing rather than as the unattributed backstop', () => {
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: [CANONICAL],
+        contractFound: false,
+        contractFrozen: false,
+      },
+      '1.4.0'
+    );
+    const blocked = normalized.findings.filter(
+      (finding) => finding.ruleId === 'intent-guard/gate-blocked'
+    );
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].details.kind).toBe('contract-missing');
+    expect(blocked[0].message).toBe(CANONICAL);
+  });
+
+  it('still refuses to classify a sentence that only mentions a contract', () => {
+    expect(classifyGateStateReason('No contract was needed for this branch.')).toBe(null);
+  });
+});

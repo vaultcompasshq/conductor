@@ -400,6 +400,19 @@ const DRIFT_SEVERITY: Record<string, Severity> = {
  * interpolates an error message, and they are enumerated in a test against
  * the real strings, so an upstream rewording turns that test red instead of
  * silently dropping a reason out of every report.
+ *
+ * THE NO-CONTRACT SENTENCE INTERPOLATES THE STATE DIRECTORY NAME, so it has
+ * two spellings and needs two entries. The gate builds it as
+ * `No ${STATE_DIR}/intent-contract.yaml found.`, and 1.3.0 renamed STATE_DIR
+ * from `.conductor` to `.intent-guard`. Matching only the old name left this
+ * classifier DEAD against every gate anybody can install today: the reason
+ * fell through to the unattributed backstop, so the finding said
+ * `kind: unattributed` where a consumer filters on `contract-missing`, and a
+ * run that also had a budget violation dropped the no-contract reason out of
+ * the report entirely, since the backstop only fires when nothing else
+ * blocked. Both names stay, because the umbrella reads both state
+ * directories elsewhere and a repository on either version has to be
+ * classified the same way.
  */
 export const GATE_STATE_REASON_KINDS = [
   'contract-invalid',
@@ -411,6 +424,7 @@ export type GateStateReasonKind = (typeof GATE_STATE_REASON_KINDS)[number];
 
 const GATE_STATE_REASON_PREFIXES: ReadonlyArray<[string, GateStateReasonKind]> = [
   ['Intent contract is invalid:', 'contract-invalid'],
+  ['No .intent-guard/intent-contract.yaml found', 'contract-missing'],
   ['No .conductor/intent-contract.yaml found', 'contract-missing'],
   ['Intent contract exists but is not frozen', 'contract-unfrozen'],
 ];
