@@ -32,7 +32,7 @@ import {
 import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
-import { atLeastVersion } from './trust-base.js';
+import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
 import { ResolveError, candidateNames, resolveGateBinary } from './resolve.js';
 import type { ResolvedBinary } from './resolve.js';
 
@@ -47,7 +47,23 @@ export type CouldNotRunReason =
    * an unresolvable base ref, or a spec that would not import. Distinct from
    * gate-error on purpose, since the gate itself said nothing at all.
    */
-  | 'preparation-failed';
+  | 'preparation-failed'
+  /**
+   * On a pull-request run, the umbrella could not establish that this gate
+   * would take its rules from the base ref, so it was not spawned. Raised for
+   * a gate in `TRUST_BASE_MIN_VERSION` whose version could not be read.
+   * Distinct from `preparation-failed`, which is about the run rather than
+   * about this gate, and from `binary-missing`, since the binary was found.
+   */
+  | 'trust-base-unverified'
+  /**
+   * On a pull-request run, the gate's PROGRAM is a file the head controls, so
+   * it was not run. Its own reason rather than a shape of
+   * `trust-base-unverified`, because the two send a reader to different
+   * places: one is a packaging problem with the installed gate, and this one
+   * is a pull request choosing the program that judges it.
+   */
+  | 'gate-program-refused';
 
 export interface CouldNotRun {
   reason: CouldNotRunReason;
@@ -74,6 +90,11 @@ export interface CouldNotRun {
  */
 export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
   'intent-guard': '1.4.0',
+  'vault-guard': '1.7.0',
+  // dep-guard is deliberately absent: its pull-request mode is in flight, so
+  // it is never offered the flag and is never refused over a version it does
+  // not need. An entry here is the whole of adopting a gate into the
+  // boundary, so the day it ships this is a one-line change.
 };
 
 /**
@@ -92,8 +113,26 @@ export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
 export interface GateTrustBase {
   /** The ref the umbrella took its own policy from, and offered to this gate. */
   ref: string;
-  /** Null when the flag was passed; otherwise the reason it was not. */
+  /**
+   * Null when the flag was passed; otherwise the reason it was not, for a
+   * gate that was never going to be inside the boundary in the first place.
+   * The run continues: that gate read its own control inputs from the tree
+   * being judged, and the report says so.
+   */
   withheld: string | null;
+  /**
+   * Set when the umbrella could not ESTABLISH that this gate would be in
+   * pull-request mode, which is could-not-run rather than a downgrade.
+   *
+   * The distinction is the whole point and it is not symmetry with
+   * `withheld`. A gate outside the table was never going to get the flag, so
+   * nothing is unknown about it. A gate INSIDE the table is one this
+   * repository expects to be inside the boundary, and a version probe that
+   * fails leaves that unestablished for an unexplained reason. Falling back
+   * to running it anyway would put it quietly outside the boundary on the
+   * exact runs where something is already wrong.
+   */
+  refused: string | null;
   /** The control-input changes this gate reported as proposed. */
   proposals: string[];
 }
@@ -124,6 +163,13 @@ export function decideTrustBase(
   const withheld = (reason: string): GateTrustBase => ({
     ref: trustBase,
     withheld: reason,
+    refused: null,
+    proposals: [],
+  });
+  const refused = (reason: string): GateTrustBase => ({
+    ref: trustBase,
+    withheld: null,
+    refused: reason,
     proposals: [],
   });
 
@@ -143,15 +189,31 @@ export function decideTrustBase(
     );
   }
 
-  if (!atLeastVersion(productVersion, minimum)) {
-    return withheld(
-      `${gate.product} ${productVersion ?? 'reported no version'} does not understand ` +
-        `--trust-base, which arrived in ${minimum}, so it read its own control inputs from the ` +
-        'tree being judged. Upgrade it to put this gate into pull-request mode.'
+  // An UNREADABLE version is refused, not withheld, and only for a product in
+  // the table. The old code folded the two together and interpolated the
+  // missing version straight into the sentence, which read "intent-guard
+  // reported no version does not understand --trust-base": not a sentence,
+  // and it named a version that does not exist. Worse than the wording, it
+  // said the gate had been left outside the boundary on purpose when what had
+  // actually happened is that the umbrella could not tell.
+  if (productVersion === null) {
+    return refused(
+      `${gate.product} is expected to run in pull-request mode from ${minimum} onwards, and its ` +
+        'version could not be read, so the umbrella cannot establish that this gate would take ' +
+        'its rules from the base ref. Nothing was checked by it. Running it anyway would put it ' +
+        'quietly outside the trust boundary on exactly the runs where something is already wrong.'
     );
   }
 
-  return { ref: trustBase, withheld: null, proposals: [] };
+  if (!atLeastVersion(productVersion, minimum)) {
+    return withheld(
+      `${gate.product} ${productVersion} does not understand --trust-base, which arrived in ` +
+        `${minimum}, so it read its own control inputs from the tree being judged. Upgrade it to ` +
+        'put this gate into pull-request mode.'
+    );
+  }
+
+  return { ref: trustBase, withheld: null, refused: null, proposals: [] };
 }
 
 export interface GateOutcome {
@@ -201,6 +263,17 @@ export interface RunGateOptions {
   timeoutMs?: number;
   /** The contract and change set prepared for the intent gate, when there is one. */
   intent?: IntentPreparation;
+  /**
+   * The repository's own frozen contract, for a run with NO preparation.
+   *
+   * A plain `conductor run` never prepares anything, but the intent gate
+   * still judges against the contract in the repository, resolved by the
+   * child from `--project .`. Recording it makes that visible: the report
+   * says which contract, and the SARIF fallback files the gate's own results
+   * against the contract they are about rather than against the policy file.
+   * Ignored when `intent` is set, which already carries the same fact.
+   */
+  intentContract?: string;
   /**
    * The ref the umbrella took its own policy from, on a pull-request run.
    * Offered to every child; `decideTrustBase` says which ones can take it.
@@ -279,7 +352,11 @@ export function gateArgs(
       // No path argument: the CLI defaults it to "." and the umbrella runs
       // with cwd at the repository root anyway. Passing one would also risk
       // a passthrough value being read as the positional.
-      return [...(staged ? ['--staged'] : []), '-f', 'json', ...passthrough];
+      //
+      // `scan` takes --trust-base from 1.7.0, and on exit 2 it prints one
+      // line on stderr and NO document at all, which the could-not-run path
+      // above already handles before JSON.parse is reached.
+      return [...(staged ? ['--staged'] : []), '-f', 'json', ...trust, ...passthrough];
     case 'intent-guard': {
       if (intent === undefined) {
         return [
@@ -394,14 +471,25 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
     // Carried on every return path below, including the failures: which
     // contract a gate WOULD have used is exactly as interesting when it could
     // not run as when it could.
-    ...(options.intent === undefined
-      ? {}
-      : {
+    ...(options.intent !== undefined
+      ? {
           intent: {
             contractSource: options.intent.contractSource,
             baseRef: options.intent.baseRef,
           },
-        }),
+        }
+      : options.intentContract === undefined
+        ? {}
+        : {
+            // No preparation, but the repository has a frozen contract and
+            // the child will read it from `--project .`. Same shape, and the
+            // base is null because nothing was diffed: this run is the index
+            // or the working tree, not a branch against a ref.
+            intent: {
+              contractSource: { kind: 'native' as const, path: options.intentContract },
+              baseRef: null,
+            },
+          }),
   };
   const started = Date.now();
 
@@ -481,12 +569,59 @@ function runGateInner(
     };
   }
 
+  // BEFORE the version probe, and that ordering is the whole of it: the probe
+  // RUNS the program, so asking a head-controlled binary for its version is
+  // already executing it. A planted stub answering "1.7.0" is the cheapest
+  // version of this attack and it would have been run before anything checked
+  // where it came from.
+  if (options.trustBase !== undefined) {
+    const refusal = refuseHeadControlledProgram(
+      options.repoRoot,
+      options.trustBase,
+      binary.program
+    );
+    if (refusal !== null) {
+      return {
+        ...base,
+        binary,
+        durationMs: Date.now() - started,
+        // ENFORCED, whatever the policy says. enforce: false is a standing
+        // decision about what a gate's FINDINGS are worth, and this gate
+        // produced none: the umbrella refused to run a program the pull
+        // request chose. Letting an unenforced gate swallow that would let a
+        // pull request pick its own judge and keep the run green.
+        enforce: true,
+        trustBase: { ref: options.trustBase, withheld: null, refused: refusal, proposals: [] },
+        couldNotRun: { reason: 'gate-program-refused', detail: refusal },
+        findings: [normalizeFailedGate(gate.role, gate.product, refusal)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+  }
+
   const version = probeVersion(binary, options.repoRoot, timeoutMs);
   // AFTER the version probe and BEFORE the command line is built, because the
   // decision reads the version. That ordering is the whole capability gate:
   // an intent-guard older than 1.4.0 must not be handed a flag it would
-  // reject, and a build whose version could not be read is treated as older.
+  // reject, and a gate IN the table whose version could not be read is
+  // refused rather than run outside the boundary.
   const trustBase = decideTrustBase(gate, options.intent, options.trustBase, version);
+
+  if (trustBase !== undefined && trustBase.refused !== null) {
+    return {
+      ...base,
+      productVersion: version,
+      binary,
+      durationMs: Date.now() - started,
+      trustBase,
+      couldNotRun: { reason: 'trust-base-unverified', detail: trustBase.refused },
+      findings: [normalizeFailedGate(gate.role, gate.product, trustBase.refused)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
+  }
+
   const argv = [
     ...binary.argvPrefix,
     ...gateArgs(

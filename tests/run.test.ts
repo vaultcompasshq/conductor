@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -604,16 +604,68 @@ describe('pull-request mode through a whole run', () => {
     });
   }
 
-  it('hands the ref down to the gate that can take it and to no other', () => {
+  it('hands the ref down to the gates in the version table and to no other', () => {
     pullRequestRun(true);
     const lines = readFileSync(lastArgvLog, 'utf8').trim().split('\n');
 
-    // One line per gate, in gate order. Only the intent gate has
-    // pull-request mode today, so only its line carries the flag; handing it
-    // to the other two would make them exit non-zero on an unknown flag.
+    // One line per gate, in gate order: dependencies, secrets, intent. The
+    // stubs report 9.9.9, which is above both floors, so the two gates in the
+    // table carry the flag and dep-guard does not. Handing it to a gate that
+    // does not parse it would make that gate exit non-zero on an unknown
+    // flag, which is the failure the table exists to prevent.
     expect(lines).toHaveLength(3);
-    expect(lines.filter((line) => line.includes('--trust-base origin/main'))).toHaveLength(1);
+    expect(lines[0]).not.toContain('--trust-base');
+    expect(lines[1]).toContain('--trust-base origin/main');
     expect(lines[2]).toContain('--trust-base origin/main');
+  });
+
+  it('sums a proposal raised by the secrets gate alongside the intent gate own', () => {
+    // vault-guard 1.7.0 puts its summary at the same top-level key, so the
+    // umbrella sums two gates' proposals and its own policy line into one
+    // sentence, which is the sentence the whole wave exists to produce.
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', {
+      stdout: JSON.stringify({
+        version: '1',
+        scannedAt: '2026-09-06T00:00:00.000Z',
+        summary: { files: 0, secrets: 0 },
+        run: { files_scanned: 0, patterns_active: 59, fail_on: 'medium', blocking_matches: 0 },
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['config changed in this pull request'],
+          configChanged: true,
+          baselineChanged: false,
+          configShapeChange: null,
+          baselineShapeChange: null,
+        },
+        results: [],
+      }),
+      version: '1.7.0',
+    });
+    stubGate(bin, 'intent-guard', { stdout: PROPOSING_INTENT, version: '1.4.0' });
+
+    const result = runAll(ALL_THREE, {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+      trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+    });
+
+    expect(result.proposals).toEqual([
+      { product: 'conductor', role: null, line: 'policy changed in this pull request' },
+      {
+        product: 'vault-guard',
+        role: 'secrets',
+        line: 'config changed in this pull request',
+      },
+      {
+        product: 'intent-guard',
+        role: 'intent',
+        line: 'contract changed in this pull request',
+      },
+      { product: 'intent-guard', role: 'intent', line: 'config changed in this pull request' },
+    ]);
   });
 
   it("sums the children's proposals and puts the umbrella's own policy line first", () => {
@@ -657,6 +709,46 @@ describe('pull-request mode through a whole run', () => {
       policyChanged: true,
       refusal: null,
     });
+  });
+
+  it("records the repository's own frozen contract on a run with no preparation", () => {
+    // A plain run prepares nothing, but the intent gate still judges against
+    // the contract in the repository, resolved by the child from --project .
+    // Recording it is what makes the report say which contract, and what
+    // makes a contract-state result in SARIF point at the contract rather
+    // than at the policy file.
+    const repo = tempDir();
+    const bin = tempDir();
+    mkdirSync(path.join(repo, '.intent-guard'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.intent-guard', 'intent-contract.yaml'),
+      'frozen_by: user\napproval:\n  approved_by: a human\n'
+    );
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, version: '1.4.0' });
+
+    const policy = parsePolicy(
+      ['version: 1', 'gates:', '  intent:', '    product: intent-guard'].join('\n'),
+      POLICY_FILE_NAME
+    );
+    const result = runAll(policy, { repoRoot: repo, staged: true, pathValue: bin });
+
+    expect(result.gates[0].intent).toEqual({
+      contractSource: { kind: 'native', path: '.intent-guard/intent-contract.yaml' },
+      baseRef: null,
+    });
+  });
+
+  it('records nothing when the repository has no frozen contract', () => {
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, version: '1.4.0' });
+
+    const policy = parsePolicy(
+      ['version: 1', 'gates:', '  intent:', '    product: intent-guard'].join('\n'),
+      POLICY_FILE_NAME
+    );
+    const result = runAll(policy, { repoRoot: tempDir(), staged: true, pathValue: bin });
+
+    expect(result.gates[0].intent).toBeUndefined();
   });
 
   it('reports no proposals at all outside pull-request mode', () => {

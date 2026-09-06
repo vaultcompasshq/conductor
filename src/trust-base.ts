@@ -42,6 +42,8 @@
 //    whenever the base has not moved since the fork.
 
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 import { POLICY_FILE_NAME } from './policy.js';
@@ -178,6 +180,163 @@ export function policyDiffers(base: string | null, head: string | null): boolean
 
 /** The one line the report prints when the head proposes a different policy. */
 export const POLICY_PROPOSAL_LINE = 'policy changed in this pull request';
+
+/**
+ * One path's tree entry at a ref, or null when the ref has no such path.
+ *
+ * `ls-tree` rather than `git show`, because the BLOB ID is the thing being
+ * compared and `show` prints contents without telling you what kind of entry
+ * produced them. The mode comes with it, so a regular file can be told from a
+ * symlink, a submodule or a directory in the same read.
+ */
+export function treeEntryAt(
+  repoRoot: string,
+  ref: string,
+  relativePath: string
+): { mode: string; type: string; sha: string } | null {
+  const child = spawnSync('git', ['ls-tree', ref, '--', `./${relativePath}`], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (child.error !== undefined || child.status !== 0) {
+    return null;
+  }
+  const line = (child.stdout ?? '').split('\n').find((entry) => entry.trim().length > 0);
+  if (line === undefined) {
+    return null;
+  }
+  const [mode, type, sha] = line.split(/\s+/);
+  if (mode === undefined || type === undefined || sha === undefined) {
+    return null;
+  }
+  return { mode, type, sha };
+}
+
+/** The two modes that mean an ordinary file git will hand back. */
+function isRegularFileMode(mode: string): boolean {
+  return mode === '100644' || mode === '100755';
+}
+
+/**
+ * The working-tree root, resolved through symlinks, or null.
+ *
+ * realpath on BOTH sides of every comparison below. On macOS the temporary
+ * directory is reached through a symlink, so one repository root has two
+ * spellings, one of them with an extra leading segment, and a prefix test on
+ * the raw strings answers "outside" for a file that is plainly inside.
+ */
+function realOrNull(candidate: string): string | null {
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether `candidate` is the working tree or something under it. */
+function insideWorkingTree(repoReal: string, candidate: string): boolean {
+  const relative = path.relative(repoReal, candidate);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/**
+ * Why this gate's PROGRAM cannot be trusted on a pull-request run, or null.
+ *
+ * Reading the rules from the base ref is worth nothing if the pull request
+ * chooses the program that applies them, and it can, two ways that both look
+ * ordinary in a diff:
+ *
+ *  - A base policy whose `command:` points INSIDE the repository, at
+ *    something like `vendor/vault-guard`. The path came from the base and is
+ *    therefore approved; the FILE AT THAT PATH is whatever the head commit
+ *    put there. The umbrella then runs the pull request's own program, is
+ *    told the scan was clean, and reports a clean scan.
+ *
+ *  - No `command:` at all. Resolution prefers the repository's own
+ *    `node_modules/.bin` over PATH, deliberately, so that a project pin beats
+ *    a global install. A head that commits `node_modules/.bin/vault-guard`
+ *    shadows the real gate, and a stub that answers `--version` with a
+ *    plausible number passes every check the umbrella makes. The composite
+ *    action installs nothing, so the plant survives an install step.
+ *
+ * THE RULE. A program is acceptable when it is outside the working tree
+ * entirely: on PATH, or an absolute `command:` somewhere else on the machine.
+ * A pull request cannot write those. A program INSIDE the working tree is
+ * acceptable only when it is a tracked regular file whose blob is IDENTICAL
+ * at the trust base and at HEAD, which is the same base-versus-head test the
+ * rules themselves get, applied to the thing that enforces them.
+ *
+ * NOTHING HERE READS THE WORKING TREE. Both sides come from `git ls-tree`, so
+ * an uncommitted local edit cannot make a file look approved and a tracked
+ * file cannot be vouched for by a copy on disk that git has never seen.
+ *
+ * NODE_MODULES IS NEVER BASE-APPROVED, and the reason is worth stating
+ * because "but the lockfile is committed" is the obvious objection. What is
+ * under `node_modules` is chosen by the head's own manifest and lockfile and
+ * installed by a step that runs before this one; git has no record of those
+ * bytes at either ref, so `ls-tree` finds nothing and the rule refuses. That
+ * is the correct answer rather than a limitation: a pull request that edits
+ * its lockfile to pull a different build of a gate has chosen its own judge
+ * just as surely as one that commits a stub.
+ *
+ * Both the literal path and its realpath are vetted, because a head-committed
+ * symlink is a choice of program too.
+ */
+export function refuseHeadControlledProgram(
+  repoRoot: string,
+  trustBase: string,
+  programPath: string
+): string | null {
+  const repoReal = realOrNull(repoRoot);
+  if (repoReal === null) {
+    return `the repository root ${repoRoot} could not be resolved, so the gate program could not be checked against "${trustBase}". Nothing was checked by this gate.`;
+  }
+
+  const candidates = new Set<string>();
+  for (const candidate of [path.resolve(repoRoot, programPath), realOrNull(programPath)]) {
+    if (candidate !== null && insideWorkingTree(repoReal, candidate)) {
+      candidates.add(candidate);
+    }
+  }
+  if (candidates.size === 0) {
+    // Outside the working tree: on PATH, or an absolute path elsewhere on the
+    // machine. A pull request cannot write either.
+    return null;
+  }
+
+  for (const candidate of candidates) {
+    const relative = path.relative(repoReal, candidate).split(path.sep).join('/');
+    const base = treeEntryAt(repoRoot, trustBase, relative);
+    const head = treeEntryAt(repoRoot, 'HEAD', relative);
+
+    if (base === null || head === null) {
+      return (
+        `the ${trustBase === '' ? 'base' : `"${trustBase}"`} ref does not track the gate program ` +
+        `at ${relative}, so it is a file this pull request controls and running it would let the ` +
+        'pull request choose the program that judges it. Nothing under node_modules is ever ' +
+        'base-approved: what is there is chosen by the head own manifest and lockfile, and git ' +
+        'has no record of those bytes at either ref. Install the gate on PATH, or point ' +
+        'command: at a path outside the repository. Nothing was checked by this gate.'
+      );
+    }
+    if (!isRegularFileMode(base.mode) || !isRegularFileMode(head.mode)) {
+      return (
+        `the gate program at ${relative} is not a regular file at both "${trustBase}" and the ` +
+        'head commit, so what would actually run is decided by something other than the ' +
+        'approved bytes. Nothing was checked by this gate.'
+      );
+    }
+    if (base.sha !== head.sha) {
+      return (
+        `the gate program at ${relative} is not the one "${trustBase}" approved: this pull ` +
+        'request changes it, so running it would let the pull request choose the program that ' +
+        'judges it. Land the change on the base branch first. Nothing was checked by this gate.'
+      );
+    }
+  }
+
+  return null;
+}
 
 /**
  * Whether a gate's reported version is at least `minimum`.

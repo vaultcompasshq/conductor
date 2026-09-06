@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -275,6 +276,7 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     expect(decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.4.0')).toEqual({
       ref: 'origin/main',
       withheld: null,
+      refused: null,
       proposals: [],
     });
   });
@@ -286,24 +288,87 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     expect(decision?.withheld).toMatch(/tree being judged/);
   });
 
-  it('withholds it when the version could not be read at all', () => {
+  it('REFUSES rather than withholds when the version could not be read at all', () => {
+    // A gate in the table is one this repository expects to be inside the
+    // boundary. Silently dropping it back outside because a version probe
+    // failed is the wrong default: the probe failing is itself unexplained,
+    // and "could not establish that this gate is in pull-request mode" is
+    // could-not-run, not a downgrade to trusting the head.
     const decision = decideTrustBase(intentGate, nativeIntent, 'origin/main', null);
-    expect(decision?.withheld).toMatch(/reported no version/);
+
+    expect(decision?.refused).toMatch(/version could not be read/);
+    expect(decision?.withheld).toBeNull();
   });
 
-  it('withholds it from the two gates that have no pull-request mode yet', () => {
-    for (const [role, product] of [
-      ['dependencies', 'dep-guard'],
-      ['secrets', 'vault-guard'],
-    ] as const) {
-      const decision = decideTrustBase(
-        gate({ role, product }),
-        undefined,
-        'origin/main',
-        '9.9.9'
-      );
-      expect(decision?.withheld).toMatch(new RegExp(`${product} has no pull-request mode yet`));
-    }
+  it('names the product and the floor without the copy bug', () => {
+    // The old sentence read "intent-guard reported no version does not
+    // understand --trust-base", which is not a sentence and reads as a claim
+    // about a version called "reported no version".
+    const below = decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.3.1');
+    const unreadable = decideTrustBase(intentGate, nativeIntent, 'origin/main', null);
+
+    expect(below?.withheld).toBe(
+      'intent-guard 1.3.1 does not understand --trust-base, which arrived in 1.4.0, so it read ' +
+        'its own control inputs from the tree being judged. Upgrade it to put this gate into ' +
+        'pull-request mode.'
+    );
+    expect(unreadable?.refused).not.toMatch(/reported no version does not understand/);
+  });
+
+  it('withholds it from a gate that has no pull-request mode yet', () => {
+    // dep-guard is not in the table: its step is in flight, so the flag is
+    // never offered and nothing is refused over a version it never needed.
+    const decision = decideTrustBase(
+      gate({ role: 'dependencies', product: 'dep-guard' }),
+      undefined,
+      'origin/main',
+      '9.9.9'
+    );
+
+    expect(decision?.withheld).toMatch(/dep-guard has no pull-request mode yet/);
+    expect(decision?.refused).toBeNull();
+  });
+
+  it('does not refuse a gate outside the table over an unreadable version', () => {
+    // The refusal is for gates this repository expects inside the boundary.
+    // A gate that was never going to get the flag has nothing to establish.
+    const decision = decideTrustBase(
+      gate({ role: 'dependencies', product: 'dep-guard' }),
+      undefined,
+      'origin/main',
+      null
+    );
+
+    expect(decision?.refused).toBeNull();
+    expect(decision?.withheld).toMatch(/no pull-request mode yet/);
+  });
+
+  it('passes the flag to a vault-guard at the version it arrived in', () => {
+    const decision = decideTrustBase(
+      gate({ role: 'secrets', product: 'vault-guard' }),
+      undefined,
+      'origin/main',
+      '1.7.0'
+    );
+
+    expect(decision).toEqual({
+      ref: 'origin/main',
+      withheld: null,
+      refused: null,
+      proposals: [],
+    });
+  });
+
+  it('withholds it from a vault-guard below that version', () => {
+    const decision = decideTrustBase(
+      gate({ role: 'secrets', product: 'vault-guard' }),
+      undefined,
+      'origin/main',
+      '1.6.0'
+    );
+
+    expect(decision?.withheld).toMatch(/vault-guard 1\.6\.0 does not understand --trust-base/);
+    expect(decision?.withheld).toMatch(/1\.7\.0/);
   });
 
   it('withholds it when the contract was imported into a temporary directory', () => {
@@ -365,6 +430,7 @@ describe('the trust base on the command line and on the outcome', () => {
     expect(outcome.trustBase).toEqual({
       ref: 'origin/main',
       withheld: null,
+      refused: null,
       proposals: ['contract changed in this pull request'],
     });
   });
@@ -426,6 +492,58 @@ describe('the trust base on the command line and on the outcome', () => {
     });
 
     expect(outcome.couldNotRun?.reason).toBe('unparseable-output');
-    expect(outcome.trustBase).toEqual({ ref: 'origin/main', withheld: null, proposals: [] });
+    expect(outcome.trustBase).toEqual({
+      ref: 'origin/main',
+      withheld: null,
+      refused: null,
+      proposals: [],
+    });
+  });
+
+  it('is could-not-run, not a silent downgrade, when a gate in the table has no readable version', () => {
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    // A binary that answers --version with something unparseable. The probe
+    // returns null and the gate is inside the table, so the run refuses.
+    writeFileSync(
+      path.join(bin, 'intent-guard'),
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "a banner, not a version"; exit 0; fi\n' +
+        `printf '%s\\n' "$*" >> ${log}\n` +
+        'echo \'{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}\'\n'
+    );
+    chmodSync(path.join(bin, 'intent-guard'), 0o755);
+
+    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
+      repoRoot: tempDir(),
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(outcome.couldNotRun?.reason).toBe('trust-base-unverified');
+    expect(outcome.couldNotRun?.detail).toMatch(/version could not be read/);
+    // Nothing was spawned beyond the probe: the gate never ran at all.
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it('runs that same gate normally when the run is not in pull-request mode', () => {
+    // An unreadable version is not itself an error. It only stops the run
+    // when the umbrella had promised to put that gate inside the boundary.
+    const bin = tempDir();
+    writeFileSync(
+      path.join(bin, 'intent-guard'),
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "a banner, not a version"; exit 0; fi\n' +
+        'echo \'{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}\'\n'
+    );
+    chmodSync(path.join(bin, 'intent-guard'), 0o755);
+
+    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
+      repoRoot: tempDir(),
+      staged: false,
+      pathValue: bin,
+    });
+
+    expect(outcome.couldNotRun).toBeNull();
+    expect(outcome.productVersion).toBeNull();
   });
 });

@@ -235,6 +235,25 @@ function frozenNativeContracts(repoRoot: string): string[] {
 }
 
 /**
+ * The repository's own frozen contract, or null, for a run with no
+ * preparation at all.
+ *
+ * The whole of `prepareIntent` only runs on a pull-request shaped run. A
+ * plain `conductor run` against a repository that HAS a frozen contract still
+ * judges against that contract -- the child resolves it from `--project .` --
+ * but the umbrella recorded nothing about it, so both reports had to say
+ * nothing and the SARIF fallback filed the gate's own results against the
+ * policy file rather than against the contract they are actually about.
+ *
+ * Exported for that one caller. It is deliberately the same predicate the
+ * preparation uses, FROZEN rather than present, so the two cannot disagree
+ * about which file the gate will read.
+ */
+export function frozenNativeContractPath(repoRoot: string): string | null {
+  return frozenNativeContracts(repoRoot)[0] ?? null;
+}
+
+/**
  * The files only intent-guard writes into its state directory.
  *
  * Copied from the gate's own `holdsIntentGuardState`, because the rule below

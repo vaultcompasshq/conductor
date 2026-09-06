@@ -667,6 +667,42 @@ describe("intent-guard's pull-request-mode refusals", () => {
     expect(normalized.trustBase).toBeUndefined();
   });
 
+  it('reads the same block off vault-guard, which puts it in the same place', () => {
+    // vault-guard 1.7.0 carries more than the umbrella reads: configChanged,
+    // baselineChanged and a shape change for each. Only the ref and the
+    // sentences are taken, which is the passthrough rule applied to a second
+    // gate rather than a second opinion about that gate's control files.
+    const normalized = normalizeVaultGuard(
+      {
+        version: '1',
+        scannedAt: '2026-09-06T00:00:00.000Z',
+        summary: { files: 1, secrets: 0 },
+        run: { files_scanned: 1, patterns_active: 59, fail_on: 'medium', blocking_matches: 0 },
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['config changed in this pull request'],
+          configChanged: true,
+          baselineChanged: false,
+          configShapeChange: null,
+          baselineShapeChange: null,
+        },
+        results: [],
+      },
+      '1.7.0'
+    );
+
+    expect(normalized.trustBase).toEqual({
+      ref: 'origin/main',
+      proposals: ['config changed in this pull request'],
+    });
+  });
+
+  it('says nothing for a vault-guard that was not in pull-request mode', () => {
+    const normalized = normalizeVaultGuard(VAULT_GUARD_CLEAN, '1.7.0');
+
+    expect(normalized.trustBase).toBeUndefined();
+  });
+
   it('refuses a trustBase of a shape it does not know rather than reading past it', () => {
     expect(() =>
       normalizeIntentGuard(

@@ -289,9 +289,35 @@ request could point a gate at a script it added in the same commit.
 `--trust-base <ref>` the umbrella reads `.guardrails.yaml` from that ref with
 `git show` and judges the head tree against it. A `.guardrails.yaml` in the
 pull request never takes effect for that run, `command:` and `args:`
-included, so **a pull request cannot change the rules it is judged by**. The
-same ref is passed down to every gate that supports it, so their contracts,
-configs and baselines come from the base branch too.
+included, so **a pull request cannot change the rules it is judged by, and it
+cannot choose the program that judges it either**. The same ref is passed
+down to every gate that supports it, so their contracts, configs and
+baselines come from the base branch too.
+
+**The program is checked as well as the rules.** Reading the rules from the
+base ref is worth nothing if the pull request supplies the binary that
+applies them, and without this it could, two ways that both look ordinary in
+a diff: a base `command:` pointing at a path inside the repository, where the
+head replaces the file behind the approved path; and no `command:` at all,
+where a head-committed `node_modules/.bin/<gate>` shadows the real gate,
+because resolution prefers the repository's own copy over PATH so that a
+project pin beats a global install. So on a pull-request run a gate's program
+must be **outside the working tree** (on PATH, or an absolute `command:`
+elsewhere on the machine), or else a **tracked regular file whose contents
+are identical at the base ref and at the head commit**, compared with
+`git ls-tree` on both refs and never read from the working tree. A symlink is
+followed and what it points at is checked too. Anything else is could-not-run
+for that gate, naming the path, and it reaches the exit code even where the
+policy sets `enforce: false`, because the gate produced no findings to
+un-enforce: the umbrella declined to run a program the pull request chose.
+
+Nothing under `node_modules` is ever base-approved, and that is the right
+answer rather than a limitation: what is there is chosen by the head's own
+manifest and lockfile and installed by a step that runs before the gates, so
+git has no record of those bytes at either ref. A pull request that edits its
+lockfile to pull a different build of a gate has chosen its own judge just as
+surely as one that commits a stub. Vendoring a gate into the repository still
+works, as long as the pull request does not change it.
 
 **A change to the rules is not refused, it is proposed.** Rules legitimately
 change, and a gate that blocked every such pull request would train people to
@@ -307,24 +333,33 @@ compared as parsed documents.
 
 **It fails closed.** A `--trust-base` that does not resolve is not a reason to
 fall back to the pull request's own file, because that fallback is the hole:
-every enabled gate is reported as could-not-run and the run exits 2, naming
-the ref. So is a base ref that resolves to the head commit, or to a different
-commit carrying the head's tree, both of which would put the rules back inside
-the tree being judged while still reporting pull-request mode as on. Pass the
-base **branch**, never a SHA: on a `pull_request` event `github.sha` is the
-merge commit, which is HEAD. If the base branch has no `.guardrails.yaml` at
-all, the run has no rules and exits 2 rather than using the pull request's;
-the file the pull request adds decides what runs once it is on the base
-branch.
+the run exits 2 and the report **leads with the refusal**, naming the ref and
+the remedy, whether or not it can name any gate. That last part matters: with
+no base ref there is no base policy, so the only list of gates available is
+the head's, and a head that switches every gate off leaves it empty. So is a
+base ref that resolves to the head commit, or to a different commit carrying
+the head's tree, both of which would put the rules back inside the tree being
+judged while still reporting pull-request mode as on. Pass the base
+**branch**, never a SHA: on a `pull_request` event `github.sha` is the merge
+commit, which is HEAD. If the base branch has no `.guardrails.yaml` at all,
+the run has no rules and exits 2 rather than using the pull request's; the
+file the pull request adds decides what runs once it is on the base branch.
 
-**Which gates are covered.** intent-guard from 1.4.0. The umbrella asks each
-gate its version and passes the flag only to a build that understands it, so
-an older gate is not handed a flag it would reject. A gate that was not put
-into pull-request mode read its own rules out of the tree being judged, which
-is the thing this exists to prevent, so it is never silent: it gets a line in
-the report, a clause on the clean one-line summary, and a
-`conductor/trust-base-not-passed` notification in the SARIF log. vault-guard
-and dep-guard join as their own releases ship.
+**Which gates are covered.** intent-guard from **1.4.0** and vault-guard from
+**1.7.0**. dep-guard's own pull-request mode is in flight and it is not in
+the table yet, so it is never offered the flag.
+
+The umbrella asks each gate its version and passes the flag only to a build
+that understands it, so an older gate is not handed a flag it would reject. A
+gate that was not put into pull-request mode read its own rules out of the
+tree being judged, which is the thing this exists to prevent, so it is never
+silent: it gets a line in the report, a clause on the clean one-line summary,
+and a `conductor/trust-base-not-passed` notification in the SARIF log. For a
+gate that IS in the table, a version that cannot be read at all is
+could-not-run rather than a quiet downgrade: the umbrella cannot establish
+that the gate would take its rules from the base ref, and running it anyway
+would put it outside the boundary on exactly the runs where something is
+already wrong.
 
 Outside pull-request mode nothing changes. A pre-commit hook and a direct run
 on your own checkout are already inside the trust boundary, and neither passes
@@ -438,8 +473,13 @@ rules it is judged by; a change to the rules shows as a proposal line and
 takes effect after merge. See "The pull-request trust boundary" above. On any
 other event it passes nothing and behaviour is unchanged. The `trust-base`
 input names the ref explicitly, for a platform where `GITHUB_BASE_REF` is not
-set; the single word `off` stays out of pull-request mode, which leaves the
-pull request able to change the rules it is judged by.
+set.
+
+There is deliberately **no input that turns pull-request mode off**.
+Base-ref judging is the floor rather than a knob, and on a `pull_request`
+event the workflow file itself runs from the pull request's own ref, so an
+opt-out here would be settable by the very pull request the mode exists to
+judge: the knob and the thing it protects against would be the same file.
 
 ```yaml
 name: guardrails

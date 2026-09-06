@@ -21,10 +21,12 @@ inputs:
       .guardrails.yaml and every control input of the gates that support it.
       Leave it empty and, on a pull_request event, the action passes
       origin/$GITHUB_BASE_REF itself; on any other event it passes nothing and
-      behaviour is unchanged. Set it to enter pull-request mode somewhere
-      GITHUB_BASE_REF is not set. Set it to the single word off to stay out of
-      pull-request mode on a pull request, which leaves the pull request able
-      to change the rules it is judged by.
+      behaviour is unchanged. Set it to name the ref explicitly, for a
+      platform where GITHUB_BASE_REF is not set. There is deliberately no
+      value that turns pull-request mode off: base-ref judging is the floor
+      and not a knob, and on a pull_request event the workflow file itself
+      comes from the pull request's own ref, so an opt-out here would be
+      settable by the pull request it exists to judge.
     default: ''
   spec:
     description: >-
@@ -135,9 +137,11 @@ runs:
         # outside a pull request, so an empty value has to mean "not a pull
         # request": passing --trust-base unconditionally would hand every push
         # build the literal ref "origin/" and fail it closed.
-        if [ "$TRUST_BASE" = "off" ]; then
-          :
-        elif [ -n "$TRUST_BASE" ]; then
+        # No opt-out value, on purpose. Base-ref judging is the floor rather
+        # than a knob, and on a pull_request event the workflow file runs from
+        # the pull request's own ref: a value here that switched the mode off
+        # would be settable by the very pull request the mode exists to judge.
+        if [ -n "$TRUST_BASE" ]; then
           ARGS+=(--trust-base "$TRUST_BASE")
         elif [ -n "${GITHUB_BASE_REF:-}" ]; then
           ARGS+=(--trust-base "origin/$GITHUB_BASE_REF")

@@ -4,7 +4,11 @@ import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_COULD_NOT_RUN, composeExitCode } from './exit-codes.js';
 import { type GateOutcome, preparationFailed, runGate } from './gate-runner.js';
 import { resolveBaseRef } from './intent-base.js';
-import { type IntentPreparation, prepareIntent } from './intent-prepare.js';
+import {
+  type IntentPreparation,
+  frozenNativeContractPath,
+  prepareIntent,
+} from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Policy, Product } from './policy.js';
 import { GATE_ROLES, enabledGates, runsAtStage } from './policy.js';
 import { ResolveError, resolveGateBinary } from './resolve.js';
@@ -350,6 +354,19 @@ function collectProposals(
   return proposals;
 }
 
+/**
+ * The `intentContract` option for a run with no preparation, or nothing.
+ *
+ * A small helper rather than an inline conditional because the spread at the
+ * call site is already three lines, and because "nothing" has to be an empty
+ * object rather than an undefined property: the option is optional and
+ * `exactOptionalPropertyTypes` refuses an explicit undefined.
+ */
+function nativeContractOption(repoRoot: string): { intentContract?: string } {
+  const contract = frozenNativeContractPath(repoRoot);
+  return contract === null ? {} : { intentContract: contract };
+}
+
 export function runAll(policy: Policy, options: RunOptions): RunResult {
   const { gates, deferred, excluded } = partitionGates(policy, options.stage);
 
@@ -414,6 +431,12 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           pathValue: options.pathValue,
           ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
           ...(intent === undefined ? {} : { intent }),
+          // For a run with no preparation: which contract the child will read
+          // out of the repository itself. Looked up only for the gate it is
+          // about, so no other gate pays for the two stat calls.
+          ...(intent !== undefined || gate.role !== 'intent'
+            ? {}
+            : nativeContractOption(options.repoRoot)),
           // Offered to every child. runGate decides which ones can take it,
           // so a gate with no pull-request mode yet is not handed a flag it
           // would reject, and the reason it was withheld is on the outcome.

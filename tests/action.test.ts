@@ -196,10 +196,20 @@ describe('action.yml enters pull-request mode', () => {
     expect(gatesScript).not.toMatch(/\$\{\{/);
   });
 
-  it('lets a caller name the ref, or opt out with the single word off', () => {
+  it('lets a caller name the ref explicitly', () => {
     expect(action.inputs?.['trust-base']).toBeDefined();
     expect(action.inputs?.['trust-base']?.default).toBe('');
-    expect(gatesScript).toMatch(/if \[ "\$TRUST_BASE" = "off" \]/);
-    expect(gatesScript).toMatch(/elif \[ -n "\$TRUST_BASE" \]/);
+    expect(gatesScript).toMatch(/if \[ -n "\$TRUST_BASE" \]/);
+  });
+
+  it('offers no value that switches pull-request mode off', () => {
+    // Base-ref judging is the floor, not a knob. On a pull_request event the
+    // workflow file itself runs from the pull request's own ref, so an
+    // opt-out input would be settable by the pull request the mode exists to
+    // judge: the knob and the thing it protects against are the same file.
+    expect(gatesScript).not.toMatch(/"\$TRUST_BASE" = "off"/);
+    expect(String(action.inputs?.['trust-base']?.description)).toMatch(
+      /no value that turns pull-request mode off/
+    );
   });
 });

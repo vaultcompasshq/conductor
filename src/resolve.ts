@@ -77,6 +77,17 @@ export interface VersionProbe {
 export interface ResolvedBinary {
   /** What to spawn. */
   command: string;
+  /**
+   * The FILE whose contents decide what this gate does.
+   *
+   * Usually the same as `command`, and deliberately not the same when a
+   * `.js` build is run through this Node: there `command` is the Node
+   * executable and the program is the script after it. Carried explicitly
+   * rather than reconstructed from `argvPrefix[0]` by every caller, because
+   * getting that wrong means vetting the wrong file, and the one caller that
+   * vets it is the pull-request provenance check.
+   */
+  program: string;
   /** Arguments placed before the ones the umbrella adds. */
   argvPrefix: string[];
   source: ResolutionSource;
@@ -234,6 +245,8 @@ export function resolveGateBinary(
     if (!isExecutableFile(gate.command) && /\.(?:js|mjs|cjs)$/.test(gate.command)) {
       return {
         command: process.execPath,
+        // Node is the command; the script is what actually decides anything.
+        program: gate.command,
         argvPrefix: [gate.command, ...prefix],
         source: 'policy',
         candidate: candidateName,
@@ -245,6 +258,7 @@ export function resolveGateBinary(
 
     return {
       command: gate.command,
+      program: gate.command,
       argvPrefix: prefix,
       source: 'policy',
       candidate: candidateName,
@@ -259,6 +273,7 @@ export function resolveGateBinary(
     }
     return {
       command: found.command,
+      program: found.command,
       argvPrefix: [...candidate.prefix],
       source: found.source,
       candidate: candidate.name,

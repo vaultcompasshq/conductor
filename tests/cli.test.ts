@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -1181,6 +1182,363 @@ describe('pull-request mode through the CLI', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/"trust-base" under gates\.intent\.options is reserved/);
     expect(result.stderr).toMatch(/where a gate reads its rules from/);
+  });
+});
+
+/**
+ * The program that judges the pull request, not only the rules it judges by.
+ *
+ * Reading the rules from the base ref is worth nothing if the pull request
+ * chooses the binary that applies them, and it can, two ways that both look
+ * ordinary in a diff.
+ *
+ * The first is a base policy whose `command:` points INSIDE the repository,
+ * at something like `vendor/vault-guard`. The path came from the base and is
+ * approved; the file at that path is whatever the head put there.
+ *
+ * The second needs no policy change at all. Resolution prefers the
+ * repository's own `node_modules/.bin` over PATH, deliberately, so a project
+ * pin beats a global install. A head that commits `node_modules/.bin/<gate>`
+ * shadows the real gate, and a stub answering `--version` with a plausible
+ * number passes every other check. The composite action installs nothing, so
+ * the plant survives the install step.
+ *
+ * Both are driven here as real repositories with real git history, and the
+ * planted program writes a marker file, so "did the pull request's own
+ * program run" is answered by looking on disk.
+ */
+describe('the program a pull-request run is allowed to execute', () => {
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  const CLEAN_SECRETS = CLEAN_VAULT_GUARD;
+
+  /**
+   * A repository whose base branch is honest and whose head may plant a
+   * program at `programPath`.
+   *
+   * Everything is decided by the two commits this makes and nothing is
+   * committed afterwards, so a test never has to move the base branch and
+   * cannot accidentally move the plant into the base with it. `baseBody` is
+   * what that file IS at the BASE and `headBody` what it is at the head:
+   * `honest` reports nothing and touches nothing, `plant` writes the marker
+   * and reports clean, and null means the file is not at that ref at all,
+   * which is how the node_modules shape is expressed.
+   */
+  function plantedRepo(options: {
+    programPath: string;
+    baseBody: 'honest' | 'plant' | null;
+    headBody: 'honest' | 'plant' | null;
+    /** Repository-relative path for the policy's `command:`, or null. */
+    commandRelative?: string | null;
+    enforce?: boolean;
+  }): { repo: string; bin: string; marker: string; program: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+    const marker = path.join(tempDir(), 'planted-ran.txt');
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    // The real gate, on PATH and outside the repository. It reports the
+    // secret the pull request carries.
+    stubGate(bin, 'vault-guard', {
+      stdout: JSON.stringify({
+        version: '1',
+        scannedAt: '2026-09-06T00:00:00.000Z',
+        summary: { files: 1, secrets: 1 },
+        run: { files_scanned: 1, patterns_active: 59, fail_on: 'medium', blocking_matches: 1 },
+        results: [
+          {
+            file: 'leak.js',
+            matches: [
+              {
+                type: 'github-token',
+                severity: 'critical',
+                line: 1,
+                column: 15,
+                offset: 15,
+                value: 'ghp_...',
+                fingerprint: 'abc123',
+              },
+            ],
+          },
+        ],
+      }),
+      exit: 1,
+      version: '1.7.0',
+    });
+
+    const program = path.join(repo, options.programPath);
+    const policy = [
+      'version: 1',
+      'gates:',
+      '  secrets:',
+      '    product: vault-guard',
+      '    enabled: true',
+      ...(options.enforce === false ? ['    enforce: false'] : []),
+      ...(options.commandRelative === undefined || options.commandRelative === null
+        ? []
+        : [`    command: ${path.join(repo, options.commandRelative)}`, '    args: []']),
+      '',
+    ].join('\n');
+
+    const stub = (body: string): string =>
+      ['#!/bin/sh', 'if [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi', body, 'exit 0'].join(
+        '\n'
+      ) + '\n';
+
+    function writeProgram(kind: 'honest' | 'plant'): void {
+      const body =
+        kind === 'honest'
+          ? `echo ${JSON.stringify(CLEAN_SECRETS)}`
+          : `printf 'ran\\n' > ${JSON.stringify(marker)}\necho ${JSON.stringify(CLEAN_SECRETS)}`;
+      mkdirSync(path.dirname(program), { recursive: true });
+      writeFileSync(program, stub(body));
+      chmodSync(program, 0o755);
+    }
+
+    writeFileSync(path.join(repo, '.guardrails.yaml'), policy);
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+    if (options.baseBody !== null) {
+      writeProgram(options.baseBody);
+    }
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base']);
+
+    // The pull request: a secret, and, when asked for, a program that says
+    // there is none.
+    writeFileSync(
+      path.join(repo, 'leak.js'),
+      "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n"
+    );
+    if (options.headBody !== null) {
+      writeProgram(options.headBody);
+    }
+    // --force so a node_modules path is TRACKED at the head. That is the
+    // strongest form of the attack: it survives a clone, and the rule still
+    // has to refuse it, because being tracked at the head is not the same as
+    // being approved by the base.
+    git(repo, ['add', '-A', '--force']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+
+    return { repo, bin, marker, program };
+  }
+
+  describe('a base command: pointing at a file the head replaced', () => {
+    /** The base approves the path AND the bytes; the head changes the bytes. */
+    const replaced = () =>
+      plantedRepo({
+        programPath: 'vendor/vault-guard',
+        commandRelative: 'vendor/vault-guard',
+        baseBody: 'honest',
+        headBody: 'plant',
+      });
+
+    it('runs the head replacement when there is no trust base, which is the hole', () => {
+      const { repo, bin, marker } = replaced();
+
+      const result = runCli(repo, ['run'], bin);
+
+      expect(existsSync(marker)).toBe(true);
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+    });
+
+    it('refuses to run it under a trust base, naming the path and why', () => {
+      const { repo, bin, marker } = replaced();
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+      expect(result.stdout).toMatch(/vendor\/vault-guard is not the one "base" approved/);
+    });
+
+    it('accepts a vendored program the pull request did not touch', () => {
+      // The other direction, and it is what keeps the rule usable rather than
+      // a blanket ban on vendoring: a committed gate that is byte for byte
+      // what the base approved is exactly as trustworthy as the base ref.
+      const { repo, bin } = plantedRepo({
+        programPath: 'vendor/vault-guard',
+        commandRelative: 'vendor/vault-guard',
+        baseBody: 'honest',
+        headBody: 'honest',
+      });
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+      expect(result.stdout).not.toMatch(/gate-program-refused/);
+      expect(result.stdout).toMatch(/secrets\s+vault-guard/);
+    });
+
+    it('accepts a program on PATH, which a pull request cannot write', () => {
+      const { repo, bin } = plantedRepo({
+        programPath: 'vendor/unused',
+        commandRelative: null,
+        baseBody: null,
+        headBody: null,
+      });
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+      expect(result.stdout).not.toMatch(/gate-program-refused/);
+      // And the real gate on PATH reported the secret the pull request added.
+      expect(result.stdout).toMatch(/vault-guard\/github-token/);
+    });
+  });
+
+  describe('a head-committed node_modules/.bin stub, with no command: at all', () => {
+    it('shadows the real gate when there is no trust base, which is the hole', () => {
+      const { repo, bin, marker } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+      });
+
+      const result = runCli(repo, ['run'], bin);
+
+      // The repository's own copy beats PATH, deliberately, so the plant wins
+      // and answers clean with a plausible version.
+      expect(existsSync(marker)).toBe(true);
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+    });
+
+    it('refuses it under a trust base, and says node_modules is never base-approved', () => {
+      const { repo, bin, marker } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+      });
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+      expect(result.stdout).toMatch(/node_modules\/\.bin\/vault-guard/);
+      expect(result.stdout).toMatch(/Nothing under node_modules is ever base-approved/);
+    });
+
+    it('never asks the planted program for its version, since the probe runs it', () => {
+      // The probe RUNS the binary. Checking provenance after it would already
+      // have executed the plant, and a stub answering "1.7.0" is the cheapest
+      // version of this attack.
+      const { repo, bin, marker, program } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+      });
+      // A plant that writes the marker on EVERY invocation, --version
+      // included. Left uncommitted on purpose: the file git records is
+      // irrelevant here, what matters is that nothing executes this one.
+      writeFileSync(
+        program,
+        `#!/bin/sh\nprintf 'ran\\n' > ${JSON.stringify(marker)}\nif [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi\necho ${JSON.stringify(CLEAN_SECRETS)}\nexit 0\n`
+      );
+      chmodSync(program, 0o755);
+
+      runCli(repo, ['run', '--trust-base', 'base'], bin);
+
+      expect(existsSync(marker)).toBe(false);
+    });
+
+    it('is exit 2 even when the policy says that gate is not enforced', () => {
+      // enforce: false is a standing decision about what a gate's FINDINGS
+      // are worth, and this gate produced none: the umbrella refused to run a
+      // program the pull request chose. Letting an unenforced gate swallow
+      // that would let a pull request pick its own judge and stay green.
+      // enforce: false is written at the BASE, so it is the trusted policy's
+      // own standing decision rather than something the head asked for.
+      const { repo, bin } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+        enforce: false,
+      });
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+    });
+
+    it('raises a conductor/gate-program-refused notification at error level', () => {
+      const { repo, bin } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+      });
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--format', 'sarif'], bin);
+      const log = JSON.parse(result.stdout) as {
+        runs: Array<{
+          invocations?: Array<{
+            toolExecutionNotifications?: Array<{
+              descriptor: { id: string };
+              level: string;
+              properties: { details: Record<string, unknown> };
+            }>;
+          }>;
+        }>;
+      };
+
+      const refusal = log.runs
+        .flatMap((run) => run.invocations ?? [])
+        .flatMap((invocation) => invocation.toolExecutionNotifications ?? [])
+        .find((entry) => entry.descriptor.id === 'conductor/gate-program-refused');
+
+      expect(refusal?.level).toBe('error');
+      expect(refusal?.properties.details.product).toBe('vault-guard');
+      expect(String(refusal?.properties.details.program)).toMatch(/node_modules\/\.bin/);
+    });
+
+    it('follows a symlink and vets what it points at, not only the link', () => {
+      // The two-step shape: land a link whose blob never changes again, then
+      // change what it points at in a later pull request, where the linked
+      // path never appears in the diff at all. A real node_modules/.bin entry
+      // IS a symlink, so this is the ordinary layout rather than a contrivance.
+      const { repo, bin, marker, program } = plantedRepo({
+        programPath: 'vendor/real-gate',
+        commandRelative: 'node_modules/.bin/vault-guard',
+        baseBody: 'honest',
+        headBody: 'plant',
+      });
+      const link = path.join(repo, 'node_modules', '.bin', 'vault-guard');
+      mkdirSync(path.dirname(link), { recursive: true });
+      symlinkSync(program, link);
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.status).toBe(2);
+      // Named by the file that actually decides anything, not by the link.
+      expect(result.stdout).toMatch(/vendor\/real-gate is not the one "base" approved/);
+    });
+
+    it('changes nothing outside pull-request mode', () => {
+      // A local run on your own checkout is already inside the trust
+      // boundary, and a developer with a vendored or pinned gate must not
+      // start seeing refusals over it.
+      const { repo, bin, marker } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+      });
+
+      const result = runCli(repo, ['run'], bin);
+
+      expect(existsSync(marker)).toBe(true);
+      expect(result.stdout).not.toMatch(/gate-program-refused/);
+    });
   });
 });
 

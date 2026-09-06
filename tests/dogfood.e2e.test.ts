@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { NATIVE_CONTRACT_PATHS } from '../src/intent-prepare.js';
+import { atLeastVersion } from '../src/trust-base.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
 
 const CONDUCTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,6 +46,22 @@ function vaultGuardOnPath(): string | null {
 }
 
 const VAULT_GUARD = vaultGuardOnPath();
+
+/**
+ * A vault-guard BUILD to drive through the policy's absolute `command:`, for
+ * the pull-request-mode case that needs a known version rather than whatever
+ * this machine installed.
+ *
+ * An environment variable first, then a sibling checkout, and nothing
+ * hardcoded. The build under test may not be a sibling of this repository at
+ * all, and a machine layout has no business in a tracked file: this
+ * repository's own lint refuses one. When neither is there the case skips
+ * with a message naming what was missing, exactly like the rest of this file,
+ * and a skip is not a pass.
+ */
+const VAULT_GUARD_CLI =
+  process.env.CONDUCTOR_VAULT_GUARD_CLI ??
+  path.join(SIBLINGS, 'vault-guard', 'packages', 'cli', 'dist', 'cli-entry.js');
 
 const missing = [
   existsSync(CONDUCTOR_CLI) ? null : 'the umbrella is not built (run pnpm build)',
@@ -550,9 +567,21 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     it('names the gates that have no pull-request mode yet rather than staying quiet', () => {
       const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
 
+      // dep-guard is not in the version table at all: its pull-request mode
+      // is in flight, so it is never offered the flag and the run says so.
       expect(result.stdout).toMatch(/NOT in pull-request mode\s+dependencies\s+dep-guard/);
-      expect(result.stdout).toMatch(/NOT in pull-request mode\s+secrets\s+vault-guard/);
       expect(result.stdout).not.toMatch(/NOT in pull-request mode\s+intent/);
+
+      // The secrets gate is whatever this machine has installed, which is the
+      // whole point of this suite, so the assertion is about the RULE rather
+      // than about a version number: at or above the floor it is inside the
+      // boundary and silent, below it the line is there. Both directions have
+      // to hold or the withheld line is decoration.
+      const version = /secrets\s+vault-guard\s+(\S+)/.exec(result.stdout)?.[1] ?? null;
+      const withheld = /NOT in pull-request mode\s+secrets\s+vault-guard/.test(result.stdout);
+      expect({ inBoundary: !withheld }).toEqual({
+        inBoundary: atLeastVersion(version, '1.7.0'),
+      });
     });
 
     it('fails closed for every enabled gate on a base ref that does not resolve', () => {
@@ -600,6 +629,88 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
       expect(notificationIds).toContain('conductor/trust-base-not-passed');
     });
   });
+
+  /**
+   * The secrets gate inside the boundary, against a known vault-guard build.
+   *
+   * Reached through the policy's absolute `command:`, the same way the intent
+   * gate is, so this case pins the version rather than reading whatever the
+   * machine installed. The pull request changes vault-guard's own config to
+   * ignore the file the secret is in: without pull-request mode that config
+   * is obeyed and the secret is missed, and with it the config comes from the
+   * base ref, the secret is reported anyway, and the attempt shows as a
+   * proposal beside the umbrella's own.
+   */
+  (existsSync(VAULT_GUARD_CLI) ? describe : describe.skip)(
+    'the secrets gate reading its own config from the base ref',
+    () => {
+      beforeAll(() => {
+        git(['checkout', '--quiet', 'trust-base-fixture']);
+        git(['checkout', '--quiet', '-B', 'vault-guard-base']);
+        writeFileSync(
+          path.join(clone, '.guardrails.yaml'),
+          [
+            'version: 1',
+            'gates:',
+            '  secrets:',
+            '    product: vault-guard',
+            '    enabled: true',
+            `    command: ${VAULT_GUARD_CLI}`,
+            '',
+          ].join('\n')
+        );
+        git(['add', '-A']);
+        git(['commit', '--quiet', '-m', 'base: the secrets gate on a known build']);
+        git(['branch', '-f', 'vault-guard-fixture']);
+
+        writeFileSync(
+          path.join(clone, 'leak.js'),
+          "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+        );
+        // The pull request's own muting: ignore the file it just added.
+        writeFileSync(
+          path.join(clone, '.vault-guard.json'),
+          `${JSON.stringify({ ignore: ['leak.js'] }, null, 2)}\n`
+        );
+        git(['add', '-A']);
+        git(['commit', '--quiet', '-m', 'feat: tidy up the scanner config']);
+      });
+
+      it('obeys the pull request own config when no trust base is passed', () => {
+        const result = conductor(['run', '--verbose']);
+
+        expect(result.stdout).toMatch(/vault-guard 1\.7\.0/);
+        expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+      });
+
+      it('takes the config from the base ref and reports the secret anyway', () => {
+        const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
+
+        expect(result.stdout).toMatch(/vault-guard\/github-token/);
+        expect(result.stdout).toMatch(/leak\.js:1:/);
+        expect(result.stdout).not.toMatch(/NOT in pull-request mode\s+secrets/);
+      });
+
+      it("reports the muting attempt as that gate's own proposal", () => {
+        const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
+
+        // The sentence is vault-guard's, carried verbatim: this package does
+        // not read that gate's control files and has no standing to describe
+        // what changed in them.
+        expect(result.stdout).toMatch(/proposed\s+vault-guard\s+config added in this pull request/);
+        expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+      });
+
+      it('raises no policy line, because this pull request left the policy alone', () => {
+        // The other direction, and it is what keeps the count worth reading:
+        // the head and base policies are identical here, so the umbrella's
+        // own line is absent and the only proposal is the gate's.
+        const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
+
+        expect(result.stdout).not.toMatch(/policy changed in this pull request/);
+      });
+    }
+  );
 });
 
 if (missing.length > 0) {
@@ -607,4 +718,13 @@ if (missing.length > 0) {
   // the same problem as a gate that is switched on and not installed.
   // eslint-disable-next-line no-console
   console.warn(`dogfood e2e skipped: ${missing.join('; ')}`);
+}
+
+if (missing.length === 0 && !existsSync(VAULT_GUARD_CLI)) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    'dogfood: the vault-guard pull-request case skipped, no build at ' +
+      'CONDUCTOR_VAULT_GUARD_CLI and none beside this repository. ' +
+      'Nothing in that block has been proven.'
+  );
 }

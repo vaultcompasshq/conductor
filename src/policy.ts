@@ -100,8 +100,15 @@ export const PRODUCT_FOR_ROLE: Record<GateRole, Product> = {
  * could read in their own policy file.
  */
 export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
-  'dep-guard': ['format', 'staged', 'base'],
-  'vault-guard': ['format', 'f', 'staged'],
+  // `trust-base` is reserved for ALL THREE products, including the one the
+  // umbrella does not write it for yet. A policy file is a standing document
+  // and dep-guard's pull-request mode is in flight: a key that parses today
+  // and is rejected the week that gate ships would break repositories on an
+  // upgrade they did not ask for, and the flag it names is the one that
+  // decides where a gate reads its rules from, which is the last place to
+  // leave a window open.
+  'dep-guard': ['format', 'staged', 'base', 'trust-base'],
+  'vault-guard': ['format', 'f', 'staged', 'trust-base'],
   // `base` is reserved even though the umbrella never passes it to this gate,
   // and that is the point. The umbrella works the changed-path set out itself
   // and hands over `--paths`, because `--project` may be a temporary

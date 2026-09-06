@@ -234,6 +234,7 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
   // because the latter ignores the threshold. A sibling tool in this family
   // read summary.secrets and that is the bug not to copy.
   const threshold = optionalString(run.fail_on, product, 'run.fail_on') ?? null;
+  const trustBase = readTrustBase(root.trustBase, product);
   const diagnostics: Diagnostic[] = [];
 
   const findings: Finding[] = [];
@@ -331,6 +332,14 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
 
   return {
     findings,
+    // vault-guard 1.7.0 puts its pull-request summary at the TOP LEVEL, the
+    // same place intent-guard puts its own, and carries more fields than the
+    // umbrella reads (configChanged, baselineChanged, and a shape change for
+    // each). Only `ref` and `proposals` are read, which is the passthrough
+    // rule applied to a second gate: the sentences are that gate's claims
+    // about its own control files, and this package has no standing to
+    // rewrite them or to act on the structured half.
+    ...(trustBase === undefined ? {} : { trustBase }),
     run: {
       failOn: threshold,
       suppressed: typeof run.baseline_suppressed === 'number' ? run.baseline_suppressed : 0,

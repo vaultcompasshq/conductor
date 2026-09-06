@@ -333,7 +333,11 @@ describe('the reserved option list against the flags the umbrella writes', () =>
    */
   const RESERVED_WITHOUT_WRITING: Record<Product, string[]> = {
     // The umbrella passes --staged. A policy-supplied base would fight it.
-    'dep-guard': ['base'],
+    // trust-base is reserved ahead of the flag being written for this gate:
+    // its pull-request mode is in flight, and a key that parses today and is
+    // rejected the week that gate ships would break repositories on an
+    // upgrade they did not ask for.
+    'dep-guard': ['base', 'trust-base'],
     // The umbrella writes the same option under its short name, -f.
     'vault-guard': ['format'],
     // The umbrella passes --paths, and a --base would be resolved against a

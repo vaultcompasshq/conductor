@@ -1461,6 +1461,38 @@ describe('every result has a location, because a log with one that does not is r
     }
   });
 
+  it('files a self-approval refusal against the contract on a plain native run', () => {
+    // The branch below is documented and was unreachable in the shape it
+    // matters most: on a run with no PREPARATION, `gate.intent` was undefined
+    // even though the repository has a frozen contract the child reads, so a
+    // contract-state result was filed against the policy file. runAll now
+    // records the contract for that case too.
+    const withContract = result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.4.0',
+        findings: GATE_BLOCKED.findings,
+        intent: {
+          contractSource: { kind: 'native', path: '.intent-guard/intent-contract.yaml' },
+          baseRef: null,
+        },
+      }),
+    ]);
+
+    const entry = (sarif(withContract).runs[0].results as Array<Record<string, unknown>>)[0];
+    expect(entry.locations).toEqual([
+      {
+        physicalLocation: {
+          artifactLocation: {
+            uri: '.intent-guard/intent-contract.yaml',
+            uriBaseId: '%SRCROOT%',
+          },
+        },
+      },
+    ]);
+  });
+
   it("uses the intent gate's own contract file when the run says which one it read", () => {
     // A result about the contract belongs on the contract, not on the policy
     // file, and the run already carries which of the two state directories
@@ -1633,6 +1665,7 @@ describe('pull-request mode in the SARIF log', () => {
           trustBase: {
             ref: 'origin/main',
             withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+            refused: null,
             proposals: [],
           },
         }),

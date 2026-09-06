@@ -730,6 +730,44 @@ function trustBaseRefusedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The gates whose PROGRAM the umbrella refused to run.
+ *
+ * ERROR level, beside the refused trust base and for the same reason: this is
+ * not a statement about how much of the policy a run covered. A pull request
+ * put a file where the gate's binary resolves and the umbrella declined to
+ * execute it, which a reviewer has to meet rather than scroll past.
+ *
+ * The gate's could-not-run RESULT carries the same sentence, so a consumer
+ * reading only results still learns the gate did not run. This adds the
+ * structured half: which gate, which program, and which ref it was measured
+ * against.
+ */
+function programRefusedNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) => {
+    if (gate.couldNotRun?.reason !== 'gate-program-refused') {
+      return [];
+    }
+    return [
+      {
+        id: 'conductor/gate-program-refused',
+        level: 'error' as const,
+        message:
+          `The ${gate.role} gate (${gate.product}) did NOT run: its program is a file this pull ` +
+          `request controls, so running it would let the pull request choose the program that ` +
+          `judges it. ${gate.couldNotRun.detail}`,
+        details: {
+          role: gate.role,
+          product: gate.product,
+          program: gate.binary?.program ?? null,
+          ref: gate.trustBase?.ref ?? null,
+          reason: gate.couldNotRun.detail,
+        },
+      },
+    ];
+  });
+}
+
+/**
  * The gates the umbrella could not put into pull-request mode.
  *
  * The loud half of the same mode, and by the discriminator below it is a
@@ -887,6 +925,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),
     ...trustBaseRefusedNotifications(result),
+    ...programRefusedNotifications(result),
     ...proposalNotifications(result),
     ...trustBaseWithheldNotifications(result),
   ];

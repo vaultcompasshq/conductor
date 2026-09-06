@@ -971,6 +971,7 @@ describe('pull-request mode in the text report', () => {
             trustBase: {
               ref: 'origin/main',
               withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              refused: null,
               proposals: [],
             },
           }),
@@ -994,6 +995,7 @@ describe('pull-request mode in the text report', () => {
             trustBase: {
               ref: 'origin/main',
               withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              refused: null,
               proposals: [],
             },
           }),
