@@ -418,6 +418,19 @@ export const GATE_STATE_REASON_KINDS = [
   'contract-invalid',
   'contract-missing',
   'contract-unfrozen',
+  /**
+   * The two pull-request-mode refusals, from intent-guard 1.4.0.
+   *
+   * They are here rather than left to the backstop for the reason the whole
+   * list exists. The backstop fires only when NOTHING ELSE BLOCKED, so a pull
+   * request that forged a contract approval AND breached a change budget
+   * reported only the budget breach: the run still failed, but the report
+   * never said the approval was self-granted, which is the single most
+   * important sentence pull-request mode produces. Found by running the real
+   * gate against a crafted pull request rather than by reading the code.
+   */
+  'self-approval-refused',
+  'control-input-refused',
 ] as const;
 
 export type GateStateReasonKind = (typeof GATE_STATE_REASON_KINDS)[number];
@@ -427,6 +440,12 @@ const GATE_STATE_REASON_PREFIXES: ReadonlyArray<[string, GateStateReasonKind]> =
   ['No .intent-guard/intent-contract.yaml found', 'contract-missing'],
   ['No .conductor/intent-contract.yaml found', 'contract-missing'],
   ['Intent contract exists but is not frozen', 'contract-unfrozen'],
+  // Copied from intent-guard's own trust-base.ts, where both are exported
+  // constants for exactly this: SELF_APPROVAL_REASON_PREFIX and
+  // CONTROL_INPUT_REASON_PREFIX. Prefixes, because each interpolates the ref
+  // and the path.
+  ['Self-approval refused:', 'self-approval-refused'],
+  ['Control input refused:', 'control-input-refused'],
 ];
 
 /** Which gate-state reason this is, or null when it is a budget or drift reason. */

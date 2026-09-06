@@ -407,11 +407,13 @@ describe('intent-guard 1.2.0 normalization', () => {
       ).toBe(null);
     });
 
-    it('lists exactly the three kinds the gate can raise', () => {
+    it('lists exactly the kinds the gate can raise', () => {
       expect([...GATE_STATE_REASON_KINDS]).toEqual([
         'contract-invalid',
         'contract-missing',
         'contract-unfrozen',
+        'self-approval-refused',
+        'control-input-refused',
       ]);
     });
   });
@@ -515,5 +517,169 @@ describe('the no-contract reason under both state-directory names', () => {
 
   it('still refuses to classify a sentence that only mentions a contract', () => {
     expect(classifyGateStateReason('No contract was needed for this branch.')).toBe(null);
+  });
+});
+
+/**
+ * The two pull-request-mode refusals intent-guard 1.4.0 raises.
+ *
+ * Both arrive as ordinary reasons in the same array as budget and drift
+ * reasons, with nothing structured saying which is which, so they are matched
+ * by prefix exactly as the three contract-state reasons are. The strings are
+ * quoted from intent-guard's trust-base.ts, which exports both prefixes as
+ * constants for this purpose.
+ *
+ * THE REASON THEY ARE CLASSIFIED RATHER THAN LEFT TO THE BACKSTOP is the
+ * whole point, and it was found by running the real gate against a crafted
+ * pull request. The backstop fires only when nothing else blocked, so a pull
+ * request that forged a contract approval AND breached a change budget
+ * reported only the budget breach. The run still failed; the report never
+ * said the approval was self-granted, which is the one sentence a reviewer
+ * needs from pull-request mode.
+ */
+describe("intent-guard's pull-request-mode refusals", () => {
+  // Verbatim from a real 1.4.0 run against a scratch repository whose pull
+  // request rewrote the frozen contract's approval block.
+  const SELF_APPROVAL =
+    'Self-approval refused: this pull request changes .intent-guard/intent-contract.yaml and ' +
+    'gives it an approval that is not the one on "base". The approval that counts is the base ' +
+    "ref's, which a pull request cannot write. Land the contract change on the base branch " +
+    'first, or require a human approval for contract changes in the workflow.';
+  const CONTROL_INPUT =
+    'Control input refused: .intent-guard/intent-contract.yaml is a symlink at the head commit, ' +
+    'not a regular file. A link makes the contract point at a file the base ref never approved.';
+
+  it('classifies a self-approval refusal', () => {
+    expect(classifyGateStateReason(SELF_APPROVAL)).toBe('self-approval-refused');
+  });
+
+  it('classifies a refused control input', () => {
+    expect(classifyGateStateReason(CONTROL_INPUT)).toBe('control-input-refused');
+  });
+
+  it('renders and blocks like any other reason', () => {
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: [SELF_APPROVAL],
+        contractFound: true,
+        contractFrozen: true,
+        trustBase: {
+          ref: 'base',
+          proposals: ['contract changed in this pull request'],
+          contractChanged: true,
+          configChanged: false,
+          baseContractFound: true,
+          selfApproval: true,
+          contractShapeChange: null,
+        },
+      },
+      '1.4.0'
+    );
+
+    expect(normalized.findings).toHaveLength(1);
+    expect(normalized.findings[0].ruleId).toBe('intent-guard/gate-blocked');
+    expect(normalized.findings[0].blocking).toBe(true);
+    expect(normalized.findings[0].severity).toBe('critical');
+    expect(normalized.findings[0].message).toBe(SELF_APPROVAL);
+    expect(normalized.findings[0].details.kind).toBe('self-approval-refused');
+  });
+
+  it('keeps the refusal in the report when a budget violation blocked as well', () => {
+    // The failure this classification exists to prevent. Left to the
+    // backstop, this run reported only the budget breach.
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: [SELF_APPROVAL, 'Budget hard_block: a new dependency was added'],
+        contractFound: true,
+        contractFrozen: true,
+        budget: {
+          action: 'hard_block',
+          violations: [
+            {
+              rule: 'allow_new_dependencies',
+              severity: 'hard_block',
+              message: 'A new dependency was added and the contract forbids it.',
+              matched: ['package.json'],
+              fingerprint: 'abc123',
+            },
+          ],
+        },
+      },
+      '1.4.0'
+    );
+
+    const kinds = normalized.findings
+      .filter((finding) => finding.ruleId === 'intent-guard/gate-blocked')
+      .map((finding) => finding.details.kind);
+    expect(kinds).toEqual(['self-approval-refused']);
+    expect(normalized.findings.filter((finding) => finding.blocking)).toHaveLength(2);
+  });
+
+  it('carries the gate own trustBase summary through, proposals and all', () => {
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'ok',
+        exitCode: 0,
+        reasons: [],
+        contractFound: true,
+        contractFrozen: true,
+        trustBase: {
+          ref: 'origin/main',
+          proposals: ['contract changed in this pull request', 'config changed in this pull request'],
+          contractChanged: true,
+          configChanged: true,
+          baseContractFound: true,
+          selfApproval: false,
+          contractShapeChange: null,
+        },
+      },
+      '1.4.0'
+    );
+
+    expect(normalized.trustBase).toEqual({
+      ref: 'origin/main',
+      proposals: [
+        'contract changed in this pull request',
+        'config changed in this pull request',
+      ],
+    });
+  });
+
+  it('says nothing at all when the gate was not in pull-request mode', () => {
+    // Absence is the gate's own signal: the field is present only on a run
+    // it was given --trust-base for, so an ordinary run has nothing here and
+    // no report has to guess.
+    const normalized = normalizeIntentGuard(
+      {
+        status: 'ok',
+        exitCode: 0,
+        reasons: [],
+        contractFound: true,
+        contractFrozen: true,
+      },
+      '1.4.0'
+    );
+
+    expect(normalized.trustBase).toBeUndefined();
+  });
+
+  it('refuses a trustBase of a shape it does not know rather than reading past it', () => {
+    expect(() =>
+      normalizeIntentGuard(
+        {
+          status: 'ok',
+          exitCode: 0,
+          reasons: [],
+          contractFound: true,
+          contractFrozen: true,
+          trustBase: { ref: 'origin/main', proposals: [{ line: 'an object' }] },
+        },
+        '1.4.0'
+      )
+    ).toThrow(/trustBase\.proposals\[0\] should be a string/);
   });
 });

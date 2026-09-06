@@ -406,6 +406,200 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(false);
     expect(existsSync(path.join(clone, '.guardrails', 'manifest.json'))).toBe(false);
   });
+
+  /**
+   * Pull-request mode, against the real gates and a real branch.
+   *
+   * The block above left the clone with no policy file and no hook, which is
+   * where this starts. It commits an honest policy and the contract frozen
+   * earlier as the BASE, then commits the attack as the head: the policy
+   * rewritten to point the secrets gate's `command:` at a script the same
+   * commit adds, the dependency gate switched off, a fabricated secret, and
+   * the frozen contract's approval rewritten to name the pull request itself.
+   *
+   * The attacker's script writes a marker file, so "did the pull request's
+   * own code run on the runner" is answered by looking on disk rather than by
+   * reading a command line. This is the case the whole release exists for and
+   * the one thing in this file no unit test can stand in for: every stub in
+   * the suite prints what the test told it to, and the question here is what
+   * a real intent-guard, a real vault-guard and a real dep-guard do when the
+   * rules are taken away from the tree they are judging.
+   */
+  describe('a pull request that rewrites the rules it is judged by', () => {
+    let marker = '';
+    let attacker = '';
+
+    beforeAll(() => {
+      marker = path.join(path.dirname(clone), 'attacker-ran.txt');
+
+      // The base: an honest policy, and the contract frozen earlier in this
+      // file, which is still on disk.
+      writeFileSync(
+        path.join(clone, '.guardrails.yaml'),
+        [
+          'version: 1',
+          'gates:',
+          '  dependencies:',
+          '    product: dep-guard',
+          '    enabled: true',
+          '    options:',
+          `      corpus-dir: ${DEP_GUARD_CORPUS}`,
+          '  secrets:',
+          '    product: vault-guard',
+          '    enabled: true',
+          '  intent:',
+          '    product: intent-guard',
+          '    enabled: true',
+          `    command: ${INTENT_GUARD_CLI}`,
+          '    enforce: false',
+          '',
+        ].join('\n')
+      );
+      git(['add', '-A']);
+      git(['commit', '--quiet', '-m', 'base: an honest policy and a frozen contract']);
+      git(['branch', '-f', 'trust-base-fixture']);
+
+      // The pull request.
+      attacker = path.join(clone, 'tools', 'nice-gate.sh');
+      shim(
+        path.dirname(attacker),
+        'nice-gate.sh',
+        [
+          '#!/bin/sh',
+          `printf 'ran\\n' > ${JSON.stringify(marker)}`,
+          `echo '{"version":"1","summary":{"files":0,"secrets":0},"run":{"files_scanned":0,"patterns_active":0,"fail_on":"medium","blocking_matches":0},"results":[]}'`,
+          'exit 0',
+        ].join('\n') + '\n'
+      );
+      writeFileSync(
+        path.join(clone, '.guardrails.yaml'),
+        [
+          'version: 1',
+          'gates:',
+          '  dependencies:',
+          '    product: dep-guard',
+          '    enabled: false',
+          '  secrets:',
+          '    product: vault-guard',
+          '    enabled: true',
+          `    command: ${attacker}`,
+          '    args: []',
+          '  intent:',
+          '    product: intent-guard',
+          '    enabled: true',
+          `    command: ${INTENT_GUARD_CLI}`,
+          '    enforce: false',
+          '',
+        ].join('\n')
+      );
+      // Fabricated. The shape of a GitHub token and no real account.
+      writeFileSync(
+        path.join(clone, 'leak.js'),
+        "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+      );
+      // And the contract's approval rewritten to name the pull request.
+      const contractPath = frozenContractIn(clone);
+      writeFileSync(
+        contractPath,
+        readFileSync(contractPath, 'utf8').replace(/approved_by: .*/, 'approved_by: this branch')
+      );
+      git(['add', '-A']);
+      git(['commit', '--quiet', '-m', 'feat: a helpful refactor']);
+    });
+
+    it('runs the pull request own script when no trust base is passed, which is the hole', () => {
+      rmSync(marker, { force: true });
+
+      const result = conductor(['run']);
+
+      expect(existsSync(marker)).toBe(true);
+      expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+      expect(result.stdout).not.toMatch(/dependencies\s+dep-guard/);
+    });
+
+    it('never runs it with a trust base, and the real gates report what it hid', () => {
+      rmSync(marker, { force: true });
+
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(existsSync(marker)).toBe(false);
+      // The base policy's gates, including the one the pull request switched
+      // off, and the secret its own gate would have swallowed.
+      expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
+      expect(result.stdout).toMatch(/vault-guard\/github-token/);
+      expect(result.stdout).toMatch(/leak\.js:1:/);
+    });
+
+    it('sums the umbrella own proposal and the gate own into one sentence', () => {
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(result.stdout).toMatch(/2 control change\(s\) proposed in this pull request\./);
+      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      expect(result.stdout).toMatch(
+        /proposed\s+intent-guard\s+contract changed in this pull request/
+      );
+    });
+
+    it('refuses the forged approval, as an ordinary blocking finding', () => {
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(result.stdout).toMatch(/BLOCKING.*intent-guard\/gate-blocked/);
+      expect(result.stdout).toMatch(/Self-approval refused:/);
+    });
+
+    it('names the gates that have no pull-request mode yet rather than staying quiet', () => {
+      const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+      expect(result.stdout).toMatch(/NOT in pull-request mode\s+dependencies\s+dep-guard/);
+      expect(result.stdout).toMatch(/NOT in pull-request mode\s+secrets\s+vault-guard/);
+      expect(result.stdout).not.toMatch(/NOT in pull-request mode\s+intent/);
+    });
+
+    it('fails closed for every enabled gate on a base ref that does not resolve', () => {
+      rmSync(marker, { force: true });
+
+      const result = conductor(['run', '--trust-base', 'origin/does-not-exist']);
+
+      expect(result.status).toBe(2);
+      expect(existsSync(marker)).toBe(false);
+      expect(result.stdout).toMatch(/does not resolve to a commit/);
+      expect(result.stdout).toMatch(/verdict: exit 2/);
+    });
+
+    it('writes a SARIF log whose every result has a location', () => {
+      // The adjacent fix, checked where it was found: against a real
+      // repository's real gate output rather than against a constructed
+      // result. One result without a location makes code scanning reject the
+      // whole log.
+      const result = conductor([
+        'run',
+        '--trust-base',
+        'trust-base-fixture',
+        '--format',
+        'sarif',
+      ]);
+      const log = JSON.parse(result.stdout) as {
+        runs: Array<{
+          results: Array<{ ruleId: string; locations?: unknown[] }>;
+          invocations?: Array<{ toolExecutionNotifications?: Array<{ descriptor: { id: string } }> }>;
+        }>;
+      };
+
+      const results = log.runs.flatMap((run) => run.results);
+      expect(results.length).toBeGreaterThan(0);
+      expect(
+        results.filter((entry) => (entry.locations?.length ?? 0) === 0).map((entry) => entry.ruleId)
+      ).toEqual([]);
+
+      const notificationIds = log.runs.flatMap((run) =>
+        (run.invocations ?? []).flatMap((invocation) =>
+          (invocation.toolExecutionNotifications ?? []).map((entry) => entry.descriptor.id)
+        )
+      );
+      expect(notificationIds).toContain('conductor/control-change-proposed');
+      expect(notificationIds).toContain('conductor/trust-base-not-passed');
+    });
+  });
 });
 
 if (missing.length > 0) {
