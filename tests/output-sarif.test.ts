@@ -1540,7 +1540,7 @@ describe('pull-request mode in the SARIF log', () => {
   function pullRequestLog(overrides: Partial<RunResult>) {
     return sarif({
       ...result([outcome({ exitCode: 0, findings: [] })]),
-      trustBase: { ref: 'origin/main', policyChanged: true },
+      trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
       proposals: [
         { product: 'conductor', role: null, line: 'policy changed in this pull request' },
         {
@@ -1617,6 +1617,7 @@ describe('pull-request mode in the SARIF log', () => {
     expect((umbrella?.properties as Record<string, unknown>).trustBase).toEqual({
       ref: 'origin/main',
       policyChanged: true,
+      refusal: null,
     });
   });
 
@@ -1660,5 +1661,92 @@ describe('pull-request mode in the SARIF log', () => {
 
     expect(ids).not.toContain('conductor/control-change-proposed');
     expect(ids).not.toContain('conductor/trust-base-not-passed');
+  });
+});
+
+/**
+ * A refused trust base always produces a log, whatever the inventory holds.
+ *
+ * `{"runs": []}` was the output for the worst run this tool can have: the
+ * base ref could not be read, so nothing was checked, and with an inventory
+ * naming no gate there were neither findings nor notifications to earn the
+ * umbrella's run. An empty log uploads cleanly and says nothing, which is
+ * indistinguishable from a repository nobody scanned. Reachable on the
+ * default actions/checkout, which fetches depth 1.
+ */
+describe('a refused trust base in the SARIF log', () => {
+  const REFUSAL =
+    'cannot read the policy from base ref "origin/main": it does not resolve to a commit ' +
+    'in this repository. Nothing was checked.';
+
+  function refused(gates: GateOutcome[] = []) {
+    return sarif({
+      ...result(gates),
+      exitCode: 2,
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: REFUSAL },
+      proposals: [],
+    });
+  }
+
+  it('writes the umbrella run even when there is no gate and no finding', () => {
+    const log = refused();
+
+    expect(log.runs).toHaveLength(1);
+    expect((log.runs[0].tool as Record<string, Record<string, unknown>>).driver.name).toBe(
+      'conductor'
+    );
+  });
+
+  it('carries a conductor/trust-base-refused notification naming the ref', () => {
+    const refusal = notificationsOf(refused()).find(
+      (entry) => (entry.descriptor as Record<string, unknown>).id === 'conductor/trust-base-refused'
+    );
+
+    expect(refusal).toBeDefined();
+    expect(String((refusal?.message as Record<string, unknown>).text)).toMatch(
+      /does not resolve to a commit/
+    );
+    const details = (refusal?.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.ref).toBe('origin/main');
+  });
+
+  it('raises it at error level, unlike every other notification here', () => {
+    // Every other notification in this file is a statement about coverage and
+    // is note level on purpose. This one says nothing was checked at all,
+    // which is not tool status: it is the run failing closed.
+    const notifications = notificationsOf(refused());
+    const refusal = notifications.find(
+      (entry) => (entry.descriptor as Record<string, unknown>).id === 'conductor/trust-base-refused'
+    );
+
+    expect(refusal?.level).toBe('error');
+  });
+
+  it('says the analysis did not complete', () => {
+    const invocations = refused().runs[0].invocations as Array<Record<string, unknown>>;
+
+    expect(invocations[0].executionSuccessful).toBe(false);
+  });
+
+  it('keeps the could-not-run results for whatever gates the inventory named', () => {
+    const log = refused([
+      outcome({
+        role: 'secrets',
+        product: 'vault-guard',
+        exitCode: null,
+        couldNotRun: { reason: 'preparation-failed', detail: REFUSAL },
+        findings: [normalizeFailedGate('secrets', 'vault-guard', REFUSAL)],
+      }),
+    ]);
+
+    expect(umbrellaResultIds(log)).toContain('conductor/gate-failed');
+  });
+
+  it('says nothing of the kind on a run that was not refused', () => {
+    const ids = notificationsOf(sarif(THREE_GATES)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+
+    expect(ids).not.toContain('conductor/trust-base-refused');
   });
 });

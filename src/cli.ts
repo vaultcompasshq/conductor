@@ -139,12 +139,25 @@ function policyForRun(
 
   const refusal = refuseTrustBaseRef(root, trustBase);
   if (refusal !== null) {
-    // An inventory, and only an inventory. It cannot make the run pass:
-    // refusedTrustBase enforces every gate it names and writes exit 2 itself,
-    // so the worst a head policy can do here is name more gates than the base
-    // would have, which makes the report longer rather than the verdict
-    // weaker. An unreadable one leaves the list empty rather than replacing
-    // the refusal with a policy error, which would report the wrong problem.
+    // An inventory, and only an inventory: a list of gate NAMES for the
+    // report, taken from the one file available when the base ref cannot be
+    // read. It is head-controlled, so it can be SHORTER as well as longer
+    // than the base's -- every gate `enabled: false`, or a file that will not
+    // parse at all, leaves it empty -- and an earlier comment here claimed
+    // only the longer direction, which is how the empty case went unnoticed.
+    //
+    // Neither direction can weaken the verdict, and that is the property this
+    // rests on rather than on the inventory being right. refusedTrustBase
+    // enforces every gate it names and writes exit 2 itself, and the refusal
+    // is carried on the result so both renderers lead with it whether the
+    // inventory names three gates or none. A longer list makes the report
+    // longer; a shorter one makes it shorter; the verdict is the same
+    // sentence either way.
+    //
+    // An unreadable head file leaves the list empty rather than replacing the
+    // refusal with a policy error: the ref is what went wrong, and reporting
+    // the head's malformed file would send the reader to the wrong fix on a
+    // run that would have ignored that file anyway.
     let inventory: Policy = { version: 1, gates: {}, report: { format: 'text' } };
     try {
       inventory = applyCliOverrides(loadPolicy(root), overrides);
@@ -174,7 +187,11 @@ function policyForRun(
       parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`),
       overrides
     ),
-    trustBase: { ref: trustBase, policyChanged: policyDiffers(baseText, headText) },
+    trustBase: {
+      ref: trustBase,
+      policyChanged: policyDiffers(baseText, headText),
+      refusal: null,
+    },
   };
 }
 

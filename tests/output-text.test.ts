@@ -892,7 +892,7 @@ describe('pull-request mode in the text report', () => {
   function pullRequest(overrides: Partial<RunResult>): RunResult {
     return {
       ...result([outcome({ exitCode: 0, run: { ...cleanIntent, failOn: 'medium' } })], 0),
-      trustBase: { ref: 'origin/main', policyChanged: false },
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
       proposals: [],
       ...overrides,
     };
@@ -926,7 +926,7 @@ describe('pull-request mode in the text report', () => {
             line: 'contract changed in this pull request',
           },
         ],
-        trustBase: { ref: 'origin/main', policyChanged: true },
+        trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
       })
     );
 
@@ -944,7 +944,7 @@ describe('pull-request mode in the text report', () => {
             line: 'contract changed in this pull request',
           },
         ],
-        trustBase: { ref: 'origin/main', policyChanged: true },
+        trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
       }),
       { verbose: true }
     );
@@ -1005,5 +1005,82 @@ describe('pull-request mode in the text report', () => {
     expect(text).toMatch(
       /NOT in pull-request mode\s+intent\s+intent-guard\s+intent-guard 1\.3\.1 does not understand/
     );
+  });
+});
+
+/**
+ * A refused trust base renders as a refusal, whatever the inventory holds.
+ *
+ * The gap this closes was reachable on the DEFAULT actions/checkout, which
+ * fetches depth 1 and so carries no base ref. With an inventory that names no
+ * gate -- every gate `enabled: false` in the head's file, or a head file that
+ * will not parse at all, which leaves the inventory empty -- the verdict
+ * short-circuited on `gates.length === 0` and printed "verdict: exit 0, no
+ * gate ran because none is enabled", with the refusal sentence nowhere on
+ * screen. The process still exited 2, so the build failed with a report
+ * telling the reader to go and switch a gate on.
+ *
+ * A refusal is therefore its own outcome and renders FIRST, before any
+ * question about how many gates there are.
+ */
+describe('a refused trust base in the text report', () => {
+  const REFUSAL =
+    'cannot read the policy from base ref "origin/main": it does not resolve to a commit in ' +
+    'this repository. Nothing was checked. In CI, fetch the base branch (actions/checkout ' +
+    'with fetch-depth: 0) before running the gates.';
+
+  function refused(gates: GateOutcome[] = []): RunResult {
+    return {
+      ...result(gates, 2),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: REFUSAL },
+      proposals: [],
+    };
+  }
+
+  it('says exit 2 and the reason when the inventory names no gate at all', () => {
+    const text = renderText(refused());
+
+    expect(text).toMatch(/verdict: exit 2/);
+    expect(text).toMatch(/does not resolve to a commit/);
+    expect(text).not.toMatch(/verdict: exit 0/);
+    expect(text).not.toMatch(/Set enabled: true/);
+  });
+
+  it('carries the fetch-depth remedy, which is the fix in nine cases out of ten', () => {
+    expect(renderText(refused())).toMatch(/fetch-depth: 0/);
+  });
+
+  it('leads with the refusal rather than burying it under the gate sections', () => {
+    const lines = renderText(
+      refused([outcome({ role: 'secrets', product: 'vault-guard', exitCode: null })])
+    ).split('\n');
+
+    expect(lines[0]).toMatch(/refused the trust base/);
+    expect(lines[0]).toMatch(/origin\/main/);
+  });
+
+  it('still names the gates the inventory did hold', () => {
+    const text = renderText(
+      refused([
+        outcome({
+          role: 'secrets',
+          product: 'vault-guard',
+          exitCode: null,
+          couldNotRun: { reason: 'preparation-failed', detail: REFUSAL },
+        }),
+      ])
+    );
+
+    expect(text).toMatch(/secrets\s+vault-guard/);
+    expect(text).toMatch(/DID NOT RUN/);
+  });
+
+  it('never prints the clean one-line summary for a refusal', () => {
+    // The summary path is reached on exitCode 0 with every gate clean, and an
+    // empty-inventory refusal has no gate to be unclean. Belt and braces.
+    const text = renderText({ ...refused(), exitCode: 0 });
+
+    expect(text).not.toMatch(/conductor: clean, nothing blocked/);
+    expect(text).toMatch(/refused the trust base/);
   });
 });

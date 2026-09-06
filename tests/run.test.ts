@@ -510,7 +510,14 @@ describe('a trust base that could not be used', () => {
       expect(gate.couldNotRun?.detail).toContain(DETAIL);
       expect(gate.findings.some((finding) => finding.blocking)).toBe(true);
     }
-    expect(result.trustBase).toEqual({ ref: 'origin/main', policyChanged: false });
+    // The refusal is carried on the result, not only in the gate details:
+    // both renderers lead with it, and an inventory naming no gate would
+    // otherwise leave the report with nothing to say.
+    expect(result.trustBase).toEqual({
+      ref: 'origin/main',
+      policyChanged: false,
+      refusal: DETAIL,
+    });
   });
 
   it('exits 2 even when the head policy says every gate is unenforced', () => {
@@ -593,7 +600,7 @@ describe('pull-request mode through a whole run', () => {
       repoRoot: tempDir(),
       staged: true,
       pathValue: bin,
-      trustBase: { ref: 'origin/main', policyChanged },
+      trustBase: { ref: 'origin/main', policyChanged, refusal: null },
     });
   }
 
@@ -648,6 +655,7 @@ describe('pull-request mode through a whole run', () => {
     expect(pullRequestRun(true).trustBase).toEqual({
       ref: 'origin/main',
       policyChanged: true,
+      refusal: null,
     });
   });
 

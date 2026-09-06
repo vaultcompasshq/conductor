@@ -1045,6 +1045,88 @@ describe('pull-request mode through the CLI', () => {
     expect(result.stdout).toMatch(/verdict: exit 2/);
   });
 
+  it('still reports the refusal when the head policy enables no gate at all', () => {
+    // The shape that made the old report lie. The head's file is the only
+    // inventory available when the base ref cannot be read, and a head that
+    // switches every gate off leaves it empty, so the report had nothing to
+    // count and printed "verdict: exit 0, no gate ran because none is
+    // enabled" while the process exited 2 and nothing had been checked. This
+    // is reachable on the DEFAULT actions/checkout, which fetches depth 1.
+    const { repo, bin } = attackRepo({
+      headPolicy: [
+        'version: 1',
+        'gates:',
+        '  secrets:',
+        '    product: vault-guard',
+        '    enabled: false',
+        '',
+      ].join('\n'),
+    });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'origin/nope'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/^conductor: refused the trust base "origin\/nope"/m);
+    expect(result.stdout).toMatch(/does not resolve to a commit/);
+    expect(result.stdout).toMatch(/fetch-depth: 0/);
+    expect(result.stdout).toMatch(/verdict: exit 2/);
+    expect(result.stdout).not.toMatch(/Set enabled: true/);
+  });
+
+  it('writes a SARIF log with the refusal even when the head policy enables no gate', () => {
+    // The same shape in the other format, where it was worse: an empty
+    // {"runs": []} uploads cleanly and is indistinguishable from a scan of a
+    // repository nobody gated.
+    const { repo, bin } = attackRepo({
+      headPolicy: [
+        'version: 1',
+        'gates:',
+        '  secrets:',
+        '    product: vault-guard',
+        '    enabled: false',
+        '',
+      ].join('\n'),
+    });
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--trust-base', 'origin/nope', '--format', 'sarif'],
+      bin
+    );
+    const log = JSON.parse(result.stdout) as {
+      runs: Array<{
+        invocations?: Array<{
+          executionSuccessful?: boolean;
+          toolExecutionNotifications?: Array<{ descriptor: { id: string }; level: string }>;
+        }>;
+      }>;
+    };
+
+    expect(result.status).toBe(2);
+    expect(log.runs).toHaveLength(1);
+    const invocation = log.runs[0].invocations?.[0];
+    expect(invocation?.executionSuccessful).toBe(false);
+    const refusal = (invocation?.toolExecutionNotifications ?? []).find(
+      (entry) => entry.descriptor.id === 'conductor/trust-base-refused'
+    );
+    expect(refusal?.level).toBe('error');
+  });
+
+  it('reports the refusal when the head policy will not parse at all', () => {
+    // The other way to an empty inventory: loadPolicy throws, the inventory
+    // falls back to no gates, and the refusal is still the whole story.
+    const { repo, bin } = attackRepo({ headPolicy: 'version: 1\ngates: nonsense\n' });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'origin/nope'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/refused the trust base/);
+    // The refusal, not a policy-parse error: the ref is what went wrong, and
+    // reporting the head's malformed file would send the reader to the wrong
+    // fix on a run that would have ignored that file anyway.
+    expect(result.stderr).not.toMatch(/not a valid policy file/);
+  });
+
   it('refuses a trust base that is the head commit', () => {
     const { repo, bin } = attackRepo();
 

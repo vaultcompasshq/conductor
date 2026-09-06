@@ -385,6 +385,20 @@ interface Notification {
   id: string;
   message: string;
   details: Record<string, unknown>;
+  /**
+   * Note unless this says otherwise, and exactly one thing does.
+   *
+   * A statement about coverage is never an error about anybody's code, so
+   * every notification here is a note and a warning-level one would push the
+   * whole family back into the alert list they were moved out of. The single
+   * exception is a REFUSED TRUST BASE, which is not a coverage statement at
+   * all: nothing was checked, on a run whose entire job was to check. It is
+   * not a result either, because there is no code and no configuration it is
+   * about; it is the run failing closed, and a consumer reading only the log
+   * has to be able to tell it from a clean scan of a repository with no
+   * gates enabled.
+   */
+  level?: 'note' | 'error';
 }
 
 function toNotification(notification: Notification): Record<string, unknown> {
@@ -393,10 +407,7 @@ function toNotification(notification: Notification): Record<string, unknown> {
     // filed under when it was a result, so a consumer that had rules for
     // these still recognises them.
     descriptor: { id: notification.id },
-    // Note, always. A statement about coverage is never an error about the
-    // code, and a notification that arrived as a warning would push these
-    // straight back into the alert list they were moved out of.
-    level: 'note',
+    level: notification.level ?? 'note',
     message: { text: notification.message },
     properties: { details: notification.details },
   };
@@ -688,6 +699,37 @@ function proposalNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The trust base the umbrella refused, when it refused one.
+ *
+ * ERROR LEVEL, and the only notification here that is not a note. Every other
+ * one says how much of the policy a run covered; this one says the run did
+ * not happen. It is the one statement in this file that a reader must not be
+ * able to scroll past.
+ *
+ * A NOTIFICATION rather than a result even so, and the reason is the
+ * discriminator further down: a result is about a place in somebody's code,
+ * and this is about a ref. The could-not-run RESULTS for whatever gates the
+ * inventory named sit beside it in the same run and carry the same sentence,
+ * so a consumer that reads only results still learns that nothing ran.
+ */
+function trustBaseRefusedNotifications(result: RunResult): Notification[] {
+  const refusal = result.trustBase?.refusal;
+  if (refusal === undefined || refusal === null) {
+    return [];
+  }
+  return [
+    {
+      id: 'conductor/trust-base-refused',
+      level: 'error',
+      message:
+        `conductor refused the trust base "${result.trustBase?.ref ?? ''}", so no gate ran and ` +
+        `NOTHING WAS CHECKED by this run. ${refusal}`,
+      details: { ref: result.trustBase?.ref ?? null, reason: refusal },
+    },
+  ];
+}
+
+/**
  * The gates the umbrella could not put into pull-request mode.
  *
  * The loud half of the same mode, and by the discriminator below it is a
@@ -844,6 +886,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),
+    ...trustBaseRefusedNotifications(result),
     ...proposalNotifications(result),
     ...trustBaseWithheldNotifications(result),
   ];
@@ -852,7 +895,19 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
   // existed only when it had findings and a deferred gate was one; without
   // this clause a commit-stage log would say nothing whatever about the gate
   // that did not run there.
-  if (umbrellaFindings.length > 0 || notifications.length > 0) {
+  //
+  // A REFUSAL EARNS IT UNCONDITIONALLY, and that clause is not redundant with
+  // the two beside it even though a refusal always adds a notification: it
+  // says out loud that the worst run this tool can have is the one case where
+  // an empty log is not acceptable. `{"runs": []}` was the output when the
+  // base ref could not be read and the head's inventory named no gate, and an
+  // empty log uploads cleanly and is indistinguishable from a repository
+  // nobody scanned.
+  if (
+    umbrellaFindings.length > 0 ||
+    notifications.length > 0 ||
+    (result.trustBase?.refusal ?? null) !== null
+  ) {
     runs.push(
       makeRun(
         UMBRELLA_DRIVER_NAME,
@@ -870,7 +925,13 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
           // could not run leaves the run at exit 0, and nothing was checked
           // by it either way. Written whenever this run is written, in both
           // directions.
-          executionSuccessful: result.gates.every((gate) => gate.couldNotRun === null),
+          // A refusal is false whatever the gate list says, and with an
+          // empty inventory `every` over nothing is vacuously true, which
+          // would have claimed the analysis completed on the one run where
+          // nothing was even attempted.
+          executionSuccessful:
+            (result.trustBase?.refusal ?? null) === null &&
+            result.gates.every((gate) => gate.couldNotRun === null),
           notifications,
         }
       )

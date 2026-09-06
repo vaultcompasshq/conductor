@@ -371,7 +371,43 @@ function unenforcedClauses(result: RunResult): string[] {
   return clauses;
 }
 
+/**
+ * The refusal, as the first line of the report and as the verdict.
+ *
+ * FIRST, and before any question about how many gates there are. The old
+ * order asked that question first, and an inventory naming no gate -- every
+ * gate `enabled: false` in the head's file, or a head file that will not
+ * parse -- fell into the "no gate ran because none is enabled" branch, which
+ * printed exit 0 and told the reader to switch a gate on while the process
+ * exited 2 and nothing had been checked. The refusal is the whole story of
+ * such a run and there is no arrangement of the other clauses that tells it.
+ */
+function refusalLines(result: RunResult): string[] {
+  const refusal = result.trustBase?.refusal;
+  if (refusal === undefined || refusal === null) {
+    return [];
+  }
+  return [
+    `conductor: refused the trust base "${result.trustBase?.ref ?? ''}". Nothing was checked.`,
+    `  ${refusal}`,
+  ];
+}
+
 function verdict(result: RunResult): string {
+  const refusal = result.trustBase?.refusal;
+  if (refusal !== undefined && refusal !== null) {
+    // Written rather than composed, exactly as the exit code is: no gate ran,
+    // so there is nothing for the clauses below to count, and every one of
+    // them would describe a different run from the one that happened.
+    return (
+      `verdict: exit 2, the trust base "${result.trustBase?.ref ?? ''}" could not be used, ` +
+      'so no gate ran and nothing here is a result of any kind.'
+    );
+  }
+  return verdictForRun(result);
+}
+
+function verdictForRun(result: RunResult): string {
   // Counted over ENFORCED gates only. The exit code came from those alone,
   // so a count taken over all of them describes a different run from the one
   // the number at the front of the line is about, and the umbrella's own
@@ -663,7 +699,9 @@ function summaryLine(result: RunResult): string {
 }
 
 export function renderText(result: RunResult, options: TextOptions = {}): string {
-  if (!options.verbose && isFullyClean(result)) {
+  const refusal = refusalLines(result);
+
+  if (refusal.length === 0 && !options.verbose && isFullyClean(result)) {
     return `${summaryLine(result)}\n`;
   }
 
@@ -676,6 +714,8 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // different questions, so two numbers, and the section headers and the
   // "not enforced" lines are what connect them.
   const lines: string[] = [
+    ...refusal,
+    ...(refusal.length === 0 ? [] : ['']),
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];
 

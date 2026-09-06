@@ -100,6 +100,21 @@ export interface RunTrustBase {
   ref: string;
   /** Whether the head commit's own policy file differs from that one. */
   policyChanged: boolean;
+  /**
+   * Why this ref could not be used at all, or null when it was.
+   *
+   * A SEPARATE FIELD RATHER THAN AN ABSENT `trustBase`, and it is load-bearing
+   * in both renderers. A refusal is the worst outcome this tool has -- nothing
+   * was checked, on a run that was supposed to be the gate -- and it has to be
+   * the first thing a reader meets rather than something inferred from an exit
+   * code. Both reports used to work the number of gates out first, and an
+   * inventory naming no gate (every gate `enabled: false` in the head's file,
+   * or a head file that will not parse) then printed "no gate ran because none
+   * is enabled" in text and `{"runs": []}` in SARIF, with the refusal sentence
+   * nowhere. That is reachable on the DEFAULT actions/checkout, which fetches
+   * depth 1 and so carries no base ref.
+   */
+  refusal: string | null;
 }
 
 export interface RunResult {
@@ -298,8 +313,9 @@ export function refusedTrustBase(
     findings,
     // policyChanged is unknowable: the base side of the comparison is the
     // thing that could not be read. False rather than a third state, because
-    // no proposal is reported on a run where nothing was judged.
-    trustBase: { ref, policyChanged: false },
+    // no proposal is reported on a run where nothing was judged. The refusal
+    // itself is carried, and it is what both renderers lead with.
+    trustBase: { ref, policyChanged: false, refusal: detail },
     proposals: [],
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
