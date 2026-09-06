@@ -614,6 +614,21 @@ function runGateInner(
       productVersion: version,
       binary,
       durationMs: Date.now() - started,
+      // ENFORCED, whatever the policy says, for the same reason a refused
+      // program is: the gate produced no findings for `enforce: false` to be
+      // a decision about, and this is the umbrella saying it could not
+      // establish that the gate was inside the boundary.
+      //
+      // Reachable now only as a PACKAGING problem, not as an attack: the
+      // program check above runs first, and with its directory-subtree rule a
+      // pull request can no longer put a program here whose version probe it
+      // controls. Before that rule it could, through the wrapper shape: a
+      // head-replaced inner script exiting 3 on --version landed exactly
+      // here, with enforce false and exit 0. A packaging quirk that
+      // fails a build loudly is the better failure: the alternative is a
+      // boundary that quietly downgrades itself on the runs where something
+      // is already wrong, which is the shape of every bug in this file.
+      enforce: true,
       trustBase,
       couldNotRun: { reason: 'trust-base-unverified', detail: trustBase.refused },
       findings: [normalizeFailedGate(gate.role, gate.product, trustBase.refused)],

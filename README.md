@@ -301,23 +301,55 @@ a diff: a base `command:` pointing at a path inside the repository, where the
 head replaces the file behind the approved path; and no `command:` at all,
 where a head-committed `node_modules/.bin/<gate>` shadows the real gate,
 because resolution prefers the repository's own copy over PATH so that a
-project pin beats a global install. So on a pull-request run a gate's program
-must be **outside the working tree** (on PATH, or an absolute `command:`
-elsewhere on the machine), or else a **tracked regular file whose contents
-are identical at the base ref and at the head commit**, compared with
-`git ls-tree` on both refs and never read from the working tree. A symlink is
-followed and what it points at is checked too. Anything else is could-not-run
-for that gate, naming the path, and it reaches the exit code even where the
-policy sets `enforce: false`, because the gate produced no findings to
-un-enforce: the umbrella declined to run a program the pull request chose.
+project pin beats a global install.
+
+So on a pull-request run a gate's program must be **outside the working tree**
+(on PATH, or an absolute `command:` elsewhere on the machine), or else meet
+**both** of these:
+
+- it is a **tracked regular file whose contents are identical** at the base
+  ref and at the head commit; and
+- **the tree object id of its containing directory is identical** at those
+  two refs, which is to say the pull request changed nothing anywhere in that
+  directory's subtree.
+
+Both are compared with `git ls-tree` on both refs and never read from the
+working tree. The second is not belt and braces. A vendored gate is rarely
+one file: `vendor/vault-guard` execs `vendor/impl.sh`, and a pull request
+that leaves the wrapper byte for byte alone and rewrites the helper beside it
+passes a per-file check while running its own code. Comparing the directory
+covers every file under it at once, without this tool having to know what a
+wrapper calls.
+
+**What is and is not vetted**, exactly: the program file and everything in
+its directory subtree. Anything the program reaches **outside** that
+directory is not vetted at all, so an in-repo gate must be **self-contained
+within its own directory**. A program at the repository ROOT is refused, and
+the message says to give it a directory: at the root the containing directory
+is the whole repository, so the rule would mean "no pull request may change
+anything".
+
+A symlink inside the repository is refused on **its own entry**, before its
+target is considered: it is either untracked, or its tree entry is a link
+rather than a regular file, and either refuses. (A symlink whose own path is
+outside the tree but which points into it has its target vetted; that is the
+case following the link exists for.)
+
+Anything else is could-not-run for that gate, naming the path, and it reaches
+the exit code even where the policy sets `enforce: false`, because the gate
+produced no findings to un-enforce: the umbrella declined to run a program
+the pull request chose.
 
 Nothing under `node_modules` is ever base-approved, and that is the right
 answer rather than a limitation: what is there is chosen by the head's own
 manifest and lockfile and installed by a step that runs before the gates, so
 git has no record of those bytes at either ref. A pull request that edits its
 lockfile to pull a different build of a gate has chosen its own judge just as
-surely as one that commits a stub. Vendoring a gate into the repository still
-works, as long as the pull request does not change it.
+surely as one that commits a stub. **Vendoring a gate still works**, on those
+terms: put it in its own directory, keep everything it needs inside that
+directory, and leave the whole directory alone in a pull request the gate is
+meant to judge. Changing it is not forbidden, it just has to land on the base
+branch first, like any other rule change.
 
 **A change to the rules is not refused, it is proposed.** Rules legitimately
 change, and a gate that blocked every such pull request would train people to

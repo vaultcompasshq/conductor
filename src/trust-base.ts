@@ -240,10 +240,41 @@ function insideWorkingTree(repoReal: string, candidate: string): boolean {
 }
 
 /**
+ * A path with its PARENT resolved through symlinks but its own last component
+ * left alone.
+ *
+ * Resolving the whole path would follow the program's own symlink, which is a
+ * different question and is asked separately below. Resolving nothing at all
+ * was a bug: the repository root arrives here realpath'd, so on a machine
+ * where the working tree sits under a symlinked mount (a macOS temporary
+ * directory, for one) the unresolved spelling of a file plainly inside the
+ * tree compares as OUTSIDE it, and the entry was quietly skipped. Only the
+ * link's target was then vetted, and the link's own entry never was.
+ */
+function withResolvedParent(candidate: string): string {
+  const parent = path.dirname(candidate);
+  return path.join(realOrNull(parent) ?? parent, path.basename(candidate));
+}
+
+/**
+ * The tree object id of one directory at a ref, or null.
+ *
+ * The repository root is its own case: it has no containing directory, so the
+ * comparison is the whole root tree, which `rev-parse` gives directly.
+ */
+function treeShaAt(repoRoot: string, ref: string, relativeDir: string): string | null {
+  if (relativeDir === '' || relativeDir === '.') {
+    return resolveRev(repoRoot, ref, 'tree');
+  }
+  const entry = treeEntryAt(repoRoot, ref, relativeDir);
+  return entry === null || entry.type !== 'tree' ? null : entry.sha;
+}
+
+/**
  * Why this gate's PROGRAM cannot be trusted on a pull-request run, or null.
  *
  * Reading the rules from the base ref is worth nothing if the pull request
- * chooses the program that applies them, and it can, two ways that both look
+ * chooses the program that applies them, and it can, three ways that all look
  * ordinary in a diff:
  *
  *  - A base policy whose `command:` points INSIDE the repository, at
@@ -259,12 +290,35 @@ function insideWorkingTree(repoReal: string, candidate: string): boolean {
  *    plausible number passes every check the umbrella makes. The composite
  *    action installs nothing, so the plant survives an install step.
  *
+ *  - A base-approved WRAPPER. `vendor/vault-guard` is byte for byte what the
+ *    base approved and is the path the policy names; it execs
+ *    `vendor/impl.sh`, which the head rewrote. Nothing in the diff touches
+ *    the path the policy names, so a per-file check waves it through. This
+ *    one was found by a reviewer after the first two were closed, and it is
+ *    why the unit of approval is a directory rather than a file.
+ *
  * THE RULE. A program is acceptable when it is outside the working tree
  * entirely: on PATH, or an absolute `command:` somewhere else on the machine.
  * A pull request cannot write those. A program INSIDE the working tree is
- * acceptable only when it is a tracked regular file whose blob is IDENTICAL
- * at the trust base and at HEAD, which is the same base-versus-head test the
- * rules themselves get, applied to the thing that enforces them.
+ * acceptable only when BOTH hold: it is a tracked regular file whose blob is
+ * IDENTICAL at the trust base and at HEAD, AND the tree object id of its
+ * CONTAINING DIRECTORY is identical at those two refs. The first is the same
+ * base-versus-head test the rules themselves get, applied to the thing that
+ * enforces them; the second extends it to everything beside the program,
+ * which is what the wrapper shape needs and what a per-file test cannot give.
+ *
+ * A tree object id covers a whole subtree in one comparison, so this needs no
+ * knowledge of what a wrapper calls. WHAT IS VETTED IS THE PROGRAM FILE AND
+ * ITS DIRECTORY SUBTREE AND NOTHING ELSE: anything the program reaches
+ * outside that directory is not vetted, so an in-repo gate has to be
+ * self-contained within its own directory. That limit is stated in the README
+ * in those words, because an adopter has to be able to satisfy it.
+ *
+ * A PROGRAM AT THE REPOSITORY ROOT IS REFUSED. There the containing directory
+ * is the whole repository, so the comparison is the root tree and every pull
+ * request that changed anything differs, which is every pull request.
+ * Refusing with the remedy in the message beats a rule that silently means
+ * "no pull request may change anything".
  *
  * NOTHING HERE READS THE WORKING TREE. Both sides come from `git ls-tree`, so
  * an uncommitted local edit cannot make a file look approved and a tracked
@@ -279,8 +333,12 @@ function insideWorkingTree(repoReal: string, candidate: string): boolean {
  * its lockfile to pull a different build of a gate has chosen its own judge
  * just as surely as one that commits a stub.
  *
- * Both the literal path and its realpath are vetted, because a head-committed
- * symlink is a choice of program too.
+ * BOTH THE PROGRAM'S OWN PATH AND ITS REALPATH ARE VETTED, because a
+ * head-committed symlink is a choice of program too. An in-repo symlink is
+ * refused on its OWN entry, before its target matters: it is either untracked
+ * or its tree entry is a link rather than a regular file, and either refuses.
+ * Vetting the target is what catches a link whose own path is outside the
+ * tree pointing into it; it never decides the in-repo case.
  */
 export function refuseHeadControlledProgram(
   repoRoot: string,
@@ -293,7 +351,7 @@ export function refuseHeadControlledProgram(
   }
 
   const candidates = new Set<string>();
-  for (const candidate of [path.resolve(repoRoot, programPath), realOrNull(programPath)]) {
+  for (const candidate of [withResolvedParent(programPath), realOrNull(programPath)]) {
     if (candidate !== null && insideWorkingTree(repoReal, candidate)) {
       candidates.add(candidate);
     }
@@ -331,6 +389,40 @@ export function refuseHeadControlledProgram(
         `the gate program at ${relative} is not the one "${trustBase}" approved: this pull ` +
         'request changes it, so running it would let the pull request choose the program that ' +
         'judges it. Land the change on the base branch first. Nothing was checked by this gate.'
+      );
+    }
+
+    // AND THE DIRECTORY AROUND IT. The file check alone is defeated by a
+    // wrapper: `vendor/vault-guard` execs `vendor/impl.sh`, the pull request
+    // leaves the wrapper byte for byte alone and rewrites the helper beside
+    // it, and nothing in the diff touches the path the policy names. So the
+    // unit of approval is the program's DIRECTORY SUBTREE, compared as one
+    // tree object id, which covers every file under it at once without this
+    // package having to know what a wrapper calls.
+    const directory = path.posix.dirname(relative);
+    const baseTree = treeShaAt(repoRoot, trustBase, directory);
+    const headTree = treeShaAt(repoRoot, 'HEAD', directory);
+
+    if (baseTree === null || headTree === null || baseTree !== headTree) {
+      if (directory === '' || directory === '.') {
+        // At the root the containing directory IS the whole repository, so
+        // this compares root trees and any pull request that changed anything
+        // differs, which is every pull request. Refusing with the remedy
+        // beats a rule that silently means "no pull request may change
+        // anything".
+        return (
+          `the gate program at ${relative} is at the repository root, so the directory that ` +
+          'would have to be unchanged for it to be trusted is the whole repository, and this ' +
+          `pull request differs from "${trustBase}" somewhere in it. Move a vendored gate into ` +
+          'its own directory, or install it on PATH. Nothing was checked by this gate.'
+        );
+      }
+      return (
+        `a file beside the gate program in ${directory} is not what "${trustBase}" approved: the ` +
+        `program at ${relative} is unchanged, but the directory around it is not, and a gate is ` +
+        'rarely one file. A wrapper that execs a helper beside it runs whatever this pull ' +
+        'request put there. Land the change on the base branch first, or install the gate on ' +
+        'PATH. Nothing was checked by this gate.'
       );
     }
   }

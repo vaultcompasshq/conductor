@@ -526,6 +526,28 @@ describe('the trust base on the command line and on the outcome', () => {
     expect(existsSync(log)).toBe(false);
   });
 
+  it('enforces that refusal whatever the policy says, as a refused program is', () => {
+    // The gate produced no findings for enforce: false to be a decision
+    // about. With the directory-subtree rule a pull request can no longer
+    // reach this state, so what is left is a packaging problem, and one that
+    // fails a build loudly beats a boundary that quietly downgrades itself.
+    const bin = tempDir();
+    writeFileSync(
+      path.join(bin, 'intent-guard'),
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "a banner, not a version"; exit 0; fi\n' +
+        'echo \'{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}\'\n'
+    );
+    chmodSync(path.join(bin, 'intent-guard'), 0o755);
+
+    const outcome = runGate(
+      gate({ role: 'intent', product: 'intent-guard', enforce: false }),
+      { repoRoot: tempDir(), staged: false, pathValue: bin, trustBase: 'origin/main' }
+    );
+
+    expect(outcome.couldNotRun?.reason).toBe('trust-base-unverified');
+    expect(outcome.enforce).toBe(true);
+  });
+
   it('runs that same gate normally when the run is not in pull-request mode', () => {
     // An unreadable version is not itself an error. It only stops the run
     // when the umbrella had promised to put that gate inside the boundary.

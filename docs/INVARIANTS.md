@@ -538,15 +538,56 @@ diff and both of which were live before 0.3.0:
   `--version` with a plausible number passes every other check. The
   composite action installs nothing, so the plant survives the install step.
 
-The rule (`refuseHeadControlledProgram`, src/trust-base.ts:285-338, called
+A third shape defeats a per-file check on its own, and it was found by a
+reviewer AFTER the first two were closed, which is the reason the unit of
+approval is what it is:
+
+  A base-approved WRAPPER. `vendor/vault-guard` is byte for byte what the
+  base approved and is the path the policy names; it execs `vendor/impl.sh`,
+  which the head rewrote. Nothing in the diff touches the path the policy
+  names. Measured before the fix: exit 0, secret missed, zero proposals. The
+  same shape reached `trust-base-unverified` with `enforce: false` and exit 0
+  when the replaced helper exited 3 on `--version`.
+
+The rule (`refuseHeadControlledProgram`, src/trust-base.ts:343-429, called
 from src/gate-runner.ts:577-601): a program OUTSIDE the working tree is
-accepted, since a pull request cannot write it; a program inside is accepted
-only as a tracked regular file whose blob is identical at the trust base and
-at HEAD. Both sides come from `git ls-tree` and neither from the working
-tree, so an uncommitted edit cannot make a file look approved. A symlink is
-followed and its target vetted too, which closes the two-step where a link
-lands once and its target moves in a later pull request where the linked
-path never appears in the diff.
+accepted, since a pull request cannot write it. A program inside is accepted
+only when BOTH hold: it is a tracked regular file whose blob is identical at
+the trust base and at HEAD, AND the tree object id of its CONTAINING
+DIRECTORY is identical at those two refs. Both sides come from `git ls-tree`
+and neither from the working tree, so an uncommitted edit cannot make a file
+look approved.
+
+WHAT IS VETTED IS THE PROGRAM FILE AND EVERYTHING IN ITS DIRECTORY SUBTREE,
+and nothing else. A tree object id covers the whole subtree in one
+comparison, so this needs no knowledge of what a wrapper calls. Anything the
+program reaches OUTSIDE that directory is NOT vetted, which is a real limit
+rather than a hedge: an in-repo gate has to be self-contained within its own
+directory, and that is stated in the README in those words because an
+adopter has to be able to satisfy it.
+
+A PROGRAM AT THE REPOSITORY ROOT IS REFUSED, with a message saying to give it
+a directory. At the root the containing directory is the whole repository, so
+the comparison is the root tree and every pull request that changed anything
+differs, which is every pull request. Refusing with the remedy beats a rule
+that silently means "no pull request may change anything". (The root trees
+also cannot be equal by the time this runs: `refuseTrustBaseRef` has already
+refused a base whose tree matches HEAD's.)
+
+A SYMLINK INSIDE THE REPOSITORY IS REFUSED ON ITS OWN ENTRY, before its
+target is considered: it is either untracked, or its tree entry is a link
+rather than a regular file, and either one refuses. The TARGET is vetted too,
+and that is what catches a link whose own path is outside the tree pointing
+into it; it never decides the in-repo case. An earlier wording here said the
+symlink was "followed and its target vetted", which reads as accepted when
+the target is fine, and was doubly wrong: it described a check the code does
+not make, and on a machine whose working tree sits under a symlinked mount
+the link's own entry was not being vetted at all (see `withResolvedParent`,
+src/trust-base.ts:254-257). The repository root arrives realpath'd and the
+program path did not, so the link's own spelling compared as OUTSIDE the tree
+and was skipped in silence. Pinned now by tests/cli.test.ts:1686 and 1712,
+the second of which is the one that would have caught it: the link's target
+is unchanged between the refs, so vetting only the target accepts the run.
 
 IT RUNS BEFORE THE VERSION PROBE, and that ordering is the whole of it: the
 probe RUNS the program (called at src/gate-runner.ts:603, after the check at
@@ -562,14 +603,21 @@ finds nothing. A pull request that edits its lockfile to pull a different
 build of a gate has chosen its own judge as surely as one that commits a
 stub. Vendoring still works, as long as the pull request does not change it.
 
-A REFUSED PROGRAM IS ENFORCED WHATEVER THE POLICY SAYS
-(src/gate-runner.ts:593). `enforce: false` is a standing decision about
-what a gate's FINDINGS are worth, and this gate produced none: the umbrella
-declined to run a program the pull request chose. Letting an unenforced gate
-swallow that would let a pull request pick its own judge and keep the run
-green. This is the one place enforcement is overridden, and it is the only
-one: nothing else in this package reads a gate's output and decides to
-ignore the policy.
+BOTH PULL-REQUEST-MODE REFUSALS ARE ENFORCED WHATEVER THE POLICY SAYS
+(src/gate-runner.ts:593 for a refused program, src/gate-runner.ts:628 for an
+unverifiable version). `enforce: false` is a standing decision about what a
+gate's FINDINGS are worth, and neither of these gates produced any: the
+umbrella declined to run at all. Letting an unenforced gate swallow the
+program refusal would let a pull request pick its own judge and keep the run
+green, and that was reachable: through the wrapper shape, a head-replaced
+inner script exiting 3 on `--version` landed on the version refusal with
+`enforce: false` and exit 0. The directory rule closes that path, so what is
+left on the version side is a packaging problem, and one that fails a build
+loudly beats a boundary that quietly downgrades itself on the runs where
+something is already wrong.
+
+These two are the only places enforcement is overridden in this package.
+Nothing else reads a gate's output and decides to ignore the policy.
 
 THE PASS-DOWN IS CAPABILITY-GATED PER GATE (`TRUST_BASE_MIN_VERSION` and
 `decideTrustBase`, src/gate-runner.ts:91-98 and 154-217, decided after the
@@ -638,10 +686,16 @@ them is a way the mechanism above was true and the REPORT of it was not:
   false, the could-not-run results survive, silence when not refused). End
   to end through the CLI on a real repository at tests/cli.test.ts:1049,
   1080 and 1116, the last of which is a head policy that will not parse.
-- The program rule: tests/cli.test.ts:1210-1543, thirteen cases on real
-  repositories. Both attack shapes are driven BEFORE and after, so the
+- The program rule: tests/cli.test.ts:1210-1754, nineteen cases on real
+  repositories. All THREE attack shapes are driven BEFORE and after, so each
   refusal is measured against a run where the planted program demonstrably
-  did execute rather than against an assumption that it would have.
+  did execute rather than against an assumption that it would have. The
+  wrapper shape is at tests/cli.test.ts:1412-1578, with the two directions
+  that keep the directory rule usable rather than a ban on vendoring beside
+  it: a vendored directory left entirely alone is accepted, and a change
+  elsewhere in the repository refuses nothing. The mutation that matters for
+  those two is comparing the ROOT tree instead of the directory tree, which
+  reddens four.
 - The version refusal and the vault-guard pass-down:
   tests/gate-runner.test.ts:260-395 and 397-549, with the summed proposal at
   tests/run.test.ts:622 and the real gate at
