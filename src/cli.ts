@@ -170,7 +170,11 @@ export function buildProgram(): Command {
         const shared = { cwd, pathValue: process.env.PATH ?? '' };
 
         if (options.revert) {
-          const result = revertInit({ ...shared, force: Boolean(options.force) });
+          const result = revertInit({
+            ...shared,
+            force: Boolean(options.force),
+            dryRun: Boolean(options.dryRun),
+          });
           const rendered = `${renderRevertHuman(result)}\n`;
           if (options.json) {
             process.stdout.write(`${JSON.stringify(result)}\n`);

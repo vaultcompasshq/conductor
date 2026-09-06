@@ -2181,3 +2181,73 @@ describe('a crafted manifest cannot escape the repository', () => {
     expect(existsSync(outside)).toBe(false);
   });
 });
+
+// The CLI's --revert path routed to revertInit before dryRun was consulted,
+// and revertInit had no dry-run branch, so --revert --dry-run performed a real
+// destructive revert while its own help promised it would write nothing.
+describe('revert honours --dry-run', () => {
+  it('leaves every file byte for byte identical and still succeeds', () => {
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const policyPath = path.join(repo, POLICY_FILE_NAME);
+    const manifestPath = path.join(repo, MANIFEST_RELATIVE_PATH);
+    const hookBefore = readFileSync(hookPath, 'utf8');
+    const policyBefore = readFileSync(policyPath, 'utf8');
+    const manifestBefore = readFileSync(manifestPath, 'utf8');
+
+    const result = revertInit({ cwd: repo, pathValue: '', dryRun: true });
+
+    // A dry run of a revert that would fully succeed still reports success, so
+    // the CLI exits 0.
+    expect(result.ok).toBe(true);
+    // Nothing moved.
+    expect(readFileSync(hookPath, 'utf8')).toBe(hookBefore);
+    expect(readFileSync(policyPath, 'utf8')).toBe(policyBefore);
+    expect(readFileSync(manifestPath, 'utf8')).toBe(manifestBefore);
+    // And it still says what it would have removed.
+    expect(result.actions.some((action) => action.kind === 'remove')).toBe(true);
+  });
+
+  it('restores nothing on disk when it would put an adopted hook back', () => {
+    const repo = gitRepo();
+    const original = `#!/bin/sh\n# ${DEP_GUARD_HOOK_MARKER}\ndep-guard scan --staged\n`;
+    mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), original);
+    init(repo, { adopt: true });
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const umbrellaHook = readFileSync(hookPath, 'utf8');
+
+    const result = revertInit({ cwd: repo, pathValue: '', dryRun: true });
+
+    // The umbrella hook is still exactly there: nothing was removed and the
+    // adopted hook was not written over it.
+    expect(readFileSync(hookPath, 'utf8')).toBe(umbrellaHook);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+
+  it('exits 0 through the real CLI and changes nothing, the way its help promises', () => {
+    // The bug was in the CLI: --revert routed to revertInit before --dry-run
+    // was consulted, so this exact invocation used to perform a real revert.
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
+    const repo = gitRepo();
+    init(repo);
+    const hookPath = path.join(repo, '.git', 'hooks', 'pre-commit');
+    const policyPath = path.join(repo, POLICY_FILE_NAME);
+    const manifestPath = path.join(repo, MANIFEST_RELATIVE_PATH);
+    const before = [hookPath, policyPath, manifestPath].map((file) => readFileSync(file, 'utf8'));
+    const pathValue = pathLedBy(shimDirWithGit());
+
+    const result = spawnSync(
+      process.execPath,
+      [cli, 'init', '--revert', '--dry-run'],
+      { cwd: repo, encoding: 'utf8', env: childEnv(pathValue) }
+    );
+
+    expect(result.status).toBe(0);
+    expect([hookPath, policyPath, manifestPath].map((file) => readFileSync(file, 'utf8'))).toEqual(
+      before
+    );
+  });
+});
