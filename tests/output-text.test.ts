@@ -1086,3 +1086,58 @@ describe('a refused trust base in the text report', () => {
     expect(text).toMatch(/refused the trust base/);
   });
 });
+
+/**
+ * The skipped node_modules candidate, in the full report.
+ *
+ * An adopter who installs the gates as devDependencies and nothing else sees
+ * their gate resolve from somewhere they did not expect, or not resolve at
+ * all. Without this line the only explanation is in a document. It goes in the
+ * pull-request block because that is the only mode it can happen in.
+ */
+describe('the node_modules candidate a pull-request run skipped', () => {
+  function skippedRun(gates: GateOutcome[]): RunResult {
+    return {
+      ...result(gates, 0),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
+    };
+  }
+
+  const skippedGate = outcome({
+    exitCode: 0,
+    nodeModulesSkipped: 'node_modules/.bin/dep-guard',
+  } as Partial<GateOutcome>);
+
+  it('names the gate and the path it declined to take', () => {
+    const text = renderText(skippedRun([skippedGate]), { verbose: true });
+
+    expect(text).toMatch(/node_modules\/\.bin not consulted/);
+    expect(text).toMatch(/dependencies \(dep-guard\) at node_modules\/\.bin\/dep-guard/);
+  });
+
+  it('is one line for the whole run, however many gates were skipped', () => {
+    const text = renderText(
+      skippedRun([
+        skippedGate,
+        outcome({
+          role: 'secrets',
+          product: 'vault-guard',
+          exitCode: 0,
+          nodeModulesSkipped: 'node_modules/.bin/vault-guard',
+        } as Partial<GateOutcome>),
+      ]),
+      { verbose: true }
+    );
+
+    const lines = text.split('\n').filter((line) => line.includes('node_modules/.bin not consulted'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/dependencies \(dep-guard\)/);
+    expect(lines[0]).toMatch(/secrets \(vault-guard\)/);
+  });
+
+  it('says nothing when no candidate was there to skip', () => {
+    const text = renderText(skippedRun([outcome({ exitCode: 0 })]), { verbose: true });
+
+    expect(text).not.toMatch(/node_modules/);
+  });
+});

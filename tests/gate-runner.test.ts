@@ -586,3 +586,116 @@ describe('the trust base on the command line and on the outcome', () => {
     expect(outcome.productVersion).toBeNull();
   });
 });
+
+/**
+ * A pull-request run never reaches into node_modules/.bin, and says so.
+ *
+ * MEASURED WITH A MARKER, never with a source assertion. Each of these plants
+ * a binary under the repository's own node_modules/.bin that writes a file
+ * when it is executed, so "the other one ran" is a fact about the filesystem
+ * rather than about which branch a reader thinks was taken. That matters more
+ * here than usual: the whole point is that a program the head chose is not
+ * executed, and a probe for --version executes it just as thoroughly as a
+ * scan does.
+ */
+describe('a pull-request run and the repository own node_modules', () => {
+  /** A gate binary that records having been run, and answers --version. */
+  function markerGate(dir: string, name: string, marker: string): void {
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        `printf 'ran\\n' >> ${JSON.stringify(marker)}`,
+        'if [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi',
+        `echo '${DEP_GUARD_CLEAN.replace(/'/g, "'\\''")}'`,
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(file, 0o755);
+  }
+
+  it('runs the PATH copy and never the one the head installed', () => {
+    const repo = tempDir();
+    const bin = tempDir();
+    const plantMarker = path.join(repo, 'planted-ran.txt');
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', plantMarker);
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const outcome = runGate(gate(), {
+      repoRoot: repo,
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(existsSync(plantMarker)).toBe(false);
+    expect(outcome.couldNotRun).toBeNull();
+    expect(outcome.binary?.source).toBe('path');
+  });
+
+  it('is could-not-run, with the install remedy, when the only copy is the head own', () => {
+    const repo = tempDir();
+    const plantMarker = path.join(repo, 'planted-ran.txt');
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', plantMarker);
+
+    const outcome = runGate(gate(), {
+      repoRoot: repo,
+      staged: false,
+      pathValue: tempDir(),
+      trustBase: 'origin/main',
+    });
+
+    expect(existsSync(plantMarker)).toBe(false);
+    // The EXISTING reason, not a new one: nothing was found, which is what
+    // binary-missing has always meant. What is new is the sentence after it.
+    expect(outcome.couldNotRun?.reason).toBe('binary-missing');
+    expect(outcome.couldNotRun?.detail).toMatch(/npm install -g/);
+    expect(outcome.couldNotRun?.detail).toMatch(/dep-guard-version/);
+    expect(outcome.findings[0]?.message).toMatch(/npm install -g/);
+    // And it names the copy it declined to take, or the reader is told the
+    // gate is missing while looking straight at it.
+    expect(outcome.couldNotRun?.detail).toMatch(/node_modules\/\.bin\/dep-guard/);
+  });
+
+  it('carries the skipped candidate on the outcome, so one line can report the run', () => {
+    const repo = tempDir();
+    const bin = tempDir();
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', path.join(repo, 'ran.txt'));
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const skipped = runGate(gate(), {
+      repoRoot: repo,
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+    expect(skipped.nodeModulesSkipped).toBe('node_modules/.bin/dep-guard');
+
+    // Nothing to skip: no claim that anything was skipped.
+    const nothingThere = runGate(gate(), {
+      repoRoot: tempDir(),
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+    expect(nothingThere.nodeModulesSkipped).toBeUndefined();
+  });
+
+  it('says nothing and changes nothing outside pull-request mode', () => {
+    // The parity case, and it is measured the same way: the planted binary
+    // must actually RUN, or this proves only that no exception was thrown.
+    const repo = tempDir();
+    const bin = tempDir();
+    const plantMarker = path.join(repo, 'planted-ran.txt');
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', plantMarker);
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const outcome = runGate(gate(), { repoRoot: repo, staged: false, pathValue: bin });
+
+    expect(existsSync(plantMarker)).toBe(true);
+    expect(outcome.binary?.source).toBe('node_modules');
+    expect(outcome.nodeModulesSkipped).toBeUndefined();
+  });
+});

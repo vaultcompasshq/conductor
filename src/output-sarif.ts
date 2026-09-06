@@ -806,6 +806,44 @@ function trustBaseWithheldNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The node_modules/.bin candidates a pull-request run declined to take.
+ *
+ * ONE NOTIFICATION FOR THE RUN, not one per gate. This is a statement about
+ * the run's mode: node_modules/.bin is not a location a pull-request run has,
+ * and in the repository shape it happens in most, gates installed as
+ * devDependencies and nothing else, it is true of every gate at once.
+ *
+ * A NOTE, by the discriminator above, and not a close call. Nothing went
+ * wrong, nobody's code is at fault, and the gates still ran: it says WHERE the
+ * program that ran came from, which is a coverage statement in the same shape
+ * as the withheld one. When the skip actually cost a gate its run, that gate's
+ * own could-not-run result carries the remedy, so a consumer reading only
+ * results still learns what to do.
+ */
+function nodeModulesSkippedNotifications(result: RunResult): Notification[] {
+  const skipped = result.gates.flatMap((gate) =>
+    gate.nodeModulesSkipped === undefined
+      ? []
+      : [{ role: gate.role, product: gate.product, path: gate.nodeModulesSkipped }]
+  );
+  if (skipped.length === 0) {
+    return [];
+  }
+  return [
+    {
+      id: 'conductor/node-modules-skipped',
+      message:
+        'Resolution did NOT consult node_modules/.bin on this pull-request run: ' +
+        `${skipped.map((entry) => `${entry.role} (${entry.product}) at ${entry.path}`).join(', ')}. ` +
+        'What is installed there is chosen by the head own manifest and lockfile, so no ref ' +
+        'approves it. Each of those gates was resolved from PATH or from an absolute command: ' +
+        'instead, or reported as could-not-run with the install remedy.',
+      details: { ref: result.trustBase?.ref ?? null, skipped },
+    },
+  ];
+}
+
+/**
  * The gates the policy file told not to decide anything, as notifications.
  *
  * These are written in TWO places on purpose, and neither one is redundant:
@@ -928,6 +966,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...programRefusedNotifications(result),
     ...proposalNotifications(result),
     ...trustBaseWithheldNotifications(result),
+    ...nodeModulesSkippedNotifications(result),
   ];
 
   // Notifications earn the run on their own. Before this, the umbrella run

@@ -213,10 +213,19 @@ function isPullRequestShaped(options: RunOptions, env: NodeJS.ProcessEnv): boole
   return resolveBaseRef({ ...(options.base === undefined ? {} : { base: options.base }), env }) !== null;
 }
 
-/** The intent-guard binary, or null when there is none to prepare with. */
+/**
+ * The intent-guard binary, or null when there is none to prepare with.
+ *
+ * SAME SKIP AS runGate's, and it is not decoration: preparation SPAWNS this
+ * binary, before runGate has looked at anything. Resolving it out of
+ * node_modules on a pull-request run would execute a program the head chose,
+ * three times, before the program check the boundary rests on had run once.
+ */
 function intentBinary(gate: GatePolicy, options: RunOptions) {
   try {
-    return resolveGateBinary(gate, options.repoRoot, options.pathValue);
+    return resolveGateBinary(gate, options.repoRoot, options.pathValue, {
+      skipNodeModules: options.trustBase !== undefined,
+    });
   } catch (err) {
     // A ResolveError means the policy named a command that is not there.
     // runGate reports that properly; preparation just has nothing to run.

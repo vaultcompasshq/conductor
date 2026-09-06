@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 
-import { CANDIDATES, resolveGateBinary } from '../src/resolve.js';
+import { CANDIDATES, nodeModulesCandidate, resolveGateBinary } from '../src/resolve.js';
 import type { GatePolicy } from '../src/policy.js';
 
 const temps: string[] = [];
@@ -239,5 +239,125 @@ describe('candidate table', () => {
   it('has exactly one candidate for the two gates that were never renamed', () => {
     expect(CANDIDATES['dep-guard'].map((candidate) => candidate.name)).toEqual(['dep-guard']);
     expect(CANDIDATES['vault-guard'].map((candidate) => candidate.name)).toEqual(['vault-guard']);
+  });
+});
+
+/**
+ * On a pull-request run node_modules/.bin is not a location at all.
+ *
+ * The repository's own pin beats a global install everywhere else, and that
+ * ordering is right: a LOCATION is a statement about which build, and the
+ * repository gets to make it. On a pull request the repository making that
+ * statement is the pull request, and what is under node_modules was chosen by
+ * the head's own manifest and lockfile. 0.3.0 let resolution take it and then
+ * refused the program, which is safe and made every ordinary pull request in a
+ * devDependency-installed repository exit 2. Not trying it at all is the same
+ * safety with the gate still running, off PATH, from a build the base branch
+ * pinned.
+ */
+describe('resolution on a pull-request run', () => {
+  it('takes the PATH copy even though the repository has its own', () => {
+    const binDir = tempDir();
+    const onPath = shim(binDir, 'vault-guard');
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'vault-guard');
+
+    const resolved = resolveGateBinary(
+      gate({ role: 'secrets', product: 'vault-guard' }),
+      repo,
+      binDir,
+      { skipNodeModules: true }
+    );
+
+    expect(resolved?.source).toBe('path');
+    expect(resolved?.command).toBe(onPath);
+  });
+
+  it('resolves nothing when the only copy is in node_modules/.bin', () => {
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'dep-guard');
+
+    expect(
+      resolveGateBinary(gate({ role: 'dependencies', product: 'dep-guard' }), repo, tempDir(), {
+        skipNodeModules: true,
+      })
+    ).toBeNull();
+  });
+
+  it('never reaches node_modules/.bin for a version probe either', () => {
+    // The probe RUNS the binary. Resolving the version-safe sibling out of
+    // node_modules would execute a head-chosen program to answer a question,
+    // which is the exact ordering hazard the program check exists for.
+    const onlyCheck = tempDir();
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'intent-guard');
+
+    const resolved = resolveGateBinary(
+      gate({ command: shim(onlyCheck, 'intent-guard-check') }),
+      repo,
+      onlyCheck,
+      { skipNodeModules: true }
+    );
+
+    expect(resolved?.candidate).toBe('intent-guard-check');
+    expect(resolved?.versionProbe).toBeNull();
+  });
+
+  it('leaves the ordinary run alone, node_modules/.bin first', () => {
+    // The parity case. Outside pull-request mode nothing about resolution
+    // changes: a pre-commit hook and a direct run on your own checkout are
+    // already inside the trust boundary.
+    const binDir = tempDir();
+    shim(binDir, 'vault-guard');
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'vault-guard');
+
+    for (const options of [undefined, {}, { skipNodeModules: false }]) {
+      const resolved = resolveGateBinary(
+        gate({ role: 'secrets', product: 'vault-guard' }),
+        repo,
+        binDir,
+        options
+      );
+      expect(resolved?.source).toBe('node_modules');
+    }
+  });
+});
+
+describe('naming the candidate a pull-request run skipped', () => {
+  it('reports the repository-relative path, so a published log carries no machine path', () => {
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'dep-guard');
+
+    expect(nodeModulesCandidate(gate({ role: 'dependencies', product: 'dep-guard' }), repo)).toBe(
+      'node_modules/.bin/dep-guard'
+    );
+  });
+
+  it('follows the candidate table rather than guessing the product name', () => {
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'intent-guard-check');
+
+    expect(nodeModulesCandidate(gate(), repo)).toBe('node_modules/.bin/intent-guard-check');
+  });
+
+  it('reports nothing when there is nothing there', () => {
+    expect(nodeModulesCandidate(gate(), tempDir())).toBeNull();
+  });
+
+  it('reports nothing when the policy names a command, since resolution never looked', () => {
+    // A `command:` overrides resolution entirely, so no candidate was skipped
+    // and saying one was would send a reader to fix a file that decided
+    // nothing.
+    const repo = tempDir();
+    shim(path.join(repo, 'node_modules', '.bin'), 'vault-guard');
+    const elsewhere = tempDir();
+
+    expect(
+      nodeModulesCandidate(
+        gate({ role: 'secrets', product: 'vault-guard', command: shim(elsewhere, 'vault-guard') }),
+        repo
+      )
+    ).toBeNull();
   });
 });

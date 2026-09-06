@@ -748,7 +748,18 @@ function gateProblem(
 export function normalizeMissingGate(
   role: GateRole,
   product: Product,
-  candidates: string[]
+  candidates: string[],
+  /**
+   * A sentence appended to the message, or nothing.
+   *
+   * Written by the caller rather than decided here, because the only thing
+   * that varies is WHY the search came up empty, and that is a fact about the
+   * run rather than about the finding. Today the one caller that passes
+   * anything is a pull-request run, where node_modules/.bin was never
+   * searched and the message would otherwise be misleading in exactly the
+   * repository shape this is most likely to happen in.
+   */
+  remedy = ''
 ): Finding {
   return gateProblem(
     'conductor/gate-missing',
@@ -756,7 +767,7 @@ export function normalizeMissingGate(
     product,
     `The "${role}" gate is enabled but no ${product} binary was found. ` +
       `Looked for: ${candidates.join(', ')}. Install it, point the gate at a build with an ` +
-      `absolute "command:", or set enabled: false to switch the gate off on purpose.`,
+      `absolute "command:", or set enabled: false to switch the gate off on purpose.${remedy}`,
     { candidates }
   );
 }

@@ -1783,3 +1783,59 @@ describe('a refused trust base in the SARIF log', () => {
     expect(ids).not.toContain('conductor/trust-base-refused');
   });
 });
+
+/**
+ * The skipped node_modules candidate, as one notification.
+ *
+ * A NOTE and a NOTIFICATION, by the discriminator in this file: nothing went
+ * wrong, nobody's code is at fault, and the fact is true of the repository's
+ * install layout rather than of this change. It says how the gate that ran was
+ * found, which is a coverage statement in the same shape as the withheld one.
+ */
+describe('the node_modules candidate a pull-request run skipped', () => {
+  function skippedRun(gates: GateOutcome[]): RunResult {
+    return {
+      ...result(gates),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
+    };
+  }
+
+  const skipped = notificationsOf(
+    sarif(
+      skippedRun([
+        outcome({ nodeModulesSkipped: 'node_modules/.bin/dep-guard' } as Partial<GateOutcome>),
+        outcome({
+          role: 'secrets',
+          product: 'vault-guard',
+          nodeModulesSkipped: 'node_modules/.bin/vault-guard',
+        } as Partial<GateOutcome>),
+      ])
+    )
+  ).filter((entry) => (entry.descriptor as Record<string, unknown>).id === 'conductor/node-modules-skipped');
+
+  it('raises exactly one, however many gates were skipped', () => {
+    expect(skipped).toHaveLength(1);
+  });
+
+  it('is a note, because nothing went wrong', () => {
+    expect(skipped[0]?.level).toBe('note');
+  });
+
+  it('names every gate and the path each one declined, in the details', () => {
+    const details = (skipped[0]?.properties as Record<string, Record<string, unknown>>).details;
+
+    expect(details.ref).toBe('origin/main');
+    expect(details.skipped).toEqual([
+      { role: 'dependencies', product: 'dep-guard', path: 'node_modules/.bin/dep-guard' },
+      { role: 'secrets', product: 'vault-guard', path: 'node_modules/.bin/vault-guard' },
+    ]);
+  });
+
+  it('says nothing when no candidate was there to skip', () => {
+    const ids = notificationsOf(sarif(skippedRun([outcome({})]))).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+
+    expect(ids).not.toContain('conductor/node-modules-skipped');
+  });
+});
