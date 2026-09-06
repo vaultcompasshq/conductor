@@ -220,6 +220,22 @@ that gate, for pointing at a build that is not installed anywhere.
   `--adopt`: those hooks were never conductor's, and no flag here turns
   somebody else's file into one this tool may overwrite.
 
+Init recognises the hook manager already wired into the repository. husky is
+redirected to the tracked hook it maintains rather than the generated
+dispatcher git runs. lefthook and the pre-commit framework are refused, with
+the stanza to add to their own config file. simple-git-hooks and yorkie are
+refused too, and recognised from the declaration as well as from the hook
+file, because the declaration is there on a fresh clone where the generated
+hook is not yet: the `simple-git-hooks` or `gitHooks` key in package.json, or
+any of the standalone config files simple-git-hooks reads. Their hook text
+lives in package.json, which conductor does not write, so the guidance names
+the entry to add and `--force` does not override the refusal.
+
+That refusal applies only where git actually runs `.git/hooks`. Both managers
+write that directory and neither reads `core.hooksPath`, so a repository that
+has pointed git somewhere else has taken their file out of play, and init
+proceeds normally without mentioning them.
+
 `conductor run` runs every enabled gate and prints one report.
 
 - `--staged` gates the git index against HEAD, which is what the hook does.
@@ -281,11 +297,24 @@ gate looks like. In Actions this is almost always a shallow checkout, so
    outranks everything, and a path here that is not on disk is reported
    rather than replaced: running a different contract than the one somebody
    named is the wrong kindness.
-2. `<repo>/.conductor/intent-contract.yaml`, when it is **frozen**. The
-   native flow wins wherever a team has done it. Frozen is the test rather
-   than present: an unfrozen contract is a draft somebody left behind, and
-   running the gate against it fails every pull request on "not frozen by
-   user" without checking anything.
+2. `<repo>/.intent-guard/intent-contract.yaml`, when it is **frozen**, and
+   `<repo>/.conductor/intent-contract.yaml` after it. The native flow wins
+   wherever a team has done it. Frozen is the test rather than present: an
+   unfrozen contract is a draft somebody left behind, and running the gate
+   against it fails every pull request on "not frozen by user" without
+   checking anything.
+
+   The second path is the directory intent-guard used before 1.3.0, which
+   renamed it because `.conductor` had become the name of a different product
+   in this family. Both are read, so a repository on either version is
+   checked rather than blocked, and a run that used the old one says so: one
+   line on the gate's contract line in the text report, and an
+   `intent-guard/legacy-state-dir` notification in the SARIF log. If the
+   repository holds **both** directories, the gate does not run and says so,
+   naming both: that is the state intent-guard itself refuses every command
+   in, so the umbrella refuses on exactly the gate's rule rather than a
+   softer one. A `.conductor` holding nothing intent-guard wrote belongs to
+   something else and is ignored.
 3. The **first** `Spec: <path>` line in the pull request body, read from the
    event payload at `GITHUB_EVENT_PATH`. A path here that is not on disk, or
    one that leaves the repository, falls through to the next rule.
@@ -319,9 +348,9 @@ and that includes a contributor from a fork.** On the ordinary path, where a
 repository has no frozen contract of its own, `Spec: none` means the intent
 gate does not run at all on that pull request, and budget breaches are the
 thing this gate blocks on. The one thing a waiver cannot override is a frozen
-`.conductor/intent-contract.yaml`, which is checked first: a repository that
-wants the gate to be non-waivable freezes a native contract and keeps it
-committed.
+native contract, under either of the two paths above, which is checked first:
+a repository that wants the gate to be non-waivable freezes a native contract
+and keeps it committed.
 
 **What blocks is unchanged.** Blocking stays where intent-guard puts it:
 budget breaches block, subject to `enforce`. Drift on its own is reported and

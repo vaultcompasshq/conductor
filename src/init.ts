@@ -50,6 +50,19 @@
 //     points init at the repository root, and the second fails exactly
 //     after a `git clean -xdf` has removed the gitignored generated
 //     directory, which is the state this whole property exists to survive.
+//
+//  6. A MANAGER WHOSE HOOK TEXT LIVES IN package.json IS REFUSED, AND THE
+//     DECLARATION IS THE SIGNAL. simple-git-hooks and yorkie generate
+//     .git/hooks/pre-commit from a key in package.json and rewrite it on
+//     every install, and neither has a tracked file to write instead. What
+//     makes them different from lefthook is that the declaration is there
+//     BEFORE the manager has ever run: a fresh clone has no generated hook
+//     to read, and that is exactly the state somebody runs init in. So the
+//     package.json key is checked as well as the file, and either one alone
+//     is enough. Found by running this tool against two of the eight public
+//     repositories in a dogfood run: both would have taken the umbrella hook
+//     and lost it at the next install, with the manifest still recording it
+//     as installed. See detectManagedHook and declaredManagedHooks.
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -58,6 +71,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   rmdirSync,
   statSync,
@@ -96,7 +110,39 @@ export const INTENT_GUARD_HOOK_MARKER = 'conductor-managed-pre-commit';
  * a flag, and this one detects it: the umbrella's whole job is to be run
  * once in a repository somebody else already wired up.
  */
-export type HookManager = 'native' | 'husky' | 'lefthook' | 'precommit';
+export type HookManager =
+  | 'native'
+  | 'husky'
+  | 'lefthook'
+  | 'precommit'
+  | 'simple-git-hooks'
+  | 'yorkie';
+
+/**
+ * The two managers whose pre-commit TEXT lives in package.json rather than
+ * in a config file of their own or in the hook file.
+ *
+ * They are kept apart from lefthook and the pre-commit framework because
+ * the refusal is different: there is no manager-owned config file to point
+ * somebody at, only a key in the file conductor deliberately never writes.
+ */
+export type ManagedHookManager = 'simple-git-hooks' | 'yorkie';
+
+/**
+ * The standalone config files simple-git-hooks reads, exactly as its own
+ * README lists them. yorkie has no equivalent: its config is the
+ * `gitHooks` key and nothing else.
+ */
+const SIMPLE_GIT_HOOKS_CONFIG_FILES = [
+  '.simple-git-hooks.cjs',
+  '.simple-git-hooks.js',
+  '.simple-git-hooks.mjs',
+  '.simple-git-hooks.json',
+  'simple-git-hooks.cjs',
+  'simple-git-hooks.js',
+  'simple-git-hooks.mjs',
+  'simple-git-hooks.json',
+];
 
 /**
  * The `.husky` directory whose generated subdirectory git has been pointed
@@ -179,7 +225,9 @@ function huskyShimPresent(hooksDir: string): boolean {
  * verified against pre-commit 4.6.2, whose marker line is character for
  * character the string below.
  */
-function detectGeneratedHook(content: string): Exclude<HookManager, 'native' | 'husky'> | null {
+function detectGeneratedHook(
+  content: string
+): Exclude<HookManager, 'native' | 'husky' | ManagedHookManager> | null {
   if (content.includes('call_lefthook') || content.includes('lefthook_version:')) {
     return 'lefthook';
   }
@@ -201,6 +249,201 @@ function generatedHookGuidance(manager: 'lefthook' | 'precommit', relPath: strin
     `written there is lost without a word. Nothing was changed. To run the umbrella under ` +
     `${owner}, ${stanza} in ${config}. Note that ${owner} owns the commit's exit code, so the ` +
     "umbrella's 1 (a gate blocked) and 2 (a gate could not run) do not survive it."
+  );
+}
+
+/**
+ * The manager that generated this hook, for the two whose hook text comes
+ * out of package.json. Checked against real installs, captured in
+ * tests/fixtures/hooks.
+ *
+ * simple-git-hooks is recognised by `SKIP_SIMPLE_GIT_HOOKS`, the opt-out
+ * variable its generated hook tests on its first line. Verified against
+ * 2.14.0 and 2.11.1.
+ *
+ * IT IS NOT IN EVERY VERSION, and that is the whole reason the package.json
+ * key below exists rather than being belt and braces. simple-git-hooks 2.8.0
+ * writes the shebang and the user's own command and nothing else: there is
+ * no string in that file belonging to simple-git-hooks, so no content rule
+ * can recognise it, at any price. A repository on that version is
+ * unrecognisable from its hook alone and would have had the umbrella hook
+ * written into a file the next install rewrites.
+ *
+ * yorkie is recognised by `yorkie/src/runner.js`, the script its generated
+ * hook invokes. Verified against 2.0.0, which writes it relative, and 1.0.2,
+ * which writes the same suffix under an absolute path, so the suffix is what
+ * both have in common. The `#yorkie ` version stamp on the second line is a
+ * second alternative and is present in both captures too; it is second
+ * because it is a comment, and a comment is the part of a generated file
+ * most likely to be reworded.
+ */
+function detectManagedHook(content: string): ManagedHookManager | null {
+  if (content.includes('SKIP_SIMPLE_GIT_HOOKS')) {
+    return 'simple-git-hooks';
+  }
+  if (content.includes('yorkie/src/runner.js') || content.includes('#yorkie ')) {
+    return 'yorkie';
+  }
+  return null;
+}
+
+/**
+ * The manager this repository's package.json DECLARES, or null.
+ *
+ * This is the signal that matters, and it is not a corroboration of the
+ * content rule above: it is the only one that fires on a fresh clone, where
+ * the manager has never run, `.git/hooks/pre-commit` does not exist, and the
+ * next `npm install` will create it. That is the state a repository is in
+ * when somebody adds the umbrella to it.
+ *
+ * Presence of the key is the whole test; it is deliberately NOT narrowed to
+ * a declared `pre-commit` entry. yorkie's installer writes every hook file
+ * whatever the key contains (its generated hook decides at run time whether
+ * a script exists), and simple-git-hooks removes hooks it previously managed
+ * as well as writing the declared ones. Narrowing would trade a refusal that
+ * costs somebody one paragraph of guidance for a hook that is silently
+ * deleted, and those are not the same size of mistake.
+ *
+ * An unreadable or unparseable package.json is the same answer as no
+ * package.json: this asks whether something was declared, and "the file
+ * cannot be read" is not evidence that it was.
+ */
+/**
+ * Where a managed-hooks declaration was found.
+ *
+ * The config file is carried rather than collapsed into a boolean because
+ * the guidance has to NAME it: simple-git-hooks reads package.json last, so
+ * telling somebody to edit package.json while one of these exists sends them
+ * to the file that will be ignored.
+ */
+type ManagedDetection =
+  | { kind: 'hook' }
+  | { kind: 'package.json' }
+  | { kind: 'config-file'; file: string };
+
+interface ManagedDeclaration {
+  manager: ManagedHookManager;
+  detectedIn: ManagedDetection;
+}
+
+function declaredManagedHooks(root: string): ManagedDeclaration | null {
+  // A standalone config file counts as a declaration on its own. Taken
+  // verbatim from simple-git-hooks' own README, which says the config may
+  // live in ".simple-git-hooks.cjs, .simple-git-hooks.js,
+  // .simple-git-hooks.mjs, .simple-git-hooks.json, or
+  // simple-git-hooks.{cjs,js,mjs,json}". It is an EXACT list rather than a
+  // prefix or extension test, so a simple-git-hooks.yaml or a
+  // simple-git-hooks.md is what it looks like -- somebody's notes -- and not
+  // a reason to refuse an install.
+  //
+  // This is the third signal and the only one that fires for the repository
+  // that has all the others against it: a standalone config plus an older
+  // simple-git-hooks, whose generated hook carries no marker at all.
+  // Checked BEFORE package.json, and the order is the same one
+  // simple-git-hooks resolves in: it reads package.json last, so whichever
+  // of these exists is the file that actually decides the hook.
+  const configFile = SIMPLE_GIT_HOOKS_CONFIG_FILES.find((file) =>
+    isFile(path.join(root, file))
+  );
+  if (configFile !== undefined) {
+    return { manager: 'simple-git-hooks', detectedIn: { kind: 'config-file', file: configFile } };
+  }
+
+  const raw = readIfExists(path.join(root, 'package.json'));
+  if (raw === undefined) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
+  }
+  const manifest = parsed as Record<string, unknown>;
+  if (isPlainObject(manifest['simple-git-hooks'])) {
+    return { manager: 'simple-git-hooks', detectedIn: { kind: 'package.json' } };
+  }
+  if (isPlainObject(manifest.gitHooks)) {
+    return { manager: 'yorkie', detectedIn: { kind: 'package.json' } };
+  }
+  return null;
+}
+
+function isPlainObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What init says when it finds one of those two, and why it says nothing
+ * else.
+ *
+ * The honest answer here is a refusal, not an offer. These managers have no
+ * tracked hook file to redirect into and no config file of their own to name:
+ * the only place the umbrella's command could go is a key in package.json,
+ * and init does not write package.json. That is not squeamishness. Init
+ * writes a hook, a policy file and a manifest, and the manifest is what
+ * makes --revert honest; an edit merged into somebody's package.json has no
+ * revert story that is not a guess about which of their later edits were
+ * theirs. So the guidance says exactly what to add and leaves the adding to
+ * the person whose file it is.
+ *
+ * The exit-code sentence differs between the two, and both halves are held
+ * against the captured fixtures rather than against anybody's memory:
+ * simple-git-hooks runs the entry as the last command of a plain `sh`
+ * script, so the umbrella's status is the hook's status, while yorkie wraps
+ * its runner in `|| { ...; exit 1; }` and turns every non-zero exit into 1.
+ */
+function managedHooksGuidance(
+  manager: ManagedHookManager,
+  relPath: string,
+  detectedIn: ManagedDetection
+): string {
+  // WHERE THE ENTRY GOES IS WHERE THE DECLARATION ALREADY IS.
+  // simple-git-hooks reads package.json LAST, so while a standalone config
+  // file exists an entry added to package.json is precisely the one it
+  // ignores. Naming package.json there would send somebody to edit a file
+  // that will not be read, and leave them with the umbrella uninstalled and
+  // no error to explain it.
+  const home = detectedIn.kind === 'config-file' ? detectedIn.file : 'package.json';
+  const entry =
+    detectedIn.kind === 'config-file'
+      ? `the "pre-commit" entry in ${detectedIn.file}`
+      : manager === 'simple-git-hooks'
+        ? 'the "pre-commit" entry under "simple-git-hooks" in package.json'
+        : 'the "pre-commit" entry under "gitHooks" in package.json';
+  const reinstall =
+    manager === 'simple-git-hooks'
+      ? 're-run "npx simple-git-hooks"'
+      : 're-run the install (yorkie rewrites its hooks on postinstall)';
+  const exitCodes =
+    manager === 'simple-git-hooks'
+      ? `${manager} runs that entry as the last command of the hook it generates, so the ` +
+        "umbrella's exit codes reach git unchanged: 1 means a gate blocked, 2 means a gate " +
+        'could not run.'
+      : `${manager}'s generated hook turns every non-zero exit into 1, so the umbrella's 2 ` +
+        '(a gate could not run, and nothing was checked) reaches git as 1 (a gate blocked). ' +
+        'Both still stop the commit.';
+  const lead =
+    detectedIn.kind === 'hook'
+      ? `${relPath} was generated by ${manager} from its own declaration, and is rewritten on ` +
+        'every install.'
+      : `${home} declares ${manager}, which generates ${relPath} from that declaration and ` +
+        'rewrites it on every install.';
+  return (
+    `${lead} A hook written there is gone after the next install while ` +
+    `${MANIFEST_RELATIVE_PATH} still records it as installed, so the repository would report a ` +
+    'guardrail it no longer has. Nothing was changed, and --force does not override this: that ' +
+    `file was never conductor's to hold. To run the umbrella under ${manager}, set ${entry} ` +
+    'to "conductor run --staged --stage commit" yourself, and ' +
+    `${reinstall}. If something is already in that entry, put the umbrella LAST, as its own ` +
+    'command rather than chained behind && : a chain stops at the first failure, so an ' +
+    "umbrella in front of it hides the other command's verdict and one behind an && never " +
+    `runs at all once anything ahead of it fails. conductor does not edit ${home}, so it ` +
+    'cannot do that for you; a later release may offer to. ' +
+    exitCodes
   );
 }
 
@@ -308,6 +551,13 @@ export type ConflictReason =
   | 'foreign-hook'
   | 'gate-hook'
   | 'generated-hook'
+  /**
+   * A manager whose hook text lives in package.json owns this file:
+   * simple-git-hooks or yorkie. Distinct from generated-hook because the
+   * remedy is different -- there is no config file of the manager's own to
+   * point at, only a key in package.json that conductor will not write.
+   */
+  | 'managed-hooks'
   | 'hooks-path-outside-repository'
   | 'no-manifest'
   | 'manifest-unreadable'
@@ -430,17 +680,30 @@ interface HooksDir {
   dir: string;
   /** True when a configured hooksPath points outside the repository. */
   outside: boolean;
+  /**
+   * True when git executes hooks out of the git directory's own `hooks/`,
+   * which is where a repository with no `core.hooksPath` looks.
+   *
+   * Derived by COMPARING THE RESOLVED PATHS rather than by testing whether
+   * `core.hooksPath` is set, because a repository may set it to exactly the
+   * place git already looks. That is a no-op for every purpose here, and a
+   * rule phrased as "nothing is configured" would answer differently for two
+   * repositories git treats identically.
+   */
+  isDefault: boolean;
 }
 
 function effectiveHooksDir(cwd: string, root: string): HooksDir {
   const gitDir = gitOutput(cwd, ['rev-parse', '--git-dir']);
   const hooksPath = gitOutput(cwd, ['config', '--get', 'core.hooksPath']) ?? '';
 
+  // With no core.hooksPath, hooks live in the git DIRECTORY, which is not
+  // the working-tree root: for a linked worktree or a submodule it is
+  // somewhere else entirely, so this one resolves against gitDir.
+  const defaultDir = path.join(path.resolve(cwd, gitDir ?? '.git'), 'hooks');
+
   if (hooksPath.length === 0) {
-    // With no core.hooksPath, hooks live in the git DIRECTORY, which is not
-    // the working-tree root: for a linked worktree or a submodule it is
-    // somewhere else entirely, so this one resolves against gitDir.
-    return { dir: path.join(path.resolve(cwd, gitDir ?? '.git'), 'hooks'), outside: false };
+    return { dir: defaultDir, outside: false, isDefault: true };
   }
 
   // A RELATIVE core.hooksPath resolves against the WORKING-TREE ROOT.
@@ -449,7 +712,31 @@ function effectiveHooksDir(cwd: string, root: string): HooksDir {
   const dir = path.isAbsolute(hooksPath) ? hooksPath : path.join(root, hooksPath);
   const relative = path.relative(root, dir);
   const outside = relative.startsWith('..') || path.isAbsolute(relative);
-  return { dir, outside };
+  return { dir, outside, isDefault: samePath(dir, defaultDir) };
+}
+
+/**
+ * Whether two paths name the same directory.
+ *
+ * Through `realpath`, not string comparison, because the two sides arrive by
+ * different routes: the default is built from the working directory the
+ * caller passed in, and a configured `core.hooksPath` resolves against the
+ * root git reported, which git has already resolved. On macOS the system
+ * temporary directory is a symlink, so those two spell the same directory
+ * two ways and a string compare answers "different" for a repository git
+ * treats as one place. Falls back to the resolved strings when a path does
+ * not exist yet, which is the ordinary case for a hooks directory init is
+ * about to create.
+ */
+function samePath(left: string, right: string): boolean {
+  const real = (candidate: string): string => {
+    try {
+      return realpathSync(candidate);
+    } catch {
+      return path.resolve(candidate);
+    }
+  };
+  return real(left) === real(right);
 }
 
 function readIfExists(file: string): string | undefined {
@@ -692,16 +979,54 @@ export function planInit(options: InitOptions): InitResult {
   const huskyDir = huskyDirectoryFor(hooks.dir);
   const husky = huskyDir !== null;
 
-  if (!husky && executedHook !== undefined) {
-    const generatedBy = detectGeneratedHook(executedHook);
-    if (generatedBy !== null) {
-      const rel = path.relative(root, executedHookPath).split(path.sep).join('/');
+  if (!husky) {
+    const rel = path.relative(root, executedHookPath).split(path.sep).join('/');
+
+    if (executedHook !== undefined) {
+      const generatedBy = detectGeneratedHook(executedHook);
+      if (generatedBy !== null) {
+        conflicts.push({
+          path: rel,
+          reason: 'generated-hook',
+          guidance: generatedHookGuidance(generatedBy, rel),
+        });
+        return { ...base, repoRoot: root, hookPath: executedHookPath, hookManager: generatedBy };
+      }
+    }
+
+    // The installed file first, then the declaration. The file says what is
+    // there now; the declaration says what the next install will put there,
+    // and on a fresh clone it is the only one of the two that exists. Either
+    // alone is enough, and the refusal is the same either way: only the
+    // opening sentence of the guidance changes, so a reader is told which of
+    // the two was actually seen.
+    //
+    // This is checked only on the native path, and only where git actually
+    // runs .git/hooks. BOTH conditions are about the same fact: these two
+    // managers write .git/hooks/pre-commit directly and neither one reads
+    // core.hooksPath. Under husky, and under any other configured hooks
+    // directory, the file they rewrite is not the file git runs, so the
+    // umbrella's hook is in no danger from them and a refusal would name a
+    // file the manager never touches while blocking an install that is
+    // perfectly safe.
+    const fromHook = executedHook === undefined ? null : detectManagedHook(executedHook);
+    const declared: ManagedDeclaration | null =
+      fromHook === null
+        ? declaredManagedHooks(root)
+        : { manager: fromHook, detectedIn: { kind: 'hook' } };
+    const managedBy = hooks.isDefault ? declared : null;
+    if (managedBy !== null) {
       conflicts.push({
         path: rel,
-        reason: 'generated-hook',
-        guidance: generatedHookGuidance(generatedBy, rel),
+        reason: 'managed-hooks',
+        guidance: managedHooksGuidance(managedBy.manager, rel, managedBy.detectedIn),
       });
-      return { ...base, repoRoot: root, hookPath: executedHookPath, hookManager: generatedBy };
+      return {
+        ...base,
+        repoRoot: root,
+        hookPath: executedHookPath,
+        hookManager: managedBy.manager,
+      };
     }
   }
 

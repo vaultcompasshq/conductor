@@ -391,3 +391,92 @@ describe('a run with no enabled gates', () => {
     expect(result.exitCode).toBe(0);
   });
 });
+
+/**
+ * What the gate itself said about why it could not run.
+ *
+ * The umbrella's own sentence is "the gate exited 2, which it uses for could
+ * not run", which is true and says nothing a reader can act on. The gate's
+ * own line does: a dogfood run against a repository with an unparseable
+ * lockfile had dep-guard printing the file and the reason, the text report
+ * printed it, and the SARIF log carried only the generic sentence. A
+ * code-scanning reader saw a critical alert with no way to learn what was
+ * wrong, and a gate that could not run produces no SARIF run of its own, so
+ * there was nowhere else in that log for the line to be.
+ */
+describe("a failing gate's own error", () => {
+  const LOCKFILE = 'dep-guard: pnpm-lock.yaml: not valid YAML (lockfile-parse)';
+
+  function failingDepGuard(stderr: string) {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: '', stderr, exit: 2 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return runWith(bin).findings.find((entry) => entry.ruleId === 'conductor/gate-failed');
+  }
+
+  it('reaches the umbrella finding, and not only the text report', () => {
+    const finding = failingDepGuard(`${LOCKFILE}\n`);
+
+    expect(finding?.message).toContain(LOCKFILE);
+    expect(finding?.details.stderr).toBe(LOCKFILE);
+    // The generic sentence is still there. It says which exit code was seen
+    // and what that code means, which the gate's own line does not.
+    expect(finding?.message).toMatch(/exited 2/);
+  });
+
+  it('caps a very long stderr and says out loud that it did', () => {
+    // A gate that dumps a stack or a whole file into stderr must not put all
+    // of it in a published log, and a silent truncation is worse than a long
+    // message: the reader cannot tell a cut-off line from the gate's last
+    // word.
+    const finding = failingDepGuard(`${'x'.repeat(5000)}\n`);
+
+    const stderr = String(finding?.details.stderr);
+    expect(stderr.length).toBeLessThan(2200);
+    expect(stderr).toMatch(/truncated/);
+    expect(stderr).toMatch(/5000/);
+    expect(finding?.message).toMatch(/truncated/);
+  });
+
+  it('says nothing extra when the gate exited 2 with nothing on stderr', () => {
+    const finding = failingDepGuard('');
+
+    expect(finding?.details.stderr).toBeNull();
+    expect(finding?.message).toBe(
+      'The "dependencies" gate did not complete: the gate exited 2, which it uses for ' +
+        '"could not run". Nothing was verified by this gate.'
+    );
+  });
+
+  it('reaches gate-output-unparseable too, which is the same reader problem', () => {
+    // A gate that exits 1 with no JSON is the shape a rejected config takes,
+    // and the gate has almost always said why on stderr. That result had the
+    // same gap gate-failed did: the umbrella's own sentence and nothing the
+    // reader could act on. The classic case is the one that found this,
+    // where a state-directory conflict makes the gate refuse every command.
+    const bin = tempDir();
+    const line = 'intent-guard: both .intent-guard/ and .conductor/ exist';
+    stubGate(bin, 'dep-guard', { stdout: 'not json', stderr: `${line}\n`, exit: 1 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+
+    const finding = runWith(bin).findings.find(
+      (entry) => entry.ruleId === 'conductor/gate-output-unparseable'
+    );
+
+    expect(finding?.message).toContain(line);
+    expect(finding?.details.stderr).toBe(line);
+  });
+
+  it('leaves the fingerprint alone, so a reworded gate error is not a new alert', () => {
+    // The fingerprint is deliberately over the rule, the role and the
+    // product and never over the message. Carrying stderr into the message
+    // is exactly the change that would break that if it were computed from
+    // the message instead.
+    const first = failingDepGuard('one thing went wrong\n');
+    const second = failingDepGuard('a completely different thing went wrong\n');
+
+    expect(first?.fingerprint?.value).toBe(second?.fingerprint?.value);
+  });
+});

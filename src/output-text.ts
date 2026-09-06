@@ -25,6 +25,7 @@
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN } from './exit-codes.js';
 import type { GateOutcome } from './gate-runner.js';
+import { isLegacyContractPath } from './intent-prepare.js';
 import type { RunResult } from './run.js';
 
 function subjectLabel(finding: Finding): string {
@@ -111,7 +112,12 @@ function contractLine(gate: GateOutcome): string | null {
   const source = gate.intent.contractSource;
   const where =
     source.kind === 'native'
-      ? `the repository's own frozen ${source.path}`
+      ? // The path already names the directory, and the aside says what a
+        // reader who has not followed intent-guard's releases cannot get from
+        // the path alone: that this is the old name and a newer gate moves it.
+        `the repository's own frozen ${source.path}${
+          isLegacyContractPath(source.path) ? ' (pre-1.3 directory, still read)' : ''
+        }`
       : source.kind === 'imported'
         ? `spec ${source.spec}${source.plan === null ? '' : ` plus plan ${source.plan}`}`
         : 'none';

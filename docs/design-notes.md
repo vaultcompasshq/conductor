@@ -43,6 +43,18 @@ It gets no SARIF run of its own, for the same reason a gate that could not run
 gets none: it produced no tool output, and an empty run named for that product
 would put its name on something it never did.
 
+That rule is written for a gate that never ran, and it currently also covers
+a gate that ran and failed. The SARIF-native shape for the second is its own
+run with `invocations[0].executionSuccessful: false`; that is not done yet,
+because it changes the run list of every log with a failing gate in it. What
+follows from leaving it is that `conductor/gate-failed` in the umbrella's run
+is the only place such a log can say anything about the failure, so that
+finding carries the failing gate's own stderr, trimmed, capped and truncated
+out loud rather than silently. It used to carry only "the gate exited 2,
+which it uses for could not run", which a reader with the log and nothing
+else cannot act on: a dogfood run had dep-guard naming an unparseable
+lockfile in the text report and saying nothing in the log beside it.
+
 ### What `enforce: false` does not quieten
 
 The failure is not quietened down anywhere else. In SARIF it is still a
@@ -235,6 +247,45 @@ from either of those is subject to that manager's exit code rather than
 the umbrella's, so 1 and 2 stop meaning different things there; that is
 why init names the file rather than editing it.
 
+simple-git-hooks and yorkie are the same refusal with one difference that
+changes how they have to be found: their hook text lives in a declaration
+elsewhere rather than in a config file the generated hook points at, so the
+declaration exists on a fresh clone where the generated hook does not, and
+reading only the hook file misses exactly the repository somebody is most
+likely to run init in. Either signal alone is enough, and the declaration is
+not corroboration: simple-git-hooks 2.8.0 writes a hook containing nothing
+but the shebang and the user's command, so no content rule can recognise it
+at all.
+
+The declaration is the `simple-git-hooks` or `gitHooks` key in package.json,
+and for simple-git-hooks also any of the standalone config files its own
+README lists (`.simple-git-hooks.cjs`, `.simple-git-hooks.js`,
+`.simple-git-hooks.mjs`, `.simple-git-hooks.json`, and
+`simple-git-hooks.{cjs,js,mjs,json}`). That list is exact rather than a
+prefix test, so a `simple-git-hooks.yaml` is what it looks like, somebody's
+notes, and not a reason to refuse an install. The combination that needs all
+three signals is real: a standalone config plus a version old enough to write
+no marker is invisible to both of the others.
+
+**The refusal fires only where git actually runs `.git/hooks`.** Both
+managers write that directory and neither reads `core.hooksPath`, so under
+husky, or under any other configured hooks directory, the file they rewrite
+is not the file git runs. Refusing there would name a file the manager never
+touches and block an install that is perfectly safe. The test is whether the
+resolved hooks directory IS the git directory's own `hooks/`, compared
+through `realpath` rather than by asking whether `core.hooksPath` is set: a
+repository may set it to exactly where git already looks, and that is a no-op
+git treats identically.
+
+The refusal points at the entry to edit rather than offering to edit it,
+because init writes a hook, a policy file and a manifest, and the manifest is
+what makes `--revert` honest: a merge into somebody's package.json has no
+revert story that is not a guess about which later edits were theirs. The
+guidance says to put the umbrella last and as its own command, never chained
+behind `&&`, because a chain stops at the first failure: an umbrella in front
+hides the other command's verdict, and one behind an `&&` never runs at all
+once anything ahead of it fails.
+
 ## The report
 
 The line names the gates that ran, names any gate deferred to a later stage
@@ -379,13 +430,68 @@ imports a spec on its own.
 that YAML is written into a **temporary** directory, `intent-guard freeze`
 approves it there with an `--approved-by` naming the spec and the short
 commit, and the gate runs with `--project` pointed at that directory. Nothing
-is ever written under the repository's own `.conductor`: a contract is a
-committed artifact with an approver's name on it, and one dropped into a
-working tree by a CI run is either committed by accident or read by the next
-run as though a person had approved it. Any failure in that chain is
-could-not-run for the gate, and the report names the step it failed at,
-because the gate itself said nothing and that sentence is all there is to tell
-a shallow checkout from a spec the importer choked on.
+is ever written under the repository's own state directory, under either of
+its names: a contract is a committed artifact with an approver's name on it,
+and one dropped into a working tree by a CI run is either committed by
+accident or read by the next run as though a person had approved it. Any
+failure in that chain is could-not-run for the gate, and the report names the
+step it failed at, because the gate itself said nothing and that sentence is
+all there is to tell a shallow checkout from a spec the importer choked on.
+
+### The state directory has two names, and the umbrella reads both
+
+intent-guard 1.3.0 renamed its per-project state directory from `.conductor`
+to `.intent-guard`, because `.conductor` had become the name of a different
+product in the same family: a repository adopting both showed `.conductor/`
+and `.guardrails/` side by side with nothing to say which tool owned which.
+Both versions will be installed across repositories for as long as anybody is
+slow to upgrade, so the umbrella looks in both, canonical first. A gate whose
+contract the umbrella cannot find is a pull request blocked on nothing.
+
+Three decisions sit under that, and each cost a paragraph of thought.
+
+**The conflict test is exactly intent-guard's own, and an earlier version of
+it was not.** The rule is: the canonical directory merely existing, even
+empty, beside a legacy directory holding any of the gate's own state markers
+(`config.yaml`, `intent-contract.yaml`, `index.md`, `drift-log.jsonl`,
+`contracts`), frozen or not. In that state the gate is could-not-run, naming
+both directories.
+
+The first version of this was narrower -- both directories holding a
+**frozen** contract -- and the argument for it sounded good: a stale unfrozen
+draft beside a real contract has an obvious right answer, and refusing would
+fail pull requests over a file nobody has looked at in months. The argument
+was about the wrong tool. In that exact state the gate's own `stateDir`
+throws and every intent-guard command exits 1, so the narrower rule saved
+none of those pull requests. It moved where they broke: conductor handed the
+gate a repository the gate refuses to run in, the child exited non-zero with
+no JSON, and the run surfaced as `gate-output-unparseable` with a message
+about the umbrella being out of date with the gate. Reasoning about what
+another tool ought to do is not evidence about what it does.
+
+A `.conductor` holding none of those markers belongs to something else,
+and neither tool touches it. The check sits **above** `--spec`, because the
+import path runs `import-spec --project .` in that same repository, where the
+gate fails closed on the same conflict and reports it as an opaque non-zero
+exit. The guidance says to move the old directory aside and never to delete
+it, because conductor has not read what else is in there.
+
+**The drafted contract is written under the legacy name**, into the temporary
+directory. That is the one choice that works on both versions: a 1.2.x gate
+reads only `.conductor/`, and a 1.3.0 gate reads it as the fallback and
+renames it to the canonical name on its first write, which the freeze is.
+Writing the canonical name would work on 1.3.0 and leave 1.2.x freezing an
+empty project. After the freeze the contract is looked for under both names
+and a preparation failure is raised when it is under neither, because exit 0
+is not by itself proof there is a contract to hand the gate.
+
+**Reading the old directory is a notification, not a result.** It is the
+closest call among the five notifications and worth stating: nothing went
+wrong, the gate ran, and the verdict is exactly what it will be after the
+migration. What the line says is which of two layouts the run covered, and it
+stays true on every run until somebody upgrades the gate, so as a result it
+would be a fingerprint-less alert reappearing on every pull request for as
+long as that takes.
 
 ### Which budget applies
 

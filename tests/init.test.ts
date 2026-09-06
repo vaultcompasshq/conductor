@@ -1785,3 +1785,270 @@ describe('re-init over the hook body v0.2 actually shipped', () => {
     expect(hook).not.toMatch(/no-verify/);
   });
 });
+
+/**
+ * The managers whose hook TEXT lives in package.json.
+ *
+ * simple-git-hooks and yorkie both generate .git/hooks/pre-commit from a
+ * key in package.json and rewrite it on every install, and neither has a
+ * tracked file the umbrella could write instead. Two of the eight public
+ * repositories the dogfood run covered are wired this way, and both would
+ * have lost the umbrella hook at the next install while the manifest went
+ * on recording it as installed.
+ *
+ * The package.json key is the signal that matters, because it is there
+ * BEFORE any install has run: a fresh clone has no generated hook to read,
+ * and that is exactly the state somebody runs init in.
+ */
+describe('hook managers that keep the hook text in package.json', () => {
+  function capturedHook(name: string): string {
+    return readFileSync(path.join(HOOK_FIXTURES, name), 'utf8');
+  }
+
+  function repoDeclaring(hookKey: Record<string, unknown>): string {
+    const repo = gitRepo();
+    writeFileSync(
+      path.join(repo, 'package.json'),
+      `${JSON.stringify({ name: 'fixture', private: true, ...hookKey }, null, 2)}\n`
+    );
+    return repo;
+  }
+
+  const DECLARATIONS: Array<[string, Record<string, unknown>, RegExp]> = [
+    ['simple-git-hooks', { 'simple-git-hooks': { 'pre-commit': 'npx lint-staged' } }, /simple-git-hooks/],
+    ['yorkie', { gitHooks: { 'pre-commit': 'lint-staged' } }, /yorkie/],
+  ];
+
+  it.each(DECLARATIONS)(
+    'refuses on a bare clone that only DECLARES %s, with no hook file yet',
+    (_name, declaration, named) => {
+      const repo = repoDeclaring(declaration);
+      // The state a fresh clone is in: the manager has never run here, so
+      // there is nothing in .git/hooks to read and only package.json says
+      // what the next install will do.
+      expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+
+      const result = init(repo);
+
+      expect(result.ok).toBe(false);
+      expect(result.conflicts[0].reason).toBe('managed-hooks');
+      expect(result.conflicts[0].guidance).toMatch(named);
+      expect(result.conflicts[0].guidance).toMatch(/package\.json/);
+      expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+      expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+      expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(false);
+    }
+  );
+
+  it.each(DECLARATIONS)('does not let --force override the %s refusal', (_name, declaration) => {
+    const repo = repoDeclaring(declaration);
+
+    const result = init(repo, { force: true, adopt: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('managed-hooks');
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it.each(DECLARATIONS)('reports the %s refusal under --dry-run too', (_name, declaration) => {
+    const repo = repoDeclaring(declaration);
+
+    const result = init(repo, { dryRun: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('managed-hooks');
+    expect(result.actions).toEqual([]);
+  });
+
+  it.each([
+    ['simple-git-hooks 2.14.0', 'simple-git-hooks-2.14.0-pre-commit.sh', 'simple-git-hooks'],
+    ['yorkie 2.0.0', 'yorkie-2.0.0-pre-commit.sh', 'yorkie'],
+    ['yorkie 1.0.2', 'yorkie-1.0.2-pre-commit.sh', 'yorkie'],
+  ])(
+    'refuses on the hook %s really wrote, with no package.json at all',
+    (_name, fixture, manager) => {
+      const repo = gitRepo();
+      const content = capturedHook(fixture);
+      mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+      writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), content);
+      // No package.json: the installed file is the only evidence, which is
+      // the state a repository is in once the manager has run and the
+      // declaration has since been taken back out.
+      expect(existsSync(path.join(repo, 'package.json'))).toBe(false);
+
+      const result = init(repo);
+
+      expect(result.ok).toBe(false);
+      expect(result.hookManager).toBe(manager);
+      expect(result.conflicts[0].reason).toBe('managed-hooks');
+      expect(readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8')).toBe(content);
+      expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+    }
+  );
+
+  it.each(DECLARATIONS)(
+    'says nothing about %s when core.hooksPath takes .git/hooks out of play',
+    (_name, declaration) => {
+      // Both managers write .git/hooks/pre-commit and neither reads
+      // core.hooksPath. A repository that has pointed git somewhere else has
+      // therefore taken the file they rewrite out of the picture: the
+      // umbrella's hook goes to the configured directory, the manager keeps
+      // rewriting a file git no longer runs, and nothing is lost. Refusing
+      // here would name a file the manager never touches and block an
+      // install that is perfectly safe.
+      const repo = repoDeclaring(declaration);
+      execFileSync('git', ['config', 'core.hooksPath', 'githooks'], { cwd: repo });
+
+      const result = init(repo);
+
+      expect(result.ok).toBe(true);
+      expect(result.conflicts).toEqual([]);
+      expect(result.hookManager).toBe('native');
+      expect(existsSync(path.join(repo, 'githooks', 'pre-commit'))).toBe(true);
+    }
+  );
+
+  it.each(DECLARATIONS)(
+    'still refuses %s when core.hooksPath is set to the default .git/hooks',
+    (_name, declaration) => {
+      // Setting the value explicitly to where git already looks changes
+      // nothing about who rewrites that file, so the refusal has to survive
+      // it. A rule written as "no core.hooksPath is configured" would not.
+      const repo = repoDeclaring(declaration);
+      execFileSync('git', ['config', 'core.hooksPath', '.git/hooks'], { cwd: repo });
+
+      const result = init(repo);
+
+      expect(result.ok).toBe(false);
+      expect(result.conflicts[0].reason).toBe('managed-hooks');
+    }
+  );
+
+  // Exactly the list simple-git-hooks' own README gives, in its words:
+  // ".simple-git-hooks.cjs, .simple-git-hooks.js, .simple-git-hooks.mjs,
+  // .simple-git-hooks.json, or simple-git-hooks.{cjs,js,mjs,json}".
+  it.each([
+    ['.simple-git-hooks.cjs'],
+    ['.simple-git-hooks.js'],
+    ['.simple-git-hooks.mjs'],
+    ['.simple-git-hooks.json'],
+    ['simple-git-hooks.cjs'],
+    ['simple-git-hooks.js'],
+    ['simple-git-hooks.mjs'],
+    ['simple-git-hooks.json'],
+  ])('refuses on a standalone %s with no package.json key at all', (config) => {
+    // package.json is not the only home for the declaration, and this
+    // matters more than it looks: on 2.8.0 the generated hook carries no
+    // marker, so a repository configured through a standalone file and
+    // installed with an older version is invisible to BOTH other signals.
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, config), '{}\n');
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('managed-hooks');
+    expect(result.hookManager).toBe('simple-git-hooks');
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('points a standalone-config repository at that file, not at package.json', () => {
+    // simple-git-hooks reads package.json LAST. While a standalone config
+    // file exists, an entry added to package.json is the one it ignores, so
+    // guidance naming package.json here sends somebody to edit the file that
+    // will not be read and leaves them with the umbrella still uninstalled
+    // and no error to explain it.
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, '.simple-git-hooks.json'), '{"pre-commit":"npx lint-staged"}\n');
+
+    const guidance = init(repo).conflicts[0].guidance;
+
+    expect(guidance).toContain('.simple-git-hooks.json');
+    expect(guidance).toContain('conductor run --staged --stage commit');
+    expect(guidance).not.toContain('package.json');
+  });
+
+  it('is not fooled by a file that merely looks like one of those', () => {
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, 'simple-git-hooks.yaml'), 'pre-commit: x\n');
+    writeFileSync(path.join(repo, 'simple-git-hooks.md'), 'notes\n');
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.hookManager).toBe('native');
+  });
+
+  it('leaves an ordinary package.json alone and takes the native path', () => {
+    const repo = repoDeclaring({ scripts: { test: 'jest' }, husky: { hooks: {} } });
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(result.hookManager).toBe('native');
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
+  });
+
+  it('treats a package.json it cannot parse as no declaration at all', () => {
+    const repo = gitRepo();
+    writeFileSync(path.join(repo, 'package.json'), '{ not json');
+
+    const result = init(repo);
+
+    expect(result.ok).toBe(true);
+    expect(result.hookManager).toBe('native');
+  });
+
+  it('says what to put in package.json, and that conductor will not put it there', () => {
+    const repo = repoDeclaring({ 'simple-git-hooks': { 'pre-commit': 'npx lint-staged' } });
+
+    const guidance = init(repo).conflicts[0].guidance;
+
+    // The one supported route, spelled out: the user edits the manager's
+    // own entry. Init writes a hook, a policy file and a manifest, and
+    // package.json is not one of them, so offering to edit it would be a
+    // write with no revert story.
+    expect(guidance).toContain('conductor run --staged --stage commit');
+    expect(guidance).toMatch(/does not edit package\.json/);
+    expect(guidance).toMatch(/later release/);
+    expect(guidance).toMatch(/--force/);
+  });
+
+  // The strings init.ts matches on, held against the files the tools really
+  // wrote. These do not run init, so they are evidence about the captures
+  // rather than about the code, which is what would catch an upstream
+  // rewording before it becomes a silent false negative.
+  it('finds the simple-git-hooks marker exactly as init.ts spells it', () => {
+    expect(capturedHook('simple-git-hooks-2.14.0-pre-commit.sh')).toContain(
+      'SKIP_SIMPLE_GIT_HOOKS'
+    );
+  });
+
+  it('finds no marker at all in simple-git-hooks 2.8.0, which is why the key matters', () => {
+    // The finding this whole block turns on. 2.8.0 writes the shebang and
+    // the user's command and nothing else, so there is no string in it that
+    // belongs to simple-git-hooks. Content detection cannot recognise that
+    // hook at any price, and the package.json key is the only signal left.
+    const old = capturedHook('simple-git-hooks-2.8.0-pre-commit.sh');
+    expect(old).not.toMatch(/SKIP_SIMPLE_GIT_HOOKS/);
+    expect(old).not.toMatch(/simple.git.hooks/i);
+  });
+
+  it('finds the yorkie marker in both captured versions', () => {
+    for (const fixture of ['yorkie-2.0.0-pre-commit.sh', 'yorkie-1.0.2-pre-commit.sh']) {
+      expect(capturedHook(fixture)).toContain('yorkie/src/runner.js');
+    }
+  });
+
+  it("backs the guidance's claim that yorkie collapses every non-zero exit into 1", () => {
+    // The guidance tells a yorkie user that the umbrella's 2 reaches git as
+    // 1. That is a claim about somebody else's generated script, so it is
+    // held against the script rather than against anybody's memory of it.
+    for (const fixture of ['yorkie-2.0.0-pre-commit.sh', 'yorkie-1.0.2-pre-commit.sh']) {
+      expect(capturedHook(fixture)).toMatch(/pre-commit \|\| \{[\s\S]*exit 1/);
+    }
+  });
+});

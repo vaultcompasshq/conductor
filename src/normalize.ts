@@ -717,26 +717,92 @@ export function normalizeMisconfiguredGate(
 export function normalizeUnparseableGate(
   role: GateRole,
   product: Product,
-  detail: string
+  detail: string,
+  stderr?: string | null
 ): Finding {
+  // Carried for the same reason gate-failed carries it, and the case that
+  // found the gap is a good one: a gate refusing to run at all exits 1 with
+  // no JSON and says why on stderr, and this result is the only place a
+  // published log can repeat it.
+  const said = summariseStderr(stderr);
   return gateProblem(
     'conductor/gate-output-unparseable',
     role,
     product,
     `The "${role}" gate ran but the umbrella could not read its output: ${detail} ` +
       'This is the umbrella being out of date with that gate, not a problem in your code. ' +
-      'Nothing was verified by this gate.',
-    { detail }
+      'Nothing was verified by this gate.' +
+      (said === null ? '' : ` The gate wrote to stderr: ${said}`),
+    { detail, stderr: said }
   );
 }
 
-/** The finding raised when a gate could not be run or did not complete. */
-export function normalizeFailedGate(role: GateRole, product: Product, detail: string): Finding {
+/**
+ * How much of a failing gate's stderr goes into a published report.
+ *
+ * A gate that could not run may print a stack, a whole rejected config, or a
+ * file it could not parse, and this finding is uploaded to code scanning.
+ * The cap is generous enough for the shape that matters -- a line or two
+ * naming the file and the reason -- and small enough that nothing here can
+ * grow an alert without a bound.
+ */
+const STDERR_CAP = 2000;
+
+/**
+ * The gate's own last words, trimmed and capped, or null when it said
+ * nothing.
+ *
+ * The truncation is ANNOUNCED rather than silent, and says how much there
+ * was. A message that stops mid-sentence with no note reads as the gate's
+ * final word, which sends a reader looking for meaning in a cut.
+ */
+export function summariseStderr(stderr: string | null | undefined): string | null {
+  if (stderr === null || stderr === undefined) {
+    return null;
+  }
+  const trimmed = stderr.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  if (trimmed.length <= STDERR_CAP) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, STDERR_CAP)} [truncated, ${trimmed.length} characters in total]`;
+}
+
+/**
+ * The finding raised when a gate could not be run or did not complete.
+ *
+ * `stderr` is what the child printed, and it is carried here because this
+ * finding is the ONLY place a published log can say why. A gate that could
+ * not run gets no SARIF run of its own, so without this the log held
+ * "the gate exited 2, which it uses for could not run" and nothing else,
+ * while the text report beside it printed the gate's own line naming the
+ * file and the reason. Found by running the umbrella against a repository
+ * with an unparseable lockfile.
+ *
+ * It is APPENDED to the umbrella's own sentence rather than replacing it.
+ * The generic half says which exit code was seen and what that gate uses it
+ * for, which the child's line does not, and a gate that exits 2 silently is
+ * a real case that has to keep reading sensibly.
+ *
+ * The fingerprint is unaffected: it is computed over the rule, the role and
+ * the product and never over the message, so a gate that reworded its error
+ * is the same alert rather than a new one every run.
+ */
+export function normalizeFailedGate(
+  role: GateRole,
+  product: Product,
+  detail: string,
+  stderr?: string | null
+): Finding {
+  const said = summariseStderr(stderr);
   return gateProblem(
     'conductor/gate-failed',
     role,
     product,
-    `The "${role}" gate did not complete: ${detail} Nothing was verified by this gate.`,
-    { detail }
+    `The "${role}" gate did not complete: ${detail} Nothing was verified by this gate.` +
+      (said === null ? '' : ` The gate wrote to stderr: ${said}`),
+    { detail, stderr: said }
   );
 }

@@ -11,11 +11,12 @@
 //
 // Two rules keep that from being a lie:
 //
-//  - NOTHING IS EVER WRITTEN UNDER <repo>/.conductor. A contract is a
-//    committed artifact with an approver's name on it. A pull-request run
-//    that dropped one into the working tree would either be committed by
-//    accident or picked up by the next run as though a person had approved
-//    it, and the second failure is silent.
+//  - NOTHING IS EVER WRITTEN UNDER THE REPOSITORY'S OWN STATE DIRECTORY,
+//    under either of its two names. A contract is a committed artifact with
+//    an approver's name on it. A pull-request run that dropped one into the
+//    working tree would either be committed by accident or picked up by the
+//    next run as though a person had approved it, and the second failure is
+//    silent.
 //
 //  - THE REPOSITORY'S OWN FROZEN CONTRACT ALWAYS WINS. Where a team has done
 //    the native flow, the native flow is what runs; the import is the
@@ -30,19 +31,72 @@
 // sentence in the report.
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 import { changedPathsSince, currentBranch, resolveBaseRef } from './intent-base.js';
+import { summariseStderr } from './normalize.js';
 import { SPEC_DIR, discoverSpec, prBodyFromEvent } from './intent-spec.js';
 import type { ResolvedBinary } from './resolve.js';
 
 /** Prefix of the per-run directory, exported so a test can count leaks. */
 export const TEMP_PREFIX = 'conductor-intent-';
 
-export const NATIVE_CONTRACT_PATH = '.conductor/intent-contract.yaml';
+/**
+ * Where intent-guard keeps a project's frozen contract, canonical first.
+ *
+ * intent-guard 1.3.0 renamed its per-project state directory from
+ * `.conductor` to `.intent-guard`, because `.conductor` had become the name
+ * of a DIFFERENT product in the same family: a repository adopting both
+ * showed `.conductor/` and `.guardrails/` side by side with nothing to say
+ * which tool owned which. The umbrella has to read both, because the two
+ * versions will be installed side by side across repositories for as long as
+ * anybody is slow to upgrade, and a gate whose contract the umbrella cannot
+ * find is a pull request blocked on nothing.
+ *
+ * THE ORDER IS THE RULE, and it is the same order intent-guard itself uses:
+ * canonical wins outright, and the legacy path is consulted only when the
+ * canonical one holds nothing. Reversing it would make a migrated repository
+ * keep reading the directory the migration left behind.
+ */
+export const STATE_DIR = '.intent-guard';
+
+/** The pre-1.3.0 directory. Read as a fallback, never written to. */
+export const LEGACY_STATE_DIR = '.conductor';
+
+export const NATIVE_CONTRACT_PATH = `${STATE_DIR}/intent-contract.yaml`;
+
+/** The pre-1.3.0 path. Read as a fallback, never written to. */
+export const LEGACY_NATIVE_CONTRACT_PATH = `${LEGACY_STATE_DIR}/intent-contract.yaml`;
+
+/** Both, canonical first, so no caller has to spell the order itself. */
+export const NATIVE_CONTRACT_PATHS = [
+  NATIVE_CONTRACT_PATH,
+  LEGACY_NATIVE_CONTRACT_PATH,
+] as const;
+
+/**
+ * Whether a contract source path is the pre-1.3.0 one.
+ *
+ * A PREDICATE over the path rather than a flag carried beside it. The path is
+ * already the fact, and a boolean travelling next to it is a second copy that
+ * can disagree with the first -- the failure this repository has written down
+ * about recomputing a gate's decision in a renderer, in the same shape.
+ */
+export function isLegacyContractPath(contractPath: string): boolean {
+  return contractPath === LEGACY_NATIVE_CONTRACT_PATH;
+}
 
 export type ContractSource =
   /** The repository's own frozen contract, used untouched. */
@@ -66,7 +120,20 @@ export interface IntentPreparation {
 }
 
 /** Which link of the chain broke. Carried into the report verbatim. */
-export type PrepareStep = 'spec' | 'base' | 'import-spec' | 'write-contract' | 'freeze';
+export type PrepareStep =
+  | 'spec'
+  | 'base'
+  /**
+   * The repository holds a frozen contract at BOTH the canonical and the
+   * legacy path, so which one the gate is about cannot be answered. Its own
+   * step because it happens before anything is spawned and before a spec is
+   * even looked for, and because the fix is in the repository rather than in
+   * anything conductor did.
+   */
+  | 'contract-source'
+  | 'import-spec'
+  | 'write-contract'
+  | 'freeze';
 
 export type IntentPrepareResult =
   | { kind: 'ready'; preparation: IntentPreparation }
@@ -121,17 +188,150 @@ export interface IntentPrepareOptions {
  * A file that cannot be parsed is treated as not frozen, which sends the run
  * down the import path rather than handing the gate something it will reject.
  */
-function nativeContractIsFrozen(repoRoot: string): boolean {
+function contractIsFrozenAt(absolutePath: string): boolean {
   let parsed: unknown;
   try {
-    parsed = parseYaml(readFileSync(path.join(repoRoot, NATIVE_CONTRACT_PATH), 'utf8'));
+    parsed = parseYaml(readFileSync(absolutePath, 'utf8'));
   } catch {
     return false;
   }
   if (parsed === null || typeof parsed !== 'object') {
     return false;
   }
-  return (parsed as { frozen_by?: unknown }).frozen_by === 'user';
+  // BOTH halves, because both halves are the gate's own test
+  // (`isContractFrozen`: frozen_by === "user" && approval != null), and its
+  // comment says frozen_by alone, hand-set in YAML, is not enough. This
+  // function reconstructs that judgment from the file rather than asking the
+  // gate, so reconstructing only half of it means calling a contract frozen
+  // that the gate will call unfrozen -- which skips the import and then
+  // blocks the pull request on "exists but is not frozen by user" without
+  // checking anything, the exact failure the surrounding rule exists to
+  // prevent. A real freeze on either version writes both, so requiring both
+  // excludes no contract either tool produced.
+  const contract = parsed as { frozen_by?: unknown; approval?: unknown };
+  return (
+    contract.frozen_by === 'user' && contract.approval !== undefined && contract.approval !== null
+  );
+}
+
+/**
+ * Every state directory in this repository holding a FROZEN contract,
+ * canonical first.
+ *
+ * Zero is the ordinary case for a repository that has not done the native
+ * flow, one is the answer this exists to give, and two cannot reach here:
+ * `stateDirsConflict` below has already refused that repository, on a rule
+ * wider than this one.
+ *
+ * FROZEN is the test rather than EXISTS for the reason the single-path
+ * version of this already recorded: an unfrozen contract is a draft somebody
+ * left behind, and handing the gate one fails every pull request on "not
+ * frozen by user" without checking anything.
+ */
+function frozenNativeContracts(repoRoot: string): string[] {
+  return NATIVE_CONTRACT_PATHS.filter((relative) =>
+    contractIsFrozenAt(path.join(repoRoot, relative))
+  );
+}
+
+/**
+ * The files only intent-guard writes into its state directory.
+ *
+ * Copied from the gate's own `holdsIntentGuardState`, because the rule below
+ * has to be the gate's rule and not an approximation of it. A `.conductor`
+ * holding none of these belongs to something else, and neither tool touches
+ * it.
+ */
+const STATE_MARKERS = [
+  'config.yaml',
+  'intent-contract.yaml',
+  'index.md',
+  'drift-log.jsonl',
+  'contracts',
+];
+
+function isDirectory(candidate: string): boolean {
+  try {
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A real directory, not a symlink to one.
+ *
+ * `ln -s .intent-guard .conductor` is the obvious workaround for a script
+ * that still names the old path, and following it makes ONE directory look
+ * like two: the legacy path would hold state, the canonical path would
+ * exist, and the run would fail closed on a conflict that is not one. lstat
+ * does not follow the link, so a symlink is simply not a legacy state
+ * directory.
+ *
+ * THE ASYMMETRY WITH `isDirectory` ABOVE IS DELIBERATE AND IS THE GATE'S
+ * OWN: the canonical side follows symlinks and the legacy side does not.
+ * Making both sides lstat would be tidier and wrong, because a canonical
+ * directory reached through a symlink is still a canonical directory that
+ * intent-guard will read and write.
+ */
+function isRealDirectory(candidate: string): boolean {
+  try {
+    return lstatSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function holdsIntentGuardState(dir: string): boolean {
+  if (!isRealDirectory(dir)) {
+    return false;
+  }
+  return STATE_MARKERS.some((marker) => existsSync(path.join(dir, marker)));
+}
+
+/**
+ * Whether this repository is in the state intent-guard 1.3.0 refuses to run
+ * ANY command in.
+ *
+ * THIS MIRRORS THE GATE'S OWN CONFLICT RULE, deliberately and exactly
+ * (`inspectStateDir` in the gate's state-dir.ts): the canonical directory
+ * merely EXISTING, even empty, beside a legacy directory holding any state
+ * marker, frozen or not. Both halves are wider than they look and both
+ * matter.
+ *
+ * An earlier version of this file used a narrower rule -- both directories
+ * holding a FROZEN contract -- on the reasoning that a stale unfrozen draft
+ * beside a real contract has an obvious right answer and refusing would fail
+ * pull requests over a file nobody had looked at in months. That reasoning
+ * was about the wrong tool. The gate does not share it: in that exact state
+ * `stateDir` throws and every intent-guard command exits 1. So the narrower
+ * rule did not save those pull requests, it just moved where they broke --
+ * conductor handed the gate a repository the gate refuses to run in, the
+ * child exited non-zero with no JSON, and the run surfaced as
+ * gate-output-unparseable with a message about the umbrella being out of
+ * date. A guess about somebody else's tool is worth what the run that
+ * checked it is worth, and this one had not been checked.
+ */
+function stateDirsConflict(repoRoot: string): boolean {
+  return (
+    isDirectory(path.join(repoRoot, STATE_DIR)) &&
+    holdsIntentGuardState(path.join(repoRoot, LEGACY_STATE_DIR))
+  );
+}
+
+/**
+ * The contract file inside a prepared temporary project, canonical first, or
+ * null when neither path holds one.
+ *
+ * EXISTS rather than FROZEN, unlike the repository-side lookup above, and the
+ * difference is deliberate: this asks whether the freeze step left a file
+ * where the gate will look for it, and reading `frozen_by` here would be the
+ * umbrella double-checking a decision it just asked intent-guard to make.
+ */
+function frozenContractIn(projectDir: string): string | null {
+  return (
+    NATIVE_CONTRACT_PATHS.find((relative) => existsSync(path.join(projectDir, relative))) ?? null
+  );
 }
 
 /**
@@ -182,10 +382,24 @@ function run(
   };
 }
 
-/** The first line of whatever the child complained with, for a one-line report. */
+/**
+ * Everything the child complained with, trimmed and capped.
+ *
+ * THIS USED TO BE THE FIRST LINE, and that was a real defect rather than a
+ * stylistic choice. The draft is written under the legacy directory name, so
+ * intent-guard 1.3.0 prints "reading project state from .conductor/, renamed
+ * to .intent-guard/ in 1.3.0" as line one of stderr on EVERY import-spec and
+ * EVERY freeze in a prepared project. Taking line one therefore reported the
+ * rename notice as the reason the step failed and discarded the sentence
+ * saying what was actually wrong, on every failure, on the version this
+ * release exists to support.
+ *
+ * The cap is the same one the gate-failed carry uses, and for the same
+ * reason: this string ends up in an uploaded report, and a child that dumps
+ * a stack must not grow it without a bound.
+ */
 function complaint(result: ChildResult): string {
-  const text = (result.stderr.trim() === '' ? result.stdout : result.stderr).trim();
-  return text.split('\n')[0] ?? '';
+  return summariseStderr(result.stderr.trim() === '' ? result.stdout : result.stderr) ?? '';
 }
 
 /** The short commit the contract is attributed to, or a placeholder. */
@@ -228,11 +442,33 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
     };
   }
 
+  // A repository holding both state directories stops the run before
+  // anything else is decided, INCLUDING before --spec is honoured. The flag
+  // would otherwise take the import path, which runs "import-spec --project ."
+  // in this same repository, where intent-guard 1.3.0 fails closed on the
+  // same conflict and reports it as an opaque non-zero exit from a
+  // subcommand. One sentence naming both directories beats that, and it is
+  // the same answer either way.
+  if (stateDirsConflict(repoRoot)) {
+    return {
+      kind: 'failed',
+      step: 'contract-source',
+      detail:
+        `this repository has both ${STATE_DIR}/ and a ${LEGACY_STATE_DIR}/ holding ` +
+        `intent-guard state. ${LEGACY_STATE_DIR}/ is the pre-1.3 name for ${STATE_DIR}/, and ` +
+        'intent-guard reads one state directory and never merges two, so it refuses every ' +
+        `command here rather than guessing. Move ${LEGACY_STATE_DIR}/ aside, or move what ` +
+        `is still needed out of it into ${STATE_DIR}/, and re-run. Nothing was checked by ` +
+        'this gate.',
+    };
+  }
+  const nativeContract = frozenNativeContracts(repoRoot)[0] ?? null;
+
   let source: ContractSource;
   if (discovery.kind === 'flag') {
     source = { kind: 'imported', spec: discovery.spec, plan: discovery.plan };
-  } else if (nativeContractIsFrozen(repoRoot)) {
-    source = { kind: 'native', path: NATIVE_CONTRACT_PATH };
+  } else if (nativeContract !== null) {
+    source = { kind: 'native', path: nativeContract };
   } else if (discovery.kind === 'waived') {
     // BELOW the native check, and the order is the whole meaning of the
     // token: "Spec: none" says there is no spec to import, not that this
@@ -244,7 +480,8 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
       reason: 'contract-waived',
       detail:
         'The pull request body waived the spec with a "Spec: none" line, so there was ' +
-        `nothing to import and no frozen ${NATIVE_CONTRACT_PATH} to fall back on.`,
+        `nothing to import and no frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} to fall ` +
+        'back on.',
     };
   } else if (discovery.kind === 'none') {
     source = { kind: 'none' };
@@ -257,7 +494,7 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
       kind: 'skip',
       reason: 'no-contract',
       detail:
-        `No frozen ${NATIVE_CONTRACT_PATH} and no spec under ${SPEC_DIR} matching ` +
+        `No frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} and no spec under ${SPEC_DIR} matching ` +
         `${branch === null ? 'this branch' : `branch "${branch}"`}. ` +
         'Name one with a "Spec: <path>" line in the pull request body, or pass --spec.',
     };
@@ -373,8 +610,17 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
   };
 
   try {
-    mkdirSync(path.join(projectDir, '.conductor'), { recursive: true });
-    writeFileSync(path.join(projectDir, NATIVE_CONTRACT_PATH), contractYaml);
+    // The DRAFT goes to the legacy path, which is the one both versions can
+    // find. A 1.2.x intent-guard reads only that directory; a 1.3.0 one reads
+    // it as the legacy fallback and renames it to the canonical name on its
+    // first write, which the freeze below is. Writing the canonical name
+    // instead would work on 1.3.0 and leave 1.2.x freezing an empty project.
+    // This is a temporary directory the umbrella made two lines ago, so
+    // writing the old name here is not a migration anybody has to live with.
+    mkdirSync(path.join(projectDir, path.dirname(LEGACY_NATIVE_CONTRACT_PATH)), {
+      recursive: true,
+    });
+    writeFileSync(path.join(projectDir, LEGACY_NATIVE_CONTRACT_PATH), contractYaml);
   } catch (err) {
     cleanup();
     return {
@@ -417,6 +663,25 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
       detail:
         freezeResult.errorMessage ??
         `freeze exited ${freezeResult.status ?? -1}: ${complaint(freezeResult)}`,
+    };
+  }
+
+  // Exit 0 is not proof there is a contract to hand the gate. freeze writes
+  // through intent-guard's own state directory, so a 1.3.0 build has just
+  // renamed the directory this function created and a 1.2.x one has not, and
+  // the whole point of this release is that the umbrella cannot assume which.
+  // Looking for the file, canonical first, turns "the gate found no contract
+  // in a directory conductor prepared" into a named preparation failure here
+  // rather than a confusing verdict from the gate three steps later.
+  if (frozenContractIn(projectDir) === null) {
+    cleanup();
+    return {
+      kind: 'failed',
+      step: 'freeze',
+      detail:
+        'freeze reported success but left no contract in the prepared project: neither ' +
+        `${NATIVE_CONTRACT_PATHS.join(' nor ')} is there. That is a version of ` +
+        'intent-guard writing its state somewhere this umbrella does not know about.',
     };
   }
 
