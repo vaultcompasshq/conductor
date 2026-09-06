@@ -231,7 +231,7 @@ could not run and asserts the result's level is `error` and its severity
 The report header and the verdict deliberately count different things.
 The header counts findings across every gate, because it is an inventory
 of what follows it and a reader counting lines on screen has to arrive at
-that number (src/output-text.ts:569-579). The verdict counts only
+that number (src/output-text.ts:604-614). The verdict counts only
 enforced gates, because it answers what failed the run
 (src/output-text.ts:322-330). Two questions, two numbers.
 
@@ -618,7 +618,7 @@ have blocked, so the two numbers would differ if any of this reached
 
 Both formats say it. One line in the text report
 (src/output-text.ts:284-289), a clause on the one-line summary of a clean
-run (src/output-text.ts:526-529), and a `conductor/gate-excluded`
+run (src/output-text.ts:529-534), and a `conductor/gate-excluded`
 notification in the umbrella's SARIF run
 (src/output-sarif.ts:527-535). A notification rather than a result by the
 discriminator below: nothing went wrong, and how much of the policy a run
@@ -1666,8 +1666,8 @@ left marked blocking.
 ## The clean-run summary line, and what it may not swallow
 
 A fully clean run prints one line rather than a screenful
-(`summaryLine`, src/output-text.ts:489-562, reached at
-src/output-text.ts:565-567). Twelve lines of per-gate detail on a commit
+(`summaryLine`, src/output-text.ts:489-597, reached at
+src/output-text.ts:600-602). Twelve lines of per-gate detail on a commit
 that found nothing is a cost paid on every commit, and it is what makes a
 team switch a hook off.
 
@@ -1695,6 +1695,25 @@ to a later stage, which had nothing to check, which the command line left
 out, which could not have blocked because they are unenforced, a count of
 non-blocking findings, a count of the gates' own notes, and how to see the
 rest. Pinned by tests/output-text.test.ts:255, 278, 293, 325, 345 and 745.
+
+Three of those are suppression, and print as a count EVEN AT ZERO
+(src/output-text.ts:529-534 for gates the command line left out, 549-557
+for gates that are not enforced, 584-593 for the suppressed and ignored
+totals summed across gates). This is the family rule dep-guard's stability
+policy states: a gate that can be turned off, dropped by `--gate`, or a
+finding count baselined away is the user's decision, and a clean line that
+said nothing about it would let a repository whose gate had no vote read as
+fully gated. The suppressed total always prints because it is always a
+number the gate reported; the ignored total prints only when every gate
+that ran reported one, because a gate that drops ignored files before its
+own output has no count, and "0 ignored" there would state a fact no gate
+stated. SARIF is unchanged: these stay coverage clauses on the text line
+and the notification-versus-result rule below is untouched. Pinned by
+tests/output-text.test.ts:812 and 825 (the not-enforced and excluded
+counts print at zero), 816 and 829 (they count and name when there is
+something to name), 835 and 839 (the suppressed and ignored totals, at zero
+and summed), and 852 (the ignored total is dropped when a gate did not
+report one). Zeroing any of the three counts turns its tests red.
 
 `--verbose` is a command-line flag rather than a policy key
 (`TextOptions`, src/output-text.ts:415-424), because the schema describes
@@ -1949,7 +1968,7 @@ from the secret gate lands on `info` and is marked derived, so a
 downstream consumer never sees a level outside the union
 (src/normalize.ts:257-270). The text report marks a derived severity with
 a trailing asterisk and explains the asterisk only when one is on screen
-(src/output-text.ts:49 and 593-595).
+(src/output-text.ts:49 and 628-630).
 
 Fingerprints are carried verbatim and namespaced by product; nothing is
 hashed together with anything else, because a new digest would match no

@@ -523,9 +523,14 @@ function summaryLine(result: RunResult): string {
   // is the easiest of the three to lose: a --gate run is usually somebody
   // narrowing a run on purpose, and a log of it that says nothing about the
   // narrowing is the log that gets uploaded and read as a full run later.
+  // Counted even at zero for the same suppression reason as the enforcement
+  // count above: a gate the command line dropped had no vote, and "0 gate(s)
+  // left out by --gate" says the run was not narrowed.
   if (result.excluded.length > 0) {
     const names = result.excluded.map((gate) => `${gate.role} (${gate.product})`).join(', ');
-    parts.push(`Left out by --gate: ${names}.`);
+    parts.push(`${result.excluded.length} gate(s) left out by --gate: ${names}.`);
+  } else {
+    parts.push('0 gate(s) left out by --gate.');
   }
 
   // A gate that ran with enforce: false could not have failed this run
@@ -535,10 +540,20 @@ function summaryLine(result: RunResult): string {
   // full report says this in the line under that gate's findings; on a clean
   // run there are no findings, so the summary line is the only place left to
   // say it.
+  //
+  // Printed as a count even when it is zero. This is the family suppression
+  // rule: a gate that can be turned off is the user's decision, and a clean
+  // line that says nothing about enforcement lets a repository read as fully
+  // gated when a gate's result did not move the exit code. "0 gate(s) not
+  // enforced" is the umbrella saying every gate that ran had a vote.
   const unenforced = result.gates.filter((gate) => !gate.enforce);
   if (unenforced.length > 0) {
     const names = unenforced.map((gate) => `${gate.role} (${gate.product})`).join(', ');
-    parts.push(`Could not have blocked, enforce: false in .guardrails.yaml: ${names}.`);
+    parts.push(
+      `${unenforced.length} gate(s) not enforced, could not have blocked, enforce: false in .guardrails.yaml: ${names}.`
+    );
+  } else {
+    parts.push('0 gate(s) not enforced.');
   }
 
   // Non-blocking findings are counted rather than hidden, for the same reason
@@ -556,6 +571,26 @@ function summaryLine(result: RunResult): string {
   if (counts.length > 0) {
     parts.push(`${counts.join(', ')}.`);
   }
+
+  // The suppressed and ignored counts the gates reported, summed across them
+  // and printed even at zero. The full report prints these per gate for the
+  // same reason, so a quiet report is not mistaken for a clean one; the clean
+  // summary line is the one a hook and a pull request comment actually print,
+  // and it is where a repository baselining findings without saying so would
+  // otherwise read as clean. Suppressed always shows because it is always a
+  // number the gate reported. Ignored shows only when every gate that ran
+  // reported it: a gate that drops ignored files before its own output has no
+  // count to give, and "0 ignored" there would state a fact no gate stated.
+  const suppressed = result.gates.reduce((total, gate) => total + gate.run.suppressed, 0);
+  const gatesReportingIgnored = result.gates.filter(
+    (gate) => gate.run.details.ignoredReported !== false
+  );
+  const ignored = gatesReportingIgnored.reduce((total, gate) => total + gate.run.ignored, 0);
+  parts.push(
+    gatesReportingIgnored.length === result.gates.length
+      ? `${suppressed} suppressed, ${ignored} ignored across all gates.`
+      : `${suppressed} suppressed across all gates.`
+  );
 
   parts.push('Re-run with --verbose for the full report.');
   return parts.join(' ');
