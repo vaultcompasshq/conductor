@@ -2,6 +2,10 @@ name: Conductor
 description: >-
   Run every enabled guardrail gate at the ci stage and write one SARIF log for
   the calling workflow to upload.
+# The Marketplace listing's icon and colour. Feather icon names only.
+branding:
+  icon: shield
+  color: blue
 
 inputs:
   stage:
