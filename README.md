@@ -328,10 +328,18 @@ and your pre-commit hook still run the pin, which is what `pnpm exec` does in
 the same repository.
 
 **The versions that judge a pull request are pinned in the workflow file**,
-which on a `pull_request` event is read from the base branch. That is the
-protected side, and it is the point: the pull request can change its own
-lockfile, and cannot change the pin that decides which conductor and which
-gates run over it.
+and that is the point: the pull request can change its own lockfile,
+manifest and `node_modules`, and none of those decide which conductor and
+which gates run over it any more. Be clear about what that does not cover.
+On a `pull_request` event GitHub runs the workflow as it is in the pull
+request's merge commit, so a pull request that edits the workflow file can
+change the pins or remove the gates step, exactly as it could rewrite any
+other step in your CI. The boundary here is against the tree choosing its
+own judge; the control for a workflow edit is branch protection on your
+base branch with review required for `.github/workflows`, and no action can
+provide that for you. Only `pull_request_target` runs the base branch's copy
+of a workflow, and that event exposes the base's secrets to the pull
+request's code, which is the wrong trade for a gate over untrusted changes.
 
 So on a pull-request run a gate's program must be **outside the working tree**
 (on PATH, or an absolute `command:` elsewhere on the machine), or else meet
@@ -589,12 +597,12 @@ jobs:
         uses: ./
         with:
           output: conductor.sarif
-          # Exact versions, never a range and never "latest". On a
-          # pull_request event this file is read from the base branch, so
-          # these four lines are the protected side: a pull request can change
-          # its own lockfile and cannot change which programs judge it.
-          # Bump them like any other pin, in a pull request, on the base
-          # branch first.
+          # Exact versions, never a range and never "latest". These four
+          # lines decide which programs judge a pull request, so a pull
+          # request's own lockfile no longer does. They are only as protected
+          # as this file is: require review on .github/workflows in your
+          # branch protection. Bump them like any other pin, in a pull
+          # request of their own.
           conductor-version: 0.4.0
           dep-guard-version: 0.6.0
           vault-guard-version: 1.7.0

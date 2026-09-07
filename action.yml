@@ -46,9 +46,10 @@ inputs:
     description: >-
       The exact version of the umbrella this action installs and runs. An
       exact version, never a range and never a dist-tag: the programs that
-      judge a pull request are pinned here, in a workflow file that lives on
-      the base branch, which is the protected side. A range would hand that
-      decision to whatever the registry served on the morning of the run.
+      judge a pull request are pinned here, in the workflow file, and a
+      range would hand that decision to whatever the registry served on the
+      morning of the run. The pin is only as protected as the workflow file
+      is; see the note above the install step.
     default: 0.4.0
   dep-guard-version:
     description: >-
@@ -83,8 +84,23 @@ runs:
     # lockfile, so a pull request could repoint any gate, or the umbrella
     # itself, at a build it controls while leaving the version number alone.
     # Now the four packages are installed from the registry at versions
-    # pinned in this file, which on a pull_request event is read from the base
-    # branch and is therefore the protected side.
+    # pinned in the caller's workflow file.
+    #
+    # WHAT THAT PIN DOES AND DOES NOT PROTECT. It takes the choice of program
+    # out of the tree: the head's lockfile, manifest and node_modules no
+    # longer decide what runs. It does not take that choice out of the
+    # workflow file. On a pull_request event GitHub runs the workflow as it
+    # is in the pull request's merge commit, so a pull request that edits
+    # the workflow can change these pins, or delete this step outright, the
+    # same as it could rewrite any other CI step; only pull_request_target
+    # runs the base branch's copy, and that event carries the base's secrets
+    # and is the wrong one for judging untrusted code. The control for a
+    # workflow edit is branch protection on the base branch, with review
+    # required for the workflow path, and nothing this action does can
+    # substitute for it. The boundary here is against the TREE choosing its
+    # own judge. An earlier revision of this comment said the workflow file
+    # was read from the base branch; that was wrong, and the sentence is
+    # kept out on purpose.
     - name: Validate the pinned versions
       id: validate
       shell: bash
@@ -103,9 +119,9 @@ runs:
         set -eu
 
         # EXACT VERSIONS ONLY. Not a range, not a dist-tag, not "latest": the
-        # version that judges a pull request has to be a decision taken on the
-        # base branch, and any of those three hands it to the registry on the
-        # morning of the run instead. Every one of the four is checked, and
+        # version that judges a pull request has to be a decision written in
+        # the workflow file, and any of those three hands it to the registry
+        # on the morning of the run instead. Every one of the four is checked, and
         # all failures are reported before exiting, so a workflow with two
         # bad pins does not need two runs to learn that.
         SEMVER='^[0-9]+\.[0-9]+\.[0-9]+$'
@@ -123,7 +139,7 @@ runs:
           fi
         done
         if [ "$status" -ne 0 ]; then
-          echo "A range, a dist-tag such as latest, or anything else is refused. The versions that judge a pull request are pinned in the workflow file on the base branch, which is the protected side." >&2
+          echo "A range, a dist-tag such as latest, or anything else is refused. The versions that judge a pull request are pinned in the workflow file, so that the choice of program is a decision written down there and not one the registry makes on the morning of the run." >&2
           exit 1
         fi
 
