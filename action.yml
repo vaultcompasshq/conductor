@@ -1,4 +1,4 @@
-name: Conductor
+name: Conductor Guardrail Gates
 description: >-
   Run every enabled guardrail gate at the ci stage and write one SARIF log for
   the calling workflow to upload.
