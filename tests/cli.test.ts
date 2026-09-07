@@ -1594,7 +1594,12 @@ describe('the program a pull-request run is allowed to execute', () => {
       expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
     });
 
-    it('refuses it under a trust base, and says node_modules is never base-approved', () => {
+    it('never reaches it under a trust base, and the gate on PATH reports what it hid', () => {
+      // 0.3.0 let resolution take the plant and then refused the program,
+      // which was safe and turned every ordinary pull request in a
+      // devDependency-installed repository into three refusals and exit 2.
+      // 0.4.0 does not try that location at all, so the same plant is
+      // unreachable AND the real gate still runs, off PATH.
       const { repo, bin, marker } = plantedRepo({
         programPath: 'node_modules/.bin/vault-guard',
         baseBody: null,
@@ -1604,10 +1609,35 @@ describe('the program a pull-request run is allowed to execute', () => {
       const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
 
       expect(existsSync(marker)).toBe(false);
-      expect(result.status).toBe(2);
-      expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+      expect(result.stdout).not.toMatch(/gate-program-refused/);
+      // The secret the plant existed to hide, found by the gate on PATH.
+      expect(result.stdout).toMatch(/vault-guard\/github-token/);
+      expect(result.status).toBe(1);
+      // And the skip is not silent: the one line that says where the program
+      // came from names the copy that was not taken.
+      expect(result.stdout).toMatch(/node_modules\/\.bin not consulted/);
       expect(result.stdout).toMatch(/node_modules\/\.bin\/vault-guard/);
-      expect(result.stdout).toMatch(/Nothing under node_modules is ever base-approved/);
+    });
+
+    it('is could-not-run with the install remedy when there is no gate on PATH either', () => {
+      // The repository shape this change exists for: the gates are
+      // devDependencies and nothing else. The gate does not run, which is
+      // right, and the message says what to do rather than leaving a reader
+      // looking at a node_modules/.bin/vault-guard they were just told does
+      // not exist.
+      const { repo, marker } = plantedRepo({
+        programPath: 'node_modules/.bin/vault-guard',
+        baseBody: null,
+        headBody: 'plant',
+      });
+
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], tempDir());
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toMatch(/DID NOT RUN \(binary-missing\)/);
+      expect(result.stdout).toMatch(/npm install -g @vaultcompass\/vault-guard/);
+      expect(result.stdout).toMatch(/vault-guard-version/);
     });
 
     it('never asks the planted program for its version, since the probe runs it', () => {
@@ -1640,9 +1670,16 @@ describe('the program a pull-request run is allowed to execute', () => {
       // that would let a pull request pick its own judge and stay green.
       // enforce: false is written at the BASE, so it is the trusted policy's
       // own standing decision rather than something the head asked for.
+      //
+      // Driven through a vendored program the head replaced rather than
+      // through a node_modules plant: since 0.4.0 that location is not
+      // consulted at all on a pull-request run, so it no longer reaches the
+      // program refusal this is about. The invariant is unchanged and the
+      // shape that still reaches it is the in-repo one.
       const { repo, bin } = plantedRepo({
-        programPath: 'node_modules/.bin/vault-guard',
-        baseBody: null,
+        programPath: 'vendor/vault-guard',
+        commandRelative: 'vendor/vault-guard',
+        baseBody: 'honest',
         headBody: 'plant',
         enforce: false,
       });
@@ -1654,9 +1691,13 @@ describe('the program a pull-request run is allowed to execute', () => {
     });
 
     it('raises a conductor/gate-program-refused notification at error level', () => {
+      // Same retarget as the enforcement case above, and for the same reason:
+      // the node_modules shape is now unreachable, and the in-repo one is
+      // what still exercises the refusal this notification is about.
       const { repo, bin } = plantedRepo({
-        programPath: 'node_modules/.bin/vault-guard',
-        baseBody: null,
+        programPath: 'vendor/vault-guard',
+        commandRelative: 'vendor/vault-guard',
+        baseBody: 'honest',
         headBody: 'plant',
       });
 
@@ -1680,7 +1721,7 @@ describe('the program a pull-request run is allowed to execute', () => {
 
       expect(refusal?.level).toBe('error');
       expect(refusal?.properties.details.product).toBe('vault-guard');
-      expect(String(refusal?.properties.details.program)).toMatch(/node_modules\/\.bin/);
+      expect(String(refusal?.properties.details.program)).toMatch(/vendor\/vault-guard/);
     });
 
     it('refuses an in-repo symlink on its own entry, before the target matters', () => {

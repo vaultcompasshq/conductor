@@ -318,11 +318,37 @@ function withheldTrustBase(result: RunResult): Array<{ gate: GateOutcome; reason
 }
 
 /**
+ * The gates whose own node_modules/.bin copy this run declined to take.
+ *
+ * ONE LINE FOR THE WHOLE RUN rather than one per gate. The fact is about the
+ * run's mode, not about any gate's verdict, and in the repository shape it is
+ * most likely to happen in, gates installed as devDependencies and nothing
+ * else, it is true of all three at once. Three lines saying the same thing
+ * would read as three problems.
+ */
+function nodeModulesSkippedLine(result: RunResult): string[] {
+  const skipped = result.gates.flatMap((gate) =>
+    gate.nodeModulesSkipped === undefined
+      ? []
+      : [`${gate.role} (${gate.product}) at ${gate.nodeModulesSkipped}`]
+  );
+  if (skipped.length === 0) {
+    return [];
+  }
+  return [
+    `  node_modules/.bin not consulted: ${skipped.join(', ')}. What is installed there is ` +
+      'chosen by the head own manifest and lockfile, so no ref approves it; each of those gates ' +
+      'was resolved from PATH or from an absolute command: instead, or reported as could-not-run.',
+  ];
+}
+
+/**
  * The pull-request-mode block of the full report.
  *
- * Three things in one place, because they answer one question between them:
+ * Four things in one place, because they answer one question between them:
  * where the rules came from, what this pull request proposes to change them
- * to, and which gates were not covered by any of it.
+ * to, which gates were not covered by any of it, and where the programs that
+ * did run came from.
  */
 function trustBaseLines(result: RunResult): string[] {
   if (result.trustBase === null) {
@@ -337,6 +363,7 @@ function trustBaseLines(result: RunResult): string[] {
   for (const { gate, reason } of withheldTrustBase(result)) {
     lines.push(`  NOT in pull-request mode  ${gate.role}  ${gate.product}  ${reason}`);
   }
+  lines.push(...nodeModulesSkippedLine(result));
   return lines;
 }
 

@@ -101,11 +101,35 @@ version already on the registry, skips its own publish rather than failing
 on a duplicate, and creates the GitHub Release. Every later release is the
 ordinary flow and touches none of this.
 
+### Everywhere a version is pinned
+
+A release bumps more than one file, and the list is short enough that
+there is no excuse for missing one. Grep for the outgoing version and
+check every hit, in the same pull request:
+
+- `package.json`, the `version` field. This is the package itself.
+- `action.yml`, the `conductor-version` input's default. The Action
+  installs the umbrella rather than running the caller's own copy, so this
+  default is the version that judges an adopter's pull requests. A release
+  that bumps `package.json` and leaves this behind publishes a version
+  nothing runs.
+- `README.md`, the CI example's four `*-version` lines.
+
+The three GATE version defaults in `action.yml`, `dep-guard-version`,
+`vault-guard-version` and `intent-guard-version`, are on their own clock:
+they change when one of those products ships something this umbrella needs,
+not when this package releases. Bumping one is its own pull request and its
+own decision, and it belongs beside the `TRUST_BASE_MIN_VERSION` table in
+`src/gate-runner.ts`, which is the other place this repository names a gate
+version. Check that the two agree: the Action must not install a build
+below the floor that table sets, or every adopter's pull request reports
+that gate as could-not-run.
+
 ### Every release after that
 
-Open a pull request that bumps the version in `package.json`. Let it merge
-like any other change, and wait for `main`'s own CI to go green on the
-merge commit. Only then tag that commit and push the tag:
+Open a pull request that bumps the version everywhere the list above names.
+Let it merge like any other change, and wait for `main`'s own CI to go green
+on the merge commit. Only then tag that commit and push the tag:
 
     git tag v0.2.0
     git push origin v0.2.0

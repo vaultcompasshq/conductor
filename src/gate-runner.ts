@@ -33,7 +33,12 @@ import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
-import { ResolveError, candidateNames, resolveGateBinary } from './resolve.js';
+import {
+  ResolveError,
+  candidateNames,
+  nodeModulesCandidate,
+  resolveGateBinary,
+} from './resolve.js';
 import type { ResolvedBinary } from './resolve.js';
 
 export type CouldNotRunReason =
@@ -253,6 +258,17 @@ export interface GateOutcome {
    * pull-request mode, and what it said was proposed.
    */
   trustBase?: GateTrustBase;
+  /**
+   * The `node_modules/.bin` candidate resolution did NOT try, repository
+   * relative, on a pull-request run where one was there.
+   *
+   * Absent outside pull-request mode, and absent inside it when there was
+   * nothing to skip: it is a claim that something was there and was declined,
+   * not a claim about the mode. Reported so an adopter whose gates are
+   * devDependencies learns why the gate came from somewhere else, or from
+   * nowhere. Repository-relative because it reaches a published log.
+   */
+  nodeModulesSkipped?: string;
 }
 
 export interface RunGateOptions {
@@ -317,6 +333,77 @@ const EMPTY_RUN: RunSummary = {
   diagnostics: [],
   details: {},
 };
+
+/**
+ * EVERY program this binary would spawn, vetted against the trust base.
+ *
+ * Two files and not one. `program` is what the gate runs, and
+ * `versionProbe.command` can be a DIFFERENT file: for a per-command binary
+ * that ignores `--version`, resolution finds the version-safe sibling
+ * somewhere else entirely (`versionProbeFor`, src/resolve.ts:238-262). Vetting
+ * only the first left the probe free to spawn whatever the head put at the
+ * second, and a probe RUNS a program as thoroughly as a scan does.
+ *
+ * The first refusal wins and the rest is not consulted. The verdict is the
+ * same either way, and the sentence a reader has to act on should name one
+ * file rather than two.
+ */
+export function refuseHeadControlledBinary(
+  repoRoot: string,
+  trustBase: string,
+  binary: ResolvedBinary
+): string | null {
+  for (const program of [binary.program, binary.versionProbe?.command]) {
+    if (program === undefined) {
+      continue;
+    }
+    const refusal = refuseHeadControlledProgram(repoRoot, trustBase, program);
+    if (refusal !== null) {
+      return refusal;
+    }
+  }
+  return null;
+}
+
+/**
+ * The outcome for a gate whose program the umbrella declined to run.
+ *
+ * ONE BUILDER, TWO CALLERS, and that is the point of it being here rather
+ * than written out at the return that needs it. `runGate` reaches this before
+ * it spawns anything; `runAll` reaches it earlier still, before the intent
+ * gate's preparation spawns the same program three times. A second copy of
+ * the shape would be a second chance to forget the override below.
+ *
+ * ENFORCED, whatever the policy says. `enforce: false` is a standing decision
+ * about what a gate's FINDINGS are worth, and this gate produced none: the
+ * umbrella refused to run a program the pull request chose. Letting an
+ * unenforced gate swallow that would let a pull request pick its own judge
+ * and keep the run green.
+ */
+export function gateProgramRefused(
+  gate: GatePolicy,
+  trustBase: string,
+  refusal: string,
+  binary: ResolvedBinary
+): GateOutcome {
+  return {
+    role: gate.role,
+    product: gate.product,
+    stage: gate.stage,
+    enforce: true,
+    productVersion: null,
+    argv: [],
+    binary,
+    exitCode: null,
+    durationMs: 0,
+    stderr: '',
+    trustBase: { ref: trustBase, withheld: null, refused: refusal, proposals: [] },
+    couldNotRun: { reason: 'gate-program-refused', detail: refusal },
+    findings: [normalizeFailedGate(gate.role, gate.product, refusal)],
+    run: EMPTY_RUN,
+    diagnostics: [],
+  };
+}
 
 /**
  * The arguments the umbrella adds, per product.
@@ -452,6 +539,38 @@ function messageOf(err: unknown): string {
 }
 
 /**
+ * The sentence a gate that resolved to nothing gets on a pull-request run.
+ *
+ * EMPTY OUTSIDE PULL-REQUEST MODE, because outside it nothing about
+ * resolution changed and the old message is still the whole story. Inside it
+ * the message would otherwise be actively misleading in the common case: an
+ * adopter with the gates as devDependencies is looking straight at a
+ * node_modules/.bin/<gate> while being told no binary was found.
+ *
+ * It names `npm install -g` and the Action's own input rather than "install
+ * it", because those are the two places the fix actually is: on a runner, the
+ * Action installs the gates itself at a version pinned in a workflow file that
+ * lives on the base branch, which is the protected side.
+ */
+function missingGateRemedy(
+  product: Product,
+  skipNodeModules: boolean,
+  skipped: string | null
+): string {
+  if (!skipNodeModules) {
+    return '';
+  }
+  return (
+    ' On a pull-request run node_modules/.bin is not consulted at all: what is installed there ' +
+    'is chosen by the head own manifest and lockfile, so no ref approves it.' +
+    (skipped === null ? '' : ` There is a ${skipped}, and it was skipped for that reason.`) +
+    ` Install the gate outside the tree with npm install -g @vaultcompass/${product}. The ` +
+    `conductor Action does exactly that, at the version its ${product}-version input pins, and ` +
+    'that pin lives in the workflow file on the base branch.'
+  );
+}
+
+/**
  * Runs one gate. TOTAL: this never throws.
  *
  * That is a contract, not a hope. The caller maps over the enabled gates in
@@ -527,11 +646,22 @@ function runGateInner(
   progress: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'>
 ): GateOutcome {
   const timeoutMs = options.timeoutMs ?? 120_000;
+
+  // ONE PLACE DECIDES WHAT PULL-REQUEST MODE IS, and it is the presence of a
+  // trust base. resolve.ts knows nothing about refs, so it is told rather than
+  // asked.
+  const skipNodeModules = options.trustBase !== undefined;
+  const skipped = skipNodeModules ? nodeModulesCandidate(gate, options.repoRoot) : null;
+  if (skipped !== null) {
+    // Onto `progress` rather than only onto the returns below, so the
+    // backstop's view carries it too.
+    Object.assign(progress, { nodeModulesSkipped: skipped });
+  }
   const base = progress;
 
   let binary: ResolvedBinary | null;
   try {
-    binary = resolveGateBinary(gate, options.repoRoot, options.pathValue);
+    binary = resolveGateBinary(gate, options.repoRoot, options.pathValue, { skipNodeModules });
   } catch (err) {
     // A ResolveError is the expected shape here; anything else is still a
     // problem with this gate rather than with the run, so it takes the same
@@ -555,6 +685,7 @@ function runGateInner(
   }
 
   if (binary === null) {
+    const remedy = missingGateRemedy(gate.product, skipNodeModules, skipped);
     return {
       ...base,
       durationMs: Date.now() - started,
@@ -562,13 +693,20 @@ function runGateInner(
         reason: 'binary-missing',
         // Named in resolution order, which is the repository's own copy
         // first. Saying PATH first points a reader at the location this
-        // tool prefers second, which is the wrong place to install it.
-        detail: `no ${gate.product} binary in node_modules/.bin or on PATH`,
+        // tool prefers second, which is the wrong place to install it. On a
+        // pull-request run that order has one entry, because the other one is
+        // not a location this run has.
+        detail:
+          (skipNodeModules
+            ? `no ${gate.product} binary on PATH`
+            : `no ${gate.product} binary in node_modules/.bin or on PATH`) + remedy,
       },
       // A missing enabled gate is a finding of the umbrella's own, never a
       // silent skip. Skipping is how a gate ends up switched on in the
       // policy file and absent in reality for months.
-      findings: [normalizeMissingGate(gate.role, gate.product, candidateNames(gate.product))],
+      findings: [
+        normalizeMissingGate(gate.role, gate.product, candidateNames(gate.product), remedy),
+      ],
       run: EMPTY_RUN,
       diagnostics: [],
     };
@@ -580,27 +718,16 @@ function runGateInner(
   // version of this attack and it would have been run before anything checked
   // where it came from.
   if (options.trustBase !== undefined) {
-    const refusal = refuseHeadControlledProgram(
-      options.repoRoot,
-      options.trustBase,
-      binary.program
-    );
+    // BOTH SPAWNABLE PATHS, not just the program: the probe below can be a
+    // different file from binary.program, and it is executed just as
+    // thoroughly. The enforce override and the rest of the shape live in
+    // gateProgramRefused, which the intent gate's preparation shares.
+    const refusal = refuseHeadControlledBinary(options.repoRoot, options.trustBase, binary);
     if (refusal !== null) {
       return {
         ...base,
-        binary,
+        ...gateProgramRefused(gate, options.trustBase, refusal, binary),
         durationMs: Date.now() - started,
-        // ENFORCED, whatever the policy says. enforce: false is a standing
-        // decision about what a gate's FINDINGS are worth, and this gate
-        // produced none: the umbrella refused to run a program the pull
-        // request chose. Letting an unenforced gate swallow that would let a
-        // pull request pick its own judge and keep the run green.
-        enforce: true,
-        trustBase: { ref: options.trustBase, withheld: null, refused: refusal, proposals: [] },
-        couldNotRun: { reason: 'gate-program-refused', detail: refusal },
-        findings: [normalizeFailedGate(gate.role, gate.product, refusal)],
-        run: EMPTY_RUN,
-        diagnostics: [],
       };
     }
   }

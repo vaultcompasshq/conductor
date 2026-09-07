@@ -658,6 +658,122 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
       // assert the notification was PRESENT, which stopped being true the
       // week dep-guard shipped its half.
     });
+
+    /**
+     * The adopter shape this release is actually about.
+     *
+     * Every repository in this family installs the gates as devDependencies
+     * for its own hooks, so a real pull request run has a
+     * node_modules/.bin/<gate> sitting there for resolution to find. Under
+     * 0.3.0 resolution took it and the program check refused it, which is
+     * safe and turned three ordinary gates into three refusals and exit 2.
+     *
+     * Measured with a marker, not with a source field: the planted binaries
+     * write a file if anything executes them, --version included, so "the
+     * PATH one ran" is a fact about the filesystem.
+     */
+    describe('the gates also installed as devDependencies, which is every repository here', () => {
+      const planted = () => path.join(clone, 'node_modules');
+      let plantMarker = '';
+
+      beforeAll(() => {
+        plantMarker = path.join(path.dirname(clone), 'planted-ran.txt');
+        for (const name of ['dep-guard', 'vault-guard']) {
+          shim(
+            path.join(planted(), '.bin'),
+            name,
+            [
+              '#!/bin/sh',
+              `printf 'ran\\n' >> ${JSON.stringify(plantMarker)}`,
+              'if [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi',
+              'exit 0',
+            ].join('\n') + '\n'
+          );
+        }
+      });
+
+      afterAll(() => {
+        rmSync(planted(), { recursive: true, force: true });
+        rmSync(plantMarker, { force: true });
+      });
+
+      it('runs the gates on PATH and executes neither planted copy', () => {
+        rmSync(plantMarker, { force: true });
+        rmSync(marker, { force: true });
+
+        const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+        expect(existsSync(plantMarker)).toBe(false);
+        // Not merely "no crash": the real gates ran and reported what the
+        // pull request tried to hide, which is the same verdict this fixture
+        // reaches with no node_modules in it at all.
+        expect(result.stdout).toMatch(/vault-guard\/github-token/);
+        expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
+        expect(result.stdout).not.toMatch(/gate-program-refused/);
+      });
+
+      it('says which copies it declined, once, naming both', () => {
+        const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
+
+        const lines = result.stdout
+          .split('\n')
+          .filter((line) => line.includes('node_modules/.bin not consulted'));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/dependencies \(dep-guard\) at node_modules\/\.bin\/dep-guard/);
+        expect(lines[0]).toMatch(/secrets \(vault-guard\) at node_modules\/\.bin\/vault-guard/);
+      });
+
+      it('raises one conductor/node-modules-skipped notification in the SARIF log', () => {
+        const result = conductor([
+          'run',
+          '--trust-base',
+          'trust-base-fixture',
+          '--format',
+          'sarif',
+        ]);
+        const log = JSON.parse(result.stdout) as {
+          runs: Array<{
+            invocations?: Array<{
+              toolExecutionNotifications?: Array<{ descriptor: { id: string }; level: string }>;
+            }>;
+          }>;
+        };
+
+        const skipped = log.runs
+          .flatMap((run) => run.invocations ?? [])
+          .flatMap((invocation) => invocation.toolExecutionNotifications ?? [])
+          .filter((entry) => entry.descriptor.id === 'conductor/node-modules-skipped');
+
+        expect(skipped).toHaveLength(1);
+        expect(skipped[0]?.level).toBe('note');
+      });
+
+      it('takes the planted copy when there is no trust base, which is unchanged', () => {
+        // The parity case, and it has to be measured here rather than assumed
+        // from a unit test: a pre-commit hook in one of these repositories is
+        // meant to run the pin, and this is the run that proves it still does.
+        //
+        // A policy of its own, restored afterwards. This fixture's head policy
+        // points the secrets gate at the attacker script with a `command:`,
+        // which overrides resolution entirely, so a run under it would never
+        // reach node_modules whatever the mode and would prove nothing.
+        const policyPath = path.join(clone, '.guardrails.yaml');
+        const headPolicy = readFileSync(policyPath, 'utf8');
+        rmSync(plantMarker, { force: true });
+        writeFileSync(
+          policyPath,
+          ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', '    enabled: true', ''].join('\n')
+        );
+
+        try {
+          conductor(['run']);
+        } finally {
+          writeFileSync(policyPath, headPolicy);
+        }
+
+        expect(existsSync(plantMarker)).toBe(true);
+      });
+    });
   });
 
   /**
@@ -1079,6 +1195,12 @@ describeComposed('the composed test: a pull request that tries to mute all three
         expect(result.stdout).toMatch(/lodahs/);
         expect(result.stdout).toMatch(/Self-approval refused:/);
         expect(result.stdout).not.toMatch(/NOT in pull-request mode/);
+        // And nothing was skipped: this fixture has no node_modules at all,
+        // so the line must be absent. Asserting its absence here is what
+        // keeps it from becoming decoration that appears on every run: the
+        // dogfood case above plants a node_modules/.bin and requires the same
+        // line to be PRESENT, and the two together say it tracks something.
+        expect(result.stdout).not.toMatch(/node_modules\/\.bin not consulted/);
         expect(result.status).toBe(1);
       });
     }

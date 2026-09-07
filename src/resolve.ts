@@ -24,6 +24,19 @@
 //     no say in that; a LOCATION is a statement about which build, and the
 //     repository does.
 //
+//  1c. ON A PULL-REQUEST RUN node_modules/.bin IS NOT A LOCATION AT ALL.
+//     Rule 1b says a LOCATION is a statement about which build and the
+//     repository gets to make it. On a pull request the repository making
+//     that statement IS the pull request: what is under node_modules was
+//     chosen by the head's own manifest and lockfile, installed by a step
+//     that runs before the gates, and git has no record of those bytes at
+//     either ref. 0.3.0 let resolution take it and then refused the program,
+//     which was safe and made every ordinary pull request in a
+//     devDependency-installed repository exit 2 with three refusals. Not
+//     trying that location at all is the same safety with the gate still
+//     running, from a build the base branch pinned. The skip is never
+//     silent: the caller reports the candidate it declined.
+//
 //  2. Only a unified binary is asked for its version. `intent-guard`
 //     answers --version; a per-command binary once did not parse the flag at
 //     all and RAN THE GATE against the current directory instead, and a
@@ -112,6 +125,18 @@ export const CANDIDATES: Record<Product, Candidate[]> = {
   ],
 };
 
+export interface ResolveOptions {
+  /**
+   * Leave `node_modules/.bin` out of the search entirely.
+   *
+   * True on a pull-request run and false everywhere else, decided by the
+   * caller from whether a trust base is set rather than re-derived here: this
+   * module knows nothing about refs, and there must be exactly one place that
+   * says what pull-request mode is.
+   */
+  skipNodeModules?: boolean;
+}
+
 export class ResolveError extends Error {
   constructor(message: string) {
     super(message);
@@ -160,17 +185,49 @@ function findInNodeModules(name: string, repoRoot: string): string | null {
 function locate(
   name: string,
   repoRoot: string,
-  pathValue: string
+  pathValue: string,
+  skipNodeModules: boolean
 ): { command: string; source: ResolutionSource } | null {
   // The repository's own copy first: a project pin beats a global install,
-  // which is what "pnpm exec <name>" does in the same repository.
-  const local = findInNodeModules(name, repoRoot);
-  if (local !== null) {
-    return { command: local, source: 'node_modules' };
+  // which is what "pnpm exec <name>" does in the same repository. Unless this
+  // is a pull-request run, where the repository saying which build to use is
+  // the pull request itself (rule 1c at the top of this file).
+  if (!skipNodeModules) {
+    const local = findInNodeModules(name, repoRoot);
+    if (local !== null) {
+      return { command: local, source: 'node_modules' };
+    }
   }
   const onPath = findOnPath(name, pathValue);
   if (onPath !== null) {
     return { command: onPath, source: 'path' };
+  }
+  return null;
+}
+
+/**
+ * The node_modules/.bin candidate a pull-request run declined to take.
+ *
+ * Repository-relative, because it goes into a report and a published SARIF
+ * log, where an absolute path is somebody's machine layout.
+ *
+ * Returns null when the policy names a `command:`: that overrides resolution
+ * entirely, so no candidate was skipped, and saying one was would send a
+ * reader to fix a file that decided nothing.
+ *
+ * Separate from `resolveGateBinary` rather than a field on its result,
+ * because the case that most needs reporting is the one where resolution
+ * returns NOTHING: a repository with the gates only as devDependencies, which
+ * is the shape this whole change exists for.
+ */
+export function nodeModulesCandidate(gate: GatePolicy, repoRoot: string): string | null {
+  if (gate.command !== undefined) {
+    return null;
+  }
+  for (const candidate of CANDIDATES[gate.product]) {
+    if (findInNodeModules(candidate.name, repoRoot) !== null) {
+      return `node_modules/.bin/${candidate.name}`;
+    }
   }
   return null;
 }
@@ -181,7 +238,8 @@ function versionProbeFor(
   resolvedCandidate: Candidate,
   resolvedCommand: string,
   repoRoot: string,
-  pathValue: string
+  pathValue: string,
+  skipNodeModules: boolean
 ): VersionProbe | null {
   if (resolvedCandidate.versionSafe) {
     return { command: resolvedCommand, argv: ['--version'] };
@@ -190,7 +248,10 @@ function versionProbeFor(
     if (!candidate.versionSafe) {
       continue;
     }
-    const found = locate(candidate.name, repoRoot, pathValue);
+    // The skip reaches here too, and it has to: a probe RUNS the binary, so
+    // resolving the version-safe sibling out of node_modules would execute a
+    // head-chosen program in order to answer a question about it.
+    const found = locate(candidate.name, repoRoot, pathValue, skipNodeModules);
     if (found !== null) {
       return { command: found.command, argv: ['--version'] };
     }
@@ -220,9 +281,11 @@ function baseName(file: string): string {
 export function resolveGateBinary(
   gate: GatePolicy,
   repoRoot: string,
-  pathValue: string
+  pathValue: string,
+  options: ResolveOptions = {}
 ): ResolvedBinary | null {
   const table = CANDIDATES[gate.product];
+  const skipNodeModules = options.skipNodeModules ?? false;
 
   if (gate.command !== undefined) {
     if (!existsAsFile(gate.command)) {
@@ -252,7 +315,14 @@ export function resolveGateBinary(
         candidate: candidateName,
         versionProbe: candidate.versionSafe
           ? { command: process.execPath, argv: [gate.command, '--version'] }
-          : versionProbeFor(gate.product, candidate, gate.command, repoRoot, pathValue),
+          : versionProbeFor(
+              gate.product,
+              candidate,
+              gate.command,
+              repoRoot,
+              pathValue,
+              skipNodeModules
+            ),
       };
     }
 
@@ -262,12 +332,19 @@ export function resolveGateBinary(
       argvPrefix: prefix,
       source: 'policy',
       candidate: candidateName,
-      versionProbe: versionProbeFor(gate.product, candidate, gate.command, repoRoot, pathValue),
+      versionProbe: versionProbeFor(
+        gate.product,
+        candidate,
+        gate.command,
+        repoRoot,
+        pathValue,
+        skipNodeModules
+      ),
     };
   }
 
   for (const candidate of table) {
-    const found = locate(candidate.name, repoRoot, pathValue);
+    const found = locate(candidate.name, repoRoot, pathValue, skipNodeModules);
     if (found === null) {
       continue;
     }
@@ -277,7 +354,14 @@ export function resolveGateBinary(
       argvPrefix: [...candidate.prefix],
       source: found.source,
       candidate: candidate.name,
-      versionProbe: versionProbeFor(gate.product, candidate, found.command, repoRoot, pathValue),
+      versionProbe: versionProbeFor(
+        gate.product,
+        candidate,
+        found.command,
+        repoRoot,
+        pathValue,
+        skipNodeModules
+      ),
     };
   }
 

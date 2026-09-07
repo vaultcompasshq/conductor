@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -15,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decideTrustBase, runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
-import { stubGate } from './helpers/stub-gate.js';
+import { CLEAN_INTENT_GUARD, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -584,5 +585,231 @@ describe('the trust base on the command line and on the outcome', () => {
 
     expect(outcome.couldNotRun).toBeNull();
     expect(outcome.productVersion).toBeNull();
+  });
+});
+
+/**
+ * A pull-request run never reaches into node_modules/.bin, and says so.
+ *
+ * MEASURED WITH A MARKER, never with a source assertion. Each of these plants
+ * a binary under the repository's own node_modules/.bin that writes a file
+ * when it is executed, so "the other one ran" is a fact about the filesystem
+ * rather than about which branch a reader thinks was taken. That matters more
+ * here than usual: the whole point is that a program the head chose is not
+ * executed, and a probe for --version executes it just as thoroughly as a
+ * scan does.
+ */
+describe('a pull-request run and the repository own node_modules', () => {
+  /** A gate binary that records having been run, and answers --version. */
+  function markerGate(dir: string, name: string, marker: string): void {
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        `printf 'ran\\n' >> ${JSON.stringify(marker)}`,
+        'if [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi',
+        `echo '${DEP_GUARD_CLEAN.replace(/'/g, "'\\''")}'`,
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(file, 0o755);
+  }
+
+  it('runs the PATH copy and never the one the head installed', () => {
+    const repo = tempDir();
+    const bin = tempDir();
+    const plantMarker = path.join(repo, 'planted-ran.txt');
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', plantMarker);
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const outcome = runGate(gate(), {
+      repoRoot: repo,
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+
+    expect(existsSync(plantMarker)).toBe(false);
+    expect(outcome.couldNotRun).toBeNull();
+    expect(outcome.binary?.source).toBe('path');
+  });
+
+  it('is could-not-run, with the install remedy, when the only copy is the head own', () => {
+    const repo = tempDir();
+    const plantMarker = path.join(repo, 'planted-ran.txt');
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', plantMarker);
+
+    const outcome = runGate(gate(), {
+      repoRoot: repo,
+      staged: false,
+      pathValue: tempDir(),
+      trustBase: 'origin/main',
+    });
+
+    expect(existsSync(plantMarker)).toBe(false);
+    // The EXISTING reason, not a new one: nothing was found, which is what
+    // binary-missing has always meant. What is new is the sentence after it.
+    expect(outcome.couldNotRun?.reason).toBe('binary-missing');
+    expect(outcome.couldNotRun?.detail).toMatch(/npm install -g/);
+    expect(outcome.couldNotRun?.detail).toMatch(/dep-guard-version/);
+    expect(outcome.findings[0]?.message).toMatch(/npm install -g/);
+    // And it names the copy it declined to take, or the reader is told the
+    // gate is missing while looking straight at it.
+    expect(outcome.couldNotRun?.detail).toMatch(/node_modules\/\.bin\/dep-guard/);
+  });
+
+  it('carries the skipped candidate on the outcome, so one line can report the run', () => {
+    const repo = tempDir();
+    const bin = tempDir();
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', path.join(repo, 'ran.txt'));
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const skipped = runGate(gate(), {
+      repoRoot: repo,
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+    expect(skipped.nodeModulesSkipped).toBe('node_modules/.bin/dep-guard');
+
+    // Nothing to skip: no claim that anything was skipped.
+    const nothingThere = runGate(gate(), {
+      repoRoot: tempDir(),
+      staged: false,
+      pathValue: bin,
+      trustBase: 'origin/main',
+    });
+    expect(nothingThere.nodeModulesSkipped).toBeUndefined();
+  });
+
+  it('says nothing and changes nothing outside pull-request mode', () => {
+    // The parity case, and it is measured the same way: the planted binary
+    // must actually RUN, or this proves only that no exception was thrown.
+    const repo = tempDir();
+    const bin = tempDir();
+    const plantMarker = path.join(repo, 'planted-ran.txt');
+    markerGate(path.join(repo, 'node_modules', '.bin'), 'dep-guard', plantMarker);
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const outcome = runGate(gate(), { repoRoot: repo, staged: false, pathValue: bin });
+
+    expect(existsSync(plantMarker)).toBe(true);
+    expect(outcome.binary?.source).toBe('node_modules');
+    expect(outcome.nodeModulesSkipped).toBeUndefined();
+  });
+});
+
+/**
+ * The version probe is a SPAWN of its own, and not always of the same file.
+ *
+ * A per-command binary ignores `--version` and runs the gate instead, so
+ * resolution asks a version-safe SIBLING instead, which can live anywhere on
+ * PATH. Vetting only `binary.program` therefore left one executed path
+ * unchecked: the program a base policy names is byte for byte what the base
+ * approved, and the file the probe runs a moment later is whatever the head
+ * put beside it.
+ */
+describe('a pull-request run and the file the version probe would spawn', () => {
+  function git(cwd: string, args: string[]): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf8' });
+  }
+
+  function commit(root: string, message: string): void {
+    git(root, ['add', '-A']);
+    git(root, [
+      '-c',
+      'user.email=test@example.invalid',
+      '-c',
+      'user.name=test',
+      'commit',
+      '--quiet',
+      '-m',
+      message,
+    ]);
+  }
+
+  /** Something that answers --version, records having been asked, and exits. */
+  function probeSibling(file: string, marker: string, version: string): void {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' "$1" >> ${JSON.stringify(marker)}`,
+        `if [ "$1" = "--version" ]; then echo "${version}"; exit 0; fi`,
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(file, 0o755);
+  }
+
+  /**
+   * A repository vendoring intent-guard-check, which cannot be asked its own
+   * version, with the version-safe intent-guard on PATH beside it in the
+   * tree. The branch rewrites only the second one.
+   */
+  function vendored(): { root: string; command: string; toolsDir: string; marker: string } {
+    const root = tempDir();
+    const marker = path.join(tempDir(), 'probe-ran.txt');
+    const toolsDir = path.join(root, 'tools');
+    const command = path.join(root, 'vendor', 'check', 'intent-guard-check');
+
+    git(root, ['init', '--quiet', '-b', 'main']);
+    writeFileSync(path.join(root, 'README.md'), '# scratch\n');
+    mkdirSync(path.dirname(command), { recursive: true });
+    writeFileSync(command, `#!/bin/sh\necho '${CLEAN_INTENT_GUARD.replace(/'/g, "'\\''")}'\n`);
+    chmodSync(command, 0o755);
+    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.4.0');
+    commit(root, 'base');
+
+    git(root, ['checkout', '--quiet', '-b', 'feat/work']);
+    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.4.1');
+    commit(root, 'branch work');
+
+    return { root, command, toolsDir, marker };
+  }
+
+  it('refuses when the head rewrote the sibling the probe would run', () => {
+    const fixture = vendored();
+
+    const outcome = runGate(
+      gate({ role: 'intent', product: 'intent-guard', command: fixture.command }),
+      {
+        repoRoot: fixture.root,
+        staged: false,
+        pathValue: fixture.toolsDir,
+        trustBase: 'main',
+      }
+    );
+
+    // Never asked, which is the whole claim: a probe RUNS the file.
+    expect(existsSync(fixture.marker)).toBe(false);
+    expect(outcome.couldNotRun?.reason).toBe('gate-program-refused');
+    expect(outcome.couldNotRun?.detail).toMatch(/tools\/intent-guard/);
+    expect(outcome.enforce).toBe(true);
+  });
+
+  it('runs as usual when the branch left that sibling alone', () => {
+    // The direction that keeps the rule usable. Same fixture, with the
+    // branch commit reverted to the bytes the base approved.
+    const fixture = vendored();
+    probeSibling(path.join(fixture.toolsDir, 'intent-guard'), fixture.marker, '1.4.0');
+    commit(fixture.root, 'put it back');
+
+    const outcome = runGate(
+      gate({ role: 'intent', product: 'intent-guard', command: fixture.command }),
+      {
+        repoRoot: fixture.root,
+        staged: false,
+        pathValue: fixture.toolsDir,
+        trustBase: 'main',
+      }
+    );
+
+    expect(existsSync(fixture.marker)).toBe(true);
+    expect(outcome.couldNotRun).toBeNull();
+    expect(outcome.productVersion).toBe('1.4.0');
   });
 });
