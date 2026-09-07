@@ -766,15 +766,33 @@ So the action installs, rather than checking that somebody else did
 versions, `conductor-version`, `dep-guard-version`, `vault-guard-version`
 and `intent-guard-version`. `npm install -g` puts all four under the runner
 temp, outside the workspace, and that directory's `bin` goes on `PATH`
-through `GITHUB_PATH`; the run step then invokes `conductor` by name. THE
-PIN IS THE PROTECTED SIDE: on a `pull_request` event the workflow file is
-read from the base branch, so the pull request can rewrite its own lockfile
-and cannot change which programs judge it.
+through `GITHUB_PATH`; the run step then invokes `conductor` by name. The
+pull request can rewrite its own lockfile, manifest and `node_modules`, and
+none of them now decide which programs judge it.
+
+WHAT THE PIN DOES NOT PROTECT, stated here because an earlier revision of
+this entry claimed it did. That revision said the workflow file is read from
+the base branch on a `pull_request` event and so the pin was "the protected
+side". THAT IS FALSE. GitHub runs a `pull_request` workflow as it is in the
+pull request's merge commit, and the first hosted run of this action was
+its own counterexample: the adopter's pull request that bumped the action
+pin ran under the bumped pin. Only `pull_request_target` runs the base
+branch's copy, and that event hands the base's secrets to the pull
+request's code, which is the wrong event for a gate over untrusted changes.
+So a pull request that edits the workflow file can change the pins, or
+remove the step, exactly as it can rewrite any other CI step. The boundary
+this package draws is against the TREE choosing its own judge: policy from
+the base ref, programs from outside the tree, base-approved or refused.
+Against a workflow edit the only control is branch protection on the base
+branch with review required for `.github/workflows`, and this package
+neither provides it nor can. The README, the action's input descriptions
+and its validate-step error text say the same thing in the same words, and
+none of them may claim more than this.
 
 EXACT VERSIONS ONLY, refused in a validate step against
 `^[0-9]+\.[0-9]+\.[0-9]+$` before anything is fetched. A range or a
-dist-tag would move the decision off the base branch and onto whatever the
-registry served that morning, which is the same defect in a slower form.
+dist-tag would move the decision out of the workflow file and onto whatever
+the registry served that morning, which is the same defect in a slower form.
 `latest` is the case worth naming because it is the one somebody reaches for.
 
 THE INSTALL IS UNCONDITIONAL, on push and `pull_request` alike. A
