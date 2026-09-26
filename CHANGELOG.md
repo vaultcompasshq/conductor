@@ -86,15 +86,13 @@ the `v0.4.6` tag names.
   primary control. Surfaced by an adopter during advisory dogfooding.
 - **Split `init.ts` into `init-hook-detect.ts`, `init-manifest.ts`, and
   `init-policy.ts`**, a pure refactor with no behaviour change of its own.
-  Alongside it, corrected the note `conductor init` prints about when a
-  written policy takes effect: it had said the policy takes effect once it
-  is on the base branch, printed directly under the line reporting that
-  init wrote a pre-commit hook, which is false for the hook. The hook runs
-  `conductor run --staged --stage commit` with no trust-base flag, so it
-  honours the working-tree policy on the very next commit; only a pull
-  request is judged by the base branch's own copy. The note now states
-  both halves, and coverage was added for the dry-run and already-installed
-  renders, which the note also reaches and which nothing pinned before.
+  Alongside it, `conductor init` now prints a note on when a written policy
+  takes effect: the pre-commit hook uses the working-tree file on the very
+  next commit, since it runs `conductor run --staged --stage commit` with
+  no trust-base flag, while a pull request is judged by the base branch's
+  copy and reports could-not-run until the file is merged there. The note
+  appears on write, dry-run and already-installed runs and never on a
+  conflict, and tests pin all of those renders.
 
 ## [0.4.5] - 2026-09-20
 
