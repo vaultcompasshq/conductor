@@ -14,6 +14,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-26
+
+**A package release.** `@vaultcompass/conductor` moves to 0.4.7 on npm and
+the action's `conductor-version` default moves to `0.4.7` in lockstep, the
+same number the `v0.4.7` tag names. The Action input this release adds
+requires the CLI flag it depends on, so the two ship together.
+
 - Added `conductor run --advisory` and the Action's matching `advisory`
   input. Advisory now means "findings do not block", never "the step cannot
   fail": the flag maps exit 1 to exit 0, and leaves exit 2 (a gate that could
