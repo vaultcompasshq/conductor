@@ -115,8 +115,8 @@ interface RunCliOptions {
  * that could not run (2) is left exactly alone: "advisory" means a finding
  * does not block, never that the umbrella cannot fail. Swallowing a
  * could-not-run exit is the precise failure this flag exists to close (a
- * crashed `npm audit signatures` read as nothing wrong for three days,
- * issue #36, because the whole job carried `continue-on-error` instead of a
+ * crashed `npm audit signatures` read as nothing wrong for two days,
+ * issue #36, because every step carried `continue-on-error` instead of a
  * flag that only ever touches a FINDING's verdict). Any other code -- there
  * is none today besides 0, 1 and 2, but a future one would land here too --
  * passes through unchanged for the same reason.

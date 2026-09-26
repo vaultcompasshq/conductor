@@ -777,6 +777,41 @@ describe('the verdict when the run exits 1 and nothing is marked blocking', () =
     expect(last).toMatch(/intent could not run/);
     expect(last).toMatch(/that is not why/);
   });
+
+  it('maps this branch to exit 0 under --advisory, without claiming a finding it does not have', () => {
+    // This is the mismatch branch: an enforced gate exited non-zero but
+    // nothing reconciled as a blocking finding, so "Findings were advisory
+    // and did not block" (the wording the blocking > 0 branch uses) would be
+    // false here -- there is no finding to call advisory. Mutation proof:
+    // reusing that same "Findings were advisory and did not block" string
+    // for this branch (collapsing the two wordings back into one) turns the
+    // second assertion below red, because the mismatch branch's own
+    // "no finding here is marked blocking" sentence would then sit right
+    // next to a claim that a finding was advisory.
+    const raw = depGuardRaw();
+    delete raw.run.failOn;
+    const normalized = normalizeDepGuard(raw, '0.2.0');
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 1,
+            findings: normalized.findings,
+            run: normalized.run,
+            diagnostics: normalized.diagnostics,
+          }),
+        ],
+        1
+      ),
+      { advisory: true }
+    );
+    const last = text.trimEnd().split('\n').pop() as string;
+
+    expect(last).toMatch(/^verdict: exit 0/);
+    expect(last).toMatch(/no finding here is marked blocking/);
+    expect(last).not.toMatch(/Findings were advisory and did not block/);
+    expect(last).toMatch(/This run was advisory, so exit 1 became exit 0/);
+  });
 });
 
 describe('a gate the stage filter deferred', () => {

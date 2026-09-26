@@ -748,7 +748,7 @@ runs:
         # exit 2, an enabled gate that could not run, is untouched by the
         # flag and still fails this step. That asymmetry is the whole fix for
         # issue #36, where a crashed `npm audit signatures` read as nothing
-        # wrong for three days because the job carried `continue-on-error` on
+        # wrong for two days because the job carried `continue-on-error` on
         # every step instead of a flag that only ever touches a FINDING's
         # verdict.
         #

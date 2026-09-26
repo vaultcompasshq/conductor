@@ -234,7 +234,11 @@ describe('action.yml: the advisory input', () => {
     () => {
       // Mutation proof: dropping the `if [ "${ADVISORY:-}" = "true" ]` guard
       // (always appending --advisory, or never appending it) turns one of
-      // these two red without touching the other.
+      // these two red without touching the other. Changing the comparison to
+      // `!= "false"`, or to an alternation like `= "true" || = "yes"`, would
+      // pass both of these unchanged, which is exactly why the negative
+      // cases below exist: 'false' alone does not distinguish an exact-match
+      // guard from a not-equal-false or a multi-value one.
       const on = runGatesForAdvisory('true');
       expect(on.status).toBe(0);
       expect(on.argv).toContain('--advisory');
@@ -242,6 +246,24 @@ describe('action.yml: the advisory input', () => {
       const off = runGatesForAdvisory('false');
       expect(off.status).toBe(0);
       expect(off.argv).not.toContain('--advisory');
+    }
+  );
+
+  it(
+    'never adds --advisory for a near-miss value: wrong case, a truthy-looking word, "1", or empty',
+    () => {
+      // The actual mutation this exercise caught in review: changing the
+      // gates step's guard from `[ "${ADVISORY:-}" = "true" ]` to
+      // `[ "${ADVISORY:-}" != "false" ]` (or to `= "true" || = "yes"`) left
+      // the test above fully green, because it only ever drove 'true' and
+      // 'false'. Every value here is something a workflow author could
+      // plausibly type for a boolean-shaped input without it being the exact
+      // string "true" the Action's own YAML boolean semantics require.
+      for (const value of ['TRUE', 'yes', '1', '']) {
+        const result = runGatesForAdvisory(value);
+        expect([value, result.status]).toEqual([value, 0]);
+        expect([value, result.argv.includes('--advisory')]).toEqual([value, false]);
+      }
     }
   );
 });

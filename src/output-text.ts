@@ -510,8 +510,14 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
     // whatever `advisory` says. The findings above this line still print
     // with their BLOCKING marker: advisory changes what the exit code
     // claims, never what a gate found.
-    const advisoryNote = ' Findings were advisory and did not block, so this run exits 0 rather than 1.';
     if (blocking === 0) {
+      // The mismatch branch: composeExitCode also lands here when an
+      // enforced gate exited non-zero but nothing reconciled as a blocking
+      // finding (conductor/blocking-count-mismatch or
+      // conductor/blocking-threshold-unknown; see normalize.ts). "Findings
+      // were advisory and did not block" would claim a finding this branch
+      // explicitly says there is none of, so it gets its own, narrower
+      // wording that is true here and says nothing about findings at all.
       const names = enforcedGates
         .filter((gate) => (gate.exitCode ?? 0) !== 0)
         .map((gate) => `${gate.role} (exit ${gate.exitCode ?? '?'})`)
@@ -521,12 +527,12 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
         `non-zero: ${names}. The umbrella could not reconcile a blocking count with what those ` +
         `gates reported, so the gate exit code decided the run.${aside}`;
       return advisory
-        ? `verdict: exit 0, ${base}${advisoryNote}`
+        ? `verdict: exit 0, ${base} This run was advisory, so exit 1 became exit 0.`
         : `verdict: exit 1, ${base}`;
     }
     const base = `${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
     return advisory
-      ? `verdict: exit 0, ${base}${advisoryNote}`
+      ? `verdict: exit 0, ${base} Findings were advisory and did not block, so this run exits 0 rather than 1.`
       : `verdict: exit 1, ${base}`;
   }
 

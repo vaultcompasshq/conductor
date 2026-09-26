@@ -366,9 +366,13 @@ describe('action.yml: the pr-comment step mirrors --advisory', () => {
     () => {
       // Mutation proof: dropping the guard around `ARGS+=(--advisory)` in the
       // pr-comment step (always appending it, or never appending it) turns
-      // one of these two red without touching the other. VERIFICATION_OK is
-      // set so the render run actually happens; see the verification-branch
-      // tests above, which prove the render is skipped otherwise.
+      // one of these two red without touching the other. Changing the
+      // comparison to `!= "false"`, or to an alternation like
+      // `= "true" || = "yes"`, would pass both of these unchanged; see the
+      // near-miss test below for what actually catches that.
+      // VERIFICATION_OK is set so the render run actually happens; see the
+      // verification-branch tests above, which prove the render is skipped
+      // otherwise.
       const on = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: 'true' });
       expect(on.status).toBe(0);
       expect(on.conductorRan).toBe(true);
@@ -378,6 +382,23 @@ describe('action.yml: the pr-comment step mirrors --advisory', () => {
       expect(off.status).toBe(0);
       expect(off.conductorRan).toBe(true);
       expect(off.conductorArgv).not.toContain('--advisory');
+    }
+  );
+
+  it(
+    'never adds --advisory to the render run for a near-miss value: wrong case, a truthy-looking word, "1", or empty',
+    () => {
+      // The actual mutation this exercise caught in review: changing the
+      // pr-comment step's guard from `[ "${ADVISORY:-}" = "true" ]` to
+      // `[ "${ADVISORY:-}" != "false" ]` (or to `= "true" || = "yes"`) left
+      // the test above fully green, because it only ever drove 'true' and
+      // 'false'.
+      for (const value of ['TRUE', 'yes', '1', '']) {
+        const result = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: value });
+        expect([value, result.status]).toEqual([value, 0]);
+        expect([value, result.conductorRan]).toEqual([value, true]);
+        expect([value, result.conductorArgv.includes('--advisory')]).toEqual([value, false]);
+      }
     }
   );
 });
