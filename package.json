@@ -1,6 +1,6 @@
 {
   "name": "@vaultcompass/conductor",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "type": "module",
   "description": "Umbrella installer and combined report over the independently installable guardrail gates.",
   "keywords": [

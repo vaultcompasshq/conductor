@@ -114,6 +114,24 @@ check every hit, in the same pull request:
   that bumps `package.json` and leaves this behind publishes a version
   nothing runs.
 - `README.md`, the CI example's four `*-version` lines.
+- `action.yml`, the `TAG_CONDUCTOR_MAJOR`, `TAG_CONDUCTOR_MINOR` and
+  `TAG_CONDUCTOR_PATCH` constants in the pull-request version-pin step. The
+  backward-pin rule measures a `conductor-version` input against these, not
+  against the `conductor-version` default above; leave them behind and that
+  rule keeps accepting pins to a version this tag no longer ships.
+- `README.md`, every `uses: vaultcompasshq/conductor@vX` example line. These
+  name the tag itself, which is a separate thing from the four `*-version`
+  lines above that default an input: a reader copies the tag pin as-is, so a
+  stale one hands them a release this one supersedes.
+- `README.md`, the sample text-report output (the `conductor <version>`
+  first line shown under the full-report example). It is real output the
+  tag actually prints, not narration, and drifts from it the same way a
+  stale code pin would.
+- `tests/action.test.ts`, the assertions pinning the real `conductor-version`
+  default and package version: the install manifest, the action input
+  default, and the install argv. Left at the old version, these fail on
+  their own the day the bump is real, which is the point, but the failure
+  reads as a broken test rather than a missed pin until this is on the list.
 
 The three GATE version defaults in `action.yml`, `dep-guard-version`,
 `vault-guard-version` and `intent-guard-version`, are on their own clock:
