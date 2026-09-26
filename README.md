@@ -121,8 +121,9 @@ required.
    intent gate.** Locally, with no `--base`, the intent gate runs the way it
    runs at a commit: intent-guard's own native flow, which wants an approved
    contract and reports `BLOCKING critical intent-guard/gate-blocked` when
-   there is none. On a pull request `--base` is set (by the Action, from
-   `GITHUB_BASE_REF`), and the umbrella instead prepares a contract for the
+   there is none. On a pull request a base ref resolves (conductor reads
+   `GITHUB_BASE_REF`, which GitHub sets for the whole job on a
+   `pull_request` event), and the umbrella instead prepares a contract for the
    intent gate itself; with no contract to import, that path reports the
    gate `skipped ... no contract` and never reaches the exit code. So a
    first pull request with no contract yet is not blocked by the intent gate
@@ -637,9 +638,13 @@ opinion here, is the one intent-guard's own documentation describes: draft a
 contract naming the paths worth protecting, then freeze it, and keep the
 frozen file committed so rule 2 above finds it on every pull request from
 then on. Until you do that, a project rule that lives only in `AGENTS.md`
-never blocks anything through this gate: nothing here reads that file, and
-the only thing enforced is the frozen contract or the imported spec, never
-project convention documented in prose.
+never blocks anything through this gate. intent-guard does read prose rules
+files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, cursor rules) as constraint
+sources, but by its own design a constraint from that source is advisory
+and leaves the exit code alone; only a user-stated constraint, or one
+promoted with `intent-guard correct --promote`, can block. Conductor itself
+never opens that file. What is enforced is the frozen contract or the
+imported spec, never project convention documented in prose.
 
 **A waiver is a decision, recorded by whoever wrote the pull request body,
 and that includes a contributor from a fork.** On the ordinary path, where a
@@ -765,10 +770,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
@@ -799,7 +804,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Required, for two reasons now. Without it there is no merge base
           # to diff against, and the intent gate fails closed rather than
@@ -808,7 +813,7 @@ jobs:
           # base ref that will not resolve is exit 2 for every enabled gate.
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Not a bare major: Node 22.0.0 ships npm 10.5.1, which the action
           # refuses because that client reports a clean install as tampered
@@ -888,10 +893,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
