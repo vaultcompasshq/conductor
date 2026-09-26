@@ -14,6 +14,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-25
+
+**A package release. The tag and the package converge.**
+`@vaultcompass/conductor` moves to 0.4.6 on npm and the action's
+`conductor-version` default moves to `0.4.6` in lockstep, the same number
+the `v0.4.6` tag names.
+
 - **A gate that could not run now says so, instead of looking like a missing
   tool.** Reported by an adopter whose check went red for two days while
   scanning nothing, with `conductor: command not found` as the only symptom.
@@ -71,6 +78,23 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   every fallible step so a required job never goes red over a hung or failed
   advisory step, and a note that 0.4.5 already self-fetches the base so the
   explicit fetch step is belt and braces rather than a requirement.
+- README: documented running the gates as an advisory check with a step
+  `timeout-minutes`, since `continue-on-error` swallows a failing exit code
+  but does not bound a step that hangs. Notes that the Action already caps
+  each gate's own subprocess at 120 seconds and reports a timeout as
+  could-not-run, so the step timeout is an outer bound rather than the
+  primary control. Surfaced by an adopter during advisory dogfooding.
+- **Split `init.ts` into `init-hook-detect.ts`, `init-manifest.ts`, and
+  `init-policy.ts`**, a pure refactor with no behaviour change of its own.
+  Alongside it, corrected the note `conductor init` prints about when a
+  written policy takes effect: it had said the policy takes effect once it
+  is on the base branch, printed directly under the line reporting that
+  init wrote a pre-commit hook, which is false for the hook. The hook runs
+  `conductor run --staged --stage commit` with no trust-base flag, so it
+  honours the working-tree policy on the very next commit; only a pull
+  request is judged by the base branch's own copy. The note now states
+  both halves, and coverage was added for the dry-run and already-installed
+  renders, which the note also reaches and which nothing pinned before.
 
 ## [0.4.5] - 2026-09-20
 
