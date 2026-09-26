@@ -255,10 +255,12 @@ describe('per-gate option passthrough', () => {
     ).toThrow(/-f/);
   });
 
-  it('explains base on the dependencies gate as the flag it fights rather than one the umbrella writes', () => {
-    // The umbrella passes --staged to dep-guard and never --base. The key is
-    // still reserved, because a policy-supplied base would fight the --staged
-    // the umbrella writes, but the generic sentence gives the wrong reason.
+  it('explains base on the dependencies gate as whichever flag it collides with or silently changes', () => {
+    // The umbrella writes --base itself on a pull-request run and --staged on
+    // a staged run; on a plain run it writes neither. The key is reserved on
+    // all three shapes, for three different reasons, so the message names all
+    // of them rather than picking whichever one the generic sentence would
+    // have gotten wrong.
     expect(() =>
       parsePolicy(
         'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n    options:\n      base: main\n',
