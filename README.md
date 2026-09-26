@@ -12,6 +12,23 @@ and every one of those three still runs, with exactly the configuration it
 had: nothing here is a fourth scanner, only the umbrella over the three
 that exist.
 
+The claim is checked in public. The
+[conductor-proof](https://github.com/vaultcompasshq/conductor-proof)
+repository runs an ordinary gitleaks and osv-scanner job beside conductor,
+with four pull requests left open on purpose, one planted problem each.
+Read the checks on each pull request rather than this table.
+
+| Planted problem | Ordinary job | conductor |
+| --- | --- | --- |
+| [A dependency whose name does not exist on npm](https://github.com/vaultcompasshq/conductor-proof/pull/6) | pass | fail |
+| [A pull request that turns off its own checks, then adds that dependency](https://github.com/vaultcompasshq/conductor-proof/pull/7) | skipped | fail |
+| [A credential-shaped string in a test fixture](https://github.com/vaultcompasshq/conductor-proof/pull/8) | fail | fail |
+| [An edit to a path the intent contract protects](https://github.com/vaultcompasshq/conductor-proof/pull/11) | pass | fail |
+
+The third row is parity, not a catch: both jobs see a credential shape.
+The other three are what a scanner that only knows about vulnerabilities
+and secrets has no way to know.
+
 <!-- guardrails-family: shared block, keep it identical in dep-guard, vault-guard, intent-guard and conductor -->
 The Vault & Compass guardrails are three gates over an AI-assisted coding
 session: [dep-guard](https://www.npmjs.com/package/@vaultcompass/dep-guard)
