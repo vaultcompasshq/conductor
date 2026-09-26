@@ -1,8 +1,16 @@
 # conductor
 
-conductor is the optional layer over three guardrail gates that each work on
-their own. All it adds is one policy file, one init, one hook and one report.
-Delete it and every gate still runs, with exactly the configuration it had.
+conductor is the one required check for a repository an AI agent edits. It
+runs the scanners a maintainer already trusts, and adds the checks those
+scanners cannot do on their own: a hallucinated package name, a credential
+caught before the edit lands, a pull request that edits its own gate, a
+change that reaches outside what was approved for it.
+
+It does that by running three gates that each already work on their own,
+over one policy file, one init, one hook and one report. Delete conductor
+and every one of those three still runs, with exactly the configuration it
+had: nothing here is a fourth scanner, only the umbrella over the three
+that exist.
 
 <!-- guardrails-family: shared block, keep it identical in dep-guard, vault-guard, intent-guard and conductor -->
 The Vault & Compass guardrails are three gates over an AI-assisted coding
@@ -19,6 +27,136 @@ own;
 optional umbrella that runs them from one policy file, one hook and one
 report.
 <!-- /guardrails-family -->
+
+## Adopting conductor
+
+The first pull request under a policy conductor just added cannot be judged
+by that policy, so plan for a short, ordered sequence rather than one
+command: init, a first pull request in advisory mode, merge, then go
+required.
+
+1. **Init.** Install the gates. Each of them is a working tool on its own,
+   and none of them needs this one:
+
+   ```
+   npm install -g @vaultcompass/dep-guard @vaultcompass/vault-guard @vaultcompass/intent-guard
+   ```
+
+   The umbrella is optional. Install it when running the three separately
+   has become the annoying part:
+
+   ```
+   npm install -g @vaultcompass/conductor
+   ```
+
+   **Globally, and that is the guidance for CI too.** A devDependency is
+   fine beside it for your own pre-commit hook, and nothing about a local
+   run changed. It is not what gates your pull requests: on a pull-request
+   run the umbrella never looks in `node_modules/.bin` at all, because what
+   is installed there is chosen by the head's own manifest and lockfile. The
+   Action installs all four packages itself, globally, at versions pinned in
+   your workflow file. See "The pull-request trust boundary" and "The
+   Action" below.
+
+   From the repository root, look before you write:
+
+   ```
+   conductor init --dry-run
+   ```
+
+   That prints every file it would write or change and writes nothing. Then:
+
+   ```
+   conductor init
+   ```
+
+   which writes `.guardrails.yaml` with every gate listed and only the ones
+   it found switched on, one pre-commit hook running every enabled gate
+   whose stage is `commit`, and `.guardrails/manifest.json`, the record init
+   reads back on a later `--revert`.
+
+   **`.guardrails/manifest.json` records the absolute path on the machine
+   that ran `init`**, for the hook and for the policy file alike, and
+   conductor does not add a `.gitignore` entry for it. That path is specific
+   to your checkout, so do not commit the file: add
+   `.guardrails/manifest.json` to your own `.gitignore` today. The file
+   lives inside your working tree so `--revert` can find it later, and
+   recording repo-relative paths there instead of absolute ones is a known
+   gap, not a design; it has not been fixed yet.
+
+   Commit something. A clean commit prints one line:
+
+   ```
+   conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 1 note(s). Re-run with --verbose for the full report.
+   ```
+
+   A commit with a staged credential in it prints the full report and exits 1:
+
+   ```
+   conductor 0.4.7
+   conductor run: 2 gate(s), 1 finding(s)
+
+   dependencies  dep-guard 0.2.1  exit 0  251ms  via dep-guard on path
+     threshold medium   suppressed 0   ignored 0
+
+   secrets  vault-guard 1.4.6  exit 1  97ms  via vault-guard on path
+     BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:27:32
+         Possible secret of type 'anthropic'
+     threshold medium   suppressed 0   ignored not reported
+
+     deferred  intent  intent-guard  did not run here; it runs from stage ci onwards
+
+   verdict: exit 1, 1 blocking finding(s) across 2 gate(s).
+   ```
+
+   Both gates there are the ones you installed a moment ago, running with
+   their own thresholds and their own baselines. The umbrella found nothing
+   of its own, because it looks for nothing of its own.
+
+   Before opening anything, run `conductor run --verbose` on this same
+   checkout. That is the full report your policy will produce for the
+   dependency and secrets gates, with no `--trust-base` involved: a direct
+   run on your own checkout is already inside the trust boundary, so it
+   reads the policy you just wrote. **It is not the full preview for the
+   intent gate.** Locally, with no `--base`, the intent gate runs the way it
+   runs at a commit: intent-guard's own native flow, which wants an approved
+   contract and reports `BLOCKING critical intent-guard/gate-blocked` when
+   there is none. On a pull request a base ref resolves (conductor reads
+   `GITHUB_BASE_REF`, which GitHub sets for the whole job on a
+   `pull_request` event), and the umbrella instead prepares a contract for the
+   intent gate itself; with no contract to import, that path reports the
+   gate `skipped ... no contract` and never reaches the exit code. So a
+   first pull request with no contract yet is not blocked by the intent gate
+   on the pull request, whatever the local preview showed a moment before.
+   See "Intent at a pull request" below for the full mechanism.
+
+2. **Open the first pull request in advisory mode.** Add `.guardrails.yaml`
+   and the workflow together, with `advisory: true` and `pr-comment: true`
+   on the conductor step -- the recipe under "Running the gates as an
+   advisory check" below is a complete copy-paste job -- and leave the check
+   out of branch protection for this one pull request. The step still exits
+   2 on this pull request even with `advisory: true`: the base branch has no
+   policy yet, so the run has no rules, and `advisory` never touches that
+   exit code, only a blocking finding's. Leaving the check out of branch
+   protection is what keeps that expected exit 2 from blocking the merge;
+   the step posts a comment saying so with the remedy on it, which is the
+   honest report of an unfinished adoption, not a broken tool.
+
+3. **Merge.** Every pull request after that is judged by the policy on the
+   base branch, and a change to that policy shows up as a proposal line and
+   takes effect after its own merge.
+
+4. **Go required.** Once a few ordinary pull requests have shown the report
+   reads the way you expect, remove `advisory: true` from the conductor step
+   and require the job's own check context in branch protection -- `gates`
+   in the recipes below, the job name, never the context the SARIF-upload
+   step reports under. That is the whole of turning this from an advisory
+   job into the one required check.
+
+There is deliberately no mode in which the pull request's own policy file
+decides the run, not even as a preview: step 1's preview gives you the same
+report without putting a file the pull request controls behind a verdict on
+the pull request page.
 
 ## Why
 
@@ -39,75 +177,6 @@ constraint on all of this is that the gates must not slow development down,
 with ceremony rather than runtime named as the cost. A screenful of per-gate
 detail on a commit that found nothing is that cost, paid on every commit, and
 it is what makes a team switch a hook off.
-
-## Quickstart
-
-Install the gates. Each of them is a working tool on its own, and none of
-them needs this one:
-
-```
-npm install -g @vaultcompass/dep-guard @vaultcompass/vault-guard @vaultcompass/intent-guard
-```
-
-The umbrella is optional. Install it when running the three separately has
-become the annoying part:
-
-```
-npm install -g @vaultcompass/conductor
-```
-
-**Globally, and that is the guidance for CI too.** A devDependency is fine
-beside it for your own pre-commit hook, and nothing about a local run changed.
-It is not what gates your pull requests: on a pull-request run the umbrella
-never looks in `node_modules/.bin` at all, because what is installed there is
-chosen by the head's own manifest and lockfile. The Action installs all four
-packages itself, globally, at versions pinned in your workflow file. See "The
-pull-request trust boundary" and "The Action" below.
-
-From the repository root, look before you write:
-
-```
-conductor init --dry-run
-```
-
-That prints every file it would write or change and writes nothing. Then:
-
-```
-conductor init
-```
-
-which writes `.guardrails.yaml` with every gate listed and only the ones it
-found switched on, plus one pre-commit hook running every enabled gate whose
-stage is `commit`.
-
-Commit something. A clean commit prints one line:
-
-```
-conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 1 note(s). Re-run with --verbose for the full report.
-```
-
-A commit with a staged credential in it prints the full report and exits 1:
-
-```
-conductor 0.4.7
-conductor run: 2 gate(s), 1 finding(s)
-
-dependencies  dep-guard 0.2.1  exit 0  251ms  via dep-guard on path
-  threshold medium   suppressed 0   ignored 0
-
-secrets  vault-guard 1.4.6  exit 1  97ms  via vault-guard on path
-  BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:27:32
-      Possible secret of type 'anthropic'
-  threshold medium   suppressed 0   ignored not reported
-
-  deferred  intent  intent-guard  did not run here; it runs from stage ci onwards
-
-verdict: exit 1, 1 blocking finding(s) across 2 gate(s).
-```
-
-Both gates there are the ones you installed a moment ago, running with their
-own thresholds and their own baselines. The umbrella found nothing of its
-own, because it looks for nothing of its own.
 
 ## What it deliberately is not
 
@@ -213,7 +282,10 @@ that gate, for pointing at a build that is not installed anywhere.
 
 ## Commands
 
-`conductor init` writes the policy file and one pre-commit hook.
+`conductor init` writes the policy file, one pre-commit hook, and
+`.guardrails/manifest.json`, the record `--revert` reads back later. The
+manifest currently records absolute machine paths rather than repo-relative
+ones (see "Adopting conductor" above); do not commit it.
 
 - `--dry-run` prints every file it would write or change and writes nothing.
 - `--revert` removes exactly what a previous init wrote, and nothing else.
@@ -486,6 +558,20 @@ With no `--base`, `GITHUB_BASE_REF` is used as `origin/<value>` when it is
 set, and the text report says so. With neither, the intent gate runs the way
 it does at a commit: against the staged index, or the paths you name.
 
+**This is why a local preview and a pull-request run can disagree about a
+missing contract.** The contract-discovery rules below (`--spec`, a frozen
+native contract, a `Spec:` line, the `docs/superpowers/specs` convention)
+only engage once `--base` resolves to something, or `--spec` is given.
+Neither is true of a plain `conductor run` on your own checkout, so a
+repository with no contract gets intent-guard's own native answer instead:
+`BLOCKING critical intent-guard/gate-blocked`, because that flow wants an
+approved contract and none exists. On a pull request `--base` is set, this
+whole section's machinery engages, and a branch with nothing to import
+lands in the no-contract state below instead: reported, and never reaching
+the exit code. Read a local `BLOCKING` line on the intent gate as "there is
+no contract for the umbrella to import here yet," not as "this pull request
+will fail."
+
 A git failure here is **fail-closed**: could-not-run, so exit 2 for an
 enforced gate and a note for an unenforced one. There is deliberately no
 fallback to an empty path set, because an empty path set is what a passing
@@ -543,6 +629,22 @@ under its own `intent-guard/contract-waived` id, with its own wording on the
 skipped line, in the verdict and on the one-line summary of a clean run, so a
 reader can tell "nobody has written one" from "somebody decided against one"
 wherever they meet it.
+
+**A repository with no contract yet is not a repository this gate can act
+on**, and the no-contract skip line names `docs/superpowers/specs`, which is
+a convention from this family's own tooling and not one an outside adopter
+has reason to recognise. The next step, if you want this gate to have an
+opinion here, is the one intent-guard's own documentation describes: draft a
+contract naming the paths worth protecting, then freeze it, and keep the
+frozen file committed so rule 2 above finds it on every pull request from
+then on. Until you do that, a project rule that lives only in `AGENTS.md`
+never blocks anything through this gate. intent-guard does read prose rules
+files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, cursor rules) as constraint
+sources, but by its own design a constraint from that source is advisory
+and leaves the exit code alone; only a user-stated constraint, or one
+promoted with `intent-guard correct --promote`, can block. Conductor itself
+never opens that file. What is enforced is the frozen contract or the
+imported spec, never project convention documented in prose.
 
 **A waiver is a decision, recorded by whoever wrote the pull request body,
 and that includes a contributor from a fork.** On the ordinary path, where a
@@ -668,10 +770,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
@@ -702,7 +804,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Required, for two reasons now. Without it there is no merge base
           # to diff against, and the intent gate fails closed rather than
@@ -711,7 +813,7 @@ jobs:
           # base ref that will not resolve is exit 2 for every enabled gate.
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Not a bare major: Node 22.0.0 ships npm 10.5.1, which the action
           # refuses because that client reports a clean install as tampered
@@ -791,10 +893,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
@@ -832,32 +934,28 @@ anything in `action.yml`.
 
 ### Adopting conductor
 
-The first pull request cannot be judged by the policy it adds. Plan for two
-steps rather than being surprised by one:
+See "Adopting conductor" near the top of this README for the ordered
+walkthrough: init, a first pull request in advisory mode, merge, then go
+required. This subsection is the mechanism behind two of those steps.
 
-1. On a branch, run `conductor init`, then run `conductor run --verbose` on
-   your own checkout. That is the full report your policy will produce, with
-   no `--trust-base` involved: a direct run on your own checkout is already
-   inside the trust boundary, so it reads the policy you just wrote. This is
-   where you tune thresholds, not on a pull request.
-2. Open the pull request with `.guardrails.yaml` and the workflow together,
-   and set `advisory: true` on the conductor step, the same as the advisory
-   recipe above, and leave the check not required in branch protection for
-   this one pull request. The step still exits 2 on this pull request even
-   with `advisory: true`: the base branch has no policy yet, so the run has
-   no rules, and `advisory` never touches that exit code, only a blocking
-   finding's. Leaving the check unrequired is what keeps that expected exit 2
-   from blocking the merge; the step posts a comment saying so with the
-   remedy on it, which is the honest report of an unfinished adoption, not a
-   broken tool.
-3. Merge. Every pull request after that is judged by the policy on the base
-   branch, and a change to that policy shows up as a proposal line and takes
-   effect after its own merge.
+**Why the first pull request still exits 2 under `advisory: true`.**
+`advisory: true` maps a blocking **finding** to exit 0; it has no opinion
+about a run that never had a policy to be judged by. The pull request that
+first adds `.guardrails.yaml` is judged against the base branch, which has
+none yet, so the run is refused outright before any gate produces a finding
+for `advisory` to act on. Leaving the check out of branch protection for
+that one pull request is what keeps the expected exit 2 from blocking the
+merge; the step posts a comment naming the ref and the remedy.
 
-There is deliberately no mode in which the pull request's own policy file
-decides the run, not even as a preview: the preview in step 1 gives you the
-same report without putting a file the pull request controls behind a
-verdict on the pull request page.
+**Why "go required" means the job's own context, never the SARIF-upload
+row.** The recipes above upload conductor's SARIF log with
+`github/codeql-action/upload-sarif`, which can add its own code-scanning
+check to a pull request's checks list alongside the workflow job's own
+check. Branch protection's required-checks picker can then show both. Only
+the job's own context (`gates` in the recipes above, the job key, not any
+step name) carries conductor's actual exit code; a code-scanning check can
+read green from an old scan, or from `continue-on-error` on the upload step
+itself, independent of whether the gates step passed. Require the job.
 
 ### The report as a pull request comment
 
