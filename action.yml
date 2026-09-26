@@ -94,6 +94,20 @@ inputs:
       over one shared comment. Leave it empty (the default) and the built-in
       marker is used, which keeps existing behaviour unchanged.
     default: ''
+  advisory:
+    description: >-
+      Set to exactly "true" to make a blocking finding advisory: it no longer
+      fails this run, so the check can be left out of branch protection
+      without swallowing anything else. A gate that could NOT run is
+      unaffected and still fails the run: this input changes what a FINDING
+      does, never what a broken gate does, so a crashed install or a missing
+      policy on the base ref still shows red rather than a silent green.
+      Passed straight through as conductor run's own --advisory flag, to both
+      the gates step and, when pr-comment is on, the step that renders the
+      pull request comment, so the comment's own verdict line matches the
+      job's actual exit code. Off by default, so an existing consumer is
+      unaffected.
+    default: 'false'
 
 outputs:
   sarif:
@@ -617,6 +631,7 @@ runs:
         STAGE: ${{ inputs.stage }}
         OUTPUT: ${{ inputs.output }}
         WORKDIR: ${{ inputs.working-directory }}
+        ADVISORY: ${{ inputs.advisory }}
       run: |
         set -eu
 
@@ -728,6 +743,23 @@ runs:
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")
         fi
+        # ADVISORY MEANS A FINDING DOES NOT BLOCK, NEVER THAT THIS STEP
+        # CANNOT FAIL. --advisory maps the umbrella's own exit 1 to exit 0;
+        # exit 2, an enabled gate that could not run, is untouched by the
+        # flag and still fails this step. That asymmetry is the whole fix for
+        # issue #36, where a crashed `npm audit signatures` read as nothing
+        # wrong for three days because the job carried `continue-on-error` on
+        # every step instead of a flag that only ever touches a FINDING's
+        # verdict.
+        #
+        # "${ADVISORY:-}" rather than "$ADVISORY": this step's own env mapping
+        # above always declares the variable, from an input that defaults to
+        # 'false', but the harness in tests/action.test.ts that drives this
+        # script directly does not have to set every env var this step reads,
+        # and `set -eu` would otherwise abort on the first one it left out.
+        if [ "${ADVISORY:-}" = "true" ]; then
+          ARGS+=(--advisory)
+        fi
         # Off PATH, which the install step put the runner temp on. Never
         # node_modules/.bin/conductor: that is the head's own install, chosen
         # by the head's own lockfile, and running it would let a pull request
@@ -785,6 +817,11 @@ runs:
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         GITHUB_BASE_REF: ${{ github.base_ref }}
+        # Mirrored from the gates step, so the rendered comment's own verdict
+        # line matches the job's actual exit code: with advisory: true the
+        # gates step exits 0 on a blocking finding, and a comment rendered
+        # without the same flag would say "verdict: exit 1" underneath it.
+        ADVISORY: ${{ inputs.advisory }}
         # The bundled script lives in THIS action's own tree, not the
         # consumer's checkout, so it is reached by github.action_path rather
         # than by a path relative to working-directory.
@@ -832,6 +869,13 @@ runs:
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")
+        fi
+        # Mirrors the gates step's own guard exactly, spelled the same way,
+        # so the rendered comment's verdict line agrees with the job's actual
+        # exit code: see the comment on the gates step's own copy of this
+        # line for why advisory only ever maps exit 1, never exit 2.
+        if [ "${ADVISORY:-}" = "true" ]; then
+          ARGS+=(--advisory)
         fi
         # NO RENDER RUN when the install could not be verified. At that point
         # the umbrella is precisely the thing that failed verification, so

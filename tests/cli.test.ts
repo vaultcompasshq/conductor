@@ -723,6 +723,82 @@ describe('a gate-state reason alongside a budget violation', () => {
   });
 });
 
+describe('conductor run --advisory', () => {
+  // A blocking finding, reused from the fixture above: intent-guard exits 1
+  // with a real budget violation, which composes to EXIT_BLOCKED (1) without
+  // the flag.
+  const BLOCKED = JSON.stringify({
+    status: 'blocked',
+    exitCode: 1,
+    reasons: ['Budget soft_block: Changed 2 files, budget allows 1'],
+    contractFound: true,
+    contractFrozen: true,
+    budget: {
+      ok: false,
+      action: 'soft_block',
+      violations: [
+        {
+          fingerprint: 'a12fc3e4',
+          rule: 'max_files',
+          severity: 'soft_block',
+          message: 'Changed 2 files, budget allows 1',
+          matched: ['a.js', 'b.js'],
+        },
+      ],
+    },
+  });
+
+  function blockedRepo(): { repo: string; bin: string } {
+    const repo = repoWithPolicy('version: 1\ngates:\n  intent:\n    product: intent-guard\n');
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: BLOCKED, exit: 1 });
+    return { repo, bin };
+  }
+
+  it(
+    'maps a blocking run to exit 0 with the advisory wording, and pins the same run at exit 1 without the flag',
+    () => {
+      // The pinned pair the brief asks for. Mutation proof for the advisory
+      // half: removing the exit-code mapping in cli.ts (or hard-coding it to
+      // leave result.exitCode alone) turns "withAdvisory.status" red, since it
+      // would then read 1. Mutation proof for the wording: deleting the
+      // `advisory` option passed into renderText leaves the exit code mapped
+      // but the verdict line silent about it, which turns the "advisory"
+      // match red without touching the exit-code assertions.
+      const { repo, bin } = blockedRepo();
+
+      const withoutAdvisory = runCli(repo, ['run', '--staged'], bin);
+      expect(withoutAdvisory.status).toBe(1);
+      expect(withoutAdvisory.stdout.toLowerCase()).not.toMatch(/advisory/);
+
+      const withAdvisory = runCli(repo, ['run', '--staged', '--advisory'], bin);
+      expect(withAdvisory.status).toBe(0);
+      expect(withAdvisory.stdout).toMatch(/BLOCKING/);
+      expect(withAdvisory.stdout).toMatch(/verdict: exit 0/);
+      expect(withAdvisory.stdout.toLowerCase()).toMatch(/advisory/);
+      expect(withAdvisory.stdout).toMatch(/did not block/);
+    }
+  );
+
+  it(
+    'leaves a could-not-run gate at exit 2, the load-bearing case advisory must never touch',
+    () => {
+      // Mutation proof: mapping EXIT_COULD_NOT_RUN to 0 as well (for example
+      // by testing only `Boolean(options.advisory)` and ignoring
+      // result.exitCode) turns this red, because a missing gate binary would
+      // then exit 0 with --advisory exactly as a real crash does today
+      // (issue #36), which is precisely the failure this flag must not
+      // reintroduce.
+      const repo = repoWithPolicy('version: 1\ngates:\n  intent:\n    product: intent-guard\n');
+
+      const result = runCli(repo, ['run', '--staged', '--advisory'], tempDir());
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toMatch(/conductor\/gate-missing/);
+    }
+  );
+});
+
 describe('sarif output, continued', () => {
   const DRIFTED = JSON.stringify({
     findings: [null],

@@ -14,6 +14,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- Added `conductor run --advisory` and the Action's matching `advisory`
+  input. Advisory now means "findings do not block", never "the step cannot
+  fail": the flag maps exit 1 to exit 0, and leaves exit 2 (a gate that could
+  not run) untouched. Adopters running the umbrella with `continue-on-error`
+  on the whole job had that setting swallow a real crash for three days
+  (issue #36), because it could not tell a blocking finding from a gate that
+  never ran. The Action passes the flag to both the gates step and, when
+  `pr-comment` is on, the step that renders the pull request comment, so the
+  comment's own verdict line matches the job's actual exit code. The README's
+  advisory recipe now sets `advisory: true` instead of `continue-on-error`,
+  with no `continue-on-error` anywhere in it.
+
 ## [0.4.6] - 2026-09-25
 
 **A package release. The tag and the package converge.**

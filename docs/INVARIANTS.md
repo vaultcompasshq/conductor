@@ -3092,5 +3092,98 @@ individually correct mechanisms composing into silence, which is why
 Not covered by any of the above, and named so a later reader does not
 mistake it for solved: the run-level conclusion stays green while the
 check-run goes red, so `gh run list` shows an unbroken history across a
-run whose gate did nothing. That is a property of the `continue-on-error`
-in the advisory recipe rather than of this action.
+run whose gate did nothing. That was a property of the `continue-on-error`
+the pre-advisory recipe carried on every step, README.md's own "Running the
+gates as an advisory check" section before it was rewritten to use
+`advisory: true` instead; the section below records the replacement and the
+one thing it deliberately does not fix, which is that this whole class of
+problem is now closed at the source (a crashed gate stays exit 2, so it
+never reaches `continue-on-error` at all) rather than by swallowing it
+downstream.
+
+## advisory maps exit 1 to exit 0, and never touches exit 2
+
+New in the advisory-mode fix. `conductor run --advisory` and the Action's
+matching `advisory` input exist because "advisory" had come to mean two
+different things in this repository's own README: "findings do not block"
+in the flag's own name, and "the step cannot fail" in the recipe that set
+`continue-on-error: true` on every step including the umbrella's own. Those
+are not the same promise. A crashed `npm audit signatures` and a blocking
+finding both produce a non-zero exit from the gates step, and
+`continue-on-error` cannot tell them apart: it swallowed both alike, which
+is how a genuine crash read as nothing wrong for three days (issue #36,
+recorded in the 0.4.6 entry above this one).
+
+THE MAPPING IS ONE LINE AND DELIBERATELY NARROW (`applyAdvisory`,
+src/cli.ts): `advisory && exitCode === EXIT_BLOCKED ? EXIT_OK : exitCode`.
+EXIT_BLOCKED is the only code ever rewritten, and it is only ever rewritten
+to EXIT_OK. EXIT_COULD_NOT_RUN (2) passes through unchanged whatever
+`advisory` says, because a gate that could not run has not verified
+anything, which is the one fact `composeExitCode` already treats as
+outranking everything else (src/exit-codes.ts:72-81, and the comment above
+it). Advisory mode is not permitted to reopen that hole from a different
+angle.
+
+THE PROCESS EXIT CODE AND THE VERDICT LINE ARE DECIDED FROM THE SAME
+`result.exitCode`, deliberately, so they cannot say two different things
+about one run. `applyAdvisory` in src/cli.ts sets `process.exitCode`;
+`verdictForRun`'s own `advisory` branch in src/output-text.ts rewrites only
+the wording of the EXIT_BLOCKED verdict, appending "Findings were advisory
+and did not block" rather than composing a new sentence, and both call
+sites in `renderText` pass the identical `Boolean(options.advisory)` that
+was threaded in from the same command-line flag. Neither function reads the
+other's output: they agree because they are both fed from the one flag and
+the one `RunResult.exitCode`, not because one checks the other.
+
+NOTHING ABOUT A FINDING ITSELF CHANGES. Every finding's own `blocking` flag,
+its severity, and the per-gate section's `BLOCKING` marker in the text
+report are printed exactly as they are without the flag; `--advisory` is
+read nowhere in gate-runner.ts, run.ts or normalize.ts, only in cli.ts (the
+exit code) and output-text.ts (the verdict sentence). A reader scrolling up
+from an exit-0 verdict still sees BLOCKING findings above it, the same
+asymmetry an unenforced gate's exit-0-with-BLOCKING-on-screen report already
+has (see "An unenforced gate is filtered out" above) and for the same
+reason: the report says what was found, and a flag about the exit code must
+not quietly rewrite that.
+
+SARIF HAS NO EQUIVALENT LINE TO REWRITE, so it is not touched at all. There
+is no verdict sentence in a SARIF log, only per-result `properties.blocking`
+(the gate's own decision, carried through normalize.ts unchanged) and the
+umbrella run's `invocations[0].executionSuccessful` (whether every gate ran,
+which --advisory does not affect either). A consumer parsing SARIF for a
+pass/fail signal was already expected to read `properties.blocking` per
+result rather than infer one from the file's presence, so there is nothing
+here for the flag to rewrite; this was a decision made while implementing
+the flag, not an oversight discovered afterward.
+
+THE ACTION PASSES THE SAME FLAG TO BOTH INVOCATIONS THAT RENDER A REPORT.
+The gates step gets it unconditionally from the `advisory` input
+(`ADVISORY: ${{ inputs.advisory }}`, gated with the same
+`if [ "${ADVISORY:-}" = "true" ]` text in both scripts); the pr-comment
+step mirrors it exactly, spelled the same way, so a sticky comment's own
+"verdict: exit 0" or "verdict: exit 1" line agrees with the job's actual
+exit code rather than reporting the pre-advisory sentence beside a job that
+no longer fails the same way. This is the same "mirror whatever you gave
+the Action" rule the pull-request trust boundary section above already
+states for `--base`/`--trust-base`/`--spec`; advisory joins that list.
+
+Pinned by "says exit 1 and never mentions advisory when the flag is not
+passed" and "says exit 0 and that findings were advisory when the flag is
+passed" in tests/output-text.test.ts, plus "leaves exit 2 alone: advisory
+only maps exit 1, never a could-not-run verdict" in the same file for the
+load-bearing asymmetry. End to end through the CLI: "maps a blocking run to
+exit 0 with the advisory wording, and pins the same run at exit 1 without
+the flag" and "leaves a could-not-run gate at exit 2, the load-bearing case
+advisory must never touch" in tests/cli.test.ts. The Action's own wiring:
+"adds --advisory to the gates invocation only when the input is exactly
+'true'" in tests/action.test.ts, and "adds --advisory to the render run
+only when the input is exactly 'true', proven by running the step" in
+tests/action-pr-comment.test.ts, both of which run the real step script
+against a conductor stub that records its argv rather than pattern-matching
+the YAML, following the same device tests/action.test.ts already uses for
+the trust-base fetch guard (commit f32c638, "Parse action.yml instead of
+matching lines in it"). The README's own advisory recipe is pinned by
+"uses advisory: true, keeps timeout-minutes, and never continue-on-error in
+the recipe itself" in tests/action-pr-comment.test.ts, scoped to the fenced
+code block rather than the surrounding prose, which is the one place in the
+section still allowed to name the setting it replaced.

@@ -455,6 +455,64 @@ describe('a run that is not fully clean prints the full report', () => {
   });
 });
 
+describe('the advisory option maps a blocking verdict to exit 0 in the text report', () => {
+  // TextOptions.advisory never touches the RunResult itself: the exit code
+  // the gates actually produced stays 1 here, exactly as it does without the
+  // flag. What changes is only how the verdict LINE reads, because the
+  // process exit is decided in cli.ts from this same RunResult.exitCode, not
+  // from anything renderText returns. A findings-blocked run is reused so
+  // this test and its sibling below are the pinned pair the brief asks for.
+  const blocked = result(
+    [outcome({ exitCode: 1, findings: depGuard.findings, run: depGuard.run })],
+    1
+  );
+
+  it('says exit 1 and never mentions advisory when the flag is not passed', () => {
+    // The existing behaviour, pinned in the same test as its advisory sibling
+    // below so the pair cannot drift apart.
+    const text = renderText(blocked);
+    expect(text).toMatch(/BLOCKING/);
+    expect(text).toMatch(/^verdict: exit 1, 2 blocking finding\(s\) across 1 gate\(s\)\.$/m);
+    expect(text.toLowerCase()).not.toMatch(/advisory/);
+  });
+
+  it('says exit 0 and that findings were advisory when the flag is passed', () => {
+    // Findings still print as BLOCKING in the per-gate section: advisory
+    // changes the verdict's own exit-code claim, never what the gate found.
+    // Mutation proof: deleting the `advisory` branch in verdictForRun (falling
+    // through to the exit 1 wording unconditionally) turns this red, because
+    // the verdict line would then read "exit 1" with no mention of advisory.
+    const text = renderText(blocked, { advisory: true });
+    expect(text).toMatch(/BLOCKING/);
+    expect(text).toMatch(/dep-guard\/typosquat/);
+    expect(text).toMatch(/^verdict: exit 0, 2 blocking finding\(s\) across 1 gate\(s\)\. Findings were advisory and did not block/m);
+  });
+
+  it('leaves exit 2 alone: advisory only maps exit 1, never a could-not-run verdict', () => {
+    // The load-bearing asymmetry: --advisory is about a FINDING, never about
+    // a gate that did not run. Mutation proof: making the advisory branch
+    // apply whenever `advisory` is true, without also checking
+    // `result.exitCode === EXIT_BLOCKED`, turns this red because the exit 2
+    // verdict would then also read "exit 0".
+    const brokenResult = result(
+      [
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: null,
+          exitCode: null,
+          binary: null,
+          couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          findings: [normalizeMissingGate('intent', 'intent-guard', ['intent-guard'])],
+        }),
+      ],
+      2
+    );
+    const text = renderText(brokenResult, { advisory: true });
+    expect(text).toMatch(/^verdict: exit 2, a gate could not run/m);
+  });
+});
+
 describe('a gate that blocked but is not enforced', () => {
   const text = renderText(
     result(
