@@ -255,9 +255,11 @@ function reservedReason(product: Product, key: string): string {
   }
   if (product === 'dep-guard' && key === 'base') {
     return (
-      'The umbrella never passes --base to this gate; it passes --staged, and a base here ' +
-      'would fight it over which change set is being scanned. Use the umbrella own --staged, ' +
-      'or leave it off to scan the working tree.'
+      "On a pull-request run the umbrella writes --base to this gate itself, pointing at the " +
+      'same ref as --trust-base, so a value here would be a second writer of the flag that ' +
+      'decides what changed. Outside pull-request mode, or on a staged run, the umbrella ' +
+      "passes --staged instead, and a base here would fight it: dep-guard's own CLI refuses " +
+      '--staged and --base together. Leave it off; the umbrella decides it either way.'
     );
   }
   if (product === 'vault-guard' && key === 'format') {

@@ -332,11 +332,13 @@ describe('the reserved option list against the flags the umbrella writes', () =>
    * message parsePolicy raises.
    */
   const RESERVED_WITHOUT_WRITING: Record<Product, string[]> = {
-    // The umbrella passes --staged. A policy-supplied base would fight it.
-    // trust-base is no longer an exception here: it was reserved ahead of
-    // the flag being written for this gate, and now the umbrella writes it,
-    // so the derived direction covers it like any other flag.
-    'dep-guard': ['base'],
+    // base is no longer an exception here either: on a pull-request run
+    // (trust base decided, not staged) the umbrella now writes --base to
+    // dep-guard itself, the same as it does --trust-base, so the derived
+    // direction covers it like any other flag. It stays reserved on a
+    // staged run too, where dep-guard's own CLI refuses --staged together
+    // with --base.
+    'dep-guard': [],
     // The umbrella writes the same option under its short name, -f.
     'vault-guard': ['format'],
     // The umbrella passes --paths, and a --base would be resolved against a
@@ -363,6 +365,49 @@ describe('the reserved option list against the flags the umbrella writes', () =>
         extra: [...RESERVED_WITHOUT_WRITING[product]].sort(),
       });
     }
+  });
+});
+
+describe('gateArgs, --base on a pull-request run', () => {
+  function gateFor(role: GateRole): GatePolicy {
+    return {
+      role,
+      product: PRODUCT_FOR_ROLE[role],
+      enabled: true,
+      stage: 'commit',
+      enforce: true,
+      excludedByCli: false,
+      options: {},
+    };
+  }
+
+  it('gives dep-guard both --trust-base and --base, naming the same ref, when trust base is decided and the run is not staged', () => {
+    const argv = gateArgs(gateFor('dependencies'), false, undefined, 'origin/main');
+    expect(argv).toContain('--trust-base');
+    expect(argv[argv.indexOf('--trust-base') + 1]).toBe('origin/main');
+    expect(argv).toContain('--base');
+    expect(argv[argv.indexOf('--base') + 1]).toBe('origin/main');
+  });
+
+  it('gives a staged dep-guard run --staged and no --base, since the CLI refuses the two together', () => {
+    const argv = gateArgs(gateFor('dependencies'), true, undefined, 'origin/main');
+    expect(argv).toContain('--staged');
+    expect(argv).not.toContain('--base');
+    // --trust-base is unaffected: it says whose config is trusted, not what
+    // changed, so it is orthogonal to --staged.
+    expect(argv).toContain('--trust-base');
+  });
+
+  it('gives vault-guard no --base on a pull-request run, only --trust-base', () => {
+    const argv = gateArgs(gateFor('secrets'), false, undefined, 'origin/main');
+    expect(argv).toContain('--trust-base');
+    expect(argv).not.toContain('--base');
+  });
+
+  it('gives intent-guard no --base on a pull-request run, only --trust-base', () => {
+    const argv = gateArgs(gateFor('intent'), false, undefined, 'origin/main');
+    expect(argv).toContain('--trust-base');
+    expect(argv).not.toContain('--base');
   });
 });
 

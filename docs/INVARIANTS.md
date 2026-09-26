@@ -1278,10 +1278,16 @@ nothing, and concluding the rejection is a bug in this tool
   no repository in it (src/policy.ts:248-255). Pinned by
   tests/policy.test.ts:211 and 231, the second of which asserts the
   message names `--paths`.
-- `base` on the dependency gate, because the umbrella passes `--staged`
-  and a policy-supplied base would fight it (src/policy.ts:256-262).
-  Pinned by tests/policy.test.ts:258, which asserts the message names
-  `--staged`.
+- `base` on the dependency gate, because on a pull-request run the
+  umbrella now writes `--base` to dep-guard itself, pointing at the same
+  ref as `--trust-base` (dep-guard issue #62; src/gate-runner.ts, the
+  dep-guard branch of `gateArgs`); on a staged run it instead passes
+  `--staged`, and a policy-supplied base would fight that, since
+  dep-guard's own CLI refuses `--staged` and `--base` together
+  (src/policy.ts:256-263). Pinned by tests/policy.test.ts:258, which
+  asserts the message names `--staged`, and by the new `gateArgs, --base
+  on a pull-request run` describe block, which asserts the umbrella's own
+  `--base` and `--trust-base` name the same ref.
 - `format` on the secrets gate, because the umbrella writes that option
   under its SHORT name, `-f json` (src/policy.ts:263-269). Pinned by
   tests/policy.test.ts:244, which asserts the message names `-f`.
@@ -1301,14 +1307,19 @@ every flag `gateArgs` writes is in `RESERVED_OPTIONS`, and a flag added
 to `gateArgs` and forgotten in the list turns that test red rather than
 letting a policy file write the same flag a second time.
 
-The other direction cannot be derived, because the three keys above are
-reserved WITHOUT the umbrella writing them. Those are listed by hand in
+The other direction cannot be derived for the keys that are reserved
+WITHOUT the umbrella writing them. Those are listed by hand in
 `RESERVED_WITHOUT_WRITING` (tests/policy.test.ts:334-345) and held to
-exactly those three by tests/policy.test.ts:356, so a fourth cannot be
-added without somebody writing down why. That list is still hand
-maintained, but it is three entries long rather than the whole table, it
-is held against the derived set rather than restated beside it, and each
-of its three has its own message test above.
+exactly that set by tests/policy.test.ts:356, so a new one cannot be
+added without somebody writing down why. **UPDATED (dep-guard issue #62):**
+`dep-guard`'s entry moved from `['base']` to `[]` when the umbrella
+started writing `--base` to dep-guard on a pull-request run; `base` on
+dep-guard is now derived, like `trust-base` was before it, and only
+`vault-guard`'s `format` and `intent-guard`'s `base` remain hand
+maintained. That list is still hand maintained, but it is two entries
+long rather than the whole table, it is held against the derived set
+rather than restated beside it, and each of the two has its own message
+test above.
 
 ## Stages are cumulative, and a gate the filter holds back is never resolved
 
