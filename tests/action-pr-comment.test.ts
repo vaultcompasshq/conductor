@@ -72,6 +72,7 @@ function runPrCommentScript(
   stderr: string;
   nodeArgv: string[];
   conductorRan: boolean;
+  conductorArgv: string[];
   reportBody: string;
 } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-pr-comment-step-'));
@@ -102,12 +103,17 @@ function runPrCommentScript(
     // A no-op stand-in for the real conductor CLI, so the second gates run
     // this step performs succeeds without needing a real scan. It leaves a
     // marker so a test can prove the render run was SKIPPED rather than only
-    // that the script mentions skipping it.
+    // that the script mentions skipping it, and records its own argv so a
+    // test can prove which flags actually reached it.
     const conductorRanMarker = path.join(dir, 'conductor-ran');
+    const conductorArgvFile = path.join(dir, 'conductor-argv.txt');
+    writeFileSync(conductorArgvFile, '');
     const conductorShim = path.join(bin, 'conductor');
     writeFileSync(
       conductorShim,
-      `#!/bin/sh\nprintf 'ran\\n' >> ${JSON.stringify(conductorRanMarker)}\nexit 0\n`,
+      `#!/bin/sh\nprintf 'ran\\n' >> ${JSON.stringify(conductorRanMarker)}\n` +
+        `for arg in "$@"; do printf '%s\\n' "$arg" >> ${JSON.stringify(conductorArgvFile)}; done\n` +
+        'exit 0\n',
     );
     chmodSync(conductorShim, 0o755);
 
@@ -133,11 +139,15 @@ function runPrCommentScript(
         PR_NUMBER: '42',
         GITHUB_REPOSITORY: 'acme/widgets',
         PR_COMMENT_MARKER: '',
+        ADVISORY: 'false',
         ...extraEnv,
       },
     });
 
     const nodeArgv = readFileSync(record, 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+    const conductorArgv = readFileSync(conductorArgvFile, 'utf8')
       .split('\n')
       .filter((line) => line.length > 0);
 
@@ -155,6 +165,7 @@ function runPrCommentScript(
       stderr: result.stderr ?? '',
       nodeArgv,
       conductorRan: existsSync(conductorRanMarker),
+      conductorArgv,
       reportBody,
     };
   } finally {
@@ -331,6 +342,67 @@ describe('action.yml: the pr-comment step', () => {
   });
 });
 
+describe('action.yml: the pr-comment step mirrors --advisory', () => {
+  // The comment step re-runs the umbrella purely to render text, so its
+  // rendered verdict has to say the same thing the gates step's own exit
+  // code says. Without this, --advisory would map the job's exit code to 0
+  // while the sticky comment still read "exit 1", the same class of
+  // contract this file's "mirrors the gates step's own pull-request-mode
+  // derivation exactly" test already guards for --base/--trust-base/--spec.
+
+  it('reads the advisory input from the environment, not by expanding it into the script', () => {
+    expect(stepEnv('pr-comment').ADVISORY).toBe('${{ inputs.advisory }}');
+    expect(prCommentScript).not.toMatch(/\$\{\{\s*inputs\.advisory/);
+  });
+
+  it('mirrors the gates step\'s own advisory wiring, spelled the same way', () => {
+    const gatesScript = steps.find((step) => step.id === 'gates')?.run ?? '';
+    expect(gatesScript).toContain('if [ "${ADVISORY:-}" = "true" ]');
+    expect(prCommentScript).toContain('if [ "${ADVISORY:-}" = "true" ]');
+  });
+
+  it(
+    'adds --advisory to the render run only when the input is exactly "true", proven by running the step',
+    () => {
+      // Mutation proof: dropping the guard around `ARGS+=(--advisory)` in the
+      // pr-comment step (always appending it, or never appending it) turns
+      // one of these two red without touching the other. Changing the
+      // comparison to `!= "false"`, or to an alternation like
+      // `= "true" || = "yes"`, would pass both of these unchanged; see the
+      // near-miss test below for what actually catches that.
+      // VERIFICATION_OK is set so the render run actually happens; see the
+      // verification-branch tests above, which prove the render is skipped
+      // otherwise.
+      const on = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: 'true' });
+      expect(on.status).toBe(0);
+      expect(on.conductorRan).toBe(true);
+      expect(on.conductorArgv).toContain('--advisory');
+
+      const off = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: 'false' });
+      expect(off.status).toBe(0);
+      expect(off.conductorRan).toBe(true);
+      expect(off.conductorArgv).not.toContain('--advisory');
+    }
+  );
+
+  it(
+    'never adds --advisory to the render run for a near-miss value: wrong case, a truthy-looking word, "1", or empty',
+    () => {
+      // The actual mutation this exercise caught in review: changing the
+      // pr-comment step's guard from `[ "${ADVISORY:-}" = "true" ]` to
+      // `[ "${ADVISORY:-}" != "false" ]` (or to `= "true" || = "yes"`) left
+      // the test above fully green, because it only ever drove 'true' and
+      // 'false'.
+      for (const value of ['TRUE', 'yes', '1', '']) {
+        const result = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: value });
+        expect([value, result.status]).toEqual([value, 0]);
+        expect([value, result.conductorRan]).toEqual([value, true]);
+        expect([value, result.conductorArgv.includes('--advisory')]).toEqual([value, false]);
+      }
+    }
+  );
+});
+
 describe('action.yml: pr-comment-marker input', () => {
   it('exists and defaults to empty, so an existing consumer sees no behaviour change', () => {
     expect(action.inputs?.['pr-comment-marker']).toBeDefined();
@@ -386,5 +458,61 @@ describe('README documents the pr-comment input', () => {
     expect(readme).toMatch(/pr-comment/);
     expect(readme).toMatch(/pull-requests:\s*write/);
     expect(readme.toLowerCase()).toMatch(/fork/);
+  });
+});
+
+describe('README documents the advisory recipe without continue-on-error', () => {
+  // The section's own two headings bound the whole section, which is where
+  // the sticky-comment and permissions guidance lives. The recipe itself,
+  // the thing a reader actually copy-pastes, is the narrower span between
+  // the fenced code block's own start and end markers, ```yaml and the
+  // matching closing ```: the prose around it explains, in the two required
+  // sentences, why an EARLIER recipe carried continue-on-error and this one
+  // does not, and that explanation necessarily names the term it is
+  // contrasting against. The recipe's own YAML is where the term must
+  // actually be absent.
+  const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  const sectionStart = readme.indexOf('### Running the gates as an advisory check');
+  const sectionEnd = readme.indexOf('### Adopting conductor');
+  const section = readme.slice(sectionStart, sectionEnd);
+  const recipeStart = section.indexOf('```yaml');
+  const recipeEnd = section.indexOf('```', recipeStart + '```yaml'.length) + '```'.length;
+  const recipe = section.slice(recipeStart, recipeEnd);
+
+  it('finds the section and the recipe inside it', () => {
+    expect(sectionStart).toBeGreaterThan(-1);
+    expect(sectionEnd).toBeGreaterThan(sectionStart);
+    expect(recipeStart).toBeGreaterThan(-1);
+    expect(recipeEnd).toBeGreaterThan(recipeStart);
+  });
+
+  it('explains why in two sentences naming both the flag and the failure it replaces', () => {
+    // The two required sentences: findings never fail the job under
+    // advisory: true, but a gate that could not run still does, so a
+    // crashed install or a missing policy still shows red. This is the one
+    // place in the section prose (outside the recipe itself) that is allowed
+    // to name continue-on-error, because it is explaining what the recipe no
+    // longer uses and why.
+    const prose = section.slice(0, recipeStart);
+    expect(prose).toMatch(/advisory:\s*true/);
+    expect(prose.toLowerCase()).toMatch(/never fail/);
+    expect(prose.toLowerCase()).toMatch(/could not run/);
+    expect(prose).toMatch(/continue-on-error/);
+  });
+
+  it('uses advisory: true, keeps timeout-minutes, and never continue-on-error in the recipe itself', () => {
+    // Mutation proof: restoring any one `continue-on-error: true` line inside
+    // the fenced recipe (as the pre-advisory recipe had on every step) turns
+    // the negative assertion red on its own; removing `advisory: true` or
+    // `timeout-minutes` from the recipe turns the matching positive
+    // assertion red without touching the others.
+    expect(recipe).toMatch(/advisory:\s*true/);
+    expect(recipe).toMatch(/timeout-minutes/);
+    expect(recipe).not.toMatch(/continue-on-error/);
+  });
+
+  it('keeps the sticky-comment and permissions guidance the old recipe carried', () => {
+    expect(section).toMatch(/pr-comment:\s*true/);
+    expect(section).toMatch(/pull-requests:\s*write/);
   });
 });

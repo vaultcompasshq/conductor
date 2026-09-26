@@ -143,6 +143,13 @@ version. Check that the two agree: the Action must not install a build
 below the floor that table sets, or every adopter's pull request reports
 that gate as could-not-run.
 
+A change that adds an Action input the CLI must understand to act on, the
+`advisory` input and `--advisory` flag being the example on record, is always
+a package release, never an action-only one: an action-only tag ships the
+package version already published, so a tag that moved ahead offering an
+input the installed umbrella does not parse would hand it an unknown flag,
+which exits 2 rather than doing what the input promised.
+
 ### Every release after that
 
 Open a pull request that bumps the version everywhere the list above names.

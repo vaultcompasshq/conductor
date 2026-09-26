@@ -12,7 +12,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { EXIT_COULD_NOT_RUN } from './exit-codes.js';
+import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, EXIT_OK } from './exit-codes.js';
 import {
   applyInit,
   planInit,
@@ -100,6 +100,29 @@ interface RunCliOptions {
   output?: string;
   verbose?: boolean;
   compactOnRefusal?: boolean;
+  advisory?: boolean;
+}
+
+/**
+ * The process exit code for a run, with --advisory applied.
+ *
+ * ONE PLACE, so the mapping cannot drift from what the verdict line claims:
+ * this reads the same `result.exitCode` that `renderText`'s own `advisory`
+ * option reads, and the two are always passed the same boolean from the same
+ * call site below.
+ *
+ * ONLY EXIT_BLOCKED (1) IS EVER REMAPPED, and only to EXIT_OK (0). A gate
+ * that could not run (2) is left exactly alone: "advisory" means a finding
+ * does not block, never that the umbrella cannot fail. Swallowing a
+ * could-not-run exit is the precise failure this flag exists to close (a
+ * crashed `npm audit signatures` read as nothing wrong for two days,
+ * issue #36, because every step carried `continue-on-error` instead of a
+ * flag that only ever touches a FINDING's verdict). Any other code -- there
+ * is none today besides 0, 1 and 2, but a future one would land here too --
+ * passes through unchanged for the same reason.
+ */
+function applyAdvisory(exitCode: number, advisory: boolean): number {
+  return advisory && exitCode === EXIT_BLOCKED ? EXIT_OK : exitCode;
 }
 
 /**
@@ -393,6 +416,10 @@ export function buildProgram(): Command {
       'restrict the run to this role; repeatable',
       (value: string, previous: string[] = []) => [...previous, value]
     )
+    .option(
+      '--advisory',
+      'maps exit 1 (every enabled gate ran and at least one blocked) to exit 0, so a blocking finding never fails this run. A gate that could not run is unaffected and still exits 2: advisory changes what a FINDING does, never what a broken gate does. The report is unchanged and a blocking finding still prints as BLOCKING; only the process exit code and the verdict line, which says findings were advisory, are different.'
+    )
     .exitOverride()
     .action((options: RunCliOptions) => {
       const cwd = process.cwd();
@@ -428,6 +455,12 @@ export function buildProgram(): Command {
                 ...(source.trustBase === undefined ? {} : { trustBase: source.trustBase }),
               });
 
+        const advisory = Boolean(options.advisory);
+
+        // SARIF carries no verdict line, so --advisory has nothing to say
+        // there: each finding's `properties.blocking` is the gate's own
+        // decision (see output-sarif.ts) and is unaffected by this flag,
+        // exactly as the text report's per-finding BLOCKING marker is.
         const rendered =
           format === 'sarif'
             ? `${renderSarif(result, pkg.version)}\n`
@@ -435,6 +468,7 @@ export function buildProgram(): Command {
                 verbose: Boolean(options.verbose),
                 version: pkg.version,
                 compact: Boolean(options.compactOnRefusal),
+                advisory,
               });
 
         if (options.output === undefined) {
@@ -453,7 +487,7 @@ export function buildProgram(): Command {
               `${format} report written to ${options.output}\n`
           );
         }
-        process.exitCode = result.exitCode;
+        process.exitCode = applyAdvisory(result.exitCode, advisory);
       } catch (err) {
         // One line, never a stack. runGate is total, so nothing from a gate
         // reaches here; anything that does is the umbrella's own problem and

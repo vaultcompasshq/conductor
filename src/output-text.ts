@@ -420,21 +420,23 @@ function refusalLines(result: RunResult): string[] {
   ];
 }
 
-function verdict(result: RunResult): string {
+function verdict(result: RunResult, advisory: boolean): string {
   const refusal = result.trustBase?.refusal;
   if (refusal !== undefined && refusal !== null) {
     // Written rather than composed, exactly as the exit code is: no gate ran,
     // so there is nothing for the clauses below to count, and every one of
-    // them would describe a different run from the one that happened.
+    // them would describe a different run from the one that happened. A
+    // refusal is a could-not-run outcome (exit 2), which --advisory never
+    // touches, so this branch reads advisory or not exactly the same.
     return (
       `verdict: exit 2, the trust base "${result.trustBase?.ref ?? ''}" could not be used, ` +
       'so no gate ran and nothing here is a result of any kind.'
     );
   }
-  return verdictForRun(result);
+  return verdictForRun(result, advisory);
 }
 
-function verdictForRun(result: RunResult): string {
+function verdictForRun(result: RunResult, advisory: boolean): string {
   // Counted over ENFORCED gates only. The exit code came from those alone,
   // so a count taken over all of them describes a different run from the one
   // the number at the front of the line is about, and the umbrella's own
@@ -500,18 +502,38 @@ function verdictForRun(result: RunResult): string {
     // on the one line somebody reads when they read nothing else contradicts
     // the exit code printed beside it, and sends a reader looking for a
     // finding that this report deliberately does not claim.
+    //
+    // ADVISORY ONLY EVER REWRITES THIS ONE BRANCH. The process's own exit
+    // code is decided in cli.ts by mapping EXIT_BLOCKED to EXIT_OK when
+    // --advisory was given; this function never changes result.exitCode
+    // itself, so a could-not-run verdict a few lines up is untouched
+    // whatever `advisory` says. The findings above this line still print
+    // with their BLOCKING marker: advisory changes what the exit code
+    // claims, never what a gate found.
     if (blocking === 0) {
+      // The mismatch branch: composeExitCode also lands here when an
+      // enforced gate exited non-zero but nothing reconciled as a blocking
+      // finding (conductor/blocking-count-mismatch or
+      // conductor/blocking-threshold-unknown; see normalize.ts). "Findings
+      // were advisory and did not block" would claim a finding this branch
+      // explicitly says there is none of, so it gets its own, narrower
+      // wording that is true here and says nothing about findings at all.
       const names = enforcedGates
         .filter((gate) => (gate.exitCode ?? 0) !== 0)
         .map((gate) => `${gate.role} (exit ${gate.exitCode ?? '?'})`)
         .join(', ');
-      return (
-        `verdict: exit 1, and no finding here is marked blocking. Enforced gate(s) that exited ` +
+      const base =
+        `and no finding here is marked blocking. Enforced gate(s) that exited ` +
         `non-zero: ${names}. The umbrella could not reconcile a blocking count with what those ` +
-        `gates reported, so the gate exit code decided the run.${aside}`
-      );
+        `gates reported, so the gate exit code decided the run.${aside}`;
+      return advisory
+        ? `verdict: exit 0, ${base} This run was advisory, so exit 1 became exit 0.`
+        : `verdict: exit 1, ${base}`;
     }
-    return `verdict: exit 1, ${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
+    const base = `${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
+    return advisory
+      ? `verdict: exit 0, ${base} Findings were advisory and did not block, so this run exits 0 rather than 1.`
+      : `verdict: exit 1, ${base}`;
   }
 
   // Exit 0 with red on the screen above it. The verdict is the one line
@@ -566,6 +588,22 @@ export interface TextOptions {
    * fires when the trust base was actually refused, whatever --verbose says.
    */
   compact?: boolean;
+
+  /**
+   * Maps an EXIT_BLOCKED verdict to exit 0 in the printed verdict line, and
+   * says so in words. This never touches the RunResult passed in: the exit
+   * code composed for this run (`result.exitCode`) is unchanged, and so is
+   * every finding's own `blocking` marker in the sections above the verdict.
+   * `cli.ts` is what actually maps the PROCESS exit code, from the same
+   * `result.exitCode` this option reads; this flag exists so the one line a
+   * reader is most likely to read alone does not contradict the exit code
+   * the process is about to produce.
+   *
+   * Has no effect on any other verdict shape: a could-not-run run (exit 2)
+   * reads the same whatever this says, because advisory is about a finding
+   * that did not block, never about a gate that did not run.
+   */
+  advisory?: boolean;
 }
 
 /**
@@ -776,7 +814,11 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     // "conductor init", or reading the pull request's own file as a
     // proposal) as part of the same sentence. Nothing here points at a step
     // log: the reason has to be readable on the comment itself.
-    const lines: string[] = [...versionLine(options.version), verdict(result), ...refusal];
+    const lines: string[] = [
+      ...versionLine(options.version),
+      verdict(result, Boolean(options.advisory)),
+      ...refusal,
+    ];
     return `${lines.join('\n')}\n`;
   }
 
@@ -820,6 +862,6 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     lines.push('', '* severity assigned by the umbrella; that gate reports no per-finding severity.');
   }
 
-  lines.push('', verdict(result));
+  lines.push('', verdict(result, Boolean(options.advisory)));
   return `${lines.join('\n')}\n`;
 }

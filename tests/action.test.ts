@@ -166,6 +166,109 @@ describe('action.yml', () => {
 });
 
 /**
+ * The `advisory` input: findings never fail the run, a gate that could not
+ * run always does. The gates step's own ARGS array is what actually
+ * decides this, so it is proven here by RUNNING that script with a
+ * conductor stub that records its argv, not by pattern-matching the YAML.
+ */
+describe('action.yml: the advisory input', () => {
+  it('exists, defaults to "false", so an existing consumer is unaffected', () => {
+    expect(action.inputs?.advisory).toBeDefined();
+    expect(action.inputs?.advisory?.default).toBe('false');
+  });
+
+  it('documents that a gate which could not run is unaffected', () => {
+    const description = String(action.inputs?.advisory?.description ?? '');
+    expect(description.toLowerCase()).toMatch(/could not run/);
+  });
+
+  /**
+   * Runs the real gates step script with `conductor` replaced by a stub that
+   * records its own argv, so the wiring from the input's env var to the
+   * built ARGS array is proven by execution rather than a substring match.
+   * No git needed: GITHUB_BASE_REF is left empty, so the trust-base fetch
+   * branch is never reached.
+   */
+  function runGatesForAdvisory(advisory: string): { status: number; argv: string[] } {
+    const dir = tempDir();
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const record = path.join(dir, 'conductor-argv.txt');
+    writeFileSync(record, '');
+    const conductorShim = path.join(bin, 'conductor');
+    writeFileSync(
+      conductorShim,
+      `#!/bin/sh\nfor arg in "$@"; do printf '%s\\n' "$arg" >> ${JSON.stringify(record)}; done\nexit 0\n`
+    );
+    chmodSync(conductorShim, 0o755);
+    const githubOutput = path.join(dir, 'github-output.txt');
+    writeFileSync(githubOutput, '');
+
+    const result = spawnSync('bash', ['-c', gatesScript], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        CONDUCTOR_BIN: conductorShim,
+        GITHUB_OUTPUT: githubOutput,
+        GITHUB_EVENT_PATH: '',
+        GITHUB_BASE_REF: '',
+        GITHUB_HEAD_REF: '',
+        BASE_REF: '',
+        TRUST_BASE: '',
+        SPEC: '',
+        STAGE: 'ci',
+        OUTPUT: 'conductor.sarif',
+        WORKDIR: '.',
+        ADVISORY: advisory,
+      },
+    });
+    return {
+      status: result.status ?? -1,
+      argv: readFileSync(record, 'utf8').split('\n').filter((line) => line.length > 0),
+    };
+  }
+
+  it(
+    'adds --advisory to the gates invocation only when the input is exactly "true"',
+    () => {
+      // Mutation proof: dropping the `if [ "${ADVISORY:-}" = "true" ]` guard
+      // (always appending --advisory, or never appending it) turns one of
+      // these two red without touching the other. Changing the comparison to
+      // `!= "false"`, or to an alternation like `= "true" || = "yes"`, would
+      // pass both of these unchanged, which is exactly why the negative
+      // cases below exist: 'false' alone does not distinguish an exact-match
+      // guard from a not-equal-false or a multi-value one.
+      const on = runGatesForAdvisory('true');
+      expect(on.status).toBe(0);
+      expect(on.argv).toContain('--advisory');
+
+      const off = runGatesForAdvisory('false');
+      expect(off.status).toBe(0);
+      expect(off.argv).not.toContain('--advisory');
+    }
+  );
+
+  it(
+    'never adds --advisory for a near-miss value: wrong case, a truthy-looking word, "1", or empty',
+    () => {
+      // The actual mutation this exercise caught in review: changing the
+      // gates step's guard from `[ "${ADVISORY:-}" = "true" ]` to
+      // `[ "${ADVISORY:-}" != "false" ]` (or to `= "true" || = "yes"`) left
+      // the test above fully green, because it only ever drove 'true' and
+      // 'false'. Every value here is something a workflow author could
+      // plausibly type for a boolean-shaped input without it being the exact
+      // string "true" the Action's own YAML boolean semantics require.
+      for (const value of ['TRUE', 'yes', '1', '']) {
+        const result = runGatesForAdvisory(value);
+        expect([value, result.status]).toEqual([value, 0]);
+        expect([value, result.argv.includes('--advisory')]).toEqual([value, false]);
+      }
+    }
+  );
+});
+
+/**
  * Pull-request mode, as the action enters it.
  *
  * Nothing in CI type-checks a workflow file, so the shape of the command line

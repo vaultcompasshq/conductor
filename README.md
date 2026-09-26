@@ -281,6 +281,15 @@ proceeds normally without mentioning them.
   leaves out is named as excluded, on one line in the text report and as a
   `conductor/gate-excluded` notification in the SARIF log's `conductor` run.
   It never reaches the exit code.
+- `--advisory` maps exit 1 to exit 0: a run whose only failure is a blocking
+  finding no longer fails. A gate that could not run is unaffected and still
+  exits 2, so a crashed install or a missing policy still shows red rather
+  than a silent green: this flag changes what a **finding** does, never what
+  a **broken gate** does. The report is unchanged, a blocking finding still
+  prints with its `BLOCKING` marker, and only the process exit and the
+  verdict line's own wording (it says findings were advisory and did not
+  block) change. Text output only; the SARIF log has no verdict line to
+  change and its `properties.blocking` on each result is unaffected.
 
 ### Exit codes
 
@@ -290,6 +299,11 @@ proceeds normally without mentioning them.
   its own could-not-run code, or it exited 1 with nothing parseable on
   stdout, which is what a rejected config file looks like from two of the
   three.
+
+`run --advisory` maps exit 1 to exit 0. It never touches exit 2: a gate that
+could not run is a different failure from a blocking finding, and advisory
+mode exists to leave that one alone. See "Running the gates as an advisory
+check" below.
 
 ## The pull-request trust boundary
 
@@ -747,15 +761,22 @@ workflows do.
 
 ### Running the gates as an advisory check
 
-To run the gates without blocking a merge, set `continue-on-error: true` on the
-`conductor` step and leave the check not required in branch protection. Set a
-step `timeout-minutes` as well. `continue-on-error` swallows a failing exit
-code, but it does not bound a step that hangs: on a required job a stuck run
-still drags the job to its own job-level limit and blocks the very merge the
-advisory setting was meant to leave alone. The Action already caps each gate's
-own subprocess at 120 seconds and reports a gate that exceeds it as
-could-not-run, so a step `timeout-minutes` is an outer bound around the whole
-run rather than the primary control.
+To run the gates without blocking a merge, set `advisory: true` on the
+`conductor` step and leave the check not required in branch protection.
+`advisory: true` maps a blocking finding to exit 0, so it never fails this
+run; a gate that **could not run** is unaffected and still exits 2, so a
+crashed install or a missing policy on the base ref still shows red rather
+than a silent green. That distinction is why the recipe below carries no
+`continue-on-error` anywhere: an earlier version of this recipe put
+`continue-on-error: true` on every step, including the umbrella's own, and a
+transient `npm audit signatures` failure then read as nothing wrong for two
+days (issue #36) because the step's exit code was swallowed regardless of
+which of the two reasons produced it. `advisory` fixes the failure that
+caused that; `continue-on-error` is the thing that let it happen, so the two
+do not belong in the same recipe. Set a step `timeout-minutes` as well: the
+Action already caps each gate's own subprocess at 120 seconds and reports one
+that exceeds it as could-not-run, so the timeout is an outer bound around the
+whole run rather than the primary control.
 
 A complete copy-paste job, rather than the one step above in isolation:
 
@@ -771,39 +792,43 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: true
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
-        continue-on-error: true
         with:
           node-version: '22.11.0'
-      - name: Fetch the base ref
-        continue-on-error: true
-        run: git fetch origin "$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-        env:
-          GITHUB_BASE_REF: ${{ github.base_ref }}
       - id: conductor
-        continue-on-error: true
         timeout-minutes: 5
         uses: vaultcompasshq/conductor@v0.4.6
         with:
           pr-comment: true
+          advisory: true
 ```
 
-Every fallible step above, the checkout, the node setup, the explicit fetch,
-and the conductor step itself, carries `continue-on-error: true`, because a
-required job must never go red over an advisory step that hung or failed.
 `action.yml` already shallow-fetches the trust base itself as of 0.4.5 when
 the checkout does not already carry it (see the changelog entry for that
-version), so the explicit "Fetch the base ref" step above is belt and
-braces, not a requirement; it is here so the recipe still resolves the base
-ref on an action version that predates that self-fetch. `pr-comment: true`
-is what makes the advisory finding visible at all: a `pull_request` check
-that is not required posts nothing anywhere else a developer would look, so
-without it the run's only trace is a green-looking step nobody opens. See
-"The report as a pull request comment" below for what that input needs and
-what it does on a fork.
+version), so this recipe needs no separate "fetch the base ref" step. None of
+the three steps above swallows its own exit code: a checkout or setup-node
+failure is an infrastructure problem this recipe should still surface, and
+the `conductor` step's own advisory behaviour comes from `advisory: true`
+rather than from hiding a failing step, for the reason above. `pr-comment:
+true` is what makes the advisory finding visible at all: a `pull_request`
+check that is not required posts nothing anywhere else a developer would
+look, so without it the run's only trace is a step that exited 0 and nobody
+opens. See "The report as a pull request comment" below for what that input
+needs and what it does on a fork.
+
+`advisory` changes the umbrella's own process exit code only: it does not
+reach the SARIF log, so a GitHub Code Scanning tab shows the same results and
+the same alerts either way, and Code Scanning's own merge protection can
+still block on them regardless of what this step's exit code says. `advisory`
+is also an input on the `conductor` step, which means it is read from the
+pull request's own workflow file on a same-repo `pull_request` event, the
+same as every other input this Action takes; that gives a pull request
+author nothing they could not already do by editing the workflow to add
+`continue-on-error` themselves, and the control for that, as for any workflow
+edit, is branch protection requiring review on `.github/workflows`, not
+anything in `action.yml`.
 
 ### Adopting conductor
 
@@ -816,11 +841,15 @@ steps rather than being surprised by one:
    inside the trust boundary, so it reads the policy you just wrote. This is
    where you tune thresholds, not on a pull request.
 2. Open the pull request with `.guardrails.yaml` and the workflow together,
-   and set `continue-on-error: true` on the conductor step for it. The step
-   is inert on this pull request: the base branch has no policy yet, so the
-   run has no rules, exits 2, and posts a comment saying so with the remedy
-   on it. That is the honest report of an unfinished adoption, not a broken
-   tool.
+   and set `advisory: true` on the conductor step, the same as the advisory
+   recipe above, and leave the check not required in branch protection for
+   this one pull request. The step still exits 2 on this pull request even
+   with `advisory: true`: the base branch has no policy yet, so the run has
+   no rules, and `advisory` never touches that exit code, only a blocking
+   finding's. Leaving the check unrequired is what keeps that expected exit 2
+   from blocking the merge; the step posts a comment saying so with the
+   remedy on it, which is the honest report of an unfinished adoption, not a
+   broken tool.
 3. Merge. Every pull request after that is judged by the policy on the base
    branch, and a change to that policy shows up as a proposal line and takes
    effect after its own merge.
@@ -976,13 +1005,17 @@ came from, so a pull request that plants one gets a clean comment beside a
 SARIF log that refused it.
 
 **Mirror whatever you gave the Action**, or the two runs can report different
-contracts. The step above matches the example, which passes neither
-`base-ref`, `trust-base` nor `spec`, so both runs read `GITHUB_BASE_REF` and
-the `Spec:` line out of the job environment themselves and land on the same
-contract and the same ref. If you set any of those inputs on the gates step,
-pass the same values here as `--base`, `--trust-base` and `--spec`; if you do
-not, the comment is a report of a contract source, or of a boundary, the
-uploaded log never used.
+contracts, or different verdicts. The step above matches the example, which
+passes neither `base-ref`, `trust-base`, `spec` nor `advisory`, so both runs
+read `GITHUB_BASE_REF` and the `Spec:` line out of the job environment
+themselves and land on the same contract and the same ref, and neither one
+maps a blocking finding to exit 0. If you set any of those inputs on the
+gates step, pass the same values here: `--base`, `--trust-base` and `--spec`
+for the first three, and `--advisory` if you set `advisory: true`. Missing
+one of the first three means the comment is a report of a contract source,
+or of a boundary, the uploaded log never used; missing `--advisory` means the
+comment's own verdict line reads "exit 1" underneath a gates step that just
+exited 0, which is confusing in the opposite direction from silence.
 
 **On a pull request from a fork the token is read-only**, so `gh pr comment`
 fails, `continue-on-error` swallows the failure, and no comment appears on
