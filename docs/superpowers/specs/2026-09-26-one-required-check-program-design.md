@@ -81,14 +81,20 @@ These are settled. Reopening one requires a new spec, not a message.
 1. **Could-not-run stays red.** No fail-open on the action's own errors.
    Reaffirms the 2026-09-22 decision. Coupling is answered by decision 2 and
    by the migration protocol in section 6, not by softening exit codes.
-2. **Wrapped tools are pinned by the adopter, not by conductor.** The
-   versions and checksums of external gates live in the repo's own policy
-   file, so the adopter owns the upgrade cadence and one bad upstream release
-   cannot block every repo at once.
+2. **Conductor downloads nothing.** External tools are installed by the
+   adopter's own workflow step, exactly as they are today. The policy file
+   only names them as gates. Conductor runs what is on PATH, parses each
+   tool's JSON report into the combined report, and reports could-not-run if
+   the binary is missing. The adopter therefore owns the version and the
+   upgrade cadence, and no third-party binary ships inside conductor's
+   release.
 3. **vault-guard's scope stands.** No history mode. Full-history secrets
-   scanning comes from wrapping gitleaks as an external gate.
-4. **No vulnerability scanner is reimplemented.** osv-scanner is wrapped.
-   dep-guard #60 (npm audit advisories) is deferred, not closed.
+   scanning comes from gitleaks run as an external gate.
+4. **No vulnerability scanner is reimplemented.** osv-scanner runs as an
+   external gate. dep-guard #60 (npm audit advisories) is deferred, not
+   closed. No known-bad-version blocklist is built: a seven-day publish-age
+   floor covers a compromised release while it matters, and osv-scanner
+   carries malicious-package advisories after the window closes.
 5. **The README carries the thesis in section 1 and nothing else.** The
    day-one framing for empty repos is removed.
 6. **The hook is opt-in.** `conductor init` does not write a pre-commit hook
@@ -107,21 +113,23 @@ Docs-only items get no review gate.
 | # | Repo | Change | Closes | Review |
 |---|------|--------|--------|--------|
 | 1 | dep-guard | Accept a base ref in pull-request mode so tamper signals run on PRs. Small, and it blocks every demo. | #62 | yes |
-| 2 | conductor | External gates: gitleaks in history mode and osv-scanner, each with version and checksum pinned in the policy file. A checksum mismatch or a missing binary is could-not-run. Findings map into the combined report and SARIF like any other gate. This item needs its own implementation plan. | new | yes |
-| 3 | dep-guard | Minimum publish age, default seven days, measured per resolved version's registry publish time, with an allowlist; plus a configurable list of known-bad `name@version` pairs. | #58, new | yes |
-| 4 | conductor | `init` writes no hook by default; a flag opts in. Second-clone behaviour documented. | #48 | yes |
-| 5 | conductor | Job log line reports what ran, not a finding count when nothing ran. | #46 | small |
-| 6 | conductor | README rewrite around the thesis, folding the day-one docs findings. | #43 #44 #45 #47 #49 #50 | no |
+| 2 | conductor | README rewrite around the thesis, folding the day-one docs findings. Claims only what the gates do at the time of writing. | #43 #44 #45 #47 #49 #50 | no |
+| 3 | demo repo | Public demo repo per section 5, with the rows the existing gates can already prove. | none | no |
+| 4 | conductor | External gates: gitleaks in history mode and osv-scanner, run from PATH, named in the policy file, JSON reports parsed into the combined report and SARIF. Missing binary is could-not-run. This item needs its own implementation plan. | new | yes |
+| 5 | dep-guard | Minimum publish age, default seven days, measured per resolved version's registry publish time, with an allowlist. | #58 | yes |
+| 6 | conductor | `init` writes no hook by default; a flag opts in. Second-clone behaviour documented. Same PR: the job log line reports what ran, not a finding count when nothing ran. | #48 #46 | yes |
 
 Ordering rationale: item 1 is a prerequisite for any pull-request demo of
-dep-guard. Item 2 is the only piece that changes conductor's shape and is the
-one that makes "replace your security job" true. Items 3 and 4 are the two
-adopter conditions the family can meet without changing scope. Items 5 and 6
-are docs and can run in parallel with anything after item 1.
+dep-guard. Items 2 and 3 depend on nothing but the thesis and the gates that
+already work, so the proof goes public before the build starts; this is the
+2026-09-22 rule, validate before building, applied to this program. Item 4 is
+the only piece that changes conductor's shape and is the one that makes
+"replace your security job" true. Items 5 and 6 are the two adopter
+conditions the family can meet without changing scope.
 
-Item 2 is the only item that needs a written implementation plan under this
-spec. Items 1, 3, 4 and 5 are bounded changes to code that already exists and
-get a short in-chat design each. Item 6 is docs.
+Item 4 is the only item that needs a written implementation plan under this
+spec. Items 1, 5 and 6 are bounded changes to code that already exists and
+get a short in-chat design each. Items 2 and 3 are docs and setup.
 
 ## 5. Proof
 
@@ -136,8 +144,9 @@ the thesis, each left open so the two checks can be compared:
 
 Expected result: the ordinary job is green on at least three of the four,
 conductor is red on all four. The README opens with that table and links to
-the runs. The demo can start after item 1 using the gates that already work,
-and gains rows as items 2 through 4 land.
+the runs. The demo starts right after item 1 using the gates that already
+work (rows 1, 3 and 4, and row 2 for conductor's own policy file), and gains
+the external-gate rows when item 4 lands.
 
 The demo is the compelling artifact. It replaces the per-repo parity table
 the adopters asked for with something stronger: a table of what their current
@@ -154,7 +163,7 @@ Applies to every adopter, internal or external.
 4. Delete the old job only on that evidence. Keep its configuration in the
    tree for one further release cycle.
 5. After deletion, a canary pull request must turn the required check red on
-   demand. Repeat the canary after every major version of a wrapped tool.
+   demand. Repeat the canary after every major version of an external tool.
 
 The first migration is the internal adopter whose security job was used for
 the parity matrix. The other two internal adopters follow only after that one
@@ -164,6 +173,8 @@ has deleted its job.
 
 - vault-guard history mode.
 - Reimplementing OSV or npm audit matching inside dep-guard.
+- A known-bad-version blocklist in any gate.
+- Conductor downloading, pinning, or checksumming any third-party binary.
 - Fail-open of any kind on the action's own errors.
 - New adversarial controls against human attackers.
 - Any change to the thesis outside a new spec.
@@ -189,14 +200,14 @@ two concurrently. Implementation on the mechanical seat, review on the
 judgment seat, coordination and adjudication on the top seat only. Each item
 in section 4 states its own cost before dispatch.
 
-## 10. Open questions carried into the item 2 plan
+## 10. Open questions carried into the item 4 plan
 
-- How a wrapped tool's findings map to conductor's severity model when the
+- How an external tool's findings map to conductor's severity model when the
   tool has no severity of its own (gitleaks reports match or no match).
 - Whether the adopter's existing gitleaks and osv-scanner config files are
   read from the base ref like conductor's own policy, or from the head.
-- How the policy file expresses a checksum per platform for a binary
-  release.
+- Which report format version of each tool the parser supports, and what
+  conductor does when the installed tool emits a newer one.
 - The "help with costs" intent from the original product brief is assumed to
   mean agent rework bounded by intent-guard's change budgets. If it meant
   something else, it is not served by this program and needs its own spec.
