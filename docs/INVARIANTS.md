@@ -1268,9 +1268,14 @@ trace. Pinned by tests/policy.test.ts:196.
 
 Three keys are reserved for a different reason and each gets its own
 message, because a rejection that gives the wrong reason sends somebody
-looking in the command line for a flag the umbrella never writes, finding
-nothing, and concluding the rejection is a bug in this tool
-(`reservedReason`, src/policy.ts:239-274):
+looking in the command line for a flag that is not there under that name,
+or is not there on every run, and concluding the rejection is a bug in
+this tool (`reservedReason`, src/policy.ts:239-278). Two of the three name
+a flag the umbrella never writes under that name at all; the third,
+dep-guard's `base`, is different: the umbrella DOES write `--base` to
+dep-guard, but only on some runs, so the wrong-reason risk here is someone
+finding `--base` in the command line on a pull-request run and concluding
+the key must be safe to set generally.
 
 - `base` on the intent gate, because the umbrella computes the change set
   itself and passes `--paths`, and a `--base` inside the gate would be
@@ -1278,12 +1283,24 @@ nothing, and concluding the rejection is a bug in this tool
   no repository in it (src/policy.ts:248-255). Pinned by
   tests/policy.test.ts:211 and 231, the second of which asserts the
   message names `--paths`.
-- `base` on the dependency gate, because the umbrella passes `--staged`
-  and a policy-supplied base would fight it (src/policy.ts:256-262).
-  Pinned by tests/policy.test.ts:258, which asserts the message names
-  `--staged`.
+- `base` on the dependency gate, reserved on every run despite the
+  umbrella writing `--base` itself on some of them. On a pull-request run
+  the umbrella writes `--base` to dep-guard itself, pointing at the same
+  ref as `--trust-base` (dep-guard issue #62; src/gate-runner.ts, the
+  dep-guard branch of `gateArgs`), so a policy-supplied value would be a
+  second writer. Otherwise the umbrella writes `--staged` on a staged
+  run, and a policy-supplied base would fight that, since dep-guard's own
+  CLI refuses `--staged` and `--base` together; on a plain run the
+  umbrella writes neither flag, and a policy-supplied base would silently
+  decide what that run compares dependencies against, without going
+  through the trust base the umbrella itself decided
+  (src/policy.ts:256-266). Pinned by tests/policy.test.ts:258, which
+  asserts the message names `--staged`, and by the `gateArgs, --base on a
+  pull-request run` describe block (tests/policy.test.ts:373), which
+  asserts the umbrella's own `--base` and `--trust-base` name the same
+  ref.
 - `format` on the secrets gate, because the umbrella writes that option
-  under its SHORT name, `-f json` (src/policy.ts:263-269). Pinned by
+  under its SHORT name, `-f json` (src/policy.ts:267-273). Pinned by
   tests/policy.test.ts:244, which asserts the message names `-f`.
 
 The last two were recorded here as the prose giving the wrong reason: the
@@ -1291,24 +1308,56 @@ generic sentence said "the umbrella passes that flag to this gate
 itself", which is false of both. The code was the wrong one and both
 messages have been rewritten.
 
+Two more facts about dep-guard's `--base`, recorded for completeness;
+neither changes behaviour.
+
+- Conductor's own `--base <ref>` option (src/cli.ts:390-393) feeds only
+  the intent gate: it becomes `RunOptions.base` (src/run.ts:173) and is
+  passed straight through to `prepareIntent` (src/run.ts:425-429), which
+  resolves it into the base ref the intent gate diffs against.
+  `isPullRequestShaped` (src/run.ts:215-220) reads the same option only to
+  decide whether this run counts as pull-request shaped at all. `--base`
+  never reaches dep-guard, which follows the decided TRUST base instead
+  (`trustBase.ref`, above). So `conductor run --trust-base origin/main
+  --base origin/release` compares intent against `release` and
+  dependencies against `main`, not the same ref for both.
+- `--base` is withheld from dep-guard whenever `--trust-base` is
+  withheld (src/gate-runner.ts:795, the same `trustBase.withheld !==
+  null` check that blanks the ref passed to `gateArgs`), including when
+  dep-guard is older than 0.6.0, the version floor `TRUST_BASE_MIN_VERSION`
+  sets for `--trust-base` (src/gate-runner.ts:96-99). This is broader than
+  `--base` itself needs: unlike `--trust-base`, dep-guard's `--base` has
+  been part of its CLI since the first published version, with no version
+  floor of its own, so every dep-guard version this umbrella can run
+  supports it. It is withheld anyway because the withholding is keyed to
+  the trust decision, not to a floor `--base` has never had.
+
 THE PAIRING IS NOW HELD IN ONE DIRECTION BY DERIVATION AND IN THE OTHER
 BY HAND, and which is which is the whole of the guarantee
-(tests/policy.test.ts:286-367). `flagsWritten` calls `gateArgs`
-(src/gate-runner.ts:423-488, exported for exactly this) over the four
-shapes of run there are and collects every token starting with a dash. So
-the DANGEROUS direction is derived: tests/policy.test.ts:347 asserts that
-every flag `gateArgs` writes is in `RESERVED_OPTIONS`, and a flag added
-to `gateArgs` and forgotten in the list turns that test red rather than
-letting a policy file write the same flag a second time.
+(tests/policy.test.ts:288-371). `flagsWritten` calls `gateArgs`
+(src/gate-runner.ts:423-488, exported for exactly this) over the six
+shapes of run there are, pull-request mode included, and collects every
+token starting with a dash. So the DANGEROUS direction is derived:
+tests/policy.test.ts:356 asserts that every flag `gateArgs` writes is in
+`RESERVED_OPTIONS`, and a flag added to `gateArgs` and forgotten in the
+list turns that test red rather than letting a policy file write the same
+flag a second time.
 
-The other direction cannot be derived, because the three keys above are
-reserved WITHOUT the umbrella writing them. Those are listed by hand in
-`RESERVED_WITHOUT_WRITING` (tests/policy.test.ts:334-345) and held to
-exactly those three by tests/policy.test.ts:356, so a fourth cannot be
-added without somebody writing down why. That list is still hand
-maintained, but it is three entries long rather than the whole table, it
-is held against the derived set rather than restated beside it, and each
-of its three has its own message test above.
+The other direction cannot be derived for the keys that are reserved
+WITHOUT the umbrella writing them. Those are listed by hand in
+`RESERVED_WITHOUT_WRITING` (tests/policy.test.ts:336-349) and held to
+exactly that set by tests/policy.test.ts:360, so a new one cannot be
+added without somebody writing down why. `dep-guard`'s entry moved from
+`['base']` to `[]` when the umbrella started writing `--base` to
+dep-guard on a pull-request run (dep-guard issue #62); `base` on
+dep-guard is derived on that shape of run like `trust-base` is, but it
+stays reserved on every other shape for the reasons in its own
+`reservedReason` message above, so only `vault-guard`'s `format` and
+`intent-guard`'s `base` are absent from every shape `flagsWritten` covers
+and need a hand-maintained entry. That list is still hand maintained, but
+it is two entries long rather than the whole table, it is held against
+the derived set rather than restated beside it, and each of the two has
+its own message test above.
 
 ## Stages are cumulative, and a gate the filter holds back is never resolved
 

@@ -434,12 +434,29 @@ export function gateArgs(
   const passthrough = renderOptionFlags(gate.options);
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
   switch (gate.product) {
-    case 'dep-guard':
+    case 'dep-guard': {
       // `scan` takes --trust-base from 0.6.0. It sits beside whatever the
       // umbrella already passes rather than replacing it: --trust-base says
       // where the RULES come from and the mode flags say what is scanned,
       // and a pull-request run passes both.
-      return [...(staged ? ['--staged'] : []), '--format', 'json', ...trust, ...passthrough];
+      //
+      // --base is a different flag answering a different question:
+      // --trust-base says whose config is trusted, --base says what the
+      // change is compared against. On a pull-request run (trustBase
+      // decided) they end up pointing at the same ref, because the base
+      // branch is both the state the pull request diverged from and the
+      // state whose rules were approved -- but dep-guard's own CLI treats
+      // them as unrelated flags, so both are passed rather than one
+      // implying the other.
+      //
+      // Never added when staged: dep-guard's CLI refuses --staged together
+      // with --base (packages/cli/src/cli.ts, resolveMode), because the two
+      // name incompatible comparisons -- the git index versus an arbitrary
+      // ref. A staged run already has its own comparison and --trust-base
+      // is unaffected, since it answers a different question.
+      const base = trustBase !== undefined && !staged ? ['--base', trustBase] : [];
+      return [...(staged ? ['--staged'] : []), '--format', 'json', ...trust, ...base, ...passthrough];
+    }
     case 'vault-guard':
       // No path argument: the CLI defaults it to "." and the umbrella runs
       // with cwd at the repository root anyway. Passing one would also risk

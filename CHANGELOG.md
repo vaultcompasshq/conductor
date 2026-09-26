@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- On a pull-request run, the gate runner now also passes `--base` to
+  dep-guard, pointing at the same ref as `--trust-base`. Before this,
+  dep-guard only ever received `--trust-base` from the umbrella, so every
+  scan had no earlier revision to compare dependencies against and the
+  lockfile-tamper comparison signals never ran, even through a pull request
+  (dep-guard issue #62). `--base` is never added on a staged run, since
+  dep-guard's own CLI refuses `--staged` and `--base` together; vault-guard
+  and intent-guard are unaffected, since the umbrella never passed either
+  gate a `--base` flag and still does not.
+
 ## [0.4.7] - 2026-09-26
 
 **A package release.** `@vaultcompass/conductor` moves to 0.4.7 on npm and
