@@ -284,9 +284,13 @@ describe('refusing an explicit trust-base that disagrees with GITHUB_BASE_REF (i
   });
 
   it('refuses a ref naming a different commit, naming both refs and both commits', () => {
-    // The live shape of issue #58: a same-repo pull request sets trust-base
-    // to its own branch, in its own workflow file, once the base has moved
-    // past what an unmoved origin/<pr-branch> would have matched.
+    // This function IN ISOLATION, on the simplest shape that disagrees: a
+    // linear branch, no merge involved. Note this is not yet the real #58
+    // attack shape, because "pr-branch" here is HEAD's own commit, which
+    // refuseTrustBaseRef ALREADY refuses on its own (same commit as HEAD).
+    // The test below this one, "the real #58 shape", is the one where
+    // refuseTrustBaseRef alone accepts the ref and this function is what
+    // actually closes it.
     const repo = emptyRepo();
     const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
     git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
@@ -300,6 +304,46 @@ describe('refusing an explicit trust-base that disagrees with GITHUB_BASE_REF (i
     expect(refusal).toMatch(/origin\/main/);
     expect(refusal).toMatch(head.slice(0, 12));
     expect(refusal).toMatch(base.slice(0, 12));
+  });
+
+  it('refuses the real #58 shape: a moved base and a merge commit whose second parent is the pull request branch', () => {
+    // HEAD is a merge commit, first parent the base, second parent the pull
+    // request's own branch -- the shape GitHub's pull_request checkout
+    // always uses -- but unlike equalTreeMergeRepo above, the base branch
+    // has genuinely MOVED since the fork: it gained its own real commit
+    // before the merge was built. That is what makes this the actual issue
+    // #58 gap rather than a restatement of an existing refusal:
+    //
+    //  - the merge tree combines BOTH sides' changes, so it is identical to
+    //    NEITHER parent's tree, and refuseTrustBaseRef's equal-tree check
+    //    has nothing to catch;
+    //  - the second parent (the pull request's own branch) is a different
+    //    commit from HEAD, so the same-commit check has nothing to catch
+    //    either.
+    //
+    // So on refuseTrustBaseRef ALONE -- today's code on main, with no #58
+    // fix -- --trust-base naming the second parent is ACCEPTED: a same-repo
+    // pull request really could set trust-base to its own branch, in its
+    // own workflow file, exactly as the issue describes. Only
+    // refuseTrustBaseForPullRequest closes it, by comparing against
+    // origin/<githubBaseRef> rather than against HEAD at all.
+    const repo = emptyRepo();
+    commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'fork point');
+    git(repo, ['checkout', '--quiet', '-b', 'pr-branch']);
+    const prBranchTip = commit(repo, { 'feature.js': 'const x = 1;\n' }, 'the pull request');
+    git(repo, ['checkout', '--quiet', 'main']);
+    const base = commit(repo, { 'base-only.txt': 'moved on\n' }, 'base moves on after the fork');
+    git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge the pull request', 'pr-branch']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+
+    // Confirms the gap: refuseTrustBaseRef by itself has nothing here.
+    expect(refuseTrustBaseRef(repo, prBranchTip)).toBeNull();
+
+    // refuseTrustBaseForPullRequest is what actually refuses it.
+    const refusal = refuseTrustBaseForPullRequest(repo, prBranchTip, 'main');
+    expect(refusal).toMatch(/trust base must be the base branch/);
+    expect(refusal).toMatch(base.slice(0, 12));
+    expect(refusal).toMatch(prBranchTip.slice(0, 12));
   });
 
   it('fails closed when origin/<githubBaseRef> itself does not resolve, naming it', () => {

@@ -652,30 +652,45 @@ one-line summary and on the verdict, with a line each under `--verbose` and a
 reflow, a re-quote or an edited comment is not a proposal: the two files are
 compared as parsed documents.
 
-**An explicit `--trust-base` is refused outright on a pull request, at two
-layers (issue #58).** `refuseTrustBaseRef` above only refuses a ref that
-resolves to HEAD's own commit or to HEAD's own tree, which covers HEAD itself
-and an *unmoved* `origin/<pr-branch>`. Once the base branch has moved,
-`origin/<pr-branch>` no longer matches either test, so a same-repo pull
-request could set `trust-base` to its own branch, in its own workflow file,
-and have conductor read `.guardrails.yaml` from the pull request after all,
-at which point the pull request controls the whole policy. dep-guard's own
-base input took the stronger line for its base input in 0.8.0: on a
-`pull_request` event an explicit value is refused outright. Conductor now does
-the same, at two layers. **The Action's validate step** refuses an explicit
-`trust-base` input outright on a `pull_request` or `pull_request_target`
-event, naming the value given and the fix, which is to remove the input; see
-"The Action" below. **The CLI itself** is the defence in depth for anyone
-invoking it directly in CI, bypassing that step: when `GITHUB_BASE_REF` is
-set, an explicit `--trust-base` is accepted only when it resolves to the same
-commit as `origin/$GITHUB_BASE_REF`, which is exactly what the Action itself
-always passes, so an ordinary pull-request run is unaffected. A ref naming the
-pull request's own branch, or anything else that disagrees, is refused with
-both refs and both commits named, through the same could-not-run path as
-every other trust-base refusal: exit 2, the report leads with the reason, and
-nothing is checked. When `origin/$GITHUB_BASE_REF` itself does not resolve,
-this fails closed too, naming it, for the same reason the fetch-depth remedy
-below exists.
+**An explicit `--trust-base` redirect gets a refusal on a pull request, at two
+places (issue #58), and neither closes the whole hole by itself.**
+`refuseTrustBaseRef` above only refuses a ref that resolves to HEAD's own
+commit or to HEAD's own tree, which covers HEAD itself and an *unmoved*
+`origin/<pr-branch>`. Once the base branch has moved, `origin/<pr-branch>` no
+longer matches either test, so a same-repo pull request could set
+`trust-base` to its own branch, in its own workflow file, and have conductor
+read `.guardrails.yaml` from the pull request after all, at which point the
+pull request controls the whole policy. dep-guard's own base input took the
+stronger line for its base input in 0.8.0: on a `pull_request` event an
+explicit value is refused outright.
+
+**The Action refuses an explicit redirect on `pull_request` and
+`pull_request_target` events.** Its validate step refuses a `trust-base`
+input outright on those events, naming the value given and the fix, which is
+to remove the input; see "The Action" below.
+
+**The CLI check catches a misconfigured or innocent-looking redirect when
+`GITHUB_BASE_REF` is set**, for anyone invoking the CLI directly in CI. When
+that variable is set, an explicit `--trust-base` is accepted only when it
+resolves to the same commit as `origin/$GITHUB_BASE_REF`, which is exactly
+what the Action itself always passes, so an ordinary pull-request run is
+unaffected. A ref naming the pull request's own branch, or anything else that
+disagrees, is refused with both refs and both commits named, through the same
+could-not-run path as every other trust-base refusal: exit 2, the report
+leads with the reason, and nothing is checked. When `origin/$GITHUB_BASE_REF`
+itself does not resolve, this fails closed too, naming it, for the same
+reason the fetch-depth remedy below exists.
+
+**Neither layer closes anything against a pull request that edits its own
+workflow file.** A CLI invocation on a pull request can simply omit
+`--trust-base`, or a workflow step can blank `GITHUB_BASE_REF` in its own env,
+and nothing here refuses either; the Action has the matching gap, since a
+pull request can pin `uses:` to a tag published before this fix, in its own
+workflow file. This is exactly the boundary "On a pull request those four
+inputs may not pin backward" (below, under "The Action") already draws for
+the four `*-version` inputs: the control for a workflow edit is branch
+protection on the base branch with review required for `.github/workflows`,
+and nothing in this section, or in that one, substitutes for it.
 
 **It fails closed.** A `--trust-base` that does not resolve is not a reason to
 fall back to the pull request's own file, because that fallback is the hole:
@@ -1007,12 +1022,14 @@ takes effect after merge. See "The pull-request trust boundary" above. On any
 other event it passes nothing and behaviour is unchanged. The `trust-base`
 input names the ref explicitly, for a platform where `GITHUB_BASE_REF` is not
 set. **On a `pull_request` or `pull_request_target` event this input is
-refused outright, in the validate step** (issue #58): on that event the
+refused outright, in the validate step** (issue #58). On `pull_request` the
 workflow file is the pull request's own, so a value here that redirects the
-trust base is settable by the thing it judges, the same reasoning that
-already rules out an opt-out value for this input. The refusal names the
-value that was given and the fix, which is to remove the input: the action
-already derives `origin/$GITHUB_BASE_REF` itself on that event.
+trust base is settable by the thing it judges; on `pull_request_target` the
+workflow file is the *base* branch's own instead, but the input is refused
+there too, because pull-request mode already derives the trust base on both
+events and an explicit redirect has no legitimate use on either. The refusal
+names the value that was given and the fix, which is to remove the input: the
+action already derives `origin/$GITHUB_BASE_REF` itself on that event.
 
 There is deliberately **no input that turns pull-request mode off**.
 Base-ref judging is the floor rather than a knob, and on a `pull_request`

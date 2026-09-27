@@ -288,8 +288,7 @@ export function refuseTrustBaseForPullRequest(
     `refusing "${ref}" as the trust base: GITHUB_BASE_REF is set to "${githubBaseRef}", so this ` +
     'run is a pull request, and on a pull request the trust base must be the base branch and ' +
     `nothing else. "${ref}" resolves to ${givenCommit}, and "${expectedRef}" resolves to ` +
-    `${expectedCommit}, a different commit. Pass ${expectedRef} instead, or remove --trust-base ` +
-    'and let the caller derive it. Nothing was checked.'
+    `${expectedCommit}, a different commit. Pass ${expectedRef} instead. Nothing was checked.`
   );
 }
 

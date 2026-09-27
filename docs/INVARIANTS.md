@@ -1264,7 +1264,7 @@ unchanged"): the full-report line, the one-line summary clause, the verdict
 branch for an empty gate list, and the SARIF notification at note level,
 absent entirely when nothing was skipped this way.
 
-### On a pull request, the trust base is the base branch and nothing else
+### An explicit trust-base redirect gets a refusal at two places, and neither closes the whole hole
 
 New for issue #58. `refuseTrustBaseRef` above only refuses a ref that
 resolves to HEAD's own commit or to HEAD's own tree, which covers HEAD itself
@@ -1276,10 +1276,13 @@ all, handing the pull request the whole policy. Found in review of #53.
 dep-guard's own base input took the stronger line for its base input in
 0.8.0: on a `pull_request` event an explicit value is refused outright rather
 than merely checked against HEAD. This package now does the same, at two
-layers, and the two do not depend on each other.
+places, and the two do not depend on each other; neither is the fix for a
+pull request that edits its own workflow file, which is a different, wider
+gap this entry states last and precisely.
 
-THE ACTION REFUSES IT FIRST, in the validate step (`action.yml`, the check at
-action.yml:360-397). Modelled on the backward-pin rule earlier in the same
+THE ACTION REFUSES AN EXPLICIT REDIRECT ON `pull_request` AND
+`pull_request_target` EVENTS, in the validate step (`action.yml`, the check
+at action.yml:362-419). Modelled on the backward-pin rule earlier in the same
 step: the same event test, `GITHUB_BASE_REF` non-empty, declared in the
 step's own `env:` mapping from `github.base_ref` so it cannot come from the
 workflow file; and the same scope, `pull_request` and `pull_request_target`
@@ -1288,11 +1291,19 @@ unprotected branch runs its own author's workflow file regardless, and
 `merge_group` never sets `GITHUB_BASE_REF` at all). Off those events the
 input works exactly as before, since that is what it exists for. Refused with
 the value given and the fix, which is to remove the input: the action already
-derives `origin/$GITHUB_BASE_REF` itself on that event.
+derives `origin/$GITHUB_BASE_REF` itself on that event. THE TWO EVENTS ARE
+REFUSED FOR DIFFERENT REASONS, and the validate step's own message says so:
+on `pull_request` the workflow file IS the pull request's own, so the input
+is settable by the thing it judges; on `pull_request_target` the workflow
+file is the BASE branch's own instead, so that particular attack does not
+apply, but the input is refused there too because pull-request mode already
+derives the trust base on both events and an explicit redirect has no
+legitimate use on either.
 
-THE CLI REFUSES IT TOO, as defence in depth for anyone invoking it directly
-in CI and bypassing the Action's validate step
-(`refuseTrustBaseForPullRequest`, src/trust-base.ts:259-294, wired into
+THE CLI CHECK CATCHES A MISCONFIGURED OR INNOCENT-LOOKING REDIRECT WHEN
+`GITHUB_BASE_REF` IS SET, for anyone invoking the CLI directly in CI, whether
+or not the Action's validate step ran first
+(`refuseTrustBaseForPullRequest`, src/trust-base.ts:259-293, wired into
 `policyForRun` in src/cli.ts:198-209 and read from `process.env` at
 src/cli.ts:469). `GITHUB_BASE_REF` is Actions' own pull-request signal: the
 base branch's NAME on `pull_request` and `pull_request_target`, empty
@@ -1308,41 +1319,73 @@ CHECKED BEFORE `refuseTrustBaseRef`, AND DELIBERATELY NARROWER THAN IT: this
 check says nothing about HEAD or about tree equality, only about whether the
 given ref agrees with the one Actions says this run must use
 (`policyForRun`, src/cli.ts:208-209, `pullRequestRefusal ??
-refuseTrustBaseRef(...)`). That ordering is what keeps the equal-tree
-first-parent exception from issue #69/#73 working unchanged: on an ordinary
-pull-request run the given ref and the expected ref are the identical
-spelling, this new check returns null immediately, and `refuseTrustBaseRef`
-runs its own checks, the exception included, exactly as before. FAILS CLOSED
-when `origin/<githubBaseRef>` itself does not resolve, naming it: reachable
-on the default `actions/checkout` (fetch-depth: 1), which does not carry the
-base branch at all, and the remedy is the same fetch-depth: 0 the rest of
-this section already asks for. When the GIVEN ref does not resolve at all,
-this returns null rather than refusing a second time under a different
-message: `refuseTrustBaseRef` is the function with its own sentence for that
-shape.
+refuseTrustBaseRef(...)`). The `??` means the SECOND function still runs
+whenever the first returns null, in either order, so the ORDER between the
+two is not what keeps the equal-tree first-parent exception from issue
+#69/#73 available: on an ordinary pull-request run BOTH checks independently
+return null (the given ref is the identical spelling of
+`origin/<githubBaseRef>`, and, separately, its relationship to HEAD's commit
+and tree passes the exception), so either order reaches the same accepted
+outcome. What the order DOES decide is which REFUSAL MESSAGE wins on a ref
+that both checks would refuse: checking `refuseTrustBaseForPullRequest`
+first means a pull-request-scoped redirect is named as exactly that, in a
+sentence that says GITHUB_BASE_REF and the base branch, rather than
+surfacing as the same-commit or equal-tree message a reader would have to
+already know implies a pull-request problem. FAILS CLOSED when
+`origin/<githubBaseRef>` itself does not resolve, naming it: reachable on the
+default `actions/checkout` (fetch-depth: 1), which does not carry the base
+branch at all, and the remedy is the same fetch-depth: 0 the rest of this
+section already asks for. When the GIVEN ref does not resolve at all, this
+returns null rather than refusing a second time under a different message:
+`refuseTrustBaseRef` is the function with its own sentence for that shape.
 
-BOTH REFUSALS ARE THE SAME EVENT TEST, `GITHUB_BASE_REF` non-empty, and
-neither reads anything about which BRANCH it names: a maintainer's own
-`trust-base` input on a repository's own workflow is refused by the Action on
-every pull request exactly as an attacker's would be, which is the same
-scope tradeoff the backward-pin rule already makes and documents.
+WHAT NEITHER LAYER CLOSES, stated because the obvious summary is wider than
+either rule, the same discipline the backward-pin section above holds itself
+to. A CLI invocation on a pull request can simply not pass `--trust-base` at
+all, in which case `policyForRun` reads HEAD's own policy and nothing here
+refuses it (src/cli.ts:194-196, the `trustBase === undefined` branch, which
+this feature does not touch). A workflow step can blank `GITHUB_BASE_REF` in
+its own `env:` mapping, which turns `refuseTrustBaseForPullRequest` into a
+no-op by its own contract (the function returns null immediately when its
+third argument is empty, src/trust-base.ts:264-266) exactly as it is supposed
+to off a pull request, so a workflow that empties the variable on purpose
+gets the same no-op a push build gets on merit. And the Action has the
+matching gap at the workflow-file level: a pull request can pin `uses:` to an
+action tag published before this fix, in its own workflow file, the same way
+the backward-pin rule's own "what this does not cover" already states for
+the four `*-version` inputs. Nothing here is a second control against a
+workflow edit; the control for that remains branch protection on the base
+branch with review required for `.github/workflows`, exactly as the
+backward-pin rule says of itself, and neither of the two checks in this
+entry claims to be a substitute for it.
 
 Pinned by tests/trust-base.test.ts ("refusing an explicit trust-base that
 disagrees with GITHUB_BASE_REF"): the no-op with `GITHUB_BASE_REF` unset, the
 accepted case where the given ref resolves to the same commit as
-`origin/<githubBaseRef>`, the refusal naming both refs and both commits, the
-fail-closed case when `origin/<githubBaseRef>` does not resolve, the
-given-ref-unresolvable case deferring to `refuseTrustBaseRef`, and the
-equal-tree exception left unnarrowed. End to end through the CLI,
+`origin/<githubBaseRef>`, the refusal naming both refs and both commits on the
+simplest disagreeing shape, the fail-closed case when
+`origin/<githubBaseRef>` does not resolve, the given-ref-unresolvable case
+deferring to `refuseTrustBaseRef`, and the equal-tree first-parent exception
+from issue #69/#73 left reachable afterward. Separately, "refuses the real
+#58 shape" is the one case where `refuseTrustBaseRef` ALONE (no #58 fix)
+genuinely accepts the ref: a merge commit whose first parent is a base that
+moved since the fork and whose second parent is the pull request's own
+branch, where the merge tree matches neither parent's tree, so neither of
+`refuseTrustBaseRef`'s own checks fires, and the test asserts that directly
+(`refuseTrustBaseRef(repo, prBranchTip)` returns null) before asserting that
+`refuseTrustBaseForPullRequest` refuses it. End to end through the CLI,
 tests/cli.test.ts ("the CLI refuses an explicit trust-base that disagrees
-with GITHUB_BASE_REF"), against a real repository: the refusal, the
-accepted `origin/<base>` shape, and GITHUB_BASE_REF unset leaving the
-ORIGINAL (pre-#58) refusal message in place, which is what tells apart a
-correctly-scoped check from one that fires unconditionally. The Action,
-tests/action.test.ts ("action.yml refuses an explicit trust-base input on a
-pull request"), driven by running the real validate step's script: refused
-on a pull_request event, accepted off one, and accepted when no input was
-given at all.
+with GITHUB_BASE_REF"): the same simplest-shape refusal, the accepted
+`origin/<base>` shape, GITHUB_BASE_REF unset leaving the ORIGINAL (pre-#58)
+refusal message in place (what tells apart a correctly-scoped check from one
+that fires unconditionally), and the same real #58 merge-commit shape driven
+through a real repository and the built CLI. The Action, tests/action.test.ts
+("action.yml refuses an explicit trust-base input on a pull request" and,
+separately, "declares TRUST_BASE in the validate step"), driven by running
+the real validate step's script: refused on a pull_request event, accepted
+off one, accepted when no input was given at all, and the step's own `env:`
+wiring for `TRUST_BASE` pinned on its own, since nothing else in the suite
+would go red if that one line were deleted.
 
 ## The intent gate's own reasons are classified by prefix, and every prefix is a liability
 

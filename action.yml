@@ -28,13 +28,15 @@ inputs:
       behaviour is unchanged. Set it to name the ref explicitly, for a
       platform where GITHUB_BASE_REF is not set. On a pull_request or
       pull_request_target event this input is refused outright, in the
-      validate step: the workflow file is the pull request's own on that
-      event, so a value here that redirects the trust base is settable by the
-      thing it judges. There is deliberately no value that turns pull-request
-      mode off: base-ref judging is the floor and not a knob, and on a
-      pull_request event the workflow file itself comes from the pull
-      request's own ref, so an opt-out here would be settable by the pull
-      request it exists to judge.
+      validate step: on pull_request the workflow file is the pull request's
+      own, so a value here that redirects the trust base is settable by the
+      thing it judges; on pull_request_target the workflow file is the base
+      branch's own instead, but the input is refused there too, since
+      pull-request mode already derives the trust base on both events. There
+      is deliberately no value that turns pull-request mode off: base-ref
+      judging is the floor and not a knob, and on a pull_request event the
+      workflow file itself comes from the pull request's own ref, so an
+      opt-out here would be settable by the pull request it exists to judge.
     default: ''
   spec:
     description: >-
@@ -380,20 +382,39 @@ runs:
         # comment on the backward-pin rule's own copy of this test for the
         # two lines of defence behind it.
         #
-        # OFF A pull_request OR pull_request_target EVENT -- push, schedule,
-        # workflow_dispatch, merge_group, or a platform where GITHUB_BASE_REF
-        # is not set at all -- this input keeps working exactly as before,
-        # since that is what it exists for: naming the ref explicitly
-        # somewhere GITHUB_BASE_REF is not set could never be a pull request
-        # this rule needs to refuse.
+        # BOTH EVENTS, AND FOR DIFFERENT REASONS. On pull_request the workflow
+        # file IS the pull request's own, so a trust-base input here is
+        # settable by the thing it judges. On pull_request_target the
+        # workflow file is the BASE branch's own instead, so that particular
+        # attack does not apply there -- but the input is refused on that
+        # event too, because pull-request mode already derives the trust base
+        # on both events (this same gates step passes
+        # origin/$GITHUB_BASE_REF whichever one fired), and an explicit
+        # redirect has no legitimate use on either.
+        #
+        # OFF BOTH EVENTS -- push, schedule, workflow_dispatch, merge_group,
+        # or a platform where GITHUB_BASE_REF is not set at all -- this input
+        # keeps working exactly as before, since that is what it exists for:
+        # naming the ref explicitly somewhere GITHUB_BASE_REF is not set could
+        # never be a pull request this rule needs to refuse.
         #
         # THE FIX IS TO REMOVE THE INPUT, never to set it to some other value:
         # the action already derives origin/$GITHUB_BASE_REF itself on this
         # event, which is the base branch's own commit at the time the job
         # runs and is exactly what pull-request mode requires.
+        #
+        # WHAT THIS DOES NOT CLOSE, stated because the obvious summary is
+        # wider than the rule. Nothing here stops a pull request that edits
+        # the WORKFLOW FILE itself: on pull_request that is the pull
+        # request's own file, so it could delete this step, move the uses:
+        # pin to a tag published before this check existed, or remove the
+        # gates step's own derivation entirely. The control for a workflow
+        # edit is branch protection on the base branch with review required
+        # for .github/workflows, exactly as the backward-pin rule above
+        # already says, and nothing in this step can substitute for it.
         if [ -n "${GITHUB_BASE_REF:-}" ] && [ -n "${TRUST_BASE:-}" ]; then
           echo "conductor: the trust-base input may not be set on a pull_request or pull_request_target event. It was set to \"${TRUST_BASE}\"." >&2
-          echo "On this event the workflow file is the pull request's own, so an input that redirects the trust base is settable by the thing it judges. REMOVE the input: the action derives origin/\$GITHUB_BASE_REF itself." >&2
+          echo "On pull_request the workflow file is the pull request's own; on pull_request_target it is the base branch's own. Either way pull-request mode already derives the trust base itself. REMOVE the input: the action derives origin/\$GITHUB_BASE_REF itself." >&2
           exit 1
         fi
 

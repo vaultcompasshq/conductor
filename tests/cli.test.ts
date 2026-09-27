@@ -1507,6 +1507,77 @@ describe('the CLI refuses an explicit trust-base that disagrees with GITHUB_BASE
     expect(result.stdout).toMatch(/the same commit as HEAD/);
     expect(result.stdout).not.toMatch(/trust base must be the base branch/);
   });
+
+  /**
+   * The real #58 shape, driven end to end through the CLI. HEAD is a merge
+   * commit -- first parent the base, second parent the pull request's own
+   * branch, exactly like GitHub's pull_request checkout -- and the base
+   * branch has genuinely MOVED since the fork, so the merge tree combines
+   * both sides and is identical to neither parent's tree. On refuseTrustBaseRef
+   * alone (today's code on main, with no #58 fix) --trust-base naming the
+   * second parent is ACCEPTED: neither the same-commit-as-HEAD check nor the
+   * equal-tree check has anything to catch. Only comparing against
+   * origin/<GITHUB_BASE_REF> closes it. See the unit-level version of this
+   * fixture in tests/trust-base.test.ts for why the two earlier fixtures in
+   * this describe do not exercise this gap: "main" there is HEAD's own
+   * commit, which refuseTrustBaseRef already refuses on its own.
+   */
+  function movedBaseMergeRepo(): { repo: string; bin: string; base: string; prBranchTip: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+
+    writeFileSync(
+      path.join(repo, '.guardrails.yaml'),
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '',
+      ].join('\n')
+    );
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'fork point']);
+
+    git(repo, ['checkout', '--quiet', '-b', 'pr-branch']);
+    writeFileSync(path.join(repo, 'feature.js'), 'const x = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    const prBranchTip = rev(repo, 'HEAD');
+
+    git(repo, ['checkout', '--quiet', 'main']);
+    writeFileSync(path.join(repo, 'base-only.txt'), 'moved on\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base moves on after the fork']);
+    const base = rev(repo, 'HEAD');
+
+    git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge the pull request', 'pr-branch']);
+    git(repo, ['update-ref', 'refs/remotes/origin/base', base]);
+
+    return { repo, bin, base, prBranchTip };
+  }
+
+  it('refuses the real #58 shape: a moved base and a merge commit whose second parent is the pull request branch', () => {
+    const { repo, bin, base, prBranchTip } = movedBaseMergeRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', prBranchTip], bin, {
+      env: { GITHUB_BASE_REF: 'base' },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/trust base must be the base branch/);
+    expect(result.stdout).toContain(prBranchTip.slice(0, 12));
+    expect(result.stdout).toContain(base.slice(0, 12));
+  });
 });
 
 /**

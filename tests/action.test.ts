@@ -316,6 +316,18 @@ describe('action.yml enters pull-request mode', () => {
     expect(gatesScript).not.toMatch(/\$\{\{/);
   });
 
+  it('declares TRUST_BASE in the validate step, so the pull-request refusal below can read it', () => {
+    // Nothing else in this file drives the validate step's own env mapping:
+    // `env` above only proves SOME step declares TRUST_BASE, which the gates
+    // step already did before issue #58. Deleting the validate step's own
+    // copy of this line would leave every test in "action.yml refuses an
+    // explicit trust-base input on a pull request" green for the wrong
+    // reason, because runValidate builds its child's environment from
+    // scratch (see runValidateScript below) rather than from this mapping --
+    // this is the one assertion that would actually go red.
+    expect(stepEnv('validate').TRUST_BASE).toBe('${{ inputs.trust-base }}');
+  });
+
   it('lets a caller name the ref explicitly', () => {
     expect(action.inputs?.['trust-base']).toBeDefined();
     expect(action.inputs?.['trust-base']?.default).toBe('');
