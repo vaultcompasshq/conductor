@@ -14,6 +14,35 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-27
+
+**An action-only release. The tag moves; the npm package does not.**
+`@vaultcompass/conductor` stays at 0.5.0 on npm and the action's
+`conductor-version` default stays `0.5.0`.
+
+### Changed
+
+- **The umbrella now installs `dep-guard` 0.8.0 and `intent-guard` 1.6.0 by
+  default, up from 0.7.0 and 1.5.2.** dep-guard 0.8.0 adds the publish-age
+  online check and the `base` input; intent-guard 1.6.0 adds the `extract`
+  flag. Their own `TAG_DEP_GUARD_*` and `TAG_INTENT_GUARD_*` constants in
+  `action.yml` move in lockstep with the defaults, since those constants are
+  what the pull-request backward-pin rule measures a pin against.
+  `vault-guard-version` stays at `1.8.0` and `conductor-version` stays at
+  `0.5.0`; neither changes in this release. A workflow that pins either input
+  explicitly, to any version, is unaffected by this default move outside of a
+  pull request; the change only reaches an adopter who left the input at its
+  default.
+
+  **The consumer cost.** On a pull request, the backward-pin rule now refuses
+  `dep-guard-version` below `0.8.0` or `intent-guard-version` below `1.6.0`,
+  the same as it already refused older pins of the other two inputs. A
+  workflow carrying either of those lines pinned explicitly to the old
+  default (`0.7.0` or `1.5.2`) is refused rather than run, because this tag
+  ships the newer gates and the rule will not let a pull request judge itself
+  with an older one. The migration is to remove the input, whose default is
+  the version this tag ships, or to raise it to `0.8.0` / `1.6.0` or newer.
+
 ## [0.5.0] - 2026-09-26
 
 **A minor package release.** `@vaultcompass/conductor` moves to 0.5.0 on npm
