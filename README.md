@@ -1283,40 +1283,53 @@ edit, is branch protection requiring review on `.github/workflows`, not
 anything in `action.yml`.
 
 **A `paths:` filter on this job is a real trade, not a free speedup, and the
-honest default is to skip it.** Every gate in the default policy reads the
-whole changed set, not a slice of it: gitleaks scans git history, so a secret
-can land in any file regardless of what kind of pull request carries it;
-vault-guard's own staged scan is the same, over whatever paths changed;
-dep-guard and osv-scanner only care about manifests and lockfiles, but they
-still need to see a pull request touch one to react to it; and intent-guard's
-drift and budget checks are evaluated against every changed path, not only
-source. A `paths:` filter keyed on `package.json`, the lockfile, and your
-source globs is exactly right for dep-guard and osv-scanner and exactly
-wrong for the two secrets gates: it makes a docs-only pull request skip the
-whole job, gitleaks and vault-guard included, which means a secret pasted
-into a docs-only change, a comment, or a config file the filter did not
-list is never scanned at all. That is the cost, plainly: fewer runs bought
-by turning off secrets scanning on the pull requests the filter excludes.
+honest default is to skip it.** The biggest reason is not about coverage, it
+is about merging at all: GitHub does not treat a workflow (or a job inside
+one) that a `paths:` filter skipped as "passed". It treats it as never having
+run, so a required check with no matching run for that pull request sits
+**pending forever**, and a pull request cannot merge while a required check
+is pending, regardless of how trivial the change is. GitHub's own docs state
+this directly for `paths:`-filtered required workflows. Add a `paths:` filter
+to a job that branch protection requires, and a docs-only pull request does
+not go green early, it gets stuck, unless the ruleset also lists that check
+as one GitHub is allowed to skip.
+
+The coverage cost is real too, separately from the merge-blocking one. Every
+gate in the default policy reads the whole changed set, not a slice of it:
+gitleaks scans git history, so a secret can land in any file regardless of
+what kind of pull request carries it; vault-guard's own staged scan is the
+same, over whatever paths changed; dep-guard and osv-scanner only care about
+manifests and lockfiles, but they still need to see a pull request touch one
+to react to it; and intent-guard's drift and budget checks are evaluated
+against every changed path, not only source. A `paths:` filter keyed on
+`package.json`, the lockfile, and your source globs is exactly right for
+dep-guard and osv-scanner and exactly wrong for the two secrets gates: it
+makes a docs-only pull request skip the whole job, gitleaks and vault-guard
+included, which means a secret pasted into a docs-only change, a comment, or
+a config file the filter did not list is never scanned at all. That is the
+cost, plainly: fewer runs bought by turning off secrets scanning on the pull
+requests the filter excludes.
 
 If your workflow already has its own required security job and you only
 want this one to skip clean docs-only changes, add GitHub's own `paths:`
 (or `paths-ignore:`) to the `on: pull_request` block, the same syntax GitHub
-documents for any workflow trigger, and accept that trade explicitly rather
-than assuming a scanner slice is free. The alternative this README
-recommends is to leave the job triggering on every pull request: a run with
-nothing to report is not a run worth avoiding, and this recipe has no
-documented time budget to promise you here, because that number depends on
-your repository's size and the gates you enable, not on anything conductor
-fixes. Measure it once on your own repository if you need a number to plan
-around.
+documents for any workflow trigger, and account for both traps above before
+you make the job required: whether a skipped run should count as passing in
+your ruleset, and the coverage this recipe would then lose on exactly the
+pull requests it skips. The alternative this README recommends is to leave
+the job triggering on every pull request: a run with nothing to report is
+not a run worth avoiding, and this recipe has no documented time budget to
+promise you here, because that number depends on your repository's size and
+the gates you enable, not on anything conductor fixes. Measure it once on
+your own repository if you need a number to plan around.
 
 **Renaming the job changes what branch protection is watching for.** GitHub
-matches a required check by its context name -- the job name here,
-`gates`, or the workflow name, `guardrails-advisory` -- not by which
-workflow file produced it. If you split this into a paths-filtered job with
-a different name, or rename the job for any other reason, a pull request
-that no longer produces the old context name will sit waiting on a check
-that will never report, until you also update the required-checks list in
+matches a required check by its context, which is the JOB's name (`gates`
+here), never the workflow's name (`guardrails-advisory`). If you split this
+into a paths-filtered job with a different name, or rename the job for any
+other reason, a pull request that no longer produces the old context name
+will sit waiting on a check that will never report, until you also update
+the required-checks list in
 the branch protection ruleset to match. That edit lives on the repository's
 settings, not in the workflow file, so it is easy to make the workflow
 change and forget the other half.

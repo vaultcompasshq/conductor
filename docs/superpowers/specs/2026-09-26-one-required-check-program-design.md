@@ -91,10 +91,13 @@ These are settled. Reopening one requires a new spec, not a message.
 3. **vault-guard's scope stands.** No history mode. Full-history secrets
    scanning comes from gitleaks run as an external gate.
 4. **No vulnerability scanner is reimplemented.** osv-scanner runs as an
-   external gate. dep-guard #60 (npm audit advisories) is deferred, not
-   closed. No known-bad-version blocklist is built: a seven-day publish-age
-   floor covers a compromised release while it matters, and osv-scanner
-   carries malicious-package advisories after the window closes.
+   external gate. dep-guard #60 (npm audit advisories) was deferred at the
+   time this decision was made; it was closed on 2026-09-27, once conductor
+   0.5.0 shipped the osv-scanner vulnerabilities gate this item describes,
+   as met through the umbrella rather than inside dep-guard. No
+   known-bad-version blocklist is built: a seven-day publish-age floor
+   covers a compromised release while it matters, and osv-scanner carries
+   malicious-package advisories after the window closes.
 5. **The README carries the thesis in section 1 and nothing else.** The
    day-one framing for empty repos is removed.
 6. **The hook is opt-in.** `conductor init` does not write a pre-commit hook

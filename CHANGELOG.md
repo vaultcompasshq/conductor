@@ -166,13 +166,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   Found by independent review of intent-guard PR #93 (issue #34).
 
 - README: the advisory-workflow recipe now says why it carries no `paths:`
-  filter by default -- gitleaks and vault-guard read the whole changed set
-  because a secret can land in any file, so a filter that skips a docs-only
-  pull request skips secrets scanning on it too -- and shows GitHub's own
-  `paths:` syntax as an explicit trade for an adopter who wants it anyway,
-  plus a note that renaming the job or workflow means updating branch
-  protection's required-checks list separately, since GitHub matches a
-  required check by context name (issue #39).
+  filter by default. The main reason is not coverage, it is that GitHub
+  treats a `paths:`-skipped required workflow as never having run rather
+  than as passed, so a required check with no matching run sits pending
+  forever and a docs-only pull request cannot merge; GitHub's own docs say
+  so. Coverage is the second reason: gitleaks and vault-guard read the whole
+  changed set because a secret can land in any file, so a filter that skips
+  a docs-only pull request skips secrets scanning on it too. The recipe
+  shows GitHub's own `paths:` syntax as an explicit trade for an adopter who
+  wants it anyway, plus a note that renaming the JOB (not the workflow)
+  means updating branch protection's required-checks list separately, since
+  GitHub matches a required check by the job's context name, never the
+  workflow's name (issue #39).
 
 ## [0.5.1] - 2026-09-27
 
