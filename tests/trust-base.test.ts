@@ -16,6 +16,7 @@ import {
   headTreeEqualsBase,
   policyDiffers,
   readPolicyAtRef,
+  refuseTrustBaseForPullRequest,
   refuseTrustBaseRef,
 } from '../src/trust-base.js';
 
@@ -252,6 +253,135 @@ describe('deciding whether the policy changed', () => {
     // arrives here instead of a document. Reporting it as changed is the safe
     // direction; the base ref's policy is what ran either way.
     expect(policyDiffers('version: 1\n', '\t: : not yaml\n  - [')).toBe(true);
+  });
+});
+
+/**
+ * Issue #58: defence in depth for the CLI. action.yml's validate step
+ * refuses an explicit trust-base input outright on a pull_request event; this
+ * is the CLI's own line, for anyone invoking it directly in CI and bypassing
+ * that step. GITHUB_BASE_REF is Actions' own pull-request signal, and the
+ * composite action itself always passes exactly origin/$GITHUB_BASE_REF, so
+ * this only ever refuses a ref that disagrees with that.
+ */
+describe('refusing an explicit trust-base that disagrees with GITHUB_BASE_REF (issue #58)', () => {
+  it('is a no-op when GITHUB_BASE_REF is not set: any resolvable ref is left alone', () => {
+    const repo = emptyRepo();
+    commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['checkout', '--quiet', '-b', 'pr-branch']);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+
+    expect(refuseTrustBaseForPullRequest(repo, 'pr-branch', undefined)).toBeNull();
+  });
+
+  it('accepts a ref that resolves to the same commit as origin/<githubBaseRef>', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+
+    expect(refuseTrustBaseForPullRequest(repo, 'origin/main', 'main')).toBeNull();
+  });
+
+  it('refuses a ref naming a different commit, naming both refs and both commits', () => {
+    // This function IN ISOLATION, on the simplest shape that disagrees: a
+    // linear branch, no merge involved. Note this is not yet the real #58
+    // attack shape, because "pr-branch" here is HEAD's own commit, which
+    // refuseTrustBaseRef ALREADY refuses on its own (same commit as HEAD).
+    // The test below this one, "the real #58 shape", is the one where
+    // refuseTrustBaseRef alone accepts the ref and this function is what
+    // actually closes it.
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    git(repo, ['checkout', '--quiet', '-b', 'pr-branch']);
+    const head = commit(repo, { 'app.js': 'const x = 1;\n' }, 'the pull request');
+
+    const refusal = refuseTrustBaseForPullRequest(repo, 'pr-branch', 'main');
+
+    expect(refusal).toMatch(/trust base must be the base branch/);
+    expect(refusal).toMatch(/"pr-branch"/);
+    expect(refusal).toMatch(/origin\/main/);
+    expect(refusal).toMatch(head.slice(0, 12));
+    expect(refusal).toMatch(base.slice(0, 12));
+  });
+
+  it('refuses the real #58 shape: a moved base and a merge commit whose second parent is the pull request branch', () => {
+    // HEAD is a merge commit, first parent the base, second parent the pull
+    // request's own branch -- the shape GitHub's pull_request checkout
+    // always uses -- but unlike equalTreeMergeRepo above, the base branch
+    // has genuinely MOVED since the fork: it gained its own real commit
+    // before the merge was built. That is what makes this the actual issue
+    // #58 gap rather than a restatement of an existing refusal:
+    //
+    //  - the merge tree combines BOTH sides' changes, so it is identical to
+    //    NEITHER parent's tree, and refuseTrustBaseRef's equal-tree check
+    //    has nothing to catch;
+    //  - the second parent (the pull request's own branch) is a different
+    //    commit from HEAD, so the same-commit check has nothing to catch
+    //    either.
+    //
+    // So on refuseTrustBaseRef ALONE -- today's code on main, with no #58
+    // fix -- --trust-base naming the second parent is ACCEPTED: a same-repo
+    // pull request really could set trust-base to its own branch, in its
+    // own workflow file, exactly as the issue describes. Only
+    // refuseTrustBaseForPullRequest closes it, by comparing against
+    // origin/<githubBaseRef> rather than against HEAD at all.
+    const repo = emptyRepo();
+    commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'fork point');
+    git(repo, ['checkout', '--quiet', '-b', 'pr-branch']);
+    const prBranchTip = commit(repo, { 'feature.js': 'const x = 1;\n' }, 'the pull request');
+    git(repo, ['checkout', '--quiet', 'main']);
+    const base = commit(repo, { 'base-only.txt': 'moved on\n' }, 'base moves on after the fork');
+    git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge the pull request', 'pr-branch']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+
+    // Confirms the gap: refuseTrustBaseRef by itself has nothing here.
+    expect(refuseTrustBaseRef(repo, prBranchTip)).toBeNull();
+
+    // refuseTrustBaseForPullRequest is what actually refuses it.
+    const refusal = refuseTrustBaseForPullRequest(repo, prBranchTip, 'main');
+    expect(refusal).toMatch(/trust base must be the base branch/);
+    expect(refusal).toMatch(base.slice(0, 12));
+    expect(refusal).toMatch(prBranchTip.slice(0, 12));
+  });
+
+  it('fails closed when origin/<githubBaseRef> itself does not resolve, naming it', () => {
+    // Reachable on the default actions/checkout (fetch-depth: 1), which does
+    // not carry the base branch at all. The README already asks for
+    // fetch-depth: 0; this is not a reason to skip the comparison.
+    const repo = emptyRepo();
+    commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['branch', 'pr-branch']);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+
+    const refusal = refuseTrustBaseForPullRequest(repo, 'pr-branch', 'nope');
+
+    expect(refusal).toMatch(/origin\/nope/);
+    expect(refusal).toMatch(/does not resolve to a commit/);
+    expect(refusal).toMatch(/fetch-depth: 0/);
+  });
+
+  it('leaves an unresolvable given ref to refuseTrustBaseRef, rather than repeating its message', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+
+    expect(refuseTrustBaseForPullRequest(repo, 'origin/nope', 'main')).toBeNull();
+    // refuseTrustBaseRef is the one that actually refuses this shape.
+    expect(refuseTrustBaseRef(repo, 'origin/nope')).toMatch(/does not resolve to a commit/);
+  });
+
+  it('does not interfere with the equal-tree first-parent exception (issue #73)', () => {
+    // The composite action always passes exactly origin/$GITHUB_BASE_REF, so
+    // on an ordinary pull-request run the given ref and the expected ref are
+    // the identical spelling and this returns null immediately, never
+    // reaching -- let alone narrowing -- the equal-tree exception below.
+    const { repo, base } = equalTreeMergeRepo();
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+
+    expect(refuseTrustBaseForPullRequest(repo, 'origin/main', 'main')).toBeNull();
+    expect(refuseTrustBaseRef(repo, 'origin/main')).toBeNull();
   });
 });
 

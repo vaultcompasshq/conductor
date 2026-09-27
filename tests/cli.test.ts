@@ -62,7 +62,7 @@ function runCli(
   cwd: string,
   args: string[],
   pathValue: string,
-  options: { git?: boolean } = {}
+  options: { git?: boolean; env?: Record<string, string> } = {}
 ) {
   // Every run gets git on its controlled PATH, because the CLI needs git to
   // find the working-tree root and this file replaces PATH wholesale. One
@@ -73,7 +73,12 @@ function runCli(
   const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
     cwd,
     encoding: 'utf8',
-    env: childEnv(pathValue),
+    // `options.env` opts a variable BACK IN over childEnv()'s own scrubbing
+    // (see helpers/child-env.ts): a test that deliberately drives the
+    // pull-request path names GITHUB_BASE_REF here rather than reverting to
+    // spreading process.env directly, which is the leak childEnv exists to
+    // prevent.
+    env: { ...childEnv(pathValue), ...(options.env ?? {}) },
   });
   return {
     status: result.status,
@@ -1387,6 +1392,191 @@ describe('pull-request mode through the CLI', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/"trust-base" under gates\.intent\.options is reserved/);
     expect(result.stderr).toMatch(/where a gate reads its rules from/);
+  });
+});
+
+/**
+ * Issue #58: action.yml's validate step refuses an explicit trust-base input
+ * outright on a pull_request event, but anyone invoking this CLI directly in
+ * CI bypasses that step. GITHUB_BASE_REF is Actions' own pull-request signal,
+ * and the composite action itself always passes exactly
+ * origin/$GITHUB_BASE_REF, so this only ever refuses a ref that disagrees
+ * with that.
+ */
+describe('the CLI refuses an explicit trust-base that disagrees with GITHUB_BASE_REF (issue #58)', () => {
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  function rev(repo: string, ref: string): string {
+    return spawnSync('git', ['rev-parse', ref], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+  }
+
+  /**
+   * A repository with a base commit on "base", a "pull request" commit on
+   * top of it (HEAD), and a remote-tracking ref standing in for
+   * origin/base: GITHUB_BASE_REF is a branch NAME Actions defines, and this
+   * package resolves it as origin/<name>, never as a local branch, so the
+   * fixture has to carry that ref for real rather than relying on a local
+   * branch of the same name (which a local merge or rebase would move but a
+   * stale remote-tracking ref would not).
+   */
+  function prRepo(): { repo: string; bin: string; base: string; head: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+
+    writeFileSync(
+      path.join(repo, '.guardrails.yaml'),
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '',
+      ].join('\n')
+    );
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    const base = rev(repo, 'HEAD');
+    git(repo, ['update-ref', 'refs/remotes/origin/base', base]);
+
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 2;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    const head = rev(repo, 'HEAD');
+
+    return { repo, bin, base, head };
+  }
+
+  it('refuses --trust-base naming the pull request branch, exit 2, naming both refs and commits', () => {
+    const { repo, bin, base, head } = prRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'main'], bin, {
+      env: { GITHUB_BASE_REF: 'base' },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/"main"/);
+    expect(result.stdout).toMatch(/origin\/base/);
+    expect(result.stdout).toMatch(/trust base must be the base branch/);
+    expect(result.stdout).toContain(head.slice(0, 12));
+    expect(result.stdout).toContain(base.slice(0, 12));
+  });
+
+  it('proceeds when --trust-base names origin/<GITHUB_BASE_REF> itself, which is what the Action passes', () => {
+    const { repo, bin } = prRepo();
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--trust-base', 'origin/base', '--verbose'],
+      bin,
+      { env: { GITHUB_BASE_REF: 'base' } }
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
+    expect(result.stdout).toMatch(/secrets\s+vault-guard/);
+  });
+
+  it('is a no-op when GITHUB_BASE_REF is unset, leaving the ORIGINAL refusal reason in place', () => {
+    // Mutation proof: if the new check ran unconditionally (dropping the
+    // GITHUB_BASE_REF guard), this would refuse with the #58 message instead;
+    // if it were wired in AFTER refuseTrustBaseRef instead of before, "main"
+    // would still refuse for the pre-existing reason and this test could not
+    // tell the two apart. Here GITHUB_BASE_REF is not set at all (childEnv
+    // scrubs it), so this run must fall straight through to the unchanged,
+    // pre-#58 refusal: "main" resolves to HEAD's own commit.
+    const { repo, bin } = prRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'main'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/the same commit as HEAD/);
+    expect(result.stdout).not.toMatch(/trust base must be the base branch/);
+  });
+
+  /**
+   * The real #58 shape, driven end to end through the CLI. HEAD is a merge
+   * commit -- first parent the base, second parent the pull request's own
+   * branch, exactly like GitHub's pull_request checkout -- and the base
+   * branch has genuinely MOVED since the fork, so the merge tree combines
+   * both sides and is identical to neither parent's tree. On refuseTrustBaseRef
+   * alone (today's code on main, with no #58 fix) --trust-base naming the
+   * second parent is ACCEPTED: neither the same-commit-as-HEAD check nor the
+   * equal-tree check has anything to catch. Only comparing against
+   * origin/<GITHUB_BASE_REF> closes it. See the unit-level version of this
+   * fixture in tests/trust-base.test.ts for why the two earlier fixtures in
+   * this describe do not exercise this gap: "main" there is HEAD's own
+   * commit, which refuseTrustBaseRef already refuses on its own.
+   */
+  function movedBaseMergeRepo(): { repo: string; bin: string; base: string; prBranchTip: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+
+    writeFileSync(
+      path.join(repo, '.guardrails.yaml'),
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '',
+      ].join('\n')
+    );
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'fork point']);
+
+    git(repo, ['checkout', '--quiet', '-b', 'pr-branch']);
+    writeFileSync(path.join(repo, 'feature.js'), 'const x = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    const prBranchTip = rev(repo, 'HEAD');
+
+    git(repo, ['checkout', '--quiet', 'main']);
+    writeFileSync(path.join(repo, 'base-only.txt'), 'moved on\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base moves on after the fork']);
+    const base = rev(repo, 'HEAD');
+
+    git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge the pull request', 'pr-branch']);
+    git(repo, ['update-ref', 'refs/remotes/origin/base', base]);
+
+    return { repo, bin, base, prBranchTip };
+  }
+
+  it('refuses the real #58 shape: a moved base and a merge commit whose second parent is the pull request branch', () => {
+    const { repo, bin, base, prBranchTip } = movedBaseMergeRepo();
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', prBranchTip], bin, {
+      env: { GITHUB_BASE_REF: 'base' },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/trust base must be the base branch/);
+    expect(result.stdout).toContain(prBranchTip.slice(0, 12));
+    expect(result.stdout).toContain(base.slice(0, 12));
   });
 });
 
