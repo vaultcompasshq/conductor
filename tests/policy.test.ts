@@ -329,17 +329,21 @@ describe('the reserved option list against the flags the umbrella writes', () =>
       baseSource: 'flag' as const,
       cleanup: () => {},
     };
+    // A report path and a config path on every call: the external gates need
+    // the first and take the second on a pull request, and the three npm
+    // gates ignore both.
+    const external = { reportPath: '/dev/null', configPath: '/dev/null' };
     const runs = [
-      gateArgs(gate, true, undefined),
-      gateArgs(gate, false, undefined),
-      gateArgs(gate, true, intent),
-      gateArgs(gate, false, { ...intent, paths: null }),
+      gateArgs(gate, true, undefined, undefined, external),
+      gateArgs(gate, false, undefined, undefined, external),
+      gateArgs(gate, true, intent, undefined, external),
+      gateArgs(gate, false, { ...intent, paths: null }, undefined, external),
       // Pull-request mode, in both shapes it can take. Without these the
       // derived direction below would not cover --trust-base at all, and a
       // policy file could write the flag that decides where a gate reads its
       // rules from, with the winner settled by that CLI argument parser.
-      gateArgs(gate, false, undefined, 'origin/main'),
-      gateArgs(gate, false, intent, 'origin/main'),
+      gateArgs(gate, false, undefined, 'origin/main', external),
+      gateArgs(gate, false, intent, 'origin/main', external),
     ];
     const flags = new Set<string>();
     for (const argv of runs) {
@@ -375,12 +379,8 @@ describe('the reserved option list against the flags the umbrella writes', () =>
     'osv-scanner': [],
   };
 
-  // TEMPORARY: gateArgs for the two external roles lands in the next task of
-  // the external-gates plan, and this filter is removed there.
-  const WIRED_ROLES = GATE_ROLES.filter((role) => role !== 'secrets-history' && role !== 'vulnerabilities');
-
   it('reserves every flag the umbrella writes, which is the direction that can hurt', () => {
-    for (const role of WIRED_ROLES) {
+    for (const role of GATE_ROLES) {
       const product = PRODUCT_FOR_ROLE[role];
       const reserved = new Set(RESERVED_OPTIONS[product]);
       const unreserved = [...flagsWritten(role)].filter((flag) => !reserved.has(flag)).sort();
@@ -389,7 +389,7 @@ describe('the reserved option list against the flags the umbrella writes', () =>
   });
 
   it('reserves nothing else without a stated reason', () => {
-    for (const role of WIRED_ROLES) {
+    for (const role of GATE_ROLES) {
       const product = PRODUCT_FOR_ROLE[role];
       const written = flagsWritten(role);
       const extra = RESERVED_OPTIONS[product].filter((key) => !written.has(key)).sort();
@@ -441,6 +441,46 @@ describe('gateArgs, --base on a pull-request run', () => {
     const argv = gateArgs(gateFor('intent'), false, undefined, 'origin/main');
     expect(argv).toContain('--trust-base');
     expect(argv).not.toContain('--base');
+  });
+});
+
+describe('gateArgs for the external gates', () => {
+  const gl = { role: 'secrets-history', product: 'gitleaks', enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} } as const;
+  const osv = { role: 'vulnerabilities', product: 'osv-scanner', enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} } as const;
+
+  it('scopes gitleaks to HEAD history on a local run and writes the report to the path the runner owns', () => {
+    const argv = gateArgs(gl, false, undefined, undefined, { reportPath: '/tmp/r.json' });
+    expect(argv).toEqual(['--report-format', 'json', '--report-path', '/tmp/r.json', '--exit-code', '3', '--redact', '--no-banner', '--log-opts', 'HEAD', '.']);
+  });
+
+  it('scopes gitleaks to base..HEAD and passes the base-ref config on a pull-request run', () => {
+    const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json', configPath: '/tmp/c.toml' });
+    expect(argv).toContain('--log-opts');
+    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('origin/main..HEAD');
+    expect(argv[argv.indexOf('--config') + 1]).toBe('/tmp/c.toml');
+    expect(argv).not.toContain('--trust-base');
+    expect(argv).not.toContain('--staged');
+  });
+
+  it('never passes --staged to gitleaks even when the run is staged', () => {
+    expect(gateArgs(gl, true, undefined, undefined, { reportPath: '/tmp/r.json' })).not.toContain('--staged');
+  });
+
+  it('throws when gitleaks is built without a report path, because its report cannot go to stdout', () => {
+    expect(() => gateArgs(gl, false, undefined, undefined, {})).toThrow(/report path/);
+  });
+
+  it('asks osv-scanner for json on stdout over the whole tree, with the base-ref config on a pull request', () => {
+    expect(gateArgs(osv, false, undefined, undefined, {})).toEqual(['--format', 'json', '--recursive', '.']);
+    const pr = gateArgs(osv, false, undefined, 'origin/main', { configPath: '/tmp/o.toml' });
+    expect(pr).toEqual(['--format', 'json', '--recursive', '--config', '/tmp/o.toml', '.']);
+  });
+
+  it('appends policy options after the umbrella flags and before the scan root', () => {
+    const argv = gateArgs({ ...osv, options: { 'call-analysis': true } }, false, undefined, undefined, {});
+    const i = argv.indexOf('--call-analysis');
+    expect(i).toBeGreaterThan(argv.indexOf('--recursive'));
+    expect(argv[argv.length - 1]).toBe('.');
   });
 });
 

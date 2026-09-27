@@ -537,7 +537,7 @@ git -C <worktree> commit -m "Capture gitleaks and osv-scanner fixtures and teach
   osv-scanner argv (after `scan source`): `--format json --recursive [--config <configPath>] . ...passthrough`.
 - Consumes: Task 2 roles.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/policy.test.ts` in the gateArgs block:
 
@@ -583,12 +583,12 @@ describe('gateArgs for the external gates', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts 2>&1 | tail -30`
 Expected: FAIL, the placeholder `throw` from Task 2 fires.
 
-- [ ] **Step 3: Implement the two cases**
+- [x] **Step 3: Implement the two cases**
 
 In `src/gate-runner.ts`:
 
@@ -626,12 +626,12 @@ export function gateArgs(
 
 The `--trust-base` flag is never passed to an external tool; `trustBase` is used only to scope history and select the config, which is what Task 7 materialises.
 
-- [ ] **Step 4: Run, then run the reserved-flag drift guard**
+- [x] **Step 4: Run, then run the reserved-flag drift guard**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts 2>&1 | tail -20`
 Expected: PASS, including "reserves every flag the umbrella writes" for the two new products (the guard calls `gateArgs` with a trust base; make sure the guard passes an `ExternalArgs` with a `reportPath` for gitleaks, or it will hit the throw; adjust the guard's call site to pass `{ reportPath: '/dev/null', configPath: '/dev/null' }` for every product, which the three npm gates ignore).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git -C <worktree> add src/gate-runner.ts tests/policy.test.ts

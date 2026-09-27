@@ -407,6 +407,16 @@ export function gateProgramRefused(
 }
 
 /**
+ * Files the runner owns on an external tool's behalf: where gitleaks writes
+ * its report, and the config materialised from the base ref on a pull
+ * request (src/external-config.ts).
+ */
+export interface ExternalArgs {
+  reportPath?: string;
+  configPath?: string;
+}
+
+/**
  * The arguments the umbrella adds, per product.
  *
  * These are the reserved options the policy schema refuses to let a user
@@ -430,10 +440,13 @@ export function gateArgs(
    * `decideTrustBase`; nothing here re-decides it, so a gate that cannot take
    * the flag is never handed one by a second opinion written in this switch.
    */
-  trustBase?: string
+  trustBase?: string,
+  /** Paths the runner owns for an external tool; the npm gates ignore them. */
+  external: ExternalArgs = {}
 ): string[] {
   const passthrough = renderOptionFlags(gate.options);
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
+  const config = external.configPath === undefined ? [] : ['--config', external.configPath];
   switch (gate.product) {
     case 'dep-guard': {
       // `scan` takes --trust-base from 0.6.0. It sits beside whatever the
@@ -502,9 +515,39 @@ export function gateArgs(
         ...passthrough,
       ];
     }
-    case 'gitleaks':
+    case 'gitleaks': {
+      if (external.reportPath === undefined) {
+        throw new Error('gitleaks needs a report path: it cannot write its report to stdout');
+      }
+      // --exit-code 3 moves the leak code off 1, which gitleaks also uses for
+      // errors, so a crash and a leak stop sharing a number. --log-opts is
+      // always set: gitleaks' default is git log --all, which on a checkout
+      // with fetch-depth 0 scans every branch, so one branch's secret would
+      // redden every other pull request. --staged has no meaning here, and
+      // --trust-base is never handed to an external tool: the trust base
+      // scopes the history and selects the config, and that is all.
+      const scope = trustBase === undefined ? 'HEAD' : `${trustBase}..HEAD`;
+      return [
+        '--report-format',
+        'json',
+        '--report-path',
+        external.reportPath,
+        '--exit-code',
+        '3',
+        '--redact',
+        '--no-banner',
+        '--log-opts',
+        scope,
+        ...config,
+        ...passthrough,
+        '.',
+      ];
+    }
     case 'osv-scanner':
-      throw new Error('external gates are wired in a later task');
+      // JSON goes to stdout and everything else to stderr, so no report
+      // file. The tree is scanned recursively from the repository root; the
+      // policy may narrow it through options.
+      return ['--format', 'json', '--recursive', ...config, ...passthrough, '.'];
   }
 }
 
