@@ -1391,6 +1391,93 @@ describe('pull-request mode through the CLI', () => {
 });
 
 /**
+ * Issue #69: a pull request whose net diff is empty (a value committed and
+ * then backed out in the same pull request) builds a merge ref whose tree is
+ * byte-identical to the base's. The ordinary equal-tree refusal would stop
+ * secrets-history from running on exactly the shape it exists to catch, so
+ * this shape is the one accepted exception, and every other enabled gate is
+ * reported as tree-unchanged rather than spawned.
+ */
+describe('the equal-tree exception through the CLI (issue #69)', () => {
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  /**
+   * A repository shaped like the proof repository's secret-in-history pull
+   * request: a base commit carrying the policy, a "base-ref" branch left
+   * pointing at it (standing in for origin/main, which does not advance when
+   * a local merge does), and main advanced by a --no-ff merge of a branch
+   * that added a file and then removed it, so HEAD's tree matches the base's
+   * and HEAD's first parent is the base commit.
+   *
+   * dep-guard is deliberately left unstubbed: if the runner spawned it
+   * anyway, its missing binary would surface as a could-not-run finding,
+   * which the assertions below on stdout and on the exit code would catch.
+   */
+  function equalTreeMergeRepo(): { repo: string; bin: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      reportFlag: '--report-path',
+      reportBody: '[]',
+      exit: 0,
+      stdout: '',
+    });
+
+    writeFileSync(
+      path.join(repo, '.guardrails.yaml'),
+      [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets-history:',
+        '    product: gitleaks',
+        '',
+      ].join('\n')
+    );
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base-ref']);
+
+    git(repo, ['checkout', '--quiet', '-b', 'feature']);
+    writeFileSync(path.join(repo, 'secret.txt'), 'a-planted-secret-value\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'add a secret']);
+    git(repo, ['rm', '--quiet', 'secret.txt']);
+    git(repo, ['commit', '--quiet', '-m', 'back it out, tree matches base again']);
+
+    git(repo, ['checkout', '--quiet', 'main']);
+    git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge feature', 'feature']);
+
+    return { repo, bin };
+  }
+
+  it('runs the history gate and reports dependencies as tree-unchanged, without spawning it', () => {
+    const { repo, bin } = equalTreeMergeRepo();
+
+    const result = runCli(repo, ['run', '--trust-base', 'base-ref', '--verbose'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/secrets-history\s+gitleaks/);
+    expect(result.stdout).toMatch(/tree-unchanged\s+dependencies\s+dep-guard/);
+    expect(result.stdout).not.toMatch(/no dep-guard binary/);
+    expect(result.stdout).not.toMatch(/conductor\/gate-missing/);
+  });
+});
+
+/**
  * The program that judges the pull request, not only the rules it judges by.
  *
  * Reading the rules from the base ref is worth nothing if the pull request

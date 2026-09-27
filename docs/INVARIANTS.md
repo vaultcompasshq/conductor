@@ -1156,6 +1156,114 @@ more coverage than there is:
    committed; the fix is to read the spec from the base ref too, and it is
    not in this release.
 
+### The equal-tree exception: first-parent identity, and only that
+
+New for issue #69. The identical-tree refusal above is right for what it was
+built for -- a trust base that IS the head, or the merge commit, or the pull
+request's own branch, puts the policy back inside the tree under judgment --
+and it was also blinding secrets-history (gitleaks) on the one shape it
+exists to catch: a value committed and then backed out inside one pull
+request. The merge ref GitHub builds for such a pull request has a tree
+byte-identical to the base's, because the net diff is empty, so the refusal
+fired before any gate ran, including the one whose whole job is history
+rather than the tree. Found in the proof repository at commit 21aebe9 on
+`proof/secret-in-history`, before a third commit was added to move the tree
+and make the ordinary (non-empty-diff) shape run instead.
+
+THE DISCRIMINATOR IS FIRST-PARENT IDENTITY, NOT ANCESTRY, and that is the
+whole of the fix (`refuseTrustBaseRef`, src/trust-base.ts:158-210, the
+exception at 189-199; `headParents`, src/trust-base.ts:104-117). GitHub
+always builds a pull request's merge ref with the base branch as the FIRST
+parent and the pull request's own head as the SECOND, so a trust base that
+resolves to HEAD's first parent is the ref the merge commit was actually
+built from. HEAD's second parent -- the pull request's own branch -- is an
+ancestor of HEAD too, and carries the identical tree too, so an ancestor
+check alone cannot tell the two apart and would trust the pull request's own
+branch, which is exactly the hole this whole file exists to close. The
+exception applies ONLY when HEAD has two or more parents (a real merge
+commit, `git rev-list --parents -n 1 HEAD`) and the ref IS that first parent;
+every other equal-tree shape -- a non-merge HEAD, the second parent, any
+other ancestor -- keeps refusing with the unchanged message. The
+same-commit refusal above it is untouched.
+
+`refuseTrustBaseRef`'s return type is unchanged, `string | null`, on purpose:
+folding the tree-matched fact into it would have touched every existing
+caller and test of a function whose contract every other refusal already
+depends on. Instead a separate function, `headTreeEqualsBase`
+(src/trust-base.ts:131-135), answers the one question the accepted path still
+needs answered, and it is called from exactly one place, `policyForRun` in
+cli.ts (src/cli.ts:263), immediately after `refuseTrustBaseRef` has already
+returned null. That ordering matters: `headTreeEqualsBase` is not itself a
+second opinion about whether to refuse, it only tells the caller which of the
+two ways an unrefused run can be true -- the trees differ, the ordinary case,
+or they match, this one -- so the caller can decide which gates have
+something to judge.
+
+THE RUN DOES NOT JUDGE THE UNCHANGED TREE AS IF IT WERE THE CHANGE. A new
+`readsHistory` flag on the product profile (src/products.ts) is true only for
+gitleaks, because it is the only one of the five gates whose input is git
+history rather than the tree being judged: dep-guard and vault-guard scan the
+tree, intent-guard reads a diff of paths, osv-scanner reads lockfiles in the
+tree. When `RunTrustBase.treeUnchanged` is true, `splitOnTreeUnchanged`
+(src/run.ts:446-463, called from `runAll` at src/run.ts:467) partitions the
+gates a stage and a `--gate` flag already left in: every gate whose profile
+says `readsHistory` is kept and spawned with its ORDINARY arguments -- for
+gitleaks that already means `--log-opts <base>..HEAD` (`gateArgs`,
+src/gate-runner.ts:591-615), which is the range that still holds whatever was
+committed and backed out even though neither tree shows it -- and every other
+enabled gate is recorded in a new `RunResult.treeUnchanged` list instead of
+being spawned at all. `treeUnchanged` is false, and the split is a no-op,
+outside this one shape.
+
+`TreeUnchangedGate` (src/run.ts) is deliberately the same shape as
+`DeferredGate` and `ExcludedGate`, and for the same reason those two are not a
+`GateOutcome`: no binary was looked for, nothing was spawned, and there is no
+exit code to report. It is reported the same way those two are, at all three
+levels: one line in the full text report (`treeUnchangedLines`,
+src/output-text.ts:291-305, folded into the aside alongside deferred,
+skipped and excluded lines), a clause on the one-line clean summary
+(`summaryLine`, src/output-text.ts) and its own verdict branch for the case
+where every enabled gate landed in this list, and a `conductor/tree-unchanged`
+notification in the SARIF log (`treeUnchangedNotifications`,
+src/output-sarif.ts:611-630, a NOTE by the same discriminator as
+`gate-deferred` and `gate-excluded`: this is a statement about how much of
+the policy the run covered, not about anybody's code). None of the three
+reaches the exit code, which composes only from `outcomes`
+(`composeExitCode`, src/exit-codes.ts), and `outcomes` never contains a
+tree-unchanged gate.
+
+WHY THIS MATTERS CONCRETELY: dep-guard 0.8.0, handed both `--trust-base` and
+`--base` where `--base` resolves to a ref whose tree equals HEAD's, refuses
+with exit 2 (its own equal-tree guard, mirroring this file's). Running it
+anyway on an unchanged tree would turn the whole conductor run into
+could-not-run and defeat the fix by making the one accepted shape as broken
+as the refusal it replaces. Not running it at all is therefore not an
+economy, it is the second half of the fix.
+
+Pinned by: the acceptance and refusal decisions themselves, in
+tests/trust-base.test.ts (a merge commit whose first parent is the trust base
+is not refused even with an identical tree; the same shape with the trust
+base at the SECOND parent is refused with the identical-tree message; a
+non-merge HEAD with an equal-tree ancestor is still refused; and
+`headTreeEqualsBase` is true on the accepted path and false when the trees
+differ). The split itself, in tests/run.test.ts ("the equal-tree exception
+(issue #69)"): only the history gate is spawned and every other enabled gate
+is recorded as tree-unchanged, dep-guard and the other three are deliberately
+left unstubbed so a mutation that spawned one anyway surfaces as a
+could-not-run gate rather than passing silently; the exit code comes from the
+history gate alone in both directions (clean and blocking); and a run with
+`treeUnchanged: false` skips nothing, so the ordinary pull-request path is
+pinned not to have moved. End to end through the CLI, tests/cli.test.ts ("the
+equal-tree exception through the CLI"), against a real repository built with
+an actual `git merge --no-ff`, asserting the history gate's own section
+appears, the tree-unchanged line names the skipped gate, and neither a
+could-not-run finding nor `conductor/gate-missing` appears for the gate that
+was never spawned. The reports, in tests/output-text.test.ts and
+tests/output-sarif.test.ts ("a gate skipped because the head tree is
+unchanged"): the full-report line, the one-line summary clause, the verdict
+branch for an empty gate list, and the SARIF notification at note level,
+absent entirely when nothing was skipped this way.
+
 ## The intent gate's own reasons are classified by prefix, and every prefix is a liability
 
 The intent gate can block for reasons that are neither a budget violation

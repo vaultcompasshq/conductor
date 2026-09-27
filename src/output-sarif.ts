@@ -609,6 +609,27 @@ function excludedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * The gates skipped because the head tree equals the trust base's tree, as
+ * notifications (issue #69).
+ *
+ * Same discriminator as excludedNotifications just above: how much of the
+ * policy this run covered is a statement about the run, not about anybody's
+ * code, so it is a NOTE and never a result. Reachable only on the one
+ * accepted equal-tree shape (a merge commit whose first parent is the trust
+ * base; see trust-base.ts), where every enabled gate whose profile does not
+ * say readsHistory is recorded here instead of being spawned.
+ */
+function treeUnchangedNotifications(result: RunResult): Notification[] {
+  return result.treeUnchanged.map((gate) => ({
+    id: 'conductor/tree-unchanged',
+    message:
+      `The ${gate.role} gate (${gate.product}) did not run: the head tree is identical to the ` +
+      'base tree, so there is no change for this gate to judge.',
+    details: { role: gate.role, product: gate.product },
+  }));
+}
+
+/**
  * The gates that had nothing to check, as notifications.
  *
  * The descriptor id is the GATE'S namespace rather than the umbrella's,
@@ -961,6 +982,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
   const notifications = [
     ...deferredNotifications(result),
     ...excludedNotifications(result),
+    ...treeUnchangedNotifications(result),
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),

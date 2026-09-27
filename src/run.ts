@@ -17,6 +17,7 @@ import {
 } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Policy, Product } from './policy.js';
 import { GATE_ROLES, enabledGates, runsAtStage } from './policy.js';
+import { profileFor } from './products.js';
 import { ResolveError, resolveGateBinary } from './resolve.js';
 import { POLICY_PROPOSAL_LINE } from './trust-base.js';
 
@@ -48,6 +49,25 @@ export interface DeferredGate {
  * spawned, and there is no exit code to report.
  */
 export interface ExcludedGate {
+  role: GateRole;
+  product: Product;
+}
+
+/**
+ * An enabled gate skipped because the head tree equals the trust base's tree
+ * (issue #69).
+ *
+ * Only reachable when `RunTrustBase.treeUnchanged` is true, which itself only
+ * happens on the one accepted equal-tree shape (see trust-base.ts): a merge
+ * commit whose first parent is the base. In that shape a tree-reading gate
+ * has nothing to judge that the base ref did not already judge, so it is
+ * recorded here rather than run, exactly the way DeferredGate and
+ * ExcludedGate record a gate that did not run rather than reporting it as
+ * clean. NOT a GateOutcome, for the same reason those two are not one: no
+ * binary was looked for, nothing was spawned, and there is no exit code to
+ * report.
+ */
+export interface TreeUnchangedGate {
   role: GateRole;
   product: Product;
 }
@@ -125,6 +145,23 @@ export interface RunTrustBase {
    * depth 1 and so carries no base ref.
    */
   refusal: string | null;
+  /**
+   * Whether HEAD's tree is byte-identical to this ref's tree, on a run that
+   * was not refused (issue #69).
+   *
+   * OPTIONAL, and read as false wherever absent, rather than a required
+   * field: most `RunTrustBase` values in this codebase's own tests are built
+   * by hand for a run where the trees plainly differ, and a required field
+   * would be a mechanical edit to every one of them for a fact that is false
+   * in all of them. The one place this is actually computed is `policyForRun`
+   * in cli.ts, which calls `headTreeEqualsBase` (trust-base.ts) right after
+   * `refuseTrustBaseRef` returns null, on the one shape that check accepts
+   * despite an identical tree. `runAll` reads it to decide which enabled
+   * gates run: every gate whose profile says `readsHistory` runs as usual,
+   * and every other enabled gate is recorded in `RunResult.treeUnchanged`
+   * instead of being spawned.
+   */
+  treeUnchanged?: boolean;
 }
 
 export interface RunResult {
@@ -137,6 +174,11 @@ export interface RunResult {
   skipped: SkippedGate[];
   /** Gates the --gate flag left out. Empty with no --gate. */
   excluded: ExcludedGate[];
+  /**
+   * Enabled gates skipped because the head tree equals the trust base's tree
+   * (issue #69). Always empty outside that one shape.
+   */
+  treeUnchanged: TreeUnchangedGate[];
   /**
    * Every finding, flat across products, ordered blocking-first. Which gate
    * produced a finding is IN the finding rather than in the structure, so a
@@ -329,6 +371,9 @@ export function refusedTrustBase(
     deferred,
     skipped: [],
     excluded,
+    // Always empty here: the equal-tree exception only ever applies to a run
+    // that was NOT refused, and this whole function is the refused path.
+    treeUnchanged: [],
     findings,
     // policyChanged is unknowable: the base side of the comparison is the
     // thing that could not be read. False rather than a third state, because
@@ -382,8 +427,44 @@ function nativeContractOption(repoRoot: string): { intentContract?: string } {
   return contract === null ? {} : { intentContract: contract };
 }
 
+/**
+ * Splits the gates a stage and a --gate flag left in two: the ones this run
+ * actually spawns, and the ones it records as tree-unchanged instead
+ * (issue #69).
+ *
+ * A no-op, returning `gates` unchanged with an empty second list, whenever
+ * `treeUnchanged` is not true -- which is every run outside the one accepted
+ * equal-tree shape (`headTreeEqualsBase`, called from `policyForRun` in
+ * cli.ts right after `refuseTrustBaseRef` returns null). Inside that shape a
+ * tree-reading gate has nothing to judge that the base ref did not already
+ * judge, so only the gates whose profile says `readsHistory` -- gitleaks
+ * today, see src/products.ts -- are kept to run with their ordinary
+ * arguments; gitleaks already gets `--log-opts <base>..HEAD`
+ * (src/gate-runner.ts, gateArgs), which is the range that still holds
+ * whatever was committed and backed out.
+ */
+function splitOnTreeUnchanged(
+  gates: GatePolicy[],
+  trustBase: RunTrustBase | undefined
+): { toRun: GatePolicy[]; treeUnchanged: TreeUnchangedGate[] } {
+  if (trustBase?.treeUnchanged !== true) {
+    return { toRun: gates, treeUnchanged: [] };
+  }
+  const toRun: GatePolicy[] = [];
+  const treeUnchanged: TreeUnchangedGate[] = [];
+  for (const gate of gates) {
+    if (profileFor(gate.product).readsHistory) {
+      toRun.push(gate);
+    } else {
+      treeUnchanged.push({ role: gate.role, product: gate.product });
+    }
+  }
+  return { toRun, treeUnchanged };
+}
+
 export function runAll(policy: Policy, options: RunOptions): RunResult {
-  const { gates, deferred, excluded } = partitionGates(policy, options.stage);
+  const { gates: partitioned, deferred, excluded } = partitionGates(policy, options.stage);
+  const { toRun: gates, treeUnchanged } = splitOnTreeUnchanged(partitioned, options.trustBase);
 
   const env = options.env ?? {};
   const skipped: SkippedGate[] = [];
@@ -521,6 +602,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     deferred,
     skipped,
     excluded,
+    treeUnchanged,
     findings,
     trustBase: options.trustBase ?? null,
     proposals: collectProposals(outcomes, options.trustBase),

@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import {
   atLeastVersion,
+  headTreeEqualsBase,
   policyDiffers,
   readPolicyAtRef,
   refuseTrustBaseRef,
@@ -47,6 +48,31 @@ function commit(repo: string, files: Record<string, string>, message: string): s
   git(repo, ['add', '-A']);
   git(repo, ['commit', '--quiet', '-m', message]);
   return git(repo, ['rev-parse', 'HEAD']).trim();
+}
+
+/** Removes a tracked file and commits the removal, returning the new HEAD. */
+function removeAndCommit(repo: string, name: string, message: string): string {
+  git(repo, ['rm', '--quiet', name]);
+  git(repo, ['commit', '--quiet', '-m', message]);
+  return git(repo, ['rev-parse', 'HEAD']).trim();
+}
+
+/**
+ * A repository shaped like the proof repository's secret-in-history pull
+ * request: a base commit, a branch that adds a file and then removes it (so
+ * the branch tip's tree is byte-identical to the base's), merged with
+ * --no-ff so HEAD is a merge commit whose first parent is the base and whose
+ * second parent is the branch tip. Returns both commits.
+ */
+function equalTreeMergeRepo(): { repo: string; base: string; branchTip: string } {
+  const repo = emptyRepo();
+  const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+  git(repo, ['checkout', '--quiet', '-b', 'feature']);
+  commit(repo, { 'secret.txt': 'a-planted-secret-value\n' }, 'add a secret');
+  const branchTip = removeAndCommit(repo, 'secret.txt', 'back it out, tree matches base again');
+  git(repo, ['checkout', '--quiet', 'main']);
+  git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge feature', 'feature']);
+  return { repo, base, branchTip };
 }
 
 const BASE_POLICY = [
@@ -111,6 +137,63 @@ describe('refusing a trust base', () => {
     // first refusal. What matters is that it refuses rather than reading the
     // working tree.
     expect(refuseTrustBaseRef(repo, 'HEAD')).not.toBeNull();
+  });
+
+  it('does not refuse a merge commit whose first parent is the trust base, even with an identical tree', () => {
+    // This is the proof repository's shape: a value committed and then
+    // backed out inside one pull request, so the merge ref's tree is
+    // byte-identical to the base's. GitHub builds that merge ref with the
+    // base as the FIRST parent, which is the fact that tells this shape
+    // apart from the ordinary "base resolves to HEAD's tree" misconfiguration
+    // the test above pins.
+    const { repo, base } = equalTreeMergeRepo();
+
+    expect(refuseTrustBaseRef(repo, base)).toBeNull();
+  });
+
+  it('refuses when the trust base is the SECOND parent, even though it is also an ancestor', () => {
+    // The pull request's own branch tip is an ancestor of the merge commit
+    // too, so an ancestor check alone would accept it. It must not: that
+    // branch is the tree being judged, and trusting it is the hole this
+    // whole file exists to close. First-parent identity, not ancestry, is
+    // the discriminator.
+    const { repo, branchTip } = equalTreeMergeRepo();
+
+    const refusal = refuseTrustBaseRef(repo, branchTip);
+    expect(refusal).toMatch(/identical tree/);
+    expect(refusal).toMatch(/Nothing was checked/);
+  });
+
+  it('still refuses a non-merge HEAD with an equal-tree ancestor', () => {
+    // The exception is narrow: without a second parent on HEAD there is no
+    // merge-ref shape to distinguish, so the ordinary refusal stands. Same
+    // repository shape as "refuses a different commit that carries an
+    // identical tree" above, restated here so a change that widened the
+    // exception past merge commits would be caught beside it.
+    const repo = emptyRepo();
+    commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'first');
+    git(repo, ['commit', '--quiet', '--allow-empty', '-m', 'second, same tree, not a merge']);
+
+    const refusal = refuseTrustBaseRef(repo, 'HEAD~1');
+    expect(refusal).toMatch(/identical tree/);
+  });
+});
+
+describe('whether the head tree equals the trust base tree', () => {
+  it('is true on the accepted merge-ref shape, so the caller can still tell the trees matched', () => {
+    const { repo, base } = equalTreeMergeRepo();
+
+    expect(refuseTrustBaseRef(repo, base)).toBeNull();
+    expect(headTreeEqualsBase(repo, base)).toBe(true);
+  });
+
+  it('is false when the trees differ', () => {
+    const repo = emptyRepo();
+    commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['branch', 'base']);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+
+    expect(headTreeEqualsBase(repo, 'base')).toBe(false);
   });
 });
 

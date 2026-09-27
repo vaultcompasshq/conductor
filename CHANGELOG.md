@@ -14,6 +14,31 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- **Fixed:** a pull request whose net diff is empty (a value committed and
+  then backed out inside the same pull request) built a merge ref whose tree
+  was byte-identical to the base branch's, and the equal-tree refusal in
+  `refuseTrustBaseRef` treated that exactly like a trust base that resolves
+  to the head or the merge commit itself: exit 2, nothing checked, including
+  secrets-history (gitleaks), whose whole job is history rather than the
+  tree and which had something to find. Found in the public proof
+  repository's `proof/secret-in-history` pull request, at commit 21aebe9,
+  before a third commit was added to move the tree and make the ordinary
+  shape run instead. The refusal now makes one exception, and only one: a
+  merge commit whose first parent is the trust base is not refused, because
+  that is precisely the shape GitHub's own merge ref takes on an
+  empty-net-diff pull request, and first-parent identity (never ancestry) is
+  what tells it apart from the pull request's own branch, which is also an
+  ancestor of the merge commit, also carries the same tree, and must keep
+  being refused. Nothing about the ordinary refusals relaxes: the same
+  commit as HEAD, a non-merge HEAD with an equal-tree ancestor, and the
+  trust base resolving to HEAD's second parent are all refused exactly as
+  before. In the one accepted shape, every enabled gate whose input is git
+  history rather than the tree (gitleaks today) still runs, with its
+  ordinary arguments; every other enabled gate is reported as tree-unchanged
+  rather than spawned, with its own line in the report, its own clause on
+  the one-line summary, and its own `conductor/tree-unchanged` SARIF
+  notification, and none of it reaches the exit code (issue #69).
+
 ## [0.5.1] - 2026-09-27
 
 **An action-only release. The tag moves; the npm package does not.**
