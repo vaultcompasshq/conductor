@@ -164,16 +164,23 @@ function readDiagnostics(value: unknown, product: string, where: string): Diagno
  * installed dep-guard may send none of it, all of it, or a shape with the
  * wrong field types. This is reporting, not judgment: a malformed value here
  * must never turn into a could-not-run for the gate, so nothing here throws.
- * Only the three fields the umbrella actually displays are validated; a
- * present-but-wrong-typed one of those invalidates the whole object (there is
- * nothing honest left to report from it), while `enabled` and `budgetMs`,
- * which are read best-effort for the cut-short message, never do.
+ * Only the fields the umbrella actually displays are validated; a
+ * present-but-wrong-typed one of those invalidates the whole object, because
+ * there is nothing honest left to report from it once one claim is suspect.
+ *
+ * `enabled` is dep-guard's OWN statement about whether it actually ran
+ * online for this scan, which is a different question from whether the
+ * umbrella passed `--online`: dep-guard also turns online checks on from
+ * `"online": true` in `.dep-guard.json`, with no flag at all, so a
+ * config-driven run has `enabled: true` while the umbrella's own argv never
+ * saw `--online`. When this field is present and valid it wins over the
+ * flag; the flag is a fallback statement about what the umbrella asked for,
+ * never a claim about what dep-guard actually did.
  */
 interface DepGuardOnlineInfo {
+  enabled?: boolean;
   lookupsAttempted?: number;
   lookupsSkippedByDeadline?: number;
-  deadlineExceeded?: boolean;
-  budgetMs?: number;
 }
 
 function readOnlineInfo(value: unknown): DepGuardOnlineInfo | null {
@@ -181,6 +188,12 @@ function readOnlineInfo(value: unknown): DepGuardOnlineInfo | null {
     return null;
   }
   const info: DepGuardOnlineInfo = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      return null;
+    }
+    info.enabled = value.enabled;
+  }
   if (value.lookupsAttempted !== undefined) {
     if (typeof value.lookupsAttempted !== 'number' || !Number.isFinite(value.lookupsAttempted)) {
       return null;
@@ -196,31 +209,7 @@ function readOnlineInfo(value: unknown): DepGuardOnlineInfo | null {
     }
     info.lookupsSkippedByDeadline = value.lookupsSkippedByDeadline;
   }
-  if (value.deadlineExceeded !== undefined) {
-    if (typeof value.deadlineExceeded !== 'boolean') {
-      return null;
-    }
-    info.deadlineExceeded = value.deadlineExceeded;
-  }
-  // budgetMs is cosmetic (it only decorates the cut-short message), so a bad
-  // value for it is dropped rather than invalidating fields that ARE honest.
-  if (typeof value.budgetMs === 'number' && Number.isFinite(value.budgetMs)) {
-    info.budgetMs = value.budgetMs;
-  }
   return info;
-}
-
-/** The sentence for a budget that cut dep-guard's online lookups short. */
-function onlineCutShortMessage(info: DepGuardOnlineInfo): string {
-  const budget = info.budgetMs === undefined ? 'its budget' : `its ${info.budgetMs}ms budget`;
-  const skipped =
-    info.lookupsSkippedByDeadline === undefined
-      ? ''
-      : ` ${info.lookupsSkippedByDeadline} lookup(s) were not attempted.`;
-  return (
-    `dep-guard's online checks were cut short by ${budget}, so some package names ` +
-    `were not looked up.${skipped}`
-  );
 }
 
 export function normalizeDepGuard(
@@ -279,20 +268,6 @@ export function normalizeDepGuard(
     diagnostics
   );
 
-  // Diagnostics never move dep-guard's own exit code, so they stay out of
-  // findings[] here too rather than becoming pseudo-findings. An installed
-  // dep-guard old enough to have no `run.online` object still raises its own
-  // online-deadline-exceeded diagnostic here when its budget ran out, and it
-  // is carried through unchanged (issue #72's fallback for dep-guard 0.8.0
-  // and older).
-  const runDiagnostics = readDiagnostics(run.diagnostics, product, 'run.diagnostics');
-  if (onlineInfo?.deadlineExceeded === true) {
-    runDiagnostics.push({
-      code: 'conductor/online-budget-cut-short',
-      message: onlineCutShortMessage(onlineInfo),
-    });
-  }
-
   return {
     findings,
     // Third gate, same key, same two fields read. dep-guard carries three
@@ -304,15 +279,29 @@ export function normalizeDepGuard(
       failOn: threshold,
       suppressed: typeof root.suppressed === 'number' ? root.suppressed : 0,
       ignored: typeof root.ignored === 'number' ? root.ignored : 0,
-      diagnostics: runDiagnostics,
+      // Diagnostics never move dep-guard's own exit code, so they stay out
+      // of findings[] here too rather than becoming pseudo-findings. An
+      // installed dep-guard old enough to have no `run.online` object, or
+      // one whose online object says the budget ran out, raises its own
+      // online-deadline-exceeded diagnostic here, and it is carried through
+      // unchanged rather than the umbrella minting a second note about the
+      // same event (issue #72 fix round: dep-guard's own diagnostic already
+      // names the count, so nothing here duplicates it).
+      diagnostics: readDiagnostics(run.diagnostics, product, 'run.diagnostics'),
       details: {
         mode: run.mode ?? null,
         corpusBuiltAt: run.corpusBuiltAt ?? null,
         lockfileFormat: run.lockfileFormat ?? null,
-        // Whether --online was passed is answered from the umbrella's own
-        // argv, never from dep-guard's JSON, so the two nothing-changed
-        // cases (never asked, asked and quiet) are told apart (issue #72).
-        online: onlineRequested,
+        // dep-guard's own `enabled` claim wins whenever the online object is
+        // present and valid: dep-guard can turn online checks on from
+        // ".dep-guard.json"'s own "online" key with no flag at all, so the
+        // umbrella's argv does not always know the true answer. Only when
+        // there is no trustworthy claim to read does this fall back to
+        // stating what the umbrella itself asked for, worded so it is never
+        // mistaken for a claim about what dep-guard actually did.
+        ...(onlineInfo?.enabled === undefined
+          ? { 'online-flag': onlineRequested ? 'passed' : 'not passed' }
+          : { online: onlineInfo.enabled }),
         ...(onlineInfo?.lookupsAttempted === undefined
           ? {}
           : { lookups: onlineInfo.lookupsAttempted }),

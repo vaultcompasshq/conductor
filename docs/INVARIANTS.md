@@ -3575,31 +3575,70 @@ nothing-to-scan paths are unchanged: both return before
 all, and a reader tells "scanned one lockfile, clean" from "scanned
 nothing" by whether the fact is there.
 
-DEP-GUARD'S ONLINE REPORTING IS TWO INDEPENDENT SOURCES, AND ONE OF THEM IS
-NEVER TRUSTWORTHY BY ITSELF (issue #72). Whether `--online` was passed is
-answered from the umbrella's own constructed argv
-(`argv.includes('--online')`, src/gate-runner.ts:1388), never from
-dep-guard's JSON, because a flag the umbrella did not pass and a flag
-dep-guard quietly ignored look identical in the tool's own output. That
-answer is unconditional. dep-guard's own run-level `online` object (present
-from a release after 0.8.0) is read leniently on top of it
-(`readOnlineInfo`, src/normalize.ts:179-211): a value that is not an
-object, or is present with the wrong type for a field the umbrella actually
-displays, makes the whole object read as absent rather than throwing, so a
-shape dep-guard has not shipped yet, or ships wrong, degrades to the
-flag-derived fact alone and never to could-not-run. This is reporting, not
-judgment, so none of it -- the flag, the lookup and skipped-by-deadline
-counts, or the cut-short clause synthesized when `deadlineExceeded` is true
--- reaches `blocking`, a severity, or the gate's own exit code; only the
-child's exit code decides that, exactly as for every other gate.
+DEP-GUARD'S OWN CLAIM ABOUT WHETHER IT RAN ONLINE WINS OVER THE UMBRELLA'S
+FLAG, BECAUSE THE FLAG IS NOT THE ONLY WAY ONLINE CHECKS TURN ON (issue #72,
+fix round). dep-guard also turns them on from `"online": true` in its own
+`.dep-guard.json`, with no `--online` flag involved at all, so a
+config-driven run can have the umbrella's argv say the flag was never
+passed while dep-guard's own JSON says it ran online anyway. The umbrella
+CANNOT answer "did dep-guard run online" from its own argv; it can only
+answer "did I pass the flag", and printing the second as if it were the
+first states a fact the umbrella does not have and dep-guard's own JSON can
+directly contradict. So the umbrella now prints two different things
+depending on what it actually knows: when dep-guard's own run-level
+`online` object (present from a release after 0.8.0, read leniently by
+`readOnlineInfo`, src/normalize.ts:186-213) is present and its `enabled`
+field is a valid boolean, THAT field wins and prints as `online true` or
+`online false` (src/normalize.ts:302-304) -- dep-guard's own statement about
+what it did, never recomputed from the flag. Only when there is no such
+claim to read (the object is absent, or invalid, or has no `enabled` field)
+does the line fall back to `online-flag passed` or `online-flag not
+passed`, from the umbrella's own constructed argv
+(`argv.includes('--online')`, src/gate-runner.ts:1388) -- worded as a flag
+rather than as `online`, so it is never mistaken for the claim about what
+dep-guard actually did that only dep-guard's own JSON can make. `enabled`
+is validated the same way as the lookup and skipped-by-deadline fields it
+sits beside in `readOnlineInfo`: a wrong-typed value for any field the
+umbrella actually displays makes the whole object read as absent rather
+than throwing, so a shape dep-guard has not shipped yet, or ships wrong,
+degrades to the flag-derived line alone and never to could-not-run. This is
+reporting, not judgment, so none of it -- the flag, the enabled claim, or
+the lookup and skipped-by-deadline counts -- reaches `blocking`, a
+severity, or the gate's own exit code; only the child's exit code decides
+that, exactly as for every other gate.
 
-BOTH FACTS ARE CARRIED INTO SARIF, NOT JUST THE TEXT REPORT (issue #72).
-`renderSarif` adds the gate's own `run.details` bag to that gate's SARIF
-run as `properties.details`, verbatim and only when the bag is non-empty
-(src/output-sarif.ts:969), so the lockfile list and the online facts reach
-a published log the same way the text report's per-gate facts line does,
-through the one normalized bag rather than a second, SARIF-only rendering
-that could drift from it.
+THE UMBRELLA NEVER MINTS ITS OWN NOTE ABOUT DEP-GUARD'S BUDGET RUNNING OUT,
+BECAUSE DEP-GUARD ALREADY STATES IT (issue #72 fix round). An earlier draft
+of this fix synthesized a `conductor/online-budget-cut-short` diagnostic
+from the online object's `deadlineExceeded` field, pushed into the GATE's
+own `run.diagnostics` rather than the umbrella's `gate.diagnostics` -- an id
+prefixed `conductor/` describing something the gate itself said is not what
+that prefix means anywhere else in this file, it never reached SARIF (only
+`gate.diagnostics` renders there, output-sarif.ts:502), and it duplicated
+dep-guard's own `online-deadline-exceeded` diagnostic (deadline.ts's
+`ONLINE_DEADLINE_CODE`, in the parallel dep-guard branch) whenever both were
+present, printing one event as two notes. dep-guard's own diagnostic
+already names the count and the budget, so `readOnlineInfo` and
+`normalizeDepGuard` (src/normalize.ts:186-213, 290) read only `enabled`,
+`lookupsAttempted` and `lookupsSkippedByDeadline` -- the facts the umbrella
+states as its own -- and dep-guard's `online-deadline-exceeded` diagnostic
+reaches the report through the ordinary, unconditional
+`readDiagnostics(run.diagnostics, ...)` pass-through every dep-guard
+diagnostic always went through, unchanged by any of this.
+
+BOTH FACTS ARE CARRIED INTO SARIF, NOT JUST THE TEXT REPORT, AND NEITHER IS
+SPECIAL (issue #72). `renderSarif` adds a gate's WHOLE `run.details` bag to
+that gate's SARIF run as `properties.details`, verbatim and only when the
+bag is non-empty (src/output-sarif.ts:969), so the lockfile list and the
+online facts reach a published log the same way every other gate's own run
+facts do -- vault-guard's `ignoredReported`, intent-guard's `reasons` and
+`driftCategories`, gitleaks' `entries` -- through the one normalized bag
+rather than a second, SARIF-only rendering that could drift from it. SARIF
+gets the RAW bag, unfiltered: `ignoredReported` and any array or object
+value a gate's `run.details` carries reach SARIF even though the text
+report's facts line drops them (output-text.ts's `gateSection`, scalars
+only, so a structured value does not render as `[object Object]`), because
+`properties.details` is a JSON bag with no such constraint.
 
 Only the ROOT `osv-scanner.toml` is read from the base and passed with
 `--config`, which overrides any nested one for the run (measured on 2.6.0:

@@ -1172,10 +1172,43 @@ describe('the umbrella own findings', () => {
   });
 
   it('carries dep-guard\'s online reporting into that gate own run properties (issue #72)', () => {
-    const online = normalizeDepGuard(fixture('dep-guard-0.2.0-clean.json'), '0.2.0', true);
+    const raw = JSON.parse(JSON.stringify(fixture('dep-guard-0.2.0-clean.json'))) as {
+      run: Record<string, unknown>;
+    };
+    raw.run.online = { enabled: true, lookupsAttempted: 5, lookupsSkippedByDeadline: 2 };
+    const online = normalizeDepGuard(raw, '0.2.0', false);
     const log = sarif(result([outcome({ run: online.run, findings: [] })]));
     const details = (log.runs[0].properties as Record<string, Record<string, unknown>>).details;
     expect(details.online).toBe(true);
+    expect(details.lookups).toBe(5);
+    expect(details['skipped-by-deadline']).toBe(2);
+  });
+
+  it('pins the full non-empty run.details bag a real gate publishes into SARIF, not only the two new facts (issue #72 fix round)', () => {
+    // The strict properties assertions elsewhere in this file (e.g. "records
+    // which stage the gate ran at") pass on an empty details bag by
+    // construction; this one uses a real captured vault-guard run, so it
+    // pins that the WHOLE bag -- including ignoredReported, which the text
+    // report deliberately hides from its own facts line -- reaches SARIF
+    // verbatim, not just the vulnerabilities and dependencies facts added
+    // for issue #72.
+    const log = sarif(
+      result([
+        outcome({
+          role: 'secrets',
+          product: 'vault-guard',
+          productVersion: '1.4.2',
+          run: vaultGuard.run,
+          findings: [],
+        }),
+      ])
+    );
+    const vg = log.runs.find((r) => (r.tool as Record<string, Record<string, unknown>>).driver.name === 'vault-guard');
+    expect(vg?.properties).toEqual({
+      enforced: true,
+      stage: 'commit',
+      details: { filesScanned: 2, patternsActive: 59, ignoredReported: false },
+    });
   });
 
   it('also names an unenforced gate in the umbrella run, where a gate with no run still fits', () => {

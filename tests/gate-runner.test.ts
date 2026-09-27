@@ -114,7 +114,7 @@ describe('running one gate', () => {
     );
   });
 
-  it('reports online true from its own argv when --online was passed, and false when it was not (issue #72)', () => {
+  it('reports the online-flag as passed or not from its own argv, since DEP_GUARD_CLEAN carries no online object (issue #72)', () => {
     const bin = tempDir();
     stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
 
@@ -123,10 +123,12 @@ describe('running one gate', () => {
       staged: true,
       pathValue: bin,
     });
-    expect(withFlag.run.details.online).toBe(true);
+    expect(withFlag.run.details['online-flag']).toBe('passed');
+    expect(withFlag.run.details.online).toBeUndefined();
 
     const withoutFlag = runGate(gate(), { repoRoot: tempDir(), staged: true, pathValue: bin });
-    expect(withoutFlag.run.details.online).toBe(false);
+    expect(withoutFlag.run.details['online-flag']).toBe('not passed');
+    expect(withoutFlag.run.details.online).toBeUndefined();
   });
 
   it('omits --staged when the run is not a staged one', () => {
@@ -1103,6 +1105,11 @@ describe('external gate exit semantics', () => {
     expect(out.findings).toEqual([]);
     expect(out.productVersion).toBe('2.6.0');
     expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(true);
+    // EMPTY_RUN: no lockfile fact at all, which is what the text report
+    // relies on to tell "scanned one, clean" from "scanned nothing" (issue
+    // #72; pinned on the rendering side by "the vulnerabilities line tells a
+    // clean scan from nothing to scan" in tests/output-text.test.ts).
+    expect(out.run.details).toEqual({});
     // Only the version probe ran; a scan would have been logged.
     expect(existsSync(log)).toBe(false);
   });

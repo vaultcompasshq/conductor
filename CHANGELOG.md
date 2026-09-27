@@ -47,18 +47,27 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   with `--lockfile`, by count and name, and separates that from
   `sources-with-findings`, the count osv-scanner itself reported. The
   dependencies line showed dep-guard's mode and corpus date but nothing
-  about whether `--online` was passed, so a quiet run and an offline one
-  read the same; the line now always prints `online true` or `online false`
-  from the flag the umbrella itself passed, and, when the installed
-  dep-guard's JSON carries a run-level `online` object (read when present,
-  a dep-guard release after 0.8.0), also prints the lookup count and the
-  count skipped by its budget, with a clause when the budget cut lookups
-  short. An older dep-guard's own `online-deadline-exceeded` diagnostic
-  still surfaces, unchanged. A malformed `online` object is ignored rather
+  about whether it ran online, so a quiet run and an offline one read the
+  same; the line now prints `online true` or `online false` from dep-guard's
+  own run-level `online` object when the installed dep-guard sends one and
+  it names the field (read when present, a dep-guard release after 0.8.0),
+  including the lookup count and the count skipped by its budget, because
+  dep-guard also turns online checks on from its own config with no
+  `--online` flag at all, and only dep-guard's own claim can be trusted
+  about what it actually did. When there is no such claim to read, the line
+  prints `online-flag passed` or `online-flag not passed` instead, naming
+  only what the umbrella asked for rather than asserting a fact about what
+  ran. An older dep-guard's own `online-deadline-exceeded` diagnostic still
+  surfaces unchanged, and the umbrella never mints a second note about the
+  same budget-exceeded event. A malformed `online` object is ignored rather
   than failing the gate: this is reporting, not judgment, and none of it
   reaches a severity, `blocking`, or the exit code. Both facts are also
-  carried into the normalized gate details, so SARIF has them beside the
-  text report (issue #72).
+  carried into the normalized gate details, and every gate's whole
+  `run.details` bag is now published into SARIF as that gate's run
+  properties, not only these two: vault-guard's `ignoredReported`,
+  intent-guard's `reasons` and `driftCategories`, and gitleaks' own entries
+  all reach a published log the same way, verbatim, even where the text
+  report hides or filters them (issue #72).
 
 ## [0.5.1] - 2026-09-27
 
