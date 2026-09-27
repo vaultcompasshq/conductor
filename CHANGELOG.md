@@ -19,7 +19,7 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 **A minor package release.** `@vaultcompass/conductor` moves to 0.5.0 on npm
 and the action's `conductor-version` default moves to `0.5.0` in lockstep,
 the same number the `v0.5.0` tag names. This is a minor bump rather than a
-patch: two new gate roles and a behaviour change to `conductor init` both
+patch: two new gate roles and two behaviour changes to `conductor init` both
 change what the umbrella does, not just how it reports it.
 
 - **Behaviour change:** `conductor init` no longer writes a pre-commit hook
@@ -80,8 +80,9 @@ change what the umbrella does, not just how it reports it.
   extends, scans merge commits by their first-parent diff (one finding per
   leak, other commits listed), and logs at a pinned info level. `init`
   says in one line when it enabled an external gate because the tool was on
-  this machine's PATH. Unchanged: the three npm gates' behaviour, argv, exit reading,
-  version probe and timeout.
+  this machine's PATH. Unchanged by the two new roles: the three npm gates'
+  exit reading, version probe and timeout; their argv changes only where the
+  base-ref bullet above says so.
 
 ## [0.4.7] - 2026-09-26
 
