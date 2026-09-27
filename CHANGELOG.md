@@ -23,16 +23,28 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 ### Changed
 
 - **The umbrella now installs `dep-guard` 0.8.0 and `intent-guard` 1.6.0 by
-  default, up from 0.7.0 and 1.5.2.** dep-guard 0.8.0 adds the publish-age
-  online check and the `base` input; intent-guard 1.6.0 adds the `extract`
-  flag. Their own `TAG_DEP_GUARD_*` and `TAG_INTENT_GUARD_*` constants in
-  `action.yml` move in lockstep with the defaults, since those constants are
-  what the pull-request backward-pin rule measures a pin against.
-  `vault-guard-version` stays at `1.8.0` and `conductor-version` stays at
-  `0.5.0`; neither changes in this release. A workflow that pins either input
-  explicitly, to any version, is unaffected by this default move outside of a
-  pull request; the change only reaches an adopter who left the input at its
-  default.
+  default, up from 0.7.0 and 1.5.2.** What reaches an adopter through the
+  umbrella: dep-guard 0.8.0 adds the publish-age check, which runs only when
+  the `dependencies` gate's options set `online: true` and then reports a
+  dependency published inside its age floor at high, so it blocks at the
+  default threshold; the umbrella already passes dep-guard `--base` on a pull
+  request, so dep-guard's own new Action input is not involved here.
+  intent-guard 1.6.0 makes two changes that can REDUCE what the intent gate
+  blocks: a constraint sourced from a prose rules file (`CLAUDE.md`,
+  `AGENTS.md`, `GEMINI.md`, cursor rules) is now advisory and never fails the
+  run, and drift matching is coverage-based, with a partial match reported
+  but never reaching the exit code. A repository that relied on either to
+  block will see fewer blocking intent findings after this move. (1.6.0 also
+  gives `intent-guard extract` a `--protected-path` flag; the umbrella never
+  calls `extract`, so that one does not reach it.) Their own `TAG_DEP_GUARD_*`
+  and `TAG_INTENT_GUARD_*` constants in `action.yml` move in lockstep with
+  the defaults, since those constants are what the pull-request backward-pin
+  rule measures a pin against. `vault-guard-version` stays at `1.8.0` and
+  `conductor-version` stays at `0.5.0`; neither changes in this release.
+  Outside a pull request, a workflow that pins either input explicitly is
+  unaffected by this default move, and the change only reaches an adopter
+  who left the input at its default; on a pull request the next paragraph
+  applies.
 
   **The consumer cost.** On a pull request, the backward-pin rule now refuses
   `dep-guard-version` below `0.8.0` or `intent-guard-version` below `1.6.0`,
