@@ -8,7 +8,7 @@
 
 import { Command, CommanderError } from 'commander';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -95,6 +95,49 @@ function repoRoot(cwd: string): string {
   }
 }
 
+/**
+ * The repository root for one command, from --project when it was given and
+ * from the working directory otherwise (issue #55).
+ *
+ * --project changes WHERE the repository is, never WHAT is trusted: once
+ * resolved, the root it names goes through the exact same discovery as the
+ * working directory always has, `repoRoot`'s own `git rev-parse
+ * --show-toplevel`, so a subdirectory of a repository resolves to that
+ * repository's top level exactly as a bare `conductor init` or `conductor
+ * run` from that subdirectory already does. Nothing downstream of this
+ * function -- the trust-base checks, the node_modules/.bin skip on a
+ * pull-request run, the program-vetting rules -- reads the working directory
+ * again; every one of them takes this root explicitly.
+ *
+ * A relative value resolves against the working directory, never against
+ * anything already discovered, so this has to run before any git call. A
+ * path that does not exist, is not a directory, or is not inside a git
+ * repository is a usage error naming the path, never a silent fall back to
+ * the working directory: guessing which repository a scripted caller meant
+ * is how a CI job ends up gating the wrong tree while reporting a clean run
+ * of nothing.
+ */
+function resolveProjectRoot(cwd: string, project: string | undefined): string {
+  if (project === undefined) {
+    return repoRoot(cwd);
+  }
+  const resolved = path.resolve(cwd, project);
+  let stat;
+  try {
+    stat = statSync(resolved);
+  } catch {
+    throw new Error(`--project ${project}: no such directory (resolved to ${resolved}).`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`--project ${project}: not a directory (resolved to ${resolved}).`);
+  }
+  // repoRoot names `resolved` in its own "not a git repository" sentence,
+  // which is what makes that refusal name the path here too, without a
+  // second, separately-worded check that could drift from the one bare `cwd`
+  // already goes through.
+  return repoRoot(resolved);
+}
+
 interface RunCliOptions {
   staged?: boolean;
   format: string;
@@ -107,7 +150,15 @@ interface RunCliOptions {
   verbose?: boolean;
   compactOnRefusal?: boolean;
   advisory?: boolean;
+  project?: string;
 }
+
+const PROJECT_OPTION_HELP =
+  'run against this directory instead of the current one, resolved to its repository root ' +
+  'the same way the current directory already is: a subdirectory resolves to the top of that ' +
+  'repository. Relative values resolve against the current directory. A path that does not ' +
+  'exist, is not a directory, or is not inside a git repository is a usage error (exit 2) ' +
+  'naming the path, never a silent fall back to the current directory.';
 
 /**
  * The process exit code for a run, with --advisory applied.
@@ -355,6 +406,7 @@ export function buildProgram(): Command {
         'edited (needs --hook), or with --revert remove one and restore any adopted hook'
     )
     .option('--json', 'print the result as JSON')
+    .option('--project <dir>', PROJECT_OPTION_HELP)
     .exitOverride()
     .action(
       (options: {
@@ -364,48 +416,58 @@ export function buildProgram(): Command {
         revert?: boolean;
         force?: boolean;
         json?: boolean;
+        project?: string;
       }) => {
-        const cwd = process.cwd();
-        const shared = { cwd, pathValue: process.env.PATH ?? '' };
+        try {
+          const cwd = resolveProjectRoot(process.cwd(), options.project);
+          const shared = { cwd, pathValue: process.env.PATH ?? '' };
 
-        if (options.revert) {
-          const result = revertInit({
+          if (options.revert) {
+            const result = revertInit({
+              ...shared,
+              force: Boolean(options.force),
+              dryRun: Boolean(options.dryRun),
+            });
+            const rendered = `${renderRevertHuman(result)}\n`;
+            if (options.json) {
+              process.stdout.write(`${JSON.stringify(result)}\n`);
+            } else if (result.ok) {
+              process.stdout.write(rendered);
+            } else {
+              // A partial revert left something behind, so it is not success
+              // output. Writing it to stdout would let a script pipe it past a
+              // reader who needed to see it.
+              process.stderr.write(rendered);
+            }
+            process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
+            return;
+          }
+
+          const initOptions = {
             ...shared,
-            force: Boolean(options.force),
-            dryRun: Boolean(options.dryRun),
-          });
-          const rendered = `${renderRevertHuman(result)}\n`;
+            ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+            ...(options.hook === undefined ? {} : { hook: options.hook }),
+            ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
+            ...(options.force === undefined ? {} : { force: options.force }),
+          };
+          const result = applyInit(planInit(initOptions), initOptions);
+
           if (options.json) {
             process.stdout.write(`${JSON.stringify(result)}\n`);
           } else if (result.ok) {
-            process.stdout.write(rendered);
+            process.stdout.write(`${renderInitHuman(result)}\n`);
           } else {
-            // A partial revert left something behind, so it is not success
-            // output. Writing it to stdout would let a script pipe it past a
-            // reader who needed to see it.
-            process.stderr.write(rendered);
+            process.stderr.write(`${renderInitHuman(result)}\n`);
           }
           process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
-          return;
+        } catch (err) {
+          // Only --project's own usage errors reach here: planInit, applyInit
+          // and revertInit report every ordinary conflict as a structured
+          // result rather than throwing, exactly as they did before this flag
+          // existed. One line, no stack, the same shape "run"'s own catch
+          // below uses for the same kind of failure.
+          process.exitCode = fail(`conductor: ${err instanceof Error ? err.message : String(err)}`);
         }
-
-        const initOptions = {
-          ...shared,
-          ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
-          ...(options.hook === undefined ? {} : { hook: options.hook }),
-          ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
-          ...(options.force === undefined ? {} : { force: options.force }),
-        };
-        const result = applyInit(planInit(initOptions), initOptions);
-
-        if (options.json) {
-          process.stdout.write(`${JSON.stringify(result)}\n`);
-        } else if (result.ok) {
-          process.stdout.write(`${renderInitHuman(result)}\n`);
-        } else {
-          process.stderr.write(`${renderInitHuman(result)}\n`);
-        }
-        process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
       }
     );
 
@@ -451,15 +513,17 @@ export function buildProgram(): Command {
       '--advisory',
       'maps exit 1 (every enabled gate ran and at least one blocked) to exit 0, so a blocking finding never fails this run. A gate that could not run is unaffected and still exits 2: advisory changes what a FINDING does, never what a broken gate does. The report is unchanged and a blocking finding still prints as BLOCKING; only the process exit code and the verdict line, which says findings were advisory, are different.'
     )
+    .option('--project <dir>', PROJECT_OPTION_HELP)
     .exitOverride()
     .action((options: RunCliOptions) => {
       const cwd = process.cwd();
 
       try {
-        // Inside the try, because repoRoot now reports rather than guesses,
-        // and the catch below is what turns any of its three sentences into
-        // one line on stderr and the could-not-run exit code.
-        const root = repoRoot(cwd);
+        // Inside the try, because resolveProjectRoot (like repoRoot before
+        // it) reports rather than guesses, and the catch below is what turns
+        // any of its sentences into one line on stderr and the could-not-run
+        // exit code.
+        const root = resolveProjectRoot(cwd, options.project);
         const overrides: CliOverrides = {
           ...(parseRoles(options.gate) === undefined
             ? {}

@@ -489,6 +489,163 @@ describe('conductor run from a subdirectory', () => {
   });
 });
 
+describe('conductor run --project (issue #55)', () => {
+  // dep-guard, vault-guard and intent-guard each take a path or --project, so
+  // a script can point them at a repository without a cd compound. conductor
+  // had nothing until this flag: the only way to run it against a directory
+  // was to change into it first. --project resolves exactly the way the
+  // working directory already does, repoRoot's own git rev-parse
+  // --show-toplevel, so a script gets the same anchoring "conductor run"
+  // from inside the repository always had.
+  function allThreeStubbed(): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    return bin;
+  }
+
+  it('runs against the named repository from an unrelated cwd, matching a run from inside it', () => {
+    // Mutation this catches: --project not read at all (or read and ignored)
+    // leaves the CLI resolving the repository root from its own cwd, which
+    // is an unrelated empty directory here with no .guardrails.yaml, so the
+    // run would fail with "no policy file, run conductor init" instead of
+    // matching the in-repo run byte for byte.
+    const repo = repoWithPolicy();
+    const bin = allThreeStubbed();
+    const elsewhere = tempDir();
+    const fromInside = path.join(tempDir(), 'inside.sarif');
+    const fromProject = path.join(tempDir(), 'project.sarif');
+
+    const inside = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', fromInside], bin);
+    const viaProject = runCli(
+      elsewhere,
+      ['run', '--staged', '--format', 'sarif', '--output', fromProject, '--project', repo],
+      bin
+    );
+
+    expect(inside.status).toBe(0);
+    expect(viaProject.status).toBe(0);
+    expect(readFileSync(fromProject, 'utf8')).toBe(readFileSync(fromInside, 'utf8'));
+    // Nothing was written into the unrelated cwd on the way.
+    expect(existsSync(path.join(elsewhere, '.guardrails.yaml'))).toBe(false);
+  });
+
+  it('resolves --project at a subdirectory to the repository top level', () => {
+    // Mutation this catches: passing the given directory straight to
+    // loadPolicy/runAll without discovering its git top level, which would
+    // fail to find .guardrails.yaml one level down from a subdirectory.
+    const repo = repoWithPolicy();
+    const nested = path.join(repo, 'packages', 'app');
+    mkdirSync(nested, { recursive: true });
+    const bin = allThreeStubbed();
+
+    const result = runCli(tempDir(), ['run', '--staged', '--project', nested], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toMatch(/conductor init/);
+  });
+
+  it('resolves a relative --project against the cwd it was invoked from', () => {
+    // Mutation this catches: resolving the given value against
+    // process.cwd() of the umbrella's own package instead of against the
+    // cwd the CLI was actually invoked from, or not resolving a relative
+    // value at all and treating it as absolute (ENOENT).
+    const repo = repoWithPolicy();
+    const parent = path.dirname(repo);
+    const relative = path.relative(parent, repo);
+    const bin = allThreeStubbed();
+
+    const result = runCli(parent, ['run', '--staged', '--project', relative], bin);
+
+    expect(result.status).toBe(0);
+  });
+
+  it('exits 2 naming the path when --project does not exist', () => {
+    const bin = allThreeStubbed();
+    const missing = path.join(tempDir(), 'does-not-exist');
+
+    const result = runCli(tempDir(), ['run', '--staged', '--project', missing], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(missing);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+
+  it('exits 2 naming the path when --project names a file, not a directory', () => {
+    const bin = allThreeStubbed();
+    const dir = tempDir();
+    const file = path.join(dir, 'not-a-directory');
+    writeFileSync(file, 'x');
+
+    const result = runCli(tempDir(), ['run', '--staged', '--project', file], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(file);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+
+  it('exits 2 naming the path when --project is outside any git repository', () => {
+    const bin = allThreeStubbed();
+    const outside = tempDir();
+
+    const result = runCli(tempDir(), ['run', '--staged', '--project', outside], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/not a git repository/);
+    expect(result.stderr).toContain(outside);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+});
+
+describe('conductor init --project (issue #55)', () => {
+  function gitRepo(): string {
+    const dir = tempDir();
+    spawnSync('git', ['init', '--quiet', '-b', 'main'], { cwd: dir });
+    return dir;
+  }
+
+  it('writes the policy file and manifest into the named repository, not the cwd', () => {
+    // Mutation this catches: init reading process.cwd() directly instead of
+    // the resolved --project root, which would write .guardrails.yaml and
+    // the manifest into the unrelated directory the command was run from.
+    const repo = gitRepo();
+    const elsewhere = tempDir();
+
+    const result = runCli(elsewhere, ['init', '--project', repo], tempDir());
+
+    expect(result.status).toBe(0);
+    expect(existsSync(path.join(repo, '.guardrails.yaml'))).toBe(true);
+    expect(existsSync(path.join(repo, '.guardrails', 'manifest.json'))).toBe(true);
+    expect(existsSync(path.join(elsewhere, '.guardrails.yaml'))).toBe(false);
+  });
+
+  it('writes the same pre-commit hook a plain init writes, --project only moves where', () => {
+    const withoutProject = gitRepo();
+    const withProject = gitRepo();
+    const elsewhere = tempDir();
+
+    const first = runCli(withoutProject, ['init', '--hook'], tempDir());
+    const second = runCli(elsewhere, ['init', '--hook', '--project', withProject], tempDir());
+
+    expect(first.status).toBe(0);
+    expect(second.status).toBe(0);
+    const hookPath = (repo: string) => path.join(repo, '.git', 'hooks', 'pre-commit');
+    expect(existsSync(hookPath(withProject))).toBe(true);
+    expect(readFileSync(hookPath(withProject), 'utf8')).toBe(readFileSync(hookPath(withoutProject), 'utf8'));
+  });
+
+  it('exits 2 naming the path when --project is not inside a git repository', () => {
+    const outside = tempDir();
+
+    const result = runCli(tempDir(), ['init', '--project', outside], tempDir());
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(outside);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+});
+
 describe('a gate with enforce: false', () => {
   const BLOCKING_VAULT_GUARD = JSON.stringify({
     version: '1',

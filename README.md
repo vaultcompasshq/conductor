@@ -417,6 +417,10 @@ above); do not commit it.
   somebody else's file into one this tool may overwrite. Like `--adopt`,
   only meaningful together with `--hook` on an init (not on a `--revert`);
   without it, init errors.
+- `--project <dir>` writes into that repository instead of the current
+  directory, resolved to its git top level the same way the current
+  directory already is, so a script can point init at a repository without a
+  `cd` compound.
 
 The rest of this section, on hook managers already wired into the
 repository, applies only when `--hook` is given: none of it is consulted,
@@ -488,6 +492,13 @@ proceeds normally without mentioning them.
   verdict line's own wording (it says findings were advisory and did not
   block) change. Text output only; the SARIF log has no verdict line to
   change and its `properties.blocking` on each result is unaffected.
+- `--project <dir>` runs against that repository instead of the current
+  directory, resolved to its git top level the same way the current
+  directory already is, so a subdirectory resolves to that repository's top
+  level. A relative value resolves against the current directory. A path
+  that does not exist, is not a directory, or is not inside a git repository
+  is a usage error naming the path and exits 2 rather than falling back to
+  the current directory.
 
 ### Exit codes
 
