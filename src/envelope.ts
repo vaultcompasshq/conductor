@@ -2,7 +2,7 @@
 //
 // This shape is NOT published. SARIF is the family's published finding
 // format, and every field here exists to make one SARIF mapping decision
-// possible without the mapping having to know which of the three gates it
+// possible without the mapping having to know which of the five gates it
 // is looking at. Keeping it internal is what lets it change when a gate
 // changes, without anybody's pipeline breaking.
 //

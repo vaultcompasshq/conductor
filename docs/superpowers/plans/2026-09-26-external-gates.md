@@ -1333,7 +1333,7 @@ git -C <worktree> commit -m "Pin the five-gate report, SARIF and exit aggregatio
 - Modify: `README.md` (lines 9-13, 55-63, 180, 200-211, 228-256, 544-565, 692-700, 1147-1171; NOT 32-46), `action.yml:489-513` comments only, `docs/INVARIANTS.md` (9-15, 147-150, 166-177, 426-437, 861-866, 935-970, 1058-1066), `CHANGELOG.md`, `schema/guardrails.schema.json` descriptions, module comments in `policy.ts`, `exit-codes.ts`, `envelope.ts`, `normalize.ts`, `gate-runner.ts`, `resolve.ts`
 - Test: `pnpm lint`, `tests/action-pr-comment.test.ts` (pins README strings; keep them byte-identical), `tests/action.test.ts` (must stay green: no new inputs)
 
-- [ ] **Step 1: README**
+- [x] **Step 1: README**
 
 - Lines 9-13: replace "running three gates ... nothing here is a fourth scanner, only the umbrella over the three that exist" with: conductor runs five gates over one policy file, three from this family and two the adopter already installs, gitleaks for git history and osv-scanner for known vulnerabilities; conductor scans nothing itself and installs nothing that is not its own.
 - "Install the gates" (55-63): keep the npm line; add a paragraph: the two external gates are installed by you, on your machine and in your workflow, from their own releases; conductor finds them on PATH and reports could-not-run when they are missing. Show the two policy lines that enable them.
@@ -1344,17 +1344,17 @@ git -C <worktree> commit -m "Pin the five-gate report, SARIF and exit aggregatio
 - "What is in and what is out" (1147-1171): the gates are still the product; two of them are not this family's.
 - Every place that says "three" in a claim about the gate count is updated; the shared `guardrails-family` block (32-46) is left byte-identical.
 
-- [ ] **Step 2: INVARIANTS**
+- [x] **Step 2: INVARIANTS**
 
 For each listed line range read the claim, then rewrite it to the five-gate truth with citations to the new code: `src/products.ts` for the profile, `src/external-config.ts` for base-ref config, `gate-runner.ts` for exit classification and the floor, `TRUST_BASE_MIN_VERSION` now holding five entries. Add a new entry: "conductor downloads no third-party binary; external gates are resolved from PATH only, `managed: false` in the profile, and the Action has no input for them" citing the profile and action.yml. Update 1058-1066 (`missingGateRemedy`) to say the remedy comes from the profile and differs for external tools.
 
-- [ ] **Step 3: CHANGELOG and comments**
+- [x] **Step 3: CHANGELOG and comments**
 
 CHANGELOG Unreleased: "Added: two gate roles, secrets-history (gitleaks 8.19 or later, git history mode) and vulnerabilities (osv-scanner 2.x). Both are installed by the adopter, never by conductor; a missing binary is could-not-run. Findings appear in the report and SARIF like any gate. On a pull request their config files are read from the base ref. Unchanged: the three npm gates' behaviour, argv, exit reading and timeout." Note the minor version bump this implies (0.5.0).
 
 Update the module comments listed in the map that say "three products" or "three CLIs".
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm --dir <worktree> lint 2>&1 | tail -1`, `pnpm --dir <worktree> test -- tests/action-pr-comment.test.ts tests/action.test.ts 2>&1 | tail -6`, then the full suite once more.
 

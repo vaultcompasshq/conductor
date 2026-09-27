@@ -1,10 +1,12 @@
 // Running one gate as a child process.
 //
 // Wrapper, not library: nothing here imports any gate's own package. That
-// is what keeps the umbrella from taking three exact version pins and
-// needing a release of its own every time one of the three ships, and it is
+// is what keeps the umbrella from taking exact version pins on five tools
+// and needing a release of its own every time one of them ships, and it is
 // what makes "this gate ran and exited N, output unparsed" an available
-// outcome instead of a build error.
+// outcome instead of a build error. What differs per tool (how the version
+// is asked, where the JSON comes from, what each exit means, the timeout)
+// is data in src/products.ts, not branches here.
 //
 // The one non-obvious constraint, and it came from running the tools rather
 // than from reading them: the CHILD'S WORKING DIRECTORY MUST BE THE
@@ -98,7 +100,7 @@ export interface CouldNotRun {
 /**
  * The first version of each gate that understands `--trust-base`.
  *
- * A TABLE rather than a boolean, because the three gates get pull-request
+ * A TABLE rather than a boolean, because the three family gates got pull-request
  * mode in three separate releases and the umbrella has to keep working
  * against every combination in the meantime. A product missing from this
  * table has no pull-request mode yet and is never handed the flag; a product

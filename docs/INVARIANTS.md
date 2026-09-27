@@ -6,9 +6,11 @@ re-derive a list from whatever the auditor happened to remember, and
 because most of the rules below are true in one file and depended on in
 another, with nothing between them that would notice if one side moved.
 
-conductor is a convenience layer on purpose. It runs three gates that are
-installed, versioned and released separately, and if this package
-disappeared all three would still work. That shape is the source of nearly
+conductor is a convenience layer on purpose. It runs five gates that are
+installed, versioned and released separately, three from this family and
+two external tools the adopter installs (gitleaks and osv-scanner, profiled
+in src/products.ts:105-161), and if this package disappeared all five would
+still work. That shape is the source of nearly
 every rule here: the umbrella has no library dependency on any gate, so
 everything it knows about a gate is reconstructed from that gate's
 command-line output, and every reconstruction is a place where the report
@@ -144,10 +146,13 @@ One more arrives in 0.3.0 with the pull-request trust boundary, and it is a
 gap in the FEATURE rather than in its tests: everything the umbrella does
 here is pinned, and what is missing is a hole nothing in this release closes.
 
-All three gates are inside the boundary as of 0.3.0: dep-guard 0.6.0,
+All three family gates are inside the boundary as of 0.3.0: dep-guard 0.6.0,
 intent-guard 1.4.0, vault-guard 1.7.0. The composed test the design document
 calls the acceptance criterion for the wave now runs, in the dogfood suite,
-against all three at once.
+against all three at once. The two external gates join it in 0.5.0 by a
+different mechanism, since neither tool has a `--trust-base`: see "External
+gates" at the end of this file. Their own head-controlled suppressions that
+are NOT closed are listed there as KNOWN-OPEN.
 
 1. KNOWN-OPEN: THE INTENT GATE'S IMPORTED-CONTRACT PATH IS OUTSIDE THE
    BOUNDARY, and this one is a HOLE rather than work in flight, so it is
@@ -183,8 +188,22 @@ broken config as a policy violation.
 Because 2 covers cases the products themselves report as 1, the umbrella
 cannot read the child's exit code alone. "Exited 1 and printed nothing
 parseable on stdout" is the reliable signature of a rejected config, and
-it is treated as could-not-run (src/gate-runner.ts:845-864). So the
-composed code can differ from the maximum of the children's, deliberately.
+it is treated as could-not-run (src/gate-runner.ts:1145-1163 for an exit
+outside the product's clean and blocked codes, 1211-1233 for unparseable
+output). So the composed code can differ from the maximum of the children's,
+deliberately.
+
+Which child exits are verdicts is per product since 0.5.0, read from the
+profile (`profile.exit`, src/products.ts; applied at
+src/gate-runner.ts:1124-1163). The three family gates keep exactly the old
+reading, clean 0 and blocked 1, anything else could-not-run. gitleaks is
+handed `--exit-code 3`, so its 3 is blocked and its 1, which it also uses
+for errors, is could-not-run. osv-scanner's 128 ("no package sources
+found") is clean with a `conductor/nothing-to-scan` diagnostic and outcome
+exit code 0, so it never reaches the composition as non-zero. And a clean
+gitleaks exit whose stderr carries an `ERR` log line is could-not-run
+(src/gate-runner.ts:1171-1189), because gitleaks 8.30.1 reports a git
+failure as exit 0 with an empty report.
 
 The per-finding `blocking` flag can only ADD to the answer, never subtract
 from it: the second predicate is `(gate.exitCode ?? 0) !== 0 ||
@@ -299,10 +318,11 @@ for its own sake. A gate that never ran gets no SARIF run of its own, by
 the rule below, so without one of these findings the published report
 would carry no trace of the most important thing that happened.
 
-A gate that exits above 1, or does not exit normally at all because it was
-killed or timed out, is could-not-run (src/gate-runner.ts:826-843). A gate
+A gate that exits outside its product's clean and blocked codes (above 1,
+for the three family gates), or does not exit normally at all because it was
+killed or timed out, is could-not-run (src/gate-runner.ts:1145-1163). A gate
 that exits 1 with stdout that will not parse as JSON is could-not-run
-(src/gate-runner.ts:845-864). Reporting the second as a policy violation
+(src/gate-runner.ts:1211-1233). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
 Pinned by tests/gate-runner.test.ts:167, 177 and 201, and end to end by
@@ -330,9 +350,9 @@ is structural: the caller maps over the enabled gates in order
 report, it loses every gate after it, and it surfaces as a stack trace
 with exit 1, which the pre-commit hook then reports as "a gate blocked".
 
-The backstop is src/gate-runner.ts:620-639. The `catch` around
+The backstop is src/gate-runner.ts:776-795. The `catch` around
 normalization is deliberately NOT narrowed to `NormalizeError`
-(src/gate-runner.ts:884-904): that narrowing was the original defect, when
+(src/gate-runner.ts:1256-1276): that narrowing was the original defect, when
 a normalizer reading a property off a null array element threw a
 `TypeError`, which escaped everything. The normalizers now validate every
 field they read before reading it (src/normalize.ts:49-90), and the broad
@@ -846,9 +866,9 @@ happening: the gate that could not be judged, and the run that could not be
 judged. Nothing else reads a gate's output and decides to ignore the policy.
 
 THE PASS-DOWN IS CAPABILITY-GATED PER GATE (`TRUST_BASE_MIN_VERSION` and
-`decideTrustBase`, src/gate-runner.ts:96-104 and 160-223, decided after the
+`decideTrustBase`, src/gate-runner.ts:118-135 and 191-254, decided after the
 version probe and before the command line is built at
-src/gate-runner.ts:741).
+src/gate-runner.ts:925).
 The flag goes only to a build that understands it. Both directions matter:
 handing an older build a flag it does not parse makes it exit non-zero with
 no JSON, which the umbrella correctly reports as could-not-run, so a wrong
@@ -858,11 +878,16 @@ against a contract imported into a temporary directory, because the flag
 names a git ref and the gate resolves it against its own `--project`, where
 there is no repository.
 
-The table holds all three: dep-guard at 0.6.0, intent-guard at 1.4.0,
-vault-guard at 1.7.0. An entry here is the whole of adopting a gate into the
-boundary, which is why it stays a TABLE now that every product is in it: a
-fourth role can arrive without an entry, and the "no pull-request mode yet"
-branch is what keeps that gate from being handed a flag it would reject.
+The table holds all five: dep-guard at 0.6.0, intent-guard at 1.4.0,
+vault-guard at 1.7.0, gitleaks at 8.19.0 and osv-scanner at 2.0.0. For the
+two external tools the entry is their command-line floor (the same value as
+`minVersion` in src/products.ts), not a flag floor: they are never handed
+`--trust-base`, and being in the table is what makes an unreadable version
+a refusal on a pull request. A build below the floor never reaches the
+decision, because the floor check at src/gate-runner.ts:899-918 returns
+`gate-version-unsupported` first. It stays a TABLE: a new role can arrive
+without an entry, and the "no pull-request mode yet" branch is what keeps
+that gate from being handed a flag it would reject.
 That branch is unreachable by any gate this package knows today and is kept
 for the next one, which is the honest description of it.
 
@@ -1063,8 +1088,14 @@ installed as devDependencies and nothing else, it is true of all three at
 once. A gate with nothing on PATH either is could-not-run under the
 EXISTING `binary-missing` reason, with a sentence naming `npm install -g`
 and that product's own action input appended (`missingGateRemedy`,
-src/gate-runner.ts:541-571). A new reason would have been wrong: nothing
-was found, which is what `binary-missing` has always meant.
+src/gate-runner.ts:706-727). A new reason would have been wrong: nothing
+was found, which is what `binary-missing` has always meant. The install
+sentence comes from the product's profile (`remedy`, src/products.ts), and
+it differs by kind: a family gate's names `npm install -g` and its action
+input, and only on a pull-request run, exactly as before; an external
+tool's names installing it on the runner (conductor does not download it)
+or disabling the role, and is appended on every run, because it is never
+in `node_modules` and never installed by the Action.
 
 OUTSIDE PULL-REQUEST MODE NOTHING CHANGES. A pre-commit hook and a direct
 run on your own checkout are already inside the boundary, and the
@@ -3024,8 +3055,11 @@ exactly when a commit has just been refused. It is explicitly flagged in
 the source as the obvious thing to revisit with a measurement, and nothing
 depends on the ordering.
 
-The per-gate timeout is 120 seconds (src/gate-runner.ts:648) and the child
-output buffer is 64MB (src/gate-runner.ts:786). Both are values, not
+The per-gate timeout comes from the product's profile when the caller sets
+none (src/gate-runner.ts:804): 120 seconds for the three family gates, as
+before, 600 for gitleaks, whose full-history scan outlives two minutes on a
+large repository, and 300 for osv-scanner (src/products.ts). The child
+output buffer is 64MB (src/gate-runner.ts:1084). Both are values, not
 rules; the only invariant near them is that a timeout lands in the
 could-not-run path rather than being read as a clean exit.
 
@@ -3259,3 +3293,56 @@ matching lines in it"). The README's own advisory recipe is pinned by
 the recipe itself" in tests/action-pr-comment.test.ts, scoped to the fenced
 code block rather than the surrounding prose, which is the one place in the
 section still allowed to name the setting it replaced.
+
+## External gates
+
+Added in 0.5.0 (spec docs/superpowers/specs/2026-09-26-one-required-check-program-design.md,
+section 3 decisions 2 to 4). Every claim below was checked against gitleaks
+8.30.1 and osv-scanner 2.6.0 running for real; the observations are in
+tests/fixtures/README.md.
+
+CONDUCTOR DOWNLOADS NO THIRD-PARTY BINARY. The external gates are resolved
+from `PATH` (or an absolute `command:`) only, exactly like the family gates
+outside node_modules; their profiles say `managed: false`
+(src/products.ts:111 and 142); and the Action installs exactly its four
+npm packages and has no input for either tool (action.yml:492-502). A
+missing external binary is `binary-missing`, could-not-run, exit 2 for an
+enforced gate, never a skip. Pinned by "exits 1 when only an external gate
+blocks, and 2 when an external binary is missing" in tests/run.test.ts.
+
+THE THREE FAMILY GATES DID NOT MOVE. Profiles restate the runner's old
+behaviour (src/products.ts:75-103): `--version` with the whole first line
+kept, stdout JSON, 0 clean and 1 blocked, 120 seconds, no config handling,
+no stderr reading. Pinned by "keeps the three npm gates on the behaviour
+the runner had before profiles existed" in tests/products.test.ts and "keeps
+the npm gates on the old exit reading" in tests/gate-runner.test.ts.
+
+AN EXTERNAL GATE'S PULL-REQUEST MODE IS THE UMBRELLA'S, NOT THE TOOL'S.
+Neither tool takes `--trust-base`. On a pull-request run the umbrella reads
+the tool's config from the base ref with `git show` and passes it with
+`--config`, a neutral stand-in when the base has none, and reports a
+head-side difference as a proposal (`materializeExternalConfig`,
+src/external-config.ts:57, wired at src/gate-runner.ts:1024-1068). gitleaks'
+`.gitleaksignore` gets the same treatment through `--gitleaks-ignore-path`,
+AND the scan root becomes the repository's git directory
+(src/gate-runner.ts:1043-1068), because gitleaks loads the scan root's own
+ignore file whatever the flag says; the flag alone was measured not to
+close it. History is scoped by `--log-opts`, `HEAD` locally and
+`<base>..HEAD` on a pull request (src/gate-runner.ts:574), so another
+branch's secret never reddens this one.
+
+A CLEAN EXIT IS NOT ALWAYS CLEAN. gitleaks reports a git failure (an
+unfetched base, a path that is not a repository) as exit 0 with an empty
+report and an `ERR` line on stderr; the profile's `stderrError`
+(src/products.ts:138) turns that into could-not-run. A report-file tool
+that exits with a verdict but leaves no report is `report-missing`.
+
+1. KNOWN-OPEN: gitleaks' inline `gitleaks:allow` comments are head
+   controlled. A pull request can mark its own secret allowed on the same
+   line. `--ignore-gitleaks-allow` exists and is not passed, because it
+   would also discard every legitimate inline allow; that is a decision for
+   the spec, not a fix to slip in.
+2. KNOWN-OPEN: osv-scanner skips files matched by `.gitignore` by default,
+   tracked or not, so a pull request can hide a tracked lockfile from it
+   with a `.gitignore` entry. `--no-ignore` exists and is not passed,
+   because it would also scan every ignored lockfile (node_modules included).

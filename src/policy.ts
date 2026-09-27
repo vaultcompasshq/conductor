@@ -73,8 +73,8 @@ export type GateStage = (typeof GATE_STAGES)[number];
 /**
  * Where each gate sits when the policy file does not say.
  *
- * Runtime is not what decides this. All three gates together take under a
- * second on a staged commit; the cost is CEREMONY, and only the intent gate
+ * Runtime is not what decides this for the three family gates: together they
+ * take under a second on a staged commit; the cost is CEREMONY, and only the intent gate
  * has any, because it wants a contract approved before the work starts.
  * The other two are silent until they find something, and a secret that
  * reaches a pull request is already on a remote, so the earliest stage is

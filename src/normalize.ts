@@ -1,10 +1,12 @@
 // Turning each gate's own JSON into the internal envelope.
 //
-// Three separate functions rather than one table-driven mapper, because the
-// three shapes disagree in ways a table would have to paper over: one is a
-// flat findings array, one is nested by file, and the third is two
-// different streams (a change-budget evaluation and a scored drift rubric)
-// plus a gate status that can block for neither reason.
+// Separate functions rather than one table-driven mapper, because the
+// shapes disagree in ways a table would have to paper over: one is a flat
+// findings array, one is nested by file, the third is two different streams
+// (a change-budget evaluation and a scored drift rubric) plus a gate status
+// that can block for neither reason, and the two external tools' reports
+// (gitleaks, osv-scanner) carry no blocking flag at all, so whether they
+// block comes from the exit code the runner read.
 //
 // What every one of them refuses to do, in one place so it is reviewable:
 // invent a line number, invent a fingerprint, re-derive a severity a

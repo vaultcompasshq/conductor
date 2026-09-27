@@ -23,6 +23,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   dep-guard's own CLI refuses `--staged` and `--base` together; vault-guard
   and intent-guard are unaffected, since the umbrella never passed either
   gate a `--base` flag and still does not.
+- Added: two gate roles, `secrets-history` (gitleaks 8.19 or later, git
+  history mode) and `vulnerabilities` (osv-scanner 2.x). Both are installed
+  by the adopter, never by conductor; a missing binary is could-not-run.
+  Findings appear in the report and SARIF like any gate. On a pull request
+  their config files (`.gitleaks.toml`, `.gitleaksignore`,
+  `osv-scanner.toml`) are read from the base ref, with a neutral stand-in
+  when the base has none, and a head-side change is reported as a proposal.
+  gitleaks' exit for a leak is moved to 3 so its error exit 1 reads as
+  could-not-run, and a clean gitleaks exit that logged a git error is
+  could-not-run too; osv-scanner's exit 128 (no lockfile) is clean with a
+  note. Unchanged: the three npm gates' behaviour, argv, exit reading,
+  version probe and timeout. This implies a minor version bump, to 0.5.0.
 
 ## [0.4.7] - 2026-09-26
 
