@@ -33,6 +33,15 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   `--verbose` to explain it. It now prints the same refusal sentence the
   pull-request comment's compact body uses -- what was refused and why --
   instead of a count. An ordinary run's line is unchanged (issue #46).
+- `conductor init` now writes the intent gate enforced (`enforce: true`) when
+  a frozen intent contract already exists at init time
+  (`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
+  `.conductor/intent-contract.yaml`), instead of always leaving it
+  unenforced. Without a frozen contract it is still written unenforced,
+  now with a comment explaining why and what to change once one is frozen.
+  Before this, a frozen contract with protected paths produced findings on a
+  pull request without ever failing the check, which needed a separate
+  commit to fix on the public demo repository (issue #57).
 - On a pull-request run, the gate runner now also passes `--base` to
   dep-guard, pointing at the same ref as `--trust-base`. Before this,
   dep-guard only ever received `--trust-base` from the umbrella, so every

@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
 
+import { NATIVE_CONTRACT_PATH, frozenNativeContractPath } from './intent-prepare.js';
 import { DEFAULT_STAGE_FOR_ROLE, GATE_ROLES, POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
 import type { GateRole } from './policy.js';
 import { CANDIDATES } from './resolve.js';
@@ -39,6 +40,20 @@ function isExecutable(file: string): boolean {
   }
 }
 
+/**
+ * Whether this repository already has a frozen intent contract at init time
+ * (issue #57). Reuses intent-prepare.ts's own `frozenNativeContractPath`
+ * rather than re-deriving "frozen" from the schema: that function is the
+ * same predicate the intent gate's own pull-request preparation uses
+ * (`frozen_by: user` AND an `approval` block, checked at both the canonical
+ * `.intent-guard/intent-contract.yaml` and the pre-1.3.0
+ * `.conductor/intent-contract.yaml`), so this cannot disagree with the gate
+ * about what counts as frozen.
+ */
+export function intentContractIsFrozen(root: string): boolean {
+  return frozenNativeContractPath(root) !== null;
+}
+
 const ROLE_DESCRIPTION: Record<GateRole, string> = {
   dependencies: 'what comes in: hallucinated names, typosquats, tampered lockfile entries',
   secrets: 'what goes out: credentials about to be committed',
@@ -50,8 +65,18 @@ const ROLE_DESCRIPTION: Record<GateRole, string> = {
  * comments are half the point: a first-run policy file that explains what
  * each key is for is most of a first-run experience, and a YAML emitter
  * cannot carry them.
+ *
+ * `intentContractFrozen` decides the intent gate's `enforce` default (issue
+ * #57): true when this repository already has a frozen contract at init
+ * time, so the ramp init would otherwise produce is already climbed, and
+ * leaving it unenforced would silently drop the one protection a contract
+ * with protected paths exists to give -- exactly what a frozen contract's
+ * findings NOT failing the check let happen on the public demo repository.
+ * False is still the default with no contract, for the same ramp reasoning
+ * as before: a fresh intent gate with nothing frozen yet has nothing to
+ * enforce against.
  */
-export function renderPolicy(detected: Set<GateRole>): string {
+export function renderPolicy(detected: Set<GateRole>, intentContractFrozen: boolean): string {
   const lines: string[] = [
     '# Guardrail policy. One file for every gate this repository runs.',
     '#',
@@ -91,14 +116,28 @@ export function renderPolicy(detected: Set<GateRole>): string {
     lines.push(`    enabled: ${enabled ? 'true' : 'false'}`);
     lines.push(`    stage: ${DEFAULT_STAGE_FOR_ROLE[role]}`);
     // The intent gate is the one with ceremony, and the ramp is what makes
-    // that ceremony adoptable: it reports for a few pull requests before it
-    // is allowed to refuse anybody's merge. Writing that here rather than
-    // describing it in a comment is the difference between a fresh init
-    // producing the ramp and three repositories being hand-edited into it.
+    // that ceremony adoptable: with no frozen contract yet, it reports for a
+    // few pull requests before it is allowed to refuse anybody's merge.
+    // Writing that here rather than describing it in a comment is the
+    // difference between a fresh init producing the ramp and three
+    // repositories being hand-edited into it. Once a contract IS frozen, the
+    // ramp is already climbed and enforcing from the start is what stops a
+    // frozen contract's protected paths from producing findings that never
+    // fail the check (issue #57).
     if (role === 'intent') {
-      lines.push('    # It runs and reports in CI without failing the run. Flip it to');
-      lines.push('    # true once a few pull requests show the signal is worth blocking on.');
-      lines.push('    enforce: false');
+      if (intentContractFrozen) {
+        lines.push(
+          `    # A frozen contract already exists at ${NATIVE_CONTRACT_PATH}, so this gate`
+        );
+        lines.push('    # enforces from the start rather than only reporting.');
+        lines.push('    enforce: true');
+      } else {
+        lines.push(`    # No frozen contract yet (${NATIVE_CONTRACT_PATH}), so this gate runs`);
+        lines.push('    # and reports without failing the run. Once a contract is frozen,');
+        lines.push('    # set this to true by hand: conductor init never rewrites this file');
+        lines.push('    # once it exists.');
+        lines.push('    enforce: false');
+      }
     } else {
       lines.push('    enforce: true');
     }

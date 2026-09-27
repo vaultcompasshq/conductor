@@ -108,7 +108,12 @@ import {
 } from './init-manifest.js';
 import type { Manifest, ManifestFile } from './init-manifest.js';
 
-import { POLICY_FILE_NAME, detectGates, renderPolicy } from './init-policy.js';
+import {
+  POLICY_FILE_NAME,
+  detectGates,
+  intentContractIsFrozen,
+  renderPolicy,
+} from './init-policy.js';
 
 export {
   MANAGED_HOOK_MARKER,
@@ -697,7 +702,7 @@ function finishPlan(
   if (existingPolicy === undefined) {
     writes.push({
       path: policyPath,
-      content: renderPolicy(detectGates(root, options.pathValue)),
+      content: renderPolicy(detectGates(root, options.pathValue), intentContractIsFrozen(root)),
       executable: false,
       kind: 'policy',
     });

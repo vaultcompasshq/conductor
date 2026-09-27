@@ -316,17 +316,21 @@ describe('what init writes', () => {
     expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+enforce: false/);
   });
 
-  it('starts the intent gate off the exit code, which is the ramp the design calls for', () => {
+  it('starts the intent gate off the exit code when there is no frozen contract yet, which is the ramp the design calls for', () => {
     // The adoption ramp is a thing a fresh init should PRODUCE, not a thing
     // it describes and leaves for somebody to hand-edit into three
-    // repositories, which is what actually happened.
+    // repositories, which is what actually happened. This repository has no
+    // .intent-guard/intent-contract.yaml, so the ramp still applies (issue
+    // #57 changes the default only once a contract IS frozen -- see "init
+    // and the intent gate's enforce default" below).
     const repo = gitRepo();
     init(repo);
     const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
     const intent = policy.slice(policy.indexOf('  intent:'));
 
-    expect(intent).toMatch(/# It runs and reports in CI without failing the run/);
-    expect(intent).toMatch(/Flip it to\n\s+# true once a few pull requests/);
+    expect(intent).toMatch(/# No frozen contract yet \(\.intent-guard\/intent-contract\.yaml\)/);
+    expect(intent).toMatch(/set this to true by hand/);
+    expect(intent).toMatch(/enforce: false/);
   });
 
   it('writes a policy file that still validates against the shipped schema', () => {
@@ -467,6 +471,91 @@ describe('init without --hook', () => {
     const rendered = renderInitHuman(result);
     expect(rendered).toMatch(/Note: the pre-commit hook uses/);
     expect(rendered).not.toMatch(/No pre-commit hook was written/);
+  });
+});
+
+// Issue #57: a fresh init used to leave the intent gate unenforced no matter
+// what, so a frozen contract with protected paths produced findings that
+// never failed the check until somebody hand-edited enforce: true in on a
+// separate commit. Init now writes enforce: true from the start when a
+// frozen contract already exists at init time.
+describe("init and the intent gate's enforce default", () => {
+  /** Exactly the shape intent-guard's own isContractFrozen reads: both
+   * frozen_by: user AND an approval block, matching intent-prepare.ts's own
+   * contractIsFrozenAt, which is what src/init-policy.ts's
+   * intentContractIsFrozen reuses. */
+  function freezeIntentContract(repo: string): void {
+    mkdirSync(path.join(repo, '.intent-guard'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.intent-guard', 'intent-contract.yaml'),
+      ['contract_id: ic-1', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join('\n')
+    );
+  }
+
+  it('writes the intent gate enforced when a frozen contract already exists', () => {
+    const repo = gitRepo();
+    freezeIntentContract(repo);
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const intent = policy.slice(policy.indexOf('  intent:'));
+
+    expect(result.ok).toBe(true);
+    expect(intent).toMatch(/enforce: true/);
+    expect(intent).toMatch(/# A frozen contract already exists at \.intent-guard\/intent-contract\.yaml/);
+    const parsed = parsePolicy(policy, POLICY_FILE_NAME);
+    expect(parsed.gates.intent?.enforce).toBe(true);
+  });
+
+  it('writes the intent gate unenforced, with a comment saying why, when there is no frozen contract', () => {
+    const repo = gitRepo();
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const intent = policy.slice(policy.indexOf('  intent:'));
+
+    expect(result.ok).toBe(true);
+    expect(intent).toMatch(/enforce: false/);
+    expect(intent).toMatch(/# No frozen contract yet \(\.intent-guard\/intent-contract\.yaml\)/);
+    const parsed = parsePolicy(policy, POLICY_FILE_NAME);
+    expect(parsed.gates.intent?.enforce).toBe(false);
+  });
+
+  it('does not enforce on an unfrozen draft: frozen_by alone, with no approval, is not frozen', () => {
+    // The same rule intent-prepare.ts's contractIsFrozenAt documents: a real
+    // freeze always writes both frozen_by and approval, so requiring both
+    // excludes no contract either tool actually produces, and admitting
+    // frozen_by alone would enforce against a draft nobody approved.
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.intent-guard'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.intent-guard', 'intent-contract.yaml'),
+      'contract_id: ic-1\nfrozen_by: user\n'
+    );
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(result.ok).toBe(true);
+    expect(policy.slice(policy.indexOf('  intent:'))).toMatch(/enforce: false/);
+  });
+
+  it('reads the frozen contract from the legacy .conductor directory too', () => {
+    // intent-prepare.ts's frozenNativeContractPath checks the legacy path as
+    // a fallback, and this reuses that same function rather than a narrower
+    // check of its own, so the two cannot disagree.
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.conductor'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.conductor', 'intent-contract.yaml'),
+      ['contract_id: ic-1', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join('\n')
+    );
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(result.ok).toBe(true);
+    expect(policy.slice(policy.indexOf('  intent:'))).toMatch(/enforce: true/);
   });
 });
 

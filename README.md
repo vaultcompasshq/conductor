@@ -89,8 +89,11 @@ required.
 
    which writes `.guardrails.yaml` with every gate listed and only the ones
    it found switched on, and `.guardrails/manifest.json`, the record init
-   reads back on a later `--revert`. **It writes no pre-commit hook unless
-   you ask for one:**
+   reads back on a later `--revert`. The intent gate is written unenforced
+   unless a frozen contract already exists at `.intent-guard/intent-contract.yaml`,
+   in which case init enforces it from the start rather than leaving a
+   frozen contract's protected paths reporting without blocking. **It writes
+   no pre-commit hook unless you ask for one:**
 
    ```
    conductor init --hook
@@ -292,7 +295,13 @@ enforced gate's do. The only thing it cannot do is change the exit code: its
 blocking findings do not raise it, and its failing to run at all does not
 make the run exit 2. That is the adoption ramp, so a gate can be switched on
 and read for a few weeks before it is allowed to refuse anybody's commit.
-`init` writes it out for every gate, and starts the intent gate at `false`.
+`init` writes it out for every gate. For the intent gate it writes `true`
+when a frozen contract already exists at init time
+(`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
+`.conductor/intent-contract.yaml`) -- the ramp is already climbed by then,
+and leaving it unenforced would silently let a frozen contract's protected
+paths produce findings that never fail the check -- and `false`, with a
+comment explaining why, when there is no contract yet to enforce against.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`

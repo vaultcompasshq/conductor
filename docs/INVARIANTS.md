@@ -217,10 +217,21 @@ flags are untouched, and both output formats report it exactly as they
 report an enforced gate, with one added sentence saying its verdict did
 not reach the exit code.
 
-This is the adoption ramp. `conductor init` writes `enforce: false` for
-the intent gate and `enforce: true` for the other two
-(src/init.ts:977-983), so a fresh repository gets the ramp rather than
+This is the adoption ramp. `conductor init` writes `enforce: true` for
+the other two always, so a fresh repository gets the ramp rather than
 three repositories being hand-edited into it.
+
+UPDATED (issue #57): the intent gate is no longer unconditionally
+`enforce: false`. `conductor init` writes it enforced when a frozen intent
+contract already exists at init time (`src/init-policy.ts`'s
+`intentContractIsFrozen`, which reuses `src/intent-prepare.ts`'s own
+`frozenNativeContractPath` rather than re-deriving "frozen" from the
+contract schema, so the two cannot disagree about what counts), and
+unenforced with an explanatory comment otherwise. The ramp reasoning above
+still holds for a repository with nothing frozen yet; it stops applying once
+a contract IS frozen, because enforcement being off at that point is what let
+a frozen contract's protected paths produce findings that never failed the
+check on the public demo repository.
 
 The rule that makes it safe is that nothing reads a gate's output and
 decides to ignore it. The umbrella reads a line somebody wrote in their
