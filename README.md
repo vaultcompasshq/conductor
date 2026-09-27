@@ -16,7 +16,7 @@ runs, with exactly the configuration it had.
 The claim is checked in public. The
 [conductor-proof](https://github.com/vaultcompasshq/conductor-proof)
 repository runs an ordinary gitleaks and osv-scanner job beside conductor,
-with four pull requests left open on purpose, one planted problem each.
+with six pull requests left open on purpose, one planted problem each.
 Read the checks on each pull request rather than this table.
 
 | Planted problem | Ordinary job | conductor |
@@ -25,10 +25,13 @@ Read the checks on each pull request rather than this table.
 | [A pull request that turns off its own checks, then adds that dependency](https://github.com/vaultcompasshq/conductor-proof/pull/7) | skipped | fail |
 | [A credential-shaped string in a test fixture](https://github.com/vaultcompasshq/conductor-proof/pull/8) | fail | fail |
 | [An edit to a path the intent contract protects](https://github.com/vaultcompasshq/conductor-proof/pull/11) | pass | fail |
+| [A credential-shaped string committed, then replaced, so only history carries it](https://github.com/vaultcompasshq/conductor-proof/pull/15) | fail | fail |
+| [A dependency at a version with a known advisory](https://github.com/vaultcompasshq/conductor-proof/pull/16) | fail | fail |
 
-The third row is parity, not a catch: both jobs see a credential shape.
-The other three are what a scanner that only knows about vulnerabilities
-and secrets has no way to know.
+The rows where both fail are parity, not a catch: both jobs run gitleaks
+and osv-scanner, so both see a credential shape, a credential in history,
+and a known advisory. The other three are what a scanner that only knows
+about vulnerabilities and secrets has no way to know.
 
 <!-- guardrails-family: shared block, keep it identical in dep-guard, vault-guard, intent-guard and conductor -->
 The Vault & Compass guardrails are three gates over an AI-assisted coding
