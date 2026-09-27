@@ -212,13 +212,13 @@ function readOnlineInfo(value: unknown): DepGuardOnlineInfo | null {
 
 /** The sentence for a budget that cut dep-guard's online lookups short. */
 function onlineCutShortMessage(info: DepGuardOnlineInfo): string {
-  const budget = info.budgetMs === undefined ? '' : ` (budget ${info.budgetMs}ms)`;
+  const budget = info.budgetMs === undefined ? 'its budget' : `its ${info.budgetMs}ms budget`;
   const skipped =
     info.lookupsSkippedByDeadline === undefined
       ? ''
       : ` ${info.lookupsSkippedByDeadline} lookup(s) were not attempted.`;
   return (
-    `dep-guard's online checks were cut short by its budget${budget}, so some package names ` +
+    `dep-guard's online checks were cut short by ${budget}, so some package names ` +
     `were not looked up.${skipped}`
   );
 }
