@@ -136,6 +136,91 @@ describe('dep-guard 0.2.0 normalization', () => {
   });
 });
 
+describe('dep-guard online reporting (issue #72)', () => {
+  it('reports online true or false from the flag the umbrella passed, never from dep-guard\'s JSON', () => {
+    expect(normalizeDepGuard(DEP_GUARD_CLEAN, '0.2.0', true).run.details.online).toBe(true);
+    expect(normalizeDepGuard(DEP_GUARD_CLEAN, '0.2.0', false).run.details.online).toBe(false);
+  });
+
+  it('defaults online to false when the caller says nothing, for every existing call site', () => {
+    expect(normalizeDepGuard(DEP_GUARD_CLEAN, '0.2.0').run.details.online).toBe(false);
+  });
+
+  it('reads lookup and skipped counts from a well-formed online object, and notes a budget cut short', () => {
+    const withOnline = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    withOnline.run.online = {
+      enabled: true,
+      budgetMs: 20000,
+      lookupsAttempted: 5,
+      lookupsSkippedByDeadline: 2,
+      deadlineExceeded: true,
+    };
+    const out = normalizeDepGuard(withOnline, '0.2.0', true);
+    expect(out.run.details.online).toBe(true);
+    expect(out.run.details.lookups).toBe(5);
+    expect(out.run.details['skipped-by-deadline']).toBe(2);
+    const cutShort = out.run.diagnostics.find((d) => d.code === 'conductor/online-budget-cut-short');
+    expect(cutShort).toBeDefined();
+    expect(cutShort?.message).toMatch(/budget/);
+    expect(cutShort?.message).toMatch(/not (attempted|looked up)/);
+  });
+
+  it('says nothing about a cut short budget when the object says the deadline was not exceeded', () => {
+    const withOnline = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    withOnline.run.online = {
+      enabled: true,
+      budgetMs: 20000,
+      lookupsAttempted: 5,
+      lookupsSkippedByDeadline: 0,
+      deadlineExceeded: false,
+    };
+    const out = normalizeDepGuard(withOnline, '0.2.0', true);
+    expect(out.run.details.lookups).toBe(5);
+    expect(
+      out.run.diagnostics.find((d) => d.code === 'conductor/online-budget-cut-short')
+    ).toBeUndefined();
+  });
+
+  it('surfaces an older dep-guard\'s own online-deadline-exceeded diagnostic, with no online object present', () => {
+    const oldStyle = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as {
+      run: { diagnostics: Array<{ code: string; message: string }> };
+    };
+    oldStyle.run.diagnostics = [
+      {
+        code: 'online-deadline-exceeded',
+        message:
+          'publish-age: the per-run online budget (20000ms) was spent before 3 lookup(s) could run; ' +
+          'those findings kept their offline result',
+      },
+    ];
+    const out = normalizeDepGuard(oldStyle, '0.2.0', true);
+    expect(out.run.details.online).toBe(true);
+    expect(out.run.details.lookups).toBeUndefined();
+    expect(out.run.diagnostics.map((d) => d.code)).toContain('online-deadline-exceeded');
+    expect(
+      out.run.diagnostics.find((d) => d.code === 'online-deadline-exceeded')?.message
+    ).toMatch(/budget/);
+  });
+
+  it('ignores a malformed online object rather than failing the gate, and prints the flag-derived part only', () => {
+    const malformed = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    malformed.run.online = {
+      enabled: true,
+      lookupsAttempted: 'five',
+      lookupsSkippedByDeadline: 2,
+      deadlineExceeded: true,
+    };
+    expect(() => normalizeDepGuard(malformed, '0.2.0', true)).not.toThrow();
+    const out = normalizeDepGuard(malformed, '0.2.0', true);
+    expect(out.run.details.online).toBe(true);
+    expect(out.run.details.lookups).toBeUndefined();
+    expect(out.run.details['skipped-by-deadline']).toBeUndefined();
+    expect(
+      out.run.diagnostics.find((d) => d.code === 'conductor/online-budget-cut-short')
+    ).toBeUndefined();
+  });
+});
+
 describe('vault-guard 1.4.2 normalization', () => {
   const result = normalizeVaultGuard(VAULT_GUARD_BLOCKING, '1.4.2');
 
@@ -965,5 +1050,31 @@ describe('osv-scanner 2.6.0 normalization', () => {
     expect(cvssToSeverity(5.0)).toBe('medium');
     expect(cvssToSeverity(2.1)).toBe('low');
     expect(cvssToSeverity(null)).toBe('medium');
+  });
+
+  describe('the lockfile fact (issue #72)', () => {
+    it('names the lockfile the umbrella passed and counts zero sources with findings, on a clean scan', () => {
+      const out = normalizeOsvScanner(clean, '2.6.0', false, [], ['pnpm-lock.yaml']);
+      expect(out.run.details.lockfiles).toBe('1 (pnpm-lock.yaml)');
+      expect(out.run.details['sources-with-findings']).toBe(0);
+    });
+
+    it('names the lockfile and counts the sources with findings, on a run that found something', () => {
+      const out = normalizeOsvScanner(blocking, '2.6.0', true, [], ['package-lock.json']);
+      expect(out.run.details.lockfiles).toBe('1 (package-lock.json)');
+      expect(out.run.details['sources-with-findings']).toBe(1);
+    });
+
+    it('names every lockfile passed, not just the first', () => {
+      const out = normalizeOsvScanner(clean, '2.6.0', false, [], [
+        'pnpm-lock.yaml',
+        'apps/api/package-lock.json',
+      ]);
+      expect(out.run.details.lockfiles).toBe('2 (pnpm-lock.yaml, apps/api/package-lock.json)');
+    });
+
+    it('falls back to a bare zero when no lockfile list was given', () => {
+      expect(normalizeOsvScanner(clean, '2.6.0', false).run.details.lockfiles).toBe('0');
+    });
   });
 });

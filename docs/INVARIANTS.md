@@ -3547,7 +3547,7 @@ beside it in tests/gate-runner.test.ts; checked against the real binary
 OSV-SCANNER IS HANDED TRACKED LOCKFILES, NEVER A DIRECTORY. The runner
 lists tracked files with `git ls-files` and passes each whose base name is
 in `OSV_LOCKFILE_NAMES` (src/products.ts) with `--lockfile`, skipping
-anything under `node_modules` (src/gate-runner.ts:1057-1114). osv-scanner's
+anything under `node_modules` (src/gate-runner.ts:1063-1120). osv-scanner's
 own walk skips `.gitignore`d files even when they are tracked, which was
 measured: a tracked, ignored `package-lock.json` gave exit 128 to the walk.
 On a pull request the list is the head's index, deliberately not a base-ref
@@ -3557,6 +3557,49 @@ with `conductor/nothing-to-scan`; a listing that fails is
 `preparation-failed`, never "none". When lockfiles WERE handed and
 osv-scanner still exits 128, they parsed to no packages, and the diagnostic
 is the distinct `conductor/lockfiles-empty` naming them.
+
+THE VULNERABILITIES LINE'S LOCKFILE LIST COMES FROM THE UMBRELLA'S OWN
+ARGV, NEVER FROM OSV-SCANNER'S OUTPUT (issue #72). osv-scanner 2.x prints
+`results[]` only for a source with findings, so a clean scan of one
+lockfile and a run that scanned none both have `results: []`, and reading
+`results.length` cannot tell them apart. `runGate` already knows every
+lockfile it handed over with `--lockfile` before osv-scanner is ever
+spawned (`external.lockfiles`, src/gate-runner.ts:1063-1120); that same
+list, never the tool's report, is what `normalizeOsvScanner` renders as the
+`lockfiles` fact (`describeLockfiles`, src/normalize.ts:1046-1048, used at
+src/normalize.ts:1128-1133). `results.length` is kept under a renamed key,
+`sources-with-findings`, so the count that really did come from the tool is
+never confused with the count that came from the umbrella. The two existing
+nothing-to-scan paths are unchanged: both return before
+`normalizeOsvScanner` is ever called, so neither prints a lockfile fact at
+all, and a reader tells "scanned one lockfile, clean" from "scanned
+nothing" by whether the fact is there.
+
+DEP-GUARD'S ONLINE REPORTING IS TWO INDEPENDENT SOURCES, AND ONE OF THEM IS
+NEVER TRUSTWORTHY BY ITSELF (issue #72). Whether `--online` was passed is
+answered from the umbrella's own constructed argv
+(`argv.includes('--online')`, src/gate-runner.ts:1388), never from
+dep-guard's JSON, because a flag the umbrella did not pass and a flag
+dep-guard quietly ignored look identical in the tool's own output. That
+answer is unconditional. dep-guard's own run-level `online` object (present
+from a release after 0.8.0) is read leniently on top of it
+(`readOnlineInfo`, src/normalize.ts:179-211): a value that is not an
+object, or is present with the wrong type for a field the umbrella actually
+displays, makes the whole object read as absent rather than throwing, so a
+shape dep-guard has not shipped yet, or ships wrong, degrades to the
+flag-derived fact alone and never to could-not-run. This is reporting, not
+judgment, so none of it -- the flag, the lookup and skipped-by-deadline
+counts, or the cut-short clause synthesized when `deadlineExceeded` is true
+-- reaches `blocking`, a severity, or the gate's own exit code; only the
+child's exit code decides that, exactly as for every other gate.
+
+BOTH FACTS ARE CARRIED INTO SARIF, NOT JUST THE TEXT REPORT (issue #72).
+`renderSarif` adds the gate's own `run.details` bag to that gate's SARIF
+run as `properties.details`, verbatim and only when the bag is non-empty
+(src/output-sarif.ts:969), so the lockfile list and the online facts reach
+a published log the same way the text report's per-gate facts line does,
+through the one normalized bag rather than a second, SARIF-only rendering
+that could drift from it.
 
 Only the ROOT `osv-scanner.toml` is read from the base and passed with
 `--config`, which overrides any nested one for the run (measured on 2.6.0:

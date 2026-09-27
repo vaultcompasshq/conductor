@@ -157,13 +157,85 @@ function readDiagnostics(value: unknown, product: string, where: string): Diagno
   });
 }
 
-export function normalizeDepGuard(raw: unknown, version: string | null): NormalizedGateOutput {
+/**
+ * dep-guard's run-level `online` object (issue #72), read leniently.
+ *
+ * The object is gaining fields in a parallel dep-guard branch, so an
+ * installed dep-guard may send none of it, all of it, or a shape with the
+ * wrong field types. This is reporting, not judgment: a malformed value here
+ * must never turn into a could-not-run for the gate, so nothing here throws.
+ * Only the three fields the umbrella actually displays are validated; a
+ * present-but-wrong-typed one of those invalidates the whole object (there is
+ * nothing honest left to report from it), while `enabled` and `budgetMs`,
+ * which are read best-effort for the cut-short message, never do.
+ */
+interface DepGuardOnlineInfo {
+  lookupsAttempted?: number;
+  lookupsSkippedByDeadline?: number;
+  deadlineExceeded?: boolean;
+  budgetMs?: number;
+}
+
+function readOnlineInfo(value: unknown): DepGuardOnlineInfo | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const info: DepGuardOnlineInfo = {};
+  if (value.lookupsAttempted !== undefined) {
+    if (typeof value.lookupsAttempted !== 'number' || !Number.isFinite(value.lookupsAttempted)) {
+      return null;
+    }
+    info.lookupsAttempted = value.lookupsAttempted;
+  }
+  if (value.lookupsSkippedByDeadline !== undefined) {
+    if (
+      typeof value.lookupsSkippedByDeadline !== 'number' ||
+      !Number.isFinite(value.lookupsSkippedByDeadline)
+    ) {
+      return null;
+    }
+    info.lookupsSkippedByDeadline = value.lookupsSkippedByDeadline;
+  }
+  if (value.deadlineExceeded !== undefined) {
+    if (typeof value.deadlineExceeded !== 'boolean') {
+      return null;
+    }
+    info.deadlineExceeded = value.deadlineExceeded;
+  }
+  // budgetMs is cosmetic (it only decorates the cut-short message), so a bad
+  // value for it is dropped rather than invalidating fields that ARE honest.
+  if (typeof value.budgetMs === 'number' && Number.isFinite(value.budgetMs)) {
+    info.budgetMs = value.budgetMs;
+  }
+  return info;
+}
+
+/** The sentence for a budget that cut dep-guard's online lookups short. */
+function onlineCutShortMessage(info: DepGuardOnlineInfo): string {
+  const budget = info.budgetMs === undefined ? '' : ` (budget ${info.budgetMs}ms)`;
+  const skipped =
+    info.lookupsSkippedByDeadline === undefined
+      ? ''
+      : ` ${info.lookupsSkippedByDeadline} lookup(s) were not attempted.`;
+  return (
+    `dep-guard's online checks were cut short by its budget${budget}, so some package names ` +
+    `were not looked up.${skipped}`
+  );
+}
+
+export function normalizeDepGuard(
+  raw: unknown,
+  version: string | null,
+  /** Whether the umbrella passed --online to dep-guard, read from its own argv. */
+  onlineRequested = false
+): NormalizedGateOutput {
   const product = 'dep-guard';
   const root = needRecord(raw, product, 'the output');
   const run = needRecord(root.run, product, 'run');
   const threshold = optionalString(run.failOn, product, 'run.failOn') ?? null;
   const trustBase = readTrustBase(root.trustBase, product);
   const diagnostics: Diagnostic[] = [];
+  const onlineInfo = readOnlineInfo(run.online);
 
   const findings: Finding[] = needArray(root.findings, product, 'findings').map((entry, index) => {
     const where = `findings[${index}]`;
@@ -207,6 +279,20 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
     diagnostics
   );
 
+  // Diagnostics never move dep-guard's own exit code, so they stay out of
+  // findings[] here too rather than becoming pseudo-findings. An installed
+  // dep-guard old enough to have no `run.online` object still raises its own
+  // online-deadline-exceeded diagnostic here when its budget ran out, and it
+  // is carried through unchanged (issue #72's fallback for dep-guard 0.8.0
+  // and older).
+  const runDiagnostics = readDiagnostics(run.diagnostics, product, 'run.diagnostics');
+  if (onlineInfo?.deadlineExceeded === true) {
+    runDiagnostics.push({
+      code: 'conductor/online-budget-cut-short',
+      message: onlineCutShortMessage(onlineInfo),
+    });
+  }
+
   return {
     findings,
     // Third gate, same key, same two fields read. dep-guard carries three
@@ -218,13 +304,21 @@ export function normalizeDepGuard(raw: unknown, version: string | null): Normali
       failOn: threshold,
       suppressed: typeof root.suppressed === 'number' ? root.suppressed : 0,
       ignored: typeof root.ignored === 'number' ? root.ignored : 0,
-      // Diagnostics never move dep-guard's own exit code, so they stay out
-      // of findings[] here too rather than becoming pseudo-findings.
-      diagnostics: readDiagnostics(run.diagnostics, product, 'run.diagnostics'),
+      diagnostics: runDiagnostics,
       details: {
         mode: run.mode ?? null,
         corpusBuiltAt: run.corpusBuiltAt ?? null,
         lockfileFormat: run.lockfileFormat ?? null,
+        // Whether --online was passed is answered from the umbrella's own
+        // argv, never from dep-guard's JSON, so the two nothing-changed
+        // cases (never asked, asked and quiet) are told apart (issue #72).
+        online: onlineRequested,
+        ...(onlineInfo?.lookupsAttempted === undefined
+          ? {}
+          : { lookups: onlineInfo.lookupsAttempted }),
+        ...(onlineInfo?.lookupsSkippedByDeadline === undefined
+          ? {}
+          : { 'skipped-by-deadline': onlineInfo.lookupsSkippedByDeadline }),
       },
     },
     diagnostics,
@@ -942,12 +1036,25 @@ function relativeToRoots(file: string, roots: readonly string[]): string {
   return file;
 }
 
+/**
+ * The vulnerabilities summary line's lockfile fact (issue #72): the count and
+ * names of the lockfiles the UMBRELLA handed osv-scanner with --lockfile,
+ * never osv-scanner's own results[], which 2.x prints only for a source with
+ * findings. A clean scan of one lockfile and a run that scanned none both
+ * have results: [], and only this list tells them apart.
+ */
+function describeLockfiles(lockfiles: readonly string[]): string {
+  return lockfiles.length === 0 ? '0' : `${lockfiles.length} (${lockfiles.join(', ')})`;
+}
+
 export function normalizeOsvScanner(
   raw: unknown,
   version: string | null,
   blocked: boolean,
   /** The scan root as a path osv-scanner may have printed it, in any spelling. */
-  roots: readonly string[] = []
+  roots: readonly string[] = [],
+  /** The lockfiles the umbrella passed with --lockfile, repository-relative. */
+  lockfiles: readonly string[] = []
 ): NormalizedGateOutput {
   const product = 'osv-scanner';
   const top = needRecord(raw, product, 'the output');
@@ -1018,7 +1125,13 @@ export function normalizeOsvScanner(
       suppressed: 0,
       ignored: 0,
       diagnostics: [],
-      details: { sources: results.length },
+      details: {
+        lockfiles: describeLockfiles(lockfiles),
+        // Distinct from the old "sources" name on purpose: this counts only
+        // the sources osv-scanner reported findings for, never how many were
+        // scanned, and the old name read as the latter.
+        'sources-with-findings': results.length,
+      },
     },
     diagnostics: [],
   };

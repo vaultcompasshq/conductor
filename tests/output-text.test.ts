@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { RunSummary } from '../src/envelope.js';
 import type { GateOutcome } from '../src/gate-runner.js';
 import {
   normalizeDepGuard,
@@ -80,9 +81,13 @@ const vaultGuard = normalizeVaultGuard(fixture('vault-guard-1.4.2-blocking.json'
 
 describe('the text report with the two external gates', () => {
   const gitleaks = normalizeGitleaks(fixture('gitleaks-8.30.1-history-blocking.json'), '8.30.1', true);
-  const osv = normalizeOsvScanner(fixture('osv-scanner-2.6.0-blocking.json'), '2.6.0', true, [
-    '/tmp/conductor-osv-fixture',
-  ]);
+  const osv = normalizeOsvScanner(
+    fixture('osv-scanner-2.6.0-blocking.json'),
+    '2.6.0',
+    true,
+    ['/tmp/conductor-osv-fixture'],
+    ['package-lock.json']
+  );
   const text = renderText(
     result(
       [
@@ -130,6 +135,167 @@ describe('the text report with the two external gates', () => {
 
   it('names the package and the OSV id on each vulnerability line', () => {
     expect(text).toMatch(/osv-scanner\/GHSA-35jh-r3h4-6jhm\s+lodash \(package-lock\.json\)/);
+  });
+
+  it('names the lockfile the umbrella passed and how many sources had findings, on the vulnerabilities line (issue #72)', () => {
+    expect(text).toMatch(/lockfiles 1 \(package-lock\.json\)/);
+    expect(text).toMatch(/sources-with-findings 1/);
+  });
+});
+
+describe('the vulnerabilities line tells a clean scan from nothing to scan (issue #72)', () => {
+  it('names the lockfile and says zero sources had findings, on a clean scan', () => {
+    const clean = normalizeOsvScanner(
+      fixture('osv-scanner-2.6.0-clean.json'),
+      '2.6.0',
+      false,
+      [],
+      ['pnpm-lock.yaml']
+    );
+    const text = renderText(
+      result(
+        [
+          outcome({
+            role: 'vulnerabilities',
+            product: 'osv-scanner',
+            productVersion: '2.6.0',
+            exitCode: 0,
+            findings: clean.findings,
+            run: clean.run,
+          }),
+        ],
+        0
+      ),
+      // Otherwise this run counts as fully clean and renderText prints the
+      // one-line compact summary instead of the per-gate report.
+      { verbose: true }
+    );
+    expect(text).toMatch(/lockfiles 1 \(pnpm-lock\.yaml\)/);
+    expect(text).toMatch(/sources-with-findings 0/);
+  });
+
+  it('says nothing to scan, unchanged, rather than printing a lockfile count of zero', () => {
+    // The umbrella's own nothing-to-scan path never reaches normalizeOsvScanner:
+    // it returns EMPTY_RUN and a conductor/nothing-to-scan diagnostic before
+    // spawning the gate at all, and this test is what would break if that
+    // stopped being true.
+    const text = renderText(
+      result(
+        [
+          outcome({
+            role: 'vulnerabilities',
+            product: 'osv-scanner',
+            productVersion: '2.6.0',
+            exitCode: 0,
+            findings: [],
+            run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: {} },
+            diagnostics: [
+              {
+                code: 'conductor/nothing-to-scan',
+                message: 'osv-scanner found nothing to scan (no tracked lockfile); treated as clean.',
+              },
+            ],
+          }),
+        ],
+        0
+      )
+    );
+    expect(text).not.toMatch(/lockfiles /);
+    expect(text).not.toMatch(/sources-with-findings/);
+    expect(text).toMatch(/conductor\/nothing-to-scan/);
+  });
+});
+
+describe('the dependencies line reports whether dep-guard ran online (issue #72)', () => {
+  function dependenciesLine(run: RunSummary): string {
+    const text = renderText(
+      result(
+        [outcome({ role: 'dependencies', product: 'dep-guard', productVersion: '0.2.0', run, findings: [] })],
+        0
+      )
+    );
+    return text.slice(text.indexOf('dependencies'));
+  }
+
+  it('shows online false when the umbrella did not pass --online', () => {
+    const clean = normalizeDepGuard(fixture('dep-guard-0.2.0-clean.json'), '0.2.0', false);
+    expect(dependenciesLine(clean.run)).toMatch(/online false/);
+  });
+
+  it('shows online true when the umbrella did pass --online', () => {
+    const clean = normalizeDepGuard(fixture('dep-guard-0.2.0-clean.json'), '0.2.0', true);
+    expect(dependenciesLine(clean.run)).toMatch(/online true/);
+  });
+
+  it('shows the lookup and skipped-by-deadline counts, and the cut-short clause, when dep-guard reports them', () => {
+    const raw = JSON.parse(JSON.stringify(fixture('dep-guard-0.2.0-clean.json'))) as {
+      run: Record<string, unknown>;
+    };
+    raw.run.online = {
+      enabled: true,
+      budgetMs: 20000,
+      lookupsAttempted: 5,
+      lookupsSkippedByDeadline: 2,
+      deadlineExceeded: true,
+    };
+    const normalized = normalizeDepGuard(raw, '0.2.0', true);
+    const line = dependenciesLine(normalized.run);
+    expect(line).toMatch(/online true/);
+    expect(line).toMatch(/lookups 5/);
+    expect(line).toMatch(/skipped-by-deadline 2/);
+    expect(line).toMatch(/cut short/);
+  });
+
+  it('says nothing about a cut short budget when the deadline was not exceeded', () => {
+    const raw = JSON.parse(JSON.stringify(fixture('dep-guard-0.2.0-clean.json'))) as {
+      run: Record<string, unknown>;
+    };
+    raw.run.online = {
+      enabled: true,
+      lookupsAttempted: 5,
+      lookupsSkippedByDeadline: 0,
+      deadlineExceeded: false,
+    };
+    const normalized = normalizeDepGuard(raw, '0.2.0', true);
+    const line = dependenciesLine(normalized.run);
+    expect(line).toMatch(/lookups 5/);
+    expect(line).not.toMatch(/cut short/);
+  });
+
+  it('surfaces an older dep-guard\'s own online-deadline-exceeded diagnostic when it has no online object', () => {
+    const raw = JSON.parse(JSON.stringify(fixture('dep-guard-0.2.0-clean.json'))) as {
+      run: { diagnostics: Array<{ code: string; message: string }> };
+    };
+    raw.run.diagnostics = [
+      {
+        code: 'online-deadline-exceeded',
+        message:
+          'publish-age: the per-run online budget (20000ms) was spent before 3 lookup(s) could run; ' +
+          'those findings kept their offline result',
+      },
+    ];
+    const normalized = normalizeDepGuard(raw, '0.2.0', true);
+    const line = dependenciesLine(normalized.run);
+    expect(line).toMatch(/online true/);
+    expect(line).toMatch(/online-deadline-exceeded/);
+    expect(line).toMatch(/budget/);
+  });
+
+  it('prints the flag-derived part only when the online object is malformed, without failing the gate', () => {
+    const raw = JSON.parse(JSON.stringify(fixture('dep-guard-0.2.0-clean.json'))) as {
+      run: Record<string, unknown>;
+    };
+    raw.run.online = {
+      enabled: true,
+      lookupsAttempted: 'five',
+      lookupsSkippedByDeadline: 2,
+      deadlineExceeded: true,
+    };
+    const normalized = normalizeDepGuard(raw, '0.2.0', true);
+    const line = dependenciesLine(normalized.run);
+    expect(line).toMatch(/online true/);
+    expect(line).not.toMatch(/lookups/);
+    expect(line).not.toMatch(/cut short/);
   });
 });
 

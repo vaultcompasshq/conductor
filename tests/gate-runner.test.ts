@@ -114,6 +114,21 @@ describe('running one gate', () => {
     );
   });
 
+  it('reports online true from its own argv when --online was passed, and false when it was not (issue #72)', () => {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: DEP_GUARD_CLEAN });
+
+    const withFlag = runGate(gate({ options: { online: true } }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+    });
+    expect(withFlag.run.details.online).toBe(true);
+
+    const withoutFlag = runGate(gate(), { repoRoot: tempDir(), staged: true, pathValue: bin });
+    expect(withoutFlag.run.details.online).toBe(false);
+  });
+
   it('omits --staged when the run is not a staged one', () => {
     const bin = tempDir();
     const log = path.join(tempDir(), 'argv.txt');
@@ -1098,6 +1113,15 @@ describe('external gate exit semantics', () => {
     // Not a repository: git ls-files fails, and that is not "no lockfiles".
     const out = runGate(osv(), { repoRoot: tempDir(), staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.couldNotRun?.reason).toBe('preparation-failed');
+  });
+
+  it('names the lockfiles it handed osv-scanner and counts zero sources with findings, on a clean scan (issue #72)', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.run.details.lockfiles).toBe('1 (package-lock.json)');
+    expect(out.run.details['sources-with-findings']).toBe(0);
   });
 
   it('on a pull request, tells gitleaks to ignore inline gitleaks:allow comments; locally it does not', () => {

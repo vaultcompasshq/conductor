@@ -88,9 +88,13 @@ const THREE_GATES = result([
 ]);
 
 const gitleaks = normalizeGitleaks(fixture('gitleaks-8.30.1-history-blocking.json'), '8.30.1', true);
-const osvScanner = normalizeOsvScanner(fixture('osv-scanner-2.6.0-blocking.json'), '2.6.0', true, [
-  '/tmp/conductor-osv-fixture',
-]);
+const osvScanner = normalizeOsvScanner(
+  fixture('osv-scanner-2.6.0-blocking.json'),
+  '2.6.0',
+  true,
+  ['/tmp/conductor-osv-fixture'],
+  ['package-lock.json']
+);
 
 /** The three family gates plus the two external ones, over captured output. */
 function fiveGateResult(): RunResult {
@@ -1157,6 +1161,21 @@ describe('the umbrella own findings', () => {
       result([outcome({ stage: 'push', findings: depGuard.findings })])
     );
     expect(log.runs[0].properties).toEqual({ enforced: true, stage: 'push' });
+  });
+
+  it('carries the vulnerabilities lockfile fact into the osv-scanner run properties (issue #72)', () => {
+    const log = sarif(fiveGateResult());
+    const osv = log.runs.find((r) => (r.tool as Record<string, Record<string, unknown>>).driver.name === 'osv-scanner');
+    const details = (osv?.properties as Record<string, Record<string, unknown>>).details;
+    expect(details.lockfiles).toBe('1 (package-lock.json)');
+    expect(details['sources-with-findings']).toBe(1);
+  });
+
+  it('carries dep-guard\'s online reporting into that gate own run properties (issue #72)', () => {
+    const online = normalizeDepGuard(fixture('dep-guard-0.2.0-clean.json'), '0.2.0', true);
+    const log = sarif(result([outcome({ run: online.run, findings: [] })]));
+    const details = (log.runs[0].properties as Record<string, Record<string, unknown>>).details;
+    expect(details.online).toBe(true);
   });
 
   it('also names an unenforced gate in the umbrella run, where a gate with no run still fits', () => {

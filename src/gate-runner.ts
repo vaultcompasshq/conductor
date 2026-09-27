@@ -669,16 +669,22 @@ function probeVersion(
  * `context.blocked` is whether the gate's exit said it blocked. The npm gates
  * carry that in their own JSON and ignore it; the external tools' reports do
  * not, so their normalizers take it from here.
+ *
+ * `context.online` and `context.lockfiles` are read from the umbrella's OWN
+ * constructed argv, never from a gate's JSON (issue #72): whether --online
+ * was passed and which lockfiles were handed over with --lockfile are
+ * questions about what this run asked for, which the umbrella already knows
+ * before the child ever answers.
  */
 function normalizeFor(
   product: Product,
   parsed: unknown,
   version: string | null,
-  context: { blocked: boolean; roots: readonly string[] }
+  context: { blocked: boolean; roots: readonly string[]; online: boolean; lockfiles: readonly string[] }
 ) {
   switch (product) {
     case 'dep-guard':
-      return normalizeDepGuard(parsed, version);
+      return normalizeDepGuard(parsed, version, context.online);
     case 'vault-guard':
       return normalizeVaultGuard(parsed, version);
     case 'intent-guard':
@@ -686,7 +692,7 @@ function normalizeFor(
     case 'gitleaks':
       return normalizeGitleaks(parsed, version, context.blocked);
     case 'osv-scanner':
-      return normalizeOsvScanner(parsed, version, context.blocked, context.roots);
+      return normalizeOsvScanner(parsed, version, context.blocked, context.roots, context.lockfiles);
   }
 }
 
@@ -1377,6 +1383,10 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     const normalized = normalizeFor(gate.product, parsed, version, {
       blocked,
       roots: rootSpellings(options.repoRoot),
+      // The literal flag, read off the argv this run actually spawned with,
+      // not off gate.options: the argv is what dep-guard was actually told.
+      online: argv.includes('--online'),
+      lockfiles: external.lockfiles ?? [],
     });
     return {
       ...withRun,

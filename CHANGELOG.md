@@ -39,6 +39,27 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   the one-line summary, and its own `conductor/tree-unchanged` SARIF
   notification, and none of it reaches the exit code (issue #69).
 
+- **Fixed:** the vulnerabilities and dependencies summary lines could not
+  tell a clean run from one that checked nothing. osv-scanner 2.x prints
+  `results[]` only for a lockfile with findings, so a clean scan of one
+  lockfile and a run that scanned none both printed `sources 0`; the
+  vulnerabilities line now names the lockfiles the umbrella actually passed
+  with `--lockfile`, by count and name, and separates that from
+  `sources-with-findings`, the count osv-scanner itself reported. The
+  dependencies line showed dep-guard's mode and corpus date but nothing
+  about whether `--online` was passed, so a quiet run and an offline one
+  read the same; the line now always prints `online true` or `online false`
+  from the flag the umbrella itself passed, and, when the installed
+  dep-guard's JSON carries a run-level `online` object (read when present,
+  a dep-guard release after 0.8.0), also prints the lookup count and the
+  count skipped by its budget, with a clause when the budget cut lookups
+  short. An older dep-guard's own `online-deadline-exceeded` diagnostic
+  still surfaces, unchanged. A malformed `online` object is ignored rather
+  than failing the gate: this is reporting, not judgment, and none of it
+  reaches a severity, `blocking`, or the exit code. Both facts are also
+  carried into the normalized gate details, so SARIF has them beside the
+  text report (issue #72).
+
 ## [0.5.1] - 2026-09-27
 
 **An action-only release. The tag moves; the npm package does not.**

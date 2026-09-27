@@ -961,6 +961,12 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
         ...(gate.intent === undefined
           ? {}
           : { contractSource: gate.intent.contractSource, baseRef: gate.intent.baseRef }),
+        // The gate's own run facts (issue #72: the lockfiles the umbrella
+        // handed osv-scanner, and dep-guard's online-lookup reporting), the
+        // same bag the text report renders as scalars. Carried verbatim and
+        // only when there is something in it, so a gate that reports none of
+        // this keeps the properties shape it had before.
+        ...(Object.keys(gate.run.details).length === 0 ? {} : { details: gate.run.details }),
       })
     );
   }
