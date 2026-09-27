@@ -606,12 +606,15 @@ describe('intent-guard 1.7.0 warnings', () => {
     ]);
   });
 
-  it('never marks the run as blocking or changes the gate status because of a warning', () => {
+  it('keeps both warnings out of findings entirely: zero findings, two diagnostics', () => {
+    // A mutation that pushed a warning into `findings` too (blocking or not)
+    // would leave findings.length at 0 under the old assertion here, which
+    // only checked that no PRESENT finding was blocking; it never checked
+    // that a finding could not be present at all. This checks both counts
+    // directly, so either direction of that mutation goes red.
     const result = normalizeIntentGuard(INTENT_GUARD_WARNINGS, '1.7.0');
-    expect(result.run.diagnostics.every((diagnostic) => diagnostic.code === 'intent-guard/warning')).toBe(
-      true
-    );
-    expect(result.findings.some((finding) => finding.blocking)).toBe(false);
+    expect(result.findings).toHaveLength(0);
+    expect(result.run.diagnostics).toHaveLength(2);
   });
 
   it('reads as none, not an error, on an intent-guard old enough to have never sent warnings', () => {

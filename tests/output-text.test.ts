@@ -312,17 +312,36 @@ describe('the dependencies line reports whether dep-guard ran online (issue #72,
 });
 
 describe("the intent line prints intent-guard's own 1.7.0 advance-notice warnings", () => {
+  // exitCode: 0 on the outcome, matching the real fixture (status "ok"), and
+  // verbose: true so the full report is reached ON PURPOSE, by the same rule
+  // a --verbose run or the pull-request comment (which always renders with
+  // --verbose) reaches it, rather than by accident. Leaving the outcome's
+  // exitCode at the outcome() helper's own default (1) used to force the
+  // full report a different way: isFullyClean requires every gate's exitCode
+  // to be 0, so the accidental 1 failed that check and fell through to the
+  // full report regardless of options.verbose. That made this test pass
+  // without ever exercising the clean-summary collapse rule at all.
   function intentLine(run: RunSummary): string {
     const text = renderText(
       result(
-        [outcome({ role: 'intent', product: 'intent-guard', productVersion: '1.7.0', run, findings: [] })],
+        [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.7.0',
+            run,
+            findings: [],
+            exitCode: 0,
+          }),
+        ],
         0
-      )
+      ),
+      { verbose: true }
     );
     return text.slice(text.indexOf('intent'));
   }
 
-  it('prints each warning as a note under the gate, never as a finding', () => {
+  it('prints each warning as a note under the gate in the full report, never as a finding', () => {
     const normalized = normalizeIntentGuard(fixture('intent-guard-1.7.0-check-warnings.json'), '1.7.0');
     const line = intentLine(normalized.run);
     expect(line).toMatch(
@@ -338,6 +357,30 @@ describe("the intent line prints intent-guard's own 1.7.0 advance-notice warning
     const normalized = normalizeIntentGuard(fixture('intent-guard-1.2.1-check-passing.json'), '1.2.1');
     const line = intentLine(normalized.run);
     expect(line).not.toMatch(/note intent-guard\/warning/);
+  });
+
+  it('counts the warnings in the clean one-line summary instead of printing their text, without --verbose or a non-clean run to force the full report', () => {
+    const normalized = normalizeIntentGuard(fixture('intent-guard-1.7.0-check-warnings.json'), '1.7.0');
+    const text = renderText(
+      result(
+        [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.7.0',
+            run: normalized.run,
+            findings: [],
+            exitCode: 0,
+          }),
+        ],
+        0
+      )
+    );
+    expect(text.startsWith('conductor: clean, nothing blocked.')).toBe(true);
+    expect(text).toMatch(/\b2 note\(s\)\./);
+    expect(text).not.toMatch(/Budget protected_paths entry/);
+    expect(text).not.toMatch(/Budget allowed_paths entry/);
+    expect(text.endsWith('Re-run with --verbose for the full report.\n')).toBe(true);
   });
 });
 

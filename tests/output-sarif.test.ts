@@ -544,11 +544,62 @@ describe("intent-guard's own 1.7.0 advance-notice warnings", () => {
     expect(ids).not.toContain('intent-guard/warning');
   });
 
-  it('never turns a warning into a blocking result or changes the exit code', () => {
-    const before = WARNED.exitCode;
+  it('filters run.diagnostics by code, leaving a non-warning diagnostic on the same gate out', () => {
+    // intentWarningNotifications filters gate.run.diagnostics down to the
+    // intent-guard/warning code specifically (src/output-sarif.ts:712);
+    // untested until now, so a mutation that dropped or widened that filter
+    // would have passed every other test above, since none of them puts a
+    // second, differently-coded diagnostic on the same gate.
+    const mixed = result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.7.0',
+        exitCode: 0,
+        findings: [],
+        run: {
+          failOn: null,
+          suppressed: 0,
+          ignored: 0,
+          diagnostics: [
+            {
+              code: 'intent-guard/warning',
+              message: 'Budget protected_paths entry is invalid and will block in 2.0.0.',
+            },
+            {
+              code: 'online-deadline-exceeded',
+              message: 'an unrelated run diagnostic sharing the same gate',
+            },
+          ],
+          details: {},
+        },
+      }),
+    ]);
+
+    const ids = notificationsOf(sarif(mixed)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+    expect(ids.filter((id) => id === 'intent-guard/warning')).toHaveLength(1);
+    expect(ids).not.toContain('online-deadline-exceeded');
+  });
+
+  it('keeps a warning out of every run own results, not only the umbrella own', () => {
+    // umbrellaResultIds above already checks the umbrella's run; this checks
+    // the WHOLE log, intent-guard's own driver run included, because a
+    // mutation that pushed the diagnostic into a gate's `findings` as well
+    // as its `run.diagnostics` would still pass every assertion above.
     const log = sarif(WARNED);
-    expect(umbrellaResultIds(log)).not.toContain('intent-guard/warning');
-    expect(WARNED.exitCode).toBe(before);
+    const allResults = log.runs.flatMap(
+      (run) => (run.results as Array<Record<string, unknown>> | undefined) ?? []
+    );
+    expect(allResults.some((entry) => entry.ruleId === 'intent-guard/warning')).toBe(false);
+    expect(
+      allResults.some((entry) =>
+        String((entry.message as Record<string, unknown> | undefined)?.text ?? '').includes(
+          'This will block check and report starting in 2.0.0'
+        )
+      )
+    ).toBe(false);
   });
 });
 
