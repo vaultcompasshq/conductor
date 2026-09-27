@@ -46,6 +46,11 @@ export interface ProductProfile {
   neutralConfig: string | null;
   /** How to install the tool, for a missing-binary finding. */
   remedy: (skipNodeModules: boolean) => string;
+  /**
+   * A stderr line (ANSI colour stripped) that turns a clean exit into an
+   * error. Null for a tool whose exit code can be taken at its word.
+   */
+  stderrError: RegExp | null;
 }
 
 /**
@@ -78,6 +83,7 @@ function managedProfile(product: Product): ProductProfile {
     configFile: null,
     neutralConfig: null,
     remedy: managedRemedy(product),
+    stderrError: null,
   };
 }
 
@@ -105,6 +111,9 @@ const PROFILES: Record<Product, ProductProfile> = {
       'Install gitleaks 8.19 or later on the machine or runner before conductor runs (a pinned ' +
       'release download with a checksum is the usual step), or disable the secrets-history gate ' +
       'in .guardrails.yaml. conductor does not download it.',
+    // gitleaks 8.30.1 swallows a git failure: it logs "<time> ERR [git]
+    // fatal: ..." and exits 0 with an empty report (tests/fixtures/README.md).
+    stderrError: /^\S+\s+ERR\s/,
   },
   'osv-scanner': {
     product: 'osv-scanner',
@@ -122,6 +131,9 @@ const PROFILES: Record<Product, ProductProfile> = {
     remedy: () =>
       'Install osv-scanner 2.x on the machine or runner before conductor runs, or disable the ' +
       'vulnerabilities gate in .guardrails.yaml. conductor does not download it.',
+    // osv-scanner's exit codes separate an error (127) from a verdict, and
+    // its stderr is progress chatter, so the exit is taken at its word.
+    stderrError: null,
   },
 };
 

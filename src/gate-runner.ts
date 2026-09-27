@@ -17,6 +17,9 @@
 // for all three.
 
 import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import type { Diagnostic, Finding, RunSummary } from './envelope.js';
 import { NormalizeError } from './envelope.js';
@@ -33,6 +36,7 @@ import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
 import { profileFor } from './products.js';
+import type { ProductProfile } from './products.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
 import {
   ResolveError,
@@ -69,7 +73,19 @@ export type CouldNotRunReason =
    * places: one is a packaging problem with the installed gate, and this one
    * is a pull request choosing the program that judges it.
    */
-  | 'gate-program-refused';
+  | 'gate-program-refused'
+  /**
+   * The installed build is older than the oldest version whose command line
+   * the umbrella speaks (`minVersion` in src/products.ts). Only the external
+   * tools have a floor; nothing was run beyond the version probe.
+   */
+  | 'gate-version-unsupported'
+  /**
+   * The gate exited with a verdict but the report file it writes that
+   * verdict to is not there. Only a tool whose output is a report file can
+   * land here.
+   */
+  | 'report-missing';
 
 export interface CouldNotRun {
   reason: CouldNotRunReason;
@@ -297,6 +313,13 @@ export interface RunGateOptions {
    * Offered to every child; `decideTrustBase` says which ones can take it.
    */
   trustBase?: string;
+  /**
+   * The directory under which this gate's own working directory is made, for
+   * an external tool's report file and materialised config. The runner
+   * removes what it made. Defaults to the system temporary directory; tests
+   * inject one so they can see that nothing is left behind.
+   */
+  tempRoot?: string;
 }
 
 /**
@@ -586,7 +609,17 @@ function probeVersion(
   return match === null ? null : (match[1] ?? match[0]).replace(/^v/, '');
 }
 
-function normalizeFor(product: Product, parsed: unknown, version: string | null) {
+/**
+ * `context.blocked` is whether the gate's exit said it blocked. The npm gates
+ * carry that in their own JSON and ignore it; the external tools' reports do
+ * not, so their normalizers take it from here.
+ */
+function normalizeFor(
+  product: Product,
+  parsed: unknown,
+  version: string | null,
+  context: { blocked: boolean }
+) {
   switch (product) {
     case 'dep-guard':
       return normalizeDepGuard(parsed, version);
@@ -814,6 +847,34 @@ function runGateInner(
   }
 
   const version = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);
+
+  // The command-line floor. Only the external tools have one: the umbrella
+  // writes flags they grew at a known release (gitleaks' git subcommand,
+  // osv-scanner's scan source), and an older build would reject the command
+  // line with an exit the umbrella could misread. An UNREADABLE version falls
+  // through to the trust-base decision below, which refuses it on a pull
+  // request and runs it unverified locally, the same as the npm gates.
+  const profile = profileFor(gate.product);
+  if (
+    profile.minVersion !== null &&
+    version !== null &&
+    !atLeastVersion(version, profile.minVersion)
+  ) {
+    const detail =
+      `${gate.product} ${version} is older than ${profile.minVersion}, the oldest version whose ` +
+      `command line this umbrella speaks. Upgrade it to ${profile.minVersion} or later.`;
+    return {
+      ...base,
+      productVersion: version,
+      binary,
+      durationMs: Date.now() - started,
+      couldNotRun: { reason: 'gate-version-unsupported', detail },
+      findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
+  }
+
   // AFTER the version probe and BEFORE the command line is built, because the
   // decision reads the version. That ordering is the whole capability gate:
   // an intent-guard older than 1.4.0 must not be handed a flag it would
@@ -850,13 +911,72 @@ function runGateInner(
     };
   }
 
+  // A directory of the runner's own for an external tool's working files: the
+  // report gitleaks writes. Made under the caller's temporary root when there
+  // is one, and removed whatever happens, so a run leaves nothing behind. The
+  // npm gates need none, and get none.
+  const workDir =
+    profile.output.kind === 'report-file'
+      ? mkdtempSync(path.join(options.tempRoot ?? tmpdir(), 'conductor-gate-'))
+      : null;
+  try {
+    return spawnAndRead({
+      gate,
+      options,
+      started,
+      progress,
+      base,
+      binary,
+      version,
+      trustBase,
+      profile,
+      timeoutMs,
+      workDir,
+    });
+  } finally {
+    if (workDir !== null) {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }
+}
+
+interface SpawnContext {
+  gate: GatePolicy;
+  options: RunGateOptions;
+  started: number;
+  progress: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'>;
+  base: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'>;
+  binary: ResolvedBinary;
+  version: string | null;
+  trustBase: GateTrustBase | undefined;
+  profile: ProductProfile;
+  timeoutMs: number;
+  workDir: string | null;
+}
+
+/** Strips ANSI colour codes: gitleaks colours its log even off a terminal. */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+/** Builds the command line, runs the gate, and reads what it said. */
+function spawnAndRead(ctx: SpawnContext): GateOutcome {
+  const { gate, options, started, progress, base, binary, version, trustBase, profile, timeoutMs, workDir } =
+    ctx;
+
+  const external: ExternalArgs = {};
+  if (profile.output.kind === 'report-file' && workDir !== null) {
+    external.reportPath = path.join(workDir, `${gate.product}-report${profile.output.extension}`);
+  }
+
   const argv = [
     ...binary.argvPrefix,
     ...gateArgs(
       gate,
       options.staged,
       options.intent,
-      trustBase === undefined || trustBase.withheld !== null ? undefined : trustBase.ref
+      trustBase === undefined || trustBase.withheld !== null ? undefined : trustBase.ref,
+      external
     ),
   ];
 
@@ -899,12 +1019,34 @@ function runGateInner(
   }
 
   const exitCode = child.status;
-  const stdout = child.stdout ?? '';
 
-  // dep-guard's 2 means "could not run the checks at all" and it prints no
-  // JSON. The other two have no such code, but a signal-killed child or a
-  // timeout lands here too, and none of those are a clean result.
-  if (exitCode === null || exitCode > 1) {
+  // "Nothing here to scan" is its own exit for osv-scanner (128, a
+  // repository with no lockfile). Read as an error it would redden every pull
+  // request in a docs-only repository; read as a verdict it would claim a
+  // scan that did not happen. So it is clean, and the report says why.
+  if (exitCode !== null && profile.exit.nothingToScan.includes(exitCode)) {
+    return {
+      ...withRun,
+      exitCode: 0,
+      couldNotRun: null,
+      findings: [],
+      run: EMPTY_RUN,
+      diagnostics: [
+        {
+          code: 'conductor/nothing-to-scan',
+          message: `${gate.product} found nothing to scan (exit ${exitCode}); treated as clean.`,
+        },
+      ],
+    };
+  }
+
+  // The profile says which exits are verdicts. For the npm gates that is 0
+  // and 1, exactly as before profiles existed: dep-guard's 2 means "could not
+  // run the checks at all" and it prints no JSON. gitleaks is handed
+  // --exit-code 3, so its 1 is left meaning an error. A signal-killed child
+  // or a timeout lands here too, and none of those are a clean result.
+  const blocked = exitCode !== null && profile.exit.blocked.includes(exitCode);
+  if (exitCode === null || (!blocked && !profile.exit.clean.includes(exitCode))) {
     const detail =
       exitCode === null
         ? 'the gate did not exit normally (killed, or timed out).'
@@ -923,17 +1065,66 @@ function runGateInner(
     };
   }
 
+  // A clean exit that logged an error is not a clean scan. gitleaks 8.30.1
+  // swallows a git failure (a base ref the checkout never fetched, a path
+  // that is not a repository): it logs the git error at ERR, scans 0
+  // commits, writes a report of [], and exits 0. Read by exit code alone
+  // that is a pass over nothing on exactly the pull requests where the
+  // history was never there to read.
+  if (!blocked && profile.stderrError !== null) {
+    const pattern = profile.stderrError;
+    const errorLine = stripAnsi(withRun.stderr)
+      .split('\n')
+      .find((line) => pattern.test(line));
+    if (errorLine !== undefined) {
+      const detail =
+        `${gate.product} exited ${exitCode} but logged an error, so its clean result cannot be ` +
+        `trusted: ${errorLine.trim()}`;
+      return {
+        ...withRun,
+        exitCode,
+        couldNotRun: { reason: 'gate-error', detail },
+        findings: [normalizeFailedGate(gate.role, gate.product, detail, withRun.stderr)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+  }
+
+  let text: string;
+  if (profile.output.kind === 'report-file') {
+    // The report is where the verdict is. An exit that says clean or blocked
+    // with no report behind it is not either of those.
+    const reportPath = external.reportPath as string;
+    if (!existsSync(reportPath)) {
+      const detail = `${gate.product} exited ${exitCode} but wrote no report, so there is no verdict to read.`;
+      return {
+        ...withRun,
+        exitCode,
+        couldNotRun: { reason: 'report-missing', detail },
+        findings: [normalizeFailedGate(gate.role, gate.product, detail, withRun.stderr)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+    text = readFileSync(reportPath, 'utf8');
+  } else {
+    text = child.stdout ?? '';
+  }
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
+    parsed = JSON.parse(text);
   } catch {
     // Exit 1 with unparseable stdout is what a rejected config looks like
     // from two of the three products, and it is could-not-run rather than
     // clean. Reporting it as a policy violation would tell the user their
     // code is at fault when their config is.
     const detail =
-      `the gate exited ${exitCode} without valid JSON on stdout. ` +
-      'A rejected config file looks exactly like this, and it is not a clean result.';
+      profile.output.kind === 'report-file'
+        ? `the gate exited ${exitCode} and its report is not valid JSON, which is not a clean result.`
+        : `the gate exited ${exitCode} without valid JSON on stdout. ` +
+          'A rejected config file looks exactly like this, and it is not a clean result.';
     return {
       ...withRun,
       exitCode,
@@ -945,7 +1136,7 @@ function runGateInner(
   }
 
   try {
-    const normalized = normalizeFor(gate.product, parsed, version);
+    const normalized = normalizeFor(gate.product, parsed, version, { blocked });
     return {
       ...withRun,
       exitCode,

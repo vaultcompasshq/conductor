@@ -53,6 +53,17 @@ describe('product profiles', () => {
     expect(o.configFile).toBe('osv-scanner.toml');
     expect(o.neutralConfig).toBe('');
     expect(o.remedy(false)).toMatch(/install osv-scanner/i);
+    expect(o.stderrError).toBeNull();
+  });
+
+  it('reads a gitleaks ERR log line as an error and leaves its INF lines alone', () => {
+    const pattern = profileFor('gitleaks').stderrError as RegExp;
+    expect(pattern.test("6:36PM ERR [git] fatal: ambiguous argument 'origin/main..HEAD'")).toBe(true);
+    expect(pattern.test('6:36PM INF 0 commits scanned.')).toBe(false);
+    expect(pattern.test('6:36PM WRN leaks found: 1')).toBe(false);
+    for (const product of ['dep-guard', 'vault-guard', 'intent-guard'] as const) {
+      expect(profileFor(product).stderrError).toBeNull();
+    }
   });
 
   it('names the npm install and the action input in the remedy for a managed product', () => {

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -16,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decideTrustBase, runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
-import { CLEAN_INTENT_GUARD, stubGate } from './helpers/stub-gate.js';
+import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -42,6 +43,22 @@ function gate(overrides: Partial<GatePolicy> = {}): GatePolicy {
     options: {},
     ...overrides,
   } as GatePolicy;
+}
+
+/** A fresh repository on `main` with one commit, for gates that read git. */
+function tempGitRepo(): string {
+  const dir = tempDir();
+  const run = (args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+  run(['init', '--quiet', '-b', 'main']);
+  writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
+  run(['add', 'README.md']);
+  run(['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'init']);
+  return dir;
+}
+
+/** A captured fixture's text, byte for byte. */
+function fixtureText(name: string): string {
+  return readFileSync(path.join(FIXTURES, name), 'utf8');
 }
 
 const DEP_GUARD_JSON = readFileSync(path.join(FIXTURES, 'dep-guard-0.2.0-blocking.json'), 'utf8');
@@ -811,5 +828,105 @@ describe('a pull-request run and the file the version probe would spawn', () => 
     expect(existsSync(fixture.marker)).toBe(true);
     expect(outcome.couldNotRun).toBeNull();
     expect(outcome.productVersion).toBe('1.4.0');
+  });
+});
+
+describe('external gate exit semantics', () => {
+  const gl = () => gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci' });
+  const osv = () => gate({ role: 'vulnerabilities', product: 'osv-scanner', stage: 'ci' });
+
+  it('reads gitleaks findings from the report file and treats exit 3 as blocked', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: fixtureText('gitleaks-8.30.1-history-blocking.json'), exit: 3, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.exitCode).toBe(3);
+    expect(out.productVersion).toBe('8.30.1');
+    // The report was found and the exit read as a verdict, not an error. The
+    // findings themselves arrive with the gitleaks normalizer.
+    expect(out.couldNotRun?.reason).not.toBe('report-missing');
+    expect(out.couldNotRun?.reason).not.toBe('gate-error');
+  });
+
+  it('treats gitleaks exit 1 as an error, not a leak', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', exit: 1, stdout: '', stderr: 'fatal: not a git repository' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('reports report-missing when gitleaks exits clean but wrote no report', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('report-missing');
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('treats a clean gitleaks exit that logged a git error as an error, never as a clean scan of nothing', () => {
+    // Captured from gitleaks 8.30.1 with --log-opts naming a base ref the
+    // checkout never fetched: exit 0, report [], and these ERR lines.
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      reportFlag: '--report-path',
+      reportBody: fixtureText('gitleaks-8.30.1-history-clean.json'),
+      exit: 0,
+      stdout: '',
+      stderr: fixtureText('gitleaks-8.30.1-unknown-base-ref.stderr.txt'),
+    });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.couldNotRun?.detail).toMatch(/ERR/);
+  });
+
+  it('treats osv-scanner exit 128 as nothing to scan: clean, with a diagnostic, never could-not-run', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 128, stdout: '', stderr: 'No package sources found, --help for usage information.' });
+    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(true);
+  });
+
+  it('treats osv-scanner exit 127 as an error', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 127, stdout: '' });
+    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+  });
+
+  it('reads the osv-scanner version from its prefixed version line', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.productVersion).toBe('2.6.0');
+  });
+
+  it('refuses a gitleaks older than the floor as could-not-run, naming the floor', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.18.4', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-version-unsupported');
+    expect(out.couldNotRun?.detail).toContain('8.19.0');
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('leaves nothing behind in the temporary root it was given', () => {
+    const bin = tempDir();
+    const root = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: root });
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it('keeps the npm gates on the old exit reading: exit 2 is gate-error', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { exit: 2, stdout: '' });
+    const out = runGate(gate({ role: 'secrets', product: 'vault-guard' }), { repoRoot: tempGitRepo(), staged: false, pathValue: bin });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.couldNotRun?.detail).toBe('the gate exited 2, which it uses for "could not run".');
   });
 });

@@ -651,7 +651,7 @@ git -C <worktree> commit -m "Build gitleaks and osv-scanner argv: report file, m
 - Produces: `RunGateOptions.tempRoot?: string`; new `CouldNotRunReason` members `'gate-version-unsupported'` and `'report-missing'`; `runGate` classifies the child's exit through `profileFor(product).exit` before parsing; a `nothingToScan` exit yields `couldNotRun: null`, no findings, `exitCode: 0`, and a diagnostic `conductor/nothing-to-scan`.
 - Consumes: Tasks 1 to 4.
 
-- [ ] **Step 1: Write the failing runner tests**
+- [x] **Step 1: Write the failing runner tests**
 
 Add to `tests/gate-runner.test.ts` using the `gate(overrides)` helper and `stubGate`:
 
@@ -740,12 +740,12 @@ describe('external gate exit semantics', () => {
 
 `tempGitRepo()` is a helper that returns a fresh `git init` directory with one commit; if `tests/gate-runner.test.ts` already has one under another name, use it. `fixtureText(name)` reads `tests/fixtures/<name>` as a string. If the module mocks `node:child_process` differently, adapt the spy to the pattern the file already uses for `spawnSync`.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/gate-runner.test.ts 2>&1 | tail -40`
 Expected: FAIL for every new test.
 
-- [ ] **Step 3: Implement in `runGateInner`**
+- [x] **Step 3: Implement in `runGateInner`**
 
 Order inside `runGateInner`, after the binary is resolved and the version probed (around :752) and before the trust-base decision:
 
@@ -804,16 +804,16 @@ Delete the report file after reading it, inside a `try/finally`, unless `options
 
 In `src/run.ts` pass `tempRoot: options.tempRoot` into each `runGate` call (search for `runGate(` in run.ts).
 
-- [ ] **Step 4: Run the runner tests and the whole suite**
+- [x] **Step 4: Run the runner tests and the whole suite**
 
 Run: `pnpm --dir <worktree> test -- tests/gate-runner.test.ts 2>&1 | tail -30` then `pnpm --dir <worktree> test 2>&1 | tail -8`
 Expected: PASS. The npm-gate exit-2 test proves the old reading survived.
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
 Change `profile.exit.blocked.includes(exitCode)` to `exitCode === 1` and run the runner tests: the gitleaks exit-3 test must go RED. Restore. Change the `nothingToScan` branch to fall through and run: the osv exit-128 test must go RED. Restore. Record both in the commit message.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git -C <worktree> add src/gate-runner.ts src/run.ts tests/gate-runner.test.ts
