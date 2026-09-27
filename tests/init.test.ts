@@ -306,6 +306,27 @@ describe('what init writes', () => {
     expect(parsePolicy(policy, POLICY_FILE_NAME).gates['secrets-history']?.stage).toBe('ci');
   });
 
+  it('says in one line that an external gate it enabled must be installed by the workflow too', () => {
+    const repo = gitRepo();
+    const bin = tempDir();
+    shim(bin, 'gitleaks');
+    shim(bin, 'osv-scanner');
+
+    const lines = renderInitHuman(init(repo, { pathValue: bin })).split('\n');
+    const notes = lines.filter((line) => /found on this machine's PATH/.test(line));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/secrets-history \(gitleaks\)/);
+    expect(notes[0]).toMatch(/vulnerabilities \(osv-scanner\)/);
+    expect(notes[0]).toMatch(/workflow must install/);
+  });
+
+  it('prints no such line when no external gate was enabled', () => {
+    const repo = gitRepo();
+    const bin = tempDir();
+    shim(bin, 'vault-guard');
+    expect(renderInitHuman(init(repo, { pathValue: bin }))).not.toMatch(/found on this machine's PATH/);
+  });
+
   it('writes each gate stage explicitly, so the file explains when each one runs', () => {
     // The generated policy file is where a user discovers the vocabulary.
     // A default that exists only in the parser is a default nobody can see,

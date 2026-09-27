@@ -117,10 +117,17 @@ on; the normalizer tests assert that prefix never reaches a finding. The
 second commit deletes the file, so the secret exists only in
 history. Both commits use the throwaway identity `Fixture
 <fixture@example.invalid>`, which is why that name appears in the report.
-The command is exactly the argv the umbrella builds on a local run:
+The command was the argv the umbrella built on a local run at the time:
 
     gitleaks git --report-format json --report-path <out> --exit-code 3 \
       --redact --no-banner --log-opts HEAD <repo>
+
+The umbrella now also passes `--log-level info` and puts
+`--diff-merges=first-parent` in front of the `--log-opts` scope. The
+fixture was not re-captured: the same repository scanned with
+`--log-level info --log-opts "--diff-merges=first-parent HEAD"` wrote a
+report byte-identical to it (exit 3). gitleaks splits the `--log-opts`
+value on spaces, so the two git options arrive separately.
 
 `gitleaks-8.30.1-history-blocking.json` is the report file (exit 3). It
 has one entry, rule `doppler-api-token`, with `Match` and `Secret` both

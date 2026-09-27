@@ -39,7 +39,11 @@ import {
 import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
-import { materializeExternalConfig } from './external-config.js';
+import {
+  ExternalConfigError,
+  materializeExternalConfig,
+  nestedConfigProposals,
+} from './external-config.js';
 import { profileFor } from './products.js';
 import type { ProductProfile } from './products.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
@@ -573,6 +577,17 @@ export function gateArgs(
       // redden every other pull request. --staged has no meaning here, and
       // --trust-base is never handed to an external tool: the trust base
       // scopes the history and selects the config, and that is all.
+      //
+      // --diff-merges=first-parent because `git log -p` shows no diff for a
+      // merge commit, so a secret added inside a merge's own changes (an
+      // evil merge, a key pasted while resolving a conflict) was never
+      // scanned. The price is that a pull request's change shows twice under
+      // an Actions-style merge, once in its commit and once in the merge's
+      // first-parent diff; normalizeGitleaks collapses those.
+      //
+      // --log-level info, pinned: the umbrella reads ERR lines to tell a
+      // failed scan from a clean one, so a lower level (or a future lower
+      // default) would turn a failed scan into a pass. It is reserved too.
       const scope = trustBase === undefined ? 'HEAD' : `${trustBase}..HEAD`;
       return [
         '--report-format',
@@ -583,8 +598,10 @@ export function gateArgs(
         '3',
         '--redact',
         '--no-banner',
+        '--log-level',
+        'info',
         '--log-opts',
-        scope,
+        `--diff-merges=first-parent ${scope}`,
         // On a pull request, inline gitleaks:allow comments are ignored: an
         // inline allow lives in the tree being judged, so the pull request
         // controls it. A legitimate allow belongs in the base ref's
@@ -1037,6 +1054,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // from the base ref: the lockfiles ARE the tree being judged, and adding,
   // removing or renaming one is visible in the diff, so there is nothing for
   // a base-ref read to protect. A listing that fails is not "no lockfiles".
+  const nestedProposals: string[] = [];
   if (profile.lockfileNames !== null) {
     const names = new Set(profile.lockfileNames);
     const listing = spawnSync('git', ['ls-files', '-z'], {
@@ -1060,9 +1078,13 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
         diagnostics: [],
       };
     }
-    external.lockfiles = listing.stdout
-      .split('\0')
-      .filter((file) => file !== '')
+    const tracked = listing.stdout.split('\0').filter((file) => file !== '');
+    if (decidedRef !== undefined && profile.configFile !== null) {
+      nestedProposals.push(
+        ...nestedConfigProposals(options.repoRoot, decidedRef, tracked, profile.configFile)
+      );
+    }
+    external.lockfiles = tracked
       // Never a vendored copy under node_modules: that is a dependency's own
       // lockfile, not a statement about what this repository resolves.
       .filter((file) => !file.split('/').includes('node_modules'))
@@ -1095,18 +1117,48 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // ref (or a neutral stand-in), never from the head it would otherwise
   // auto-load them from. A head-side change is a proposal, carried the same
   // way an npm gate's own proposals are.
-  const configProposals: string[] = [];
+  const configProposals: string[] = [...nestedProposals];
+  // Where the child runs. The repository root, except for a tool whose base
+  // config can name further files relative to its working directory: on a
+  // pull request that tool runs from a directory holding the base ref's
+  // copies, so no relative path it reads can land in the head tree. Every
+  // path the umbrella hands it is absolute, so nothing else depends on it.
+  let spawnCwd = options.repoRoot;
   if (decidedRef !== undefined && workDir !== null) {
-    const materialized = materializeExternalConfig({
-      repoRoot: options.repoRoot,
-      trustBase: decidedRef,
-      profile,
-      tempRoot: workDir,
-    });
+    const baseline = gate.options['baseline-path'];
+    let materialized: ReturnType<typeof materializeExternalConfig>;
+    try {
+      materialized = materializeExternalConfig({
+        repoRoot: options.repoRoot,
+        trustBase: decidedRef,
+        profile,
+        tempRoot: workDir,
+        ...(typeof baseline === 'string' && !path.isAbsolute(baseline) ? { extraFiles: [baseline] } : {}),
+      });
+    } catch (err) {
+      if (!(err instanceof ExternalConfigError)) {
+        throw err;
+      }
+      return {
+        ...base,
+        productVersion: version,
+        binary,
+        durationMs: Date.now() - started,
+        ...(trustBase === undefined ? {} : { trustBase }),
+        couldNotRun: { reason: 'preparation-failed', detail: err.message },
+        findings: [normalizeFailedGate(gate.role, gate.product, err.message)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
     if (materialized !== null) {
       external.configPath = materialized.path;
       if (materialized.proposal !== null) {
         configProposals.push(materialized.proposal);
+      }
+      configProposals.push(...materialized.extendProposals);
+      if (profile.followsConfigExtend) {
+        spawnCwd = materialized.cwd;
       }
       if (materialized.ignore !== null) {
         external.ignorePath = materialized.ignore.dir;
@@ -1153,7 +1205,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   ];
 
   const child = spawnSync(binary.command, argv, {
-    cwd: options.repoRoot,
+    cwd: spawnCwd,
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
@@ -1204,10 +1256,20 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       findings: [],
       run: EMPTY_RUN,
       diagnostics: [
-        {
-          code: 'conductor/nothing-to-scan',
-          message: `${gate.product} found nothing to scan (exit ${exitCode}); treated as clean.`,
-        },
+        // When lockfiles WERE handed over, this exit means they parsed to no
+        // packages at all, which is different news from "no lockfile": a
+        // lockfile the tool could not read anything from deserves a look.
+        external.lockfiles !== undefined && external.lockfiles.length > 0
+          ? {
+              code: 'conductor/lockfiles-empty',
+              message:
+                `${gate.product} read no packages from ${external.lockfiles.join(', ')} ` +
+                `(exit ${exitCode}); treated as clean.`,
+            }
+          : {
+              code: 'conductor/nothing-to-scan',
+              message: `${gate.product} found nothing to scan (exit ${exitCode}); treated as clean.`,
+            },
       ],
     };
   }

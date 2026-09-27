@@ -36,7 +36,12 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   `gitleaks:allow` comments. osv-scanner is handed each tracked npm-family
   lockfile by name (`git ls-files`, never a directory walk, so `.gitignore`
   cannot hide one); with none tracked it is not spawned and the gate is
-  clean with a note, as is its own exit 128. Unchanged: the three npm gates' behaviour, argv, exit reading,
+  clean with a note, as is its own exit 128. On a pull request gitleaks runs
+  from a directory holding the base ref's copies of any files its config
+  extends, scans merge commits by their first-parent diff (one finding per
+  leak, other commits listed), and logs at a pinned info level. `init`
+  says in one line when it enabled an external gate because the tool was on
+  this machine's PATH. Unchanged: the three npm gates' behaviour, argv, exit reading,
   version probe and timeout. This implies a minor version bump, to 0.5.0.
 
 ## [0.4.7] - 2026-09-26

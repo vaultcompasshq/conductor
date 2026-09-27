@@ -805,6 +805,35 @@ describe('gitleaks 8.30.1 normalization', () => {
     expect(JSON.stringify(out)).not.toContain(PLANTED_PREFIX);
   });
 
+  it('carries the commit and date but never the author or the email', () => {
+    const f = normalizeGitleaks(blocking, '8.30.1', true).findings[0]!;
+    expect(f.details.commit).toBeDefined();
+    expect(f.details.date).toBeDefined();
+    expect(f.details.author).toBeUndefined();
+    expect(JSON.stringify(f)).not.toContain('fixture@example.invalid');
+    expect(JSON.stringify(f)).not.toContain('"Fixture"');
+  });
+
+  it('collapses the same leak seen in two commits into one finding, keeping the earliest and naming the other', () => {
+    // --diff-merges=first-parent shows a pull request's change twice: in its
+    // own commit and in the merge's first-parent diff.
+    const original = (blocking as Array<Record<string, unknown>>)[0]!;
+    const merge = { ...original, Commit: 'b'.repeat(40), Date: '2099-01-01T00:00:00Z', Fingerprint: `${'b'.repeat(40)}:config.json:doppler-api-token:3` };
+    for (const report of [[original, merge], [merge, original]]) {
+      const out = normalizeGitleaks(report, '8.30.1', true);
+      expect(out.findings).toHaveLength(1);
+      expect(out.findings[0]!.details.commit).toBe(original.Commit);
+      expect(out.findings[0]!.details.alsoIn).toEqual(['b'.repeat(40)]);
+      expect(out.findings[0]!.fingerprint?.value).toBe(original.Fingerprint);
+    }
+  });
+
+  it('keeps leaks at different places apart', () => {
+    const original = (blocking as Array<Record<string, unknown>>)[0]!;
+    const elsewhere = { ...original, StartLine: 9, Commit: 'c'.repeat(40) };
+    expect(normalizeGitleaks([original, elsewhere], '8.30.1', true).findings).toHaveLength(2);
+  });
+
   it('marks findings non-blocking when the exit code did not say blocked', () => {
     expect(normalizeGitleaks(blocking, '8.30.1', false).findings.every((f) => !f.blocking)).toBe(true);
   });

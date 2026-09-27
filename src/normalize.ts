@@ -708,8 +708,15 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
 // NEVER CARRIED: Secret, Match and Line. The umbrella passes --redact, but a
 // report can be unredacted if a tool changes or a policy finds a way round
 // it, and this report is posted to a pull request and uploaded as SARIF.
-// Email is not carried either: a commit author's address has no bearing on
-// fixing a leak and would be published with it.
+// Neither Email nor Author is carried: who made the commit has no bearing on
+// fixing a leak, and a name or address would be published with it.
+//
+// ONE FINDING PER PLACE. The umbrella asks git for each merge's first-parent
+// diff (--diff-merges=first-parent) so a secret added inside a merge is seen,
+// and under an Actions-style merge that shows a pull request's change twice:
+// in its own commit and in the merge. Entries sharing rule, file, line and
+// column collapse to the one with the earliest Date (the first seen when a
+// date is missing), and the other commits are listed in details.alsoIn.
 
 export function normalizeGitleaks(
   raw: unknown,
@@ -718,21 +725,20 @@ export function normalizeGitleaks(
 ): NormalizedGateOutput {
   const product = 'gitleaks';
   const entries = needArray(raw, product, 'the report');
-  const findings: Finding[] = entries.map((rawEntry, index) => {
+  const byPlace = new Map<string, { finding: Finding; time: number; alsoIn: string[] }>();
+  entries.forEach((rawEntry, index) => {
     const where = `report[${index}]`;
     const entry = needRecord(rawEntry, product, where);
     const rule = needString(entry.RuleID, product, `${where}.RuleID`);
     const file = needString(entry.File, product, `${where}.File`);
     const line = needNumber(entry.StartLine, product, `${where}.StartLine`);
     // Carried as gitleaks reports them, which is also what its own SARIF
-    // output uses. In 8.30.1 they sit one past the 1-based character: the
-    // fixture's token begins at character 21 of its line and is reported at
-    // 22 to 70, a span of exactly the token's 49 characters. Not corrected
-    // here, because a correction would be a guess about every other version.
+    // output uses. gitleaks 8.30.1 column numbers are not consistently 0- or
+    // 1-based across findings (one token at character 21 was reported at 22,
+    // another at character 15 at 15), so no correction is applied.
     const column = typeof entry.StartColumn === 'number' ? entry.StartColumn : 1;
     const endColumn = typeof entry.EndColumn === 'number' ? entry.EndColumn : undefined;
     const commit = optionalString(entry.Commit, product, `${where}.Commit`);
-    const author = optionalString(entry.Author, product, `${where}.Author`);
     const date = optionalString(entry.Date, product, `${where}.Date`);
     // gitleaks' own Fingerprint is commit:file:rule:line, identical across
     // runs over the same history, so it is stable. Rebuilt in that shape if
@@ -740,7 +746,7 @@ export function normalizeGitleaks(
     const fingerprint =
       optionalString(entry.Fingerprint, product, `${where}.Fingerprint`) ??
       `${commit ?? ''}:${file}:${rule}:${line}`;
-    return {
+    const finding: Finding = {
       schemaVersion: 1,
       product,
       productVersion: version,
@@ -760,13 +766,32 @@ export function normalizeGitleaks(
       fingerprint: { value: fingerprint, scope: product, stability: 'stable' },
       details: {
         ...(commit === undefined ? {} : { commit }),
-        ...(author === undefined ? {} : { author }),
         ...(date === undefined ? {} : { date }),
         ...(typeof entry.Entropy === 'number' ? { entropy: entry.Entropy } : {}),
         ...(Array.isArray(entry.Tags) ? { tags: entry.Tags } : {}),
       },
     };
+    const place = JSON.stringify([rule, file, line, column]);
+    const time = date === undefined ? Number.NaN : Date.parse(date);
+    const seen = byPlace.get(place);
+    if (seen === undefined) {
+      byPlace.set(place, { finding, time, alsoIn: [] });
+      return;
+    }
+    const newer = !Number.isNaN(time) && !Number.isNaN(seen.time) && time < seen.time;
+    const dropped = newer ? seen.finding : finding;
+    const droppedCommit = dropped.details.commit;
+    if (newer) {
+      seen.finding = finding;
+      seen.time = time;
+    }
+    if (typeof droppedCommit === 'string') {
+      seen.alsoIn.push(droppedCommit);
+    }
   });
+  const findings: Finding[] = [...byPlace.values()].map(({ finding, alsoIn }) =>
+    alsoIn.length === 0 ? finding : { ...finding, details: { ...finding.details, alsoIn } }
+  );
   return {
     findings,
     run: {

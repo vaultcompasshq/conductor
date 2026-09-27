@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { materializeExternalConfig } from '../src/external-config.js';
+import { ExternalConfigError, materializeExternalConfig } from '../src/external-config.js';
 import { profileFor } from '../src/products.js';
 
 const temps: string[] = [];
@@ -95,6 +95,76 @@ describe('materializeExternalConfig', () => {
     const out = materializeExternalConfig({ repoRoot: repo, trustBase: 'main', profile: profileFor('gitleaks'), tempRoot: tempDir() })!;
     expect(readFileSync(path.join(out.ignore!.dir, '.gitleaksignore'), 'utf8')).toBe('');
     expect(out.ignore!.proposal).toMatch(/\.gitleaksignore/);
+  });
+
+  it('materialises a relative [extend] path from the base next to the config, and proposes a head-side edit to it', () => {
+    // gitleaks resolves [extend] path against its working directory. Read
+    // from the head, the base config would pull in a file the pull request
+    // wrote.
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[extend]\npath = "gl-extra.toml"\n');
+    writeFileSync(path.join(repo, 'gl-extra.toml'), '[extend]\nuseDefault = true\n');
+    commitAll(repo, 'base config with extend');
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    writeFileSync(path.join(repo, 'gl-extra.toml'), "[extend]\nuseDefault = true\n[[allowlists]]\npaths = ['''src/.*''']\n");
+    const tempRoot = tempDir();
+    const out = materializeExternalConfig({ repoRoot: repo, trustBase: 'main', profile: profileFor('gitleaks'), tempRoot })!;
+    // In the directory the tool is run from, so the relative path lands here.
+    expect(out.cwd).toBe(path.join(tempRoot, 'cwd'));
+    expect(readFileSync(path.join(out.cwd, 'gl-extra.toml'), 'utf8')).toBe('[extend]\nuseDefault = true\n');
+    expect(out.proposal).toBeNull();
+    expect(out.extendProposals).toEqual([expect.stringMatching(/^gl-extra\.toml differs/)]);
+  });
+
+  it('follows an extend chain, each target from the base', () => {
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, '.gitleaks.toml'), "[extend]\npath = 'config/a.toml'\n");
+    mkdirSync(path.join(repo, 'config'));
+    writeFileSync(path.join(repo, 'config/a.toml'), '[extend]\npath = "config/b.toml"\n');
+    writeFileSync(path.join(repo, 'config/b.toml'), '[extend]\nuseDefault = true\n');
+    commitAll(repo, 'chain');
+    const tempRoot = tempDir();
+    const out = materializeExternalConfig({ repoRoot: repo, trustBase: 'HEAD', profile: profileFor('gitleaks'), tempRoot })!;
+    expect(readFileSync(path.join(out.cwd, 'config/b.toml'), 'utf8')).toBe('[extend]\nuseDefault = true\n');
+  });
+
+  it('refuses an [extend] path the base ref does not have, naming it', () => {
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[extend]\npath = "gl-extra.toml"\n');
+    commitAll(repo, 'base config extending a file it never committed');
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    writeFileSync(path.join(repo, 'gl-extra.toml'), "[[allowlists]]\npaths = ['''.*''']\n");
+    expect(() =>
+      materializeExternalConfig({ repoRoot: repo, trustBase: 'main', profile: profileFor('gitleaks'), tempRoot: tempDir() })
+    ).toThrow(ExternalConfigError);
+    expect(() =>
+      materializeExternalConfig({ repoRoot: repo, trustBase: 'main', profile: profileFor('gitleaks'), tempRoot: tempDir() })
+    ).toThrow(/gl-extra\.toml/);
+  });
+
+  it('refuses an [extend] path that is absolute or climbs out of the work directory', () => {
+    for (const target of ['/etc/gitleaks.toml', '../outside.toml']) {
+      const repo = tempGitRepo();
+      writeFileSync(path.join(repo, '.gitleaks.toml'), `[extend]\npath = "${target}"\n`);
+      commitAll(repo, 'odd extend');
+      expect(() =>
+        materializeExternalConfig({ repoRoot: repo, trustBase: 'HEAD', profile: profileFor('gitleaks'), tempRoot: tempDir() })
+      ).toThrow(ExternalConfigError);
+    }
+  });
+
+  it('materialises a relative baseline named in the policy options from the base', () => {
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, 'baseline.json'), '[]\n');
+    commitAll(repo, 'baseline');
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    writeFileSync(path.join(repo, 'baseline.json'), '[{"Fingerprint":"x"}]\n');
+    const tempRoot = tempDir();
+    const out = materializeExternalConfig({
+      repoRoot: repo, trustBase: 'main', profile: profileFor('gitleaks'), tempRoot, extraFiles: ['baseline.json'],
+    })!;
+    expect(readFileSync(path.join(out.cwd, 'baseline.json'), 'utf8')).toBe('[]\n');
+    expect(out.extendProposals).toEqual([expect.stringMatching(/^baseline\.json differs/)]);
   });
 
   it('has no ignore file for osv-scanner', () => {

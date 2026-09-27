@@ -320,7 +320,8 @@ JSON format flag, `--staged`, and the intent gate's `--project`) are
 rejected if you also set them, rather than being silently overridden. For
 the external gates the umbrella writes `--report-format`, `--report-path`,
 `--exit-code`, `--log-opts`, `--config`, `--gitleaks-ignore-path`,
-`--ignore-gitleaks-allow`, `--redact` and `--no-banner` to gitleaks, and
+`--ignore-gitleaks-allow`, `--log-level`, `--redact` and `--no-banner` to
+gitleaks, and
 `--format`, `--config` and `--lockfile` to osv-scanner, so those are
 reserved too. Narrow what either
 tool reports in its own config file (`.gitleaks.toml`, `osv-scanner.toml`)
@@ -440,10 +441,14 @@ handed every tracked lockfile by name (`package-lock.json`,
 depth, never under `node_modules`); when the repository tracks none, it is
 not spawned at all and the gate is reported clean with a
 `conductor/nothing-to-scan` note, so a docs-only repository is not red on
-every pull request. Its 1 is blocked, and its own 128 ("no package sources
-found") is read the same way as no lockfile. Only those npm-family names are
-handed over today: a repository whose only lockfile belongs to another
-ecosystem gets nothing-to-scan from this gate. Any other osv-scanner exit
+every pull request. Its 1 is blocked. Its own 128 ("no package sources
+found") on lockfiles it WAS handed means they parsed to no packages; that is
+clean too, with a distinct `conductor/lockfiles-empty` note naming the
+files. Only those npm-family names are handed over today: a repository
+whose only lockfile belongs to another ecosystem gets nothing-to-scan from
+this gate. Lockfiles inside git submodules are never listed. In a sparse
+checkout a tracked lockfile that is not on disk is still handed over and
+osv-scanner exits 127 on it, a false could-not-run that fails closed. Any other osv-scanner exit
 (127 is its error code) is could-not-run. A gitleaks older than 8.19 or an
 osv-scanner older than 2.0 is could-not-run, naming the floor.
 
@@ -620,7 +625,25 @@ the same history, without the head's ignore file. A head-side change to any
 of these files is reported as a proposal line and takes effect after merge,
 exactly like a change to `.guardrails.yaml`. History is scoped to
 `<base>..HEAD` on a pull request and to `HEAD` locally, so a secret on
-another branch never reddens this one.
+another branch never reddens this one. Merge commits are scanned by their
+first-parent diff, so a secret added inside a merge (while resolving a
+conflict, say) is found; the same leak seen in a pull request's commit and
+again in its merge is reported once, with the other commit listed.
+
+A base `.gitleaks.toml` can name another file with `[extend] path`, which
+gitleaks resolves against its working directory. On a pull request
+conductor copies every file in that chain from the base ref into a
+directory of its own and runs gitleaks from there, so the head's copy of an
+extended file is never read; a head-side edit to one is a proposal, and an
+extended file the base does not have makes the gate could-not-run, naming
+it. gitleaks' log level is pinned at `info` and `log-level` is reserved,
+because conductor reads gitleaks' error lines to tell a failed scan from a
+clean one.
+
+**Local runs and `.gitattributes`.** On a pull request gitleaks scans the
+repository's git directory, where the head's `.gitattributes` is not read.
+A local run scans the working tree, so a file your own `.gitattributes`
+marks `binary` is skipped by gitleaks there. Pull requests are not affected.
 
 On a pull request gitleaks is also passed `--ignore-gitleaks-allow`, so an
 inline `gitleaks:allow` comment does not hide a secret: an inline allow
@@ -635,7 +658,9 @@ pull request could hide a committed lockfile. conductor lists the tracked
 lockfiles with `git ls-files` and hands each one over with `--lockfile`. On
 a pull request that list comes from the head's index, not the base ref: the
 lockfiles are the tree being judged, and adding or removing one is visible
-in the diff.
+in the diff. Only the root `osv-scanner.toml` is read from the base and
+passed with `--config`, which overrides any nested one for the run; a
+nested one the pull request adds or edits is reported as a proposal.
 
 The umbrella asks each gate its version and passes the flag only to a build
 that understands it, so an older gate is not handed a flag it would reject. A

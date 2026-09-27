@@ -919,14 +919,59 @@ describe('external gate exit semantics', () => {
     expect(out.couldNotRun?.detail).toMatch(/ERR/);
   });
 
-  it('treats osv-scanner exit 128 as nothing to scan: clean, with a diagnostic, never could-not-run', () => {
+  it('treats osv-scanner exit 128 on handed lockfiles as lockfiles that parsed to no packages, naming them', () => {
+    // osvRepo's lockfile is "{}": handed over, it yields zero packages and
+    // osv-scanner exits 128. That is not the same news as "no lockfile".
     const bin = tempDir();
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 128, stdout: '', stderr: 'No package sources found, --help for usage information.' });
     const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.couldNotRun).toBeNull();
     expect(out.exitCode).toBe(0);
     expect(out.findings).toEqual([]);
-    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(true);
+    const diagnostic = out.diagnostics.find((d) => d.code === 'conductor/lockfiles-empty');
+    expect(diagnostic?.message).toContain('package-lock.json');
+    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(false);
+  });
+
+  it('reports a nested osv-scanner.toml the pull request adds as a proposal, like the root one', () => {
+    const repo = osvRepo();
+    execFileSync('git', ['checkout', '--quiet', '-b', 'pr'], { cwd: repo });
+    commitFiles(repo, { 'web/package-lock.json': '{}\n', 'web/osv-scanner.toml': '[[PackageOverrides]]\nname = "lodash"\nignore = true\n' }, 'nested config');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.trustBase?.proposals.some((p) => /^web\/osv-scanner\.toml differs/.test(p))).toBe(true);
+    // Overridden for this run by the base-ref --config.
+    expect(out.argv).toContain('--config');
+  });
+
+  it('runs gitleaks from its own work directory on a pull request, and from the repository locally', () => {
+    const repo = tempGitRepo();
+    const bin = tempDir();
+    const prLog = path.join(tempDir(), 'pr-cwd.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', cwdLog: prLog });
+    runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    // Relative [extend] paths resolve against it; the head tree must not be it.
+    const prCwd = readFileSync(prLog, 'utf8').trim();
+    expect(prCwd.startsWith(realpathSync(repo))).toBe(false);
+    expect(path.basename(prCwd)).toBe('cwd');
+
+    const localBin = tempDir();
+    const localLog = path.join(tempDir(), 'local-cwd.txt');
+    stubGate(localBin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', cwdLog: localLog });
+    runGate(gl(), { repoRoot: repo, staged: false, pathValue: localBin, tempRoot: tempDir() });
+    expect(readFileSync(localLog, 'utf8').trim()).toBe(realpathSync(repo));
+  });
+
+  it('is preparation-failed on a pull request whose base config extends a file the base does not have', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { '.gitleaks.toml': '[extend]\npath = "gl-extra.toml"\n' }, 'extend a missing file');
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(out.couldNotRun?.reason).toBe('preparation-failed');
+    expect(out.couldNotRun?.detail).toContain('gl-extra.toml');
   });
 
   it('treats osv-scanner exit 127 as an error', () => {
@@ -981,7 +1026,7 @@ describe('external gate exit semantics', () => {
 
     expect(out.couldNotRun).toBeNull();
     const argv = out.argv;
-    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('main..HEAD');
+    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('--diff-merges=first-parent main..HEAD');
     expect(argv).toContain('--config');
     expect(argv).toContain('--gitleaks-ignore-path');
     // Scanned from the git directory, not ".": gitleaks loads the scan

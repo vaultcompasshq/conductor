@@ -2,8 +2,9 @@
 //
 // SARIF is the family's published finding format; the envelope in
 // envelope.ts is internal and never leaves this process. The mapping below
-// is dep-guard's mapping, applied to all three gates from one place, which
-// is the whole point: three hand-written emitters is how a family ends up
+// is dep-guard's mapping, applied to every gate (the three family gates and
+// the two external ones) from one place, which is the whole point: one
+// hand-written emitter per gate is how a family ends up
 // with one tool emitting absolute paths and another omitting fingerprints
 // entirely, and both of those really happened here.
 //

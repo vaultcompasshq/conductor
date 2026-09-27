@@ -161,6 +161,7 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
     'ignore-gitleaks-allow',
     'redact',
     'no-banner',
+    'log-level',
   ],
   // osv-scanner: the umbrella owns the format (json to stdout), the config on
   // a pull-request run, and which lockfiles are scanned (every tracked one,
@@ -354,6 +355,10 @@ const EXTERNAL_RESERVED_REASONS: Partial<Record<Product, Record<string, string>>
       'Findings reach a pull-request comment and a SARIF upload; the umbrella keeps secrets ' +
       'redacted in the report it reads.',
     'no-banner': 'The banner is noise on stderr, which the report shows when a gate fails.',
+    'log-level':
+      'The umbrella depends on gitleaks ERR lines to tell a failed scan from a clean one: gitleaks ' +
+      'reports a git failure as exit 0 with an empty report. A lower level would silence them and ' +
+      'turn a scan that never happened into a pass, so the umbrella pins it at info.',
   },
   'osv-scanner': {
     format: 'The output is parsed as JSON from stdout; another format would make every run unparseable.',

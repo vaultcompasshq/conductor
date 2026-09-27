@@ -71,6 +71,12 @@ export interface ProductProfile {
    * that is not handed files.
    */
   lockfileNames: readonly string[] | null;
+  /**
+   * The config can name another file (`[extend] path`) that the tool reads
+   * relative to its working directory. On a pull request every such file is
+   * materialised from the base ref and the tool is run from that directory.
+   */
+  followsConfigExtend: boolean;
 }
 
 /**
@@ -127,6 +133,7 @@ function managedProfile(product: Product): ProductProfile {
     remedy: managedRemedy(product),
     stderrError: null,
     lockfileNames: null,
+    followsConfigExtend: false,
   };
 }
 
@@ -165,6 +172,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     // fatal: ..." and exits 0 with an empty report (tests/fixtures/README.md).
     stderrError: /^\S+\s+ERR\s/,
     lockfileNames: null,
+    followsConfigExtend: true,
   },
   'osv-scanner': {
     product: 'osv-scanner',
@@ -187,6 +195,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     // its stderr is progress chatter, so the exit is taken at its word.
     stderrError: null,
     lockfileNames: OSV_LOCKFILE_NAMES,
+    followsConfigExtend: false,
   },
 };
 

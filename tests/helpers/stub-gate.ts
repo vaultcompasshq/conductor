@@ -33,6 +33,8 @@ export interface StubOptions {
   /** When the argv contains this flag, write `reportBody` to the path that follows it. */
   reportFlag?: string;
   reportBody?: string;
+  /** File to append each non-version invocation's working directory to. */
+  cwdLog?: string;
 }
 
 export function stubGate(binDir: string, name: string, options: StubOptions = {}): string {
@@ -51,6 +53,9 @@ export function stubGate(binDir: string, name: string, options: StubOptions = {}
   const lines = ['#!/bin/sh'];
   if (options.argvLog !== undefined) {
     lines.push(`if ! { ${versionTest}; }; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
+  }
+  if (options.cwdLog !== undefined) {
+    lines.push(`if ! { ${versionTest}; }; then pwd -P >> ${JSON.stringify(options.cwdLog)}; fi`);
   }
   const versionLine = options.versionLine ?? options.version ?? '9.9.9';
   lines.push(`if ${versionTest}; then echo ${JSON.stringify(versionLine)}; exit 0; fi`);

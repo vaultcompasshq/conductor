@@ -58,6 +58,8 @@ describe('product profiles', () => {
     expect(o.stderrError).toBeNull();
     expect(o.lockfileNames).toEqual(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock']);
     expect(g.lockfileNames).toBeNull();
+    expect(g.followsConfigExtend).toBe(true);
+    expect(o.followsConfigExtend).toBe(false);
   });
 
   it('reads a gitleaks ERR log line as an error and leaves its INF lines alone', () => {

@@ -352,11 +352,14 @@ describe('the reserved option list against the flags the umbrella writes', () =>
     ];
     const flags = new Set<string>();
     for (const argv of runs) {
-      for (const token of argv) {
-        if (token.startsWith('-')) {
+      argv.forEach((token, i) => {
+        // The value of --log-opts is git's own option string
+        // ("--diff-merges=first-parent HEAD"), a value rather than a flag of
+        // the gate's; --log-opts itself is what a policy could collide with.
+        if (token.startsWith('-') && argv[i - 1] !== '--log-opts') {
           flags.add(token.replace(/^--?/, ''));
         }
-      }
+      });
     }
     return flags;
   }
@@ -455,13 +458,35 @@ describe('gateArgs for the external gates', () => {
 
   it('scopes gitleaks to HEAD history on a local run and writes the report to the path the runner owns', () => {
     const argv = gateArgs(gl, false, undefined, undefined, { reportPath: '/tmp/r.json' });
-    expect(argv).toEqual(['--report-format', 'json', '--report-path', '/tmp/r.json', '--exit-code', '3', '--redact', '--no-banner', '--log-opts', 'HEAD', '.']);
+    expect(argv).toEqual([
+      '--report-format', 'json', '--report-path', '/tmp/r.json', '--exit-code', '3', '--redact', '--no-banner',
+      '--log-level', 'info', '--log-opts', '--diff-merges=first-parent HEAD', '.',
+    ]);
+  });
+
+  it('pins gitleaks to log level info, because an ERR line is how a failed scan is told from a clean one', () => {
+    const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json' });
+    expect(argv[argv.indexOf('--log-level') + 1]).toBe('info');
+  });
+
+  it('rejects a policy that sets gitleaks log-level, saying why', () => {
+    expect(() =>
+      parsePolicy(
+        ['version: 1', 'gates:', '  secrets-history:', '    product: gitleaks', '    options:', '      log-level: fatal', ''].join('\n'),
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/log-level[\s\S]*ERR/);
+  });
+
+  it('shows gitleaks each merge commit first-parent diff, so a secret added inside a merge is scanned', () => {
+    const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json' });
+    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('--diff-merges=first-parent origin/main..HEAD');
   });
 
   it('scopes gitleaks to base..HEAD and passes the base-ref config on a pull-request run', () => {
     const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json', configPath: '/tmp/c.toml' });
     expect(argv).toContain('--log-opts');
-    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('origin/main..HEAD');
+    expect(argv[argv.indexOf('--log-opts') + 1]).toMatch(/ origin\/main\.\.HEAD$/);
     expect(argv[argv.indexOf('--config') + 1]).toBe('/tmp/c.toml');
     expect(argv).not.toContain('--trust-base');
     expect(argv).not.toContain('--staged');
