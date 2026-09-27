@@ -1,0 +1,22 @@
+[
+ {
+  "RuleID": "doppler-api-token",
+  "Description": "Discovered a Doppler API token, posing a risk to environment and secrets management security.",
+  "StartLine": 3,
+  "EndLine": 3,
+  "StartColumn": 22,
+  "EndColumn": 70,
+  "Match": "REDACTED",
+  "Secret": "REDACTED",
+  "File": "config.json",
+  "SymlinkFile": "",
+  "Commit": "bc76ef2b0f72c6735a8c9448252988cc5d7137f8",
+  "Entropy": 5.395222,
+  "Author": "Fixture",
+  "Email": "fixture@example.invalid",
+  "Date": "2026-09-27T01:33:07Z",
+  "Message": "add config",
+  "Tags": [],
+  "Fingerprint": "bc76ef2b0f72c6735a8c9448252988cc5d7137f8:config.json:doppler-api-token:3"
+ }
+]

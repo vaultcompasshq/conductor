@@ -26,6 +26,13 @@ export interface StubOptions {
   argvLog?: string;
   /** Version string printed for --version. */
   version?: string;
+  /** Answer `<name> version` (a subcommand) as well as --version, the way gitleaks does. */
+  versionSubcommand?: boolean;
+  /** Print this line for the version probe instead of the bare version. */
+  versionLine?: string;
+  /** When the argv contains this flag, write `reportBody` to the path that follows it. */
+  reportFlag?: string;
+  reportBody?: string;
 }
 
 export function stubGate(binDir: string, name: string, options: StubOptions = {}): string {
@@ -33,14 +40,33 @@ export function stubGate(binDir: string, name: string, options: StubOptions = {}
   const file = path.join(binDir, name);
   const outFile = `${file}.stdout`;
   const errFile = `${file}.stderr`;
+  const reportFile = `${file}.report`;
   writeFileSync(outFile, options.stdout ?? '');
   writeFileSync(errFile, options.stderr ?? '');
 
+  const versionTest =
+    options.versionSubcommand === true
+      ? '[ "$1" = "--version" ] || [ "$1" = "version" ]'
+      : '[ "$1" = "--version" ]';
   const lines = ['#!/bin/sh'];
   if (options.argvLog !== undefined) {
-    lines.push(`if [ "$1" != "--version" ]; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
+    lines.push(`if ! { ${versionTest}; }; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
   }
-  lines.push(`if [ "$1" = "--version" ]; then echo "${options.version ?? '9.9.9'}"; exit 0; fi`);
+  const versionLine = options.versionLine ?? options.version ?? '9.9.9';
+  lines.push(`if ${versionTest}; then echo ${JSON.stringify(versionLine)}; exit 0; fi`);
+  if (options.reportFlag !== undefined) {
+    // The report body is a sibling file for the same reason stdout is. The
+    // loop copies it to whatever path follows the flag, which is how the
+    // real tool is told where to write.
+    writeFileSync(reportFile, options.reportBody ?? '');
+    lines.push('prev=""');
+    lines.push('for a in "$@"; do');
+    lines.push(
+      `  if [ "$prev" = ${JSON.stringify(options.reportFlag)} ]; then ${CAT} ${JSON.stringify(reportFile)} > "$a"; fi`
+    );
+    lines.push('  prev="$a"');
+    lines.push('done');
+  }
   lines.push(`${CAT} ${JSON.stringify(errFile)} >&2`);
   lines.push(`${CAT} ${JSON.stringify(outFile)}`);
   lines.push(`exit ${options.exit ?? 0}`);
@@ -137,6 +163,12 @@ export const CLEAN_VAULT_GUARD = JSON.stringify({
   },
   results: [],
 });
+
+/** gitleaks' report for a clean scan: an empty array, in the report file. */
+export const CLEAN_GITLEAKS = '[]';
+
+/** osv-scanner's stdout for a clean scan. */
+export const CLEAN_OSV_SCANNER = JSON.stringify({ results: [] });
 
 export const CLEAN_INTENT_GUARD = JSON.stringify({
   status: 'ok',

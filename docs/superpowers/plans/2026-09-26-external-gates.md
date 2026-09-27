@@ -423,11 +423,11 @@ git -C <worktree> commit -m "Add the secrets-history and vulnerabilities roles f
   ```
 - Consumes: nothing new.
 
-- [ ] **Step 1: Obtain both real binaries into the worktree, not the system**
+- [x] **Step 1: Obtain both real binaries into the worktree, not the system**
 
 Download the pinned releases into `<worktree>/.local/bin` (gitignored). Use WebFetch on `https://api.github.com/repos/gitleaks/gitleaks/releases/latest` and `https://api.github.com/repos/google/osv-scanner/releases/latest` for the tag, then `curl -sSL` the darwin arm64 (or the host's) asset and its checksum file into that directory, verify with `shasum -a 256 -c`, `chmod +x`. Record the exact versions; they become `<ver>` in the fixture names. If a download is refused by the harness, stop and report; do not install with a package manager.
 
-- [ ] **Step 2: Capture gitleaks fixtures from a throwaway git repo**
+- [x] **Step 2: Capture gitleaks fixtures from a throwaway git repo**
 
 In the scratchpad create a git repo with two commits: the first adds `config.json` containing a synthetic Doppler-shaped token (the shape the proof repository used, since GitHub push protection is irrelevant here and gitleaks' generic rule catches it); the second removes the file. Run:
 
@@ -437,7 +437,7 @@ In the scratchpad create a git repo with two commits: the first adds `config.jso
 
 Record the exit code (expected 3). Copy the report to `tests/fixtures/gitleaks-<ver>-history-blocking.json`. Run the same against a repo with one clean commit; record exit 0 and copy the report (expected `[]`) to `-clean.json`. Run once more against a path that is not a git repo and record the exit code and whether a report file was written; this is the error case Task 5 depends on. Also run `<bin>/gitleaks version` and record the exact stdout line.
 
-- [ ] **Step 3: Capture osv-scanner fixtures**
+- [x] **Step 3: Capture osv-scanner fixtures**
 
 In the scratchpad create a directory with a `package-lock.json` (or `pnpm-lock.yaml`) resolving `nanoid@5.0.9`, which had open advisories on 2026-09-26 (the proof repository hit them). Run:
 
@@ -447,11 +447,11 @@ In the scratchpad create a directory with a `package-lock.json` (or `pnpm-lock.y
 
 Record the exit code (expected 1); copy stdout to `tests/fixtures/osv-scanner-<ver>-blocking.json`. Repeat with a lockfile resolving only a clean package (expected 0) into `-clean.json`. Repeat against an empty directory and record the exit code (expected 128) and stdout. Run `<bin>/osv-scanner --version` and record the exact stdout line.
 
-- [ ] **Step 4: Record every capture in `tests/fixtures/README.md`**
+- [x] **Step 4: Record every capture in `tests/fixtures/README.md`**
 
 Add `## gitleaks <ver>` and `## osv-scanner <ver>` sections in the existing style: the command, the input, the exit code observed, the version-probe line observed, and the error-case observations.
 
-- [ ] **Step 5: Write the failing stub test**
+- [x] **Step 5: Write the failing stub test**
 
 ```ts
 // tests/stub-gate.test.ts
@@ -481,12 +481,12 @@ describe('stubGate for external tools', () => {
 });
 ```
 
-- [ ] **Step 6: Run to verify it fails**
+- [x] **Step 6: Run to verify it fails**
 
 Run: `pnpm --dir <worktree> test -- tests/stub-gate.test.ts 2>&1 | tail -20`
 Expected: FAIL, the stub prints the default version and ignores the report flag.
 
-- [ ] **Step 7: Extend the stub**
+- [x] **Step 7: Extend the stub**
 
 In `tests/helpers/stub-gate.ts`, extend `StubOptions` with the four fields above and change the generated sh script:
 
@@ -510,7 +510,7 @@ exit "$EXIT"
 
 Generate the script with the option values substituted as literals (the existing stub already substitutes `exit` and the sibling file paths; follow that mechanism rather than environment variables). Write `reportBody` to a `.report` sibling file. Export `CLEAN_GITLEAKS = '[]'` and `CLEAN_OSV_SCANNER = JSON.stringify({ results: [] })`.
 
-- [ ] **Step 8: Run and commit**
+- [x] **Step 8: Run and commit**
 
 Run: `pnpm --dir <worktree> test -- tests/stub-gate.test.ts 2>&1 | tail -10`
 Expected: PASS.
