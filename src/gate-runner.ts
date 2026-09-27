@@ -32,6 +32,7 @@ import {
 import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
+import { profileFor } from './products.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
 import {
   ResolveError,
@@ -511,8 +512,14 @@ export function gateArgs(
  * per-command binaries ignore --version and run the gate instead, so a
  * probe there would have side effects on the user's repository.
  */
-function probeVersion(binary: ResolvedBinary, repoRoot: string, timeoutMs: number): string | null {
-  if (binary.versionProbe === null) {
+function probeVersion(
+  binary: ResolvedBinary,
+  product: Product,
+  repoRoot: string,
+  timeoutMs: number
+): string | null {
+  const spec = profileFor(product).versionProbe;
+  if (binary.versionProbe === null || spec === null) {
     return null;
   }
   const probe = spawnSync(binary.versionProbe.command, binary.versionProbe.argv, {
@@ -523,11 +530,14 @@ function probeVersion(binary: ResolvedBinary, repoRoot: string, timeoutMs: numbe
   if (probe.status !== 0 || typeof probe.stdout !== 'string') {
     return null;
   }
-  // All three print a bare version string. Take the first line and accept
-  // it only if it looks like one, so a future help banner does not end up
-  // in a SARIF driver's version field.
+  // Take the first line and accept it only if the product's pattern matches,
+  // so a future help banner does not end up in a SARIF driver's version
+  // field. The npm gates print a bare version and their pattern keeps the
+  // whole line; an external tool that prefixes its version with its name has
+  // a capture group that takes the number alone.
   const first = probe.stdout.trim().split('\n')[0]?.trim() ?? '';
-  return /^v?\d+\.\d+\.\d+/.test(first) ? first.replace(/^v/, '') : null;
+  const match = spec.pattern.exec(first);
+  return match === null ? null : (match[1] ?? match[0]).replace(/^v/, '');
 }
 
 function normalizeFor(product: Product, parsed: unknown, version: string | null) {
@@ -574,6 +584,13 @@ function missingGateRemedy(
   skipNodeModules: boolean,
   skipped: string | null
 ): string {
+  const profile = profileFor(product);
+  if (!profile.managed) {
+    // An external tool is never in node_modules and never installed by the
+    // Action, so the pull-request sentence below would send a reader to the
+    // wrong place. Its own install instruction applies on every run.
+    return ` ${profile.remedy(skipNodeModules)}`;
+  }
   if (!skipNodeModules) {
     return '';
   }
@@ -581,9 +598,7 @@ function missingGateRemedy(
     ' On a pull-request run node_modules/.bin is not consulted at all: what is installed there ' +
     'is chosen by the head own manifest and lockfile, so no ref approves it.' +
     (skipped === null ? '' : ` There is a ${skipped}, and it was skipped for that reason.`) +
-    ` Install the gate outside the tree with npm install -g @vaultcompass/${product}. The ` +
-    `conductor Action does exactly that, at the version its ${product}-version input pins, and ` +
-    'that pin lives in the workflow file on the base branch.'
+    ` ${profile.remedy(true)}`
   );
 }
 
@@ -662,7 +677,7 @@ function runGateInner(
   started: number,
   progress: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'>
 ): GateOutcome {
-  const timeoutMs = options.timeoutMs ?? 120_000;
+  const timeoutMs = options.timeoutMs ?? profileFor(gate.product).timeoutMs;
 
   // ONE PLACE DECIDES WHAT PULL-REQUEST MODE IS, and it is the presence of a
   // trust base. resolve.ts knows nothing about refs, so it is told rather than
@@ -749,7 +764,7 @@ function runGateInner(
     }
   }
 
-  const version = probeVersion(binary, options.repoRoot, timeoutMs);
+  const version = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);
   // AFTER the version probe and BEFORE the command line is built, because the
   // decision reads the version. That ordering is the whole capability gate:
   // an intent-guard older than 1.4.0 must not be handed a flag it would

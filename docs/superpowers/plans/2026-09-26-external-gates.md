@@ -86,7 +86,7 @@ The `guardrails-family` shared README block (README.md lines 32 to 46) is kept b
   ```
 - Consumes: `Product` from `src/policy.ts`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // tests/products.test.ts
@@ -122,12 +122,12 @@ describe('product profiles', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --dir <worktree> test -- tests/products.test.ts 2>&1 | tail -20`
 Expected: FAIL, cannot find module `../src/products.js`.
 
-- [ ] **Step 3: Write `src/products.ts`**
+- [x] **Step 3: Write `src/products.ts`**
 
 Read `missingGateRemedy` at `src/gate-runner.ts:572-588` first and move its two sentences verbatim into the managed remedy so the wording does not drift.
 
@@ -204,7 +204,7 @@ export function profileFor(product: Product): ProductProfile {
 
 If the existing `missingGateRemedy` wording differs from the two sentences above, use the existing wording; the test asserts substrings only.
 
-- [ ] **Step 4: Point `versionProbeFor` and `probeVersion` at the profile**
+- [x] **Step 4: Point `versionProbeFor` and `probeVersion` at the profile**
 
 In `src/resolve.ts` `versionProbeFor` (lines 236-260): keep the `versionSafe` guard for the candidate, and when it is safe return `{ command, argv: [...profileFor(gate.product).versionProbe!.argv] }`. If the profile probe is null, return null.
 
@@ -224,12 +224,12 @@ Replace the body of `missingGateRemedy(product, skipNodeModules, skipped)` with 
 
 Replace `options.timeoutMs ?? 120_000` at `:665` with `options.timeoutMs ?? profileFor(gate.product).timeoutMs`.
 
-- [ ] **Step 5: Run the whole suite to prove no behaviour changed**
+- [x] **Step 5: Run the whole suite to prove no behaviour changed**
 
 Run: `pnpm --dir <worktree> test 2>&1 | tail -8`
 Expected: all previously passing suites pass; `tests/products.test.ts` passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git -C <worktree> add src/products.ts src/resolve.ts src/gate-runner.ts tests/products.test.ts
