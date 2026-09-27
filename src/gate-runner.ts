@@ -459,6 +459,8 @@ export interface ExternalArgs {
    * .gitleaksignore at its root for gitleaks to load on its own.
    */
   scanRoot?: string;
+  /** The tracked lockfiles osv-scanner is handed, repository-relative. */
+  lockfiles?: readonly string[];
 }
 
 /**
@@ -583,17 +585,31 @@ export function gateArgs(
         '--no-banner',
         '--log-opts',
         scope,
+        // On a pull request, inline gitleaks:allow comments are ignored: an
+        // inline allow lives in the tree being judged, so the pull request
+        // controls it. A legitimate allow belongs in the base ref's
+        // .gitleaks.toml allowlist or .gitleaksignore, both of which the
+        // umbrella already reads from the base. Local runs keep them.
+        ...(trustBase === undefined ? [] : ['--ignore-gitleaks-allow']),
         ...config,
         ...(external.ignorePath === undefined ? [] : ['--gitleaks-ignore-path', external.ignorePath]),
         ...passthrough,
         external.scanRoot ?? '.',
       ];
     }
-    case 'osv-scanner':
+    case 'osv-scanner': {
       // JSON goes to stdout and everything else to stderr, so no report
-      // file. The tree is scanned recursively from the repository root; the
-      // policy may narrow it through options.
-      return ['--format', 'json', '--recursive', ...config, ...passthrough, '.'];
+      // file. No directory walk: each tracked lockfile is named with
+      // --lockfile (the runner lists them, src/products.ts
+      // OSV_LOCKFILE_NAMES), because osv-scanner's own walk skips anything
+      // .gitignore matches, tracked or not. With none there is nothing to
+      // hand over, and the runner reports that without spawning the tool.
+      if (external.lockfiles === undefined || external.lockfiles.length === 0) {
+        throw new Error('osv-scanner needs at least one lockfile: with none, nothing is spawned');
+      }
+      const lockfiles = external.lockfiles.flatMap((file) => ['--lockfile', file]);
+      return ['--format', 'json', ...config, ...lockfiles, ...passthrough];
+    }
   }
 }
 
@@ -1015,6 +1031,65 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   }
   const decidedRef =
     trustBase === undefined || trustBase.withheld !== null ? undefined : trustBase.ref;
+
+  // The lockfiles a file-fed tool is handed, from the repository's tracked
+  // files. On a pull request this is the head's index, read directly and not
+  // from the base ref: the lockfiles ARE the tree being judged, and adding,
+  // removing or renaming one is visible in the diff, so there is nothing for
+  // a base-ref read to protect. A listing that fails is not "no lockfiles".
+  if (profile.lockfileNames !== null) {
+    const names = new Set(profile.lockfileNames);
+    const listing = spawnSync('git', ['ls-files', '-z'], {
+      cwd: options.repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (listing.status !== 0 || typeof listing.stdout !== 'string') {
+      const detail =
+        `the repository's tracked files could not be listed, so ${gate.product} had no ` +
+        'lockfiles to be handed.';
+      return {
+        ...base,
+        productVersion: version,
+        binary,
+        durationMs: Date.now() - started,
+        ...(trustBase === undefined ? {} : { trustBase }),
+        couldNotRun: { reason: 'preparation-failed', detail },
+        findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+    external.lockfiles = listing.stdout
+      .split('\0')
+      .filter((file) => file !== '')
+      // Never a vendored copy under node_modules: that is a dependency's own
+      // lockfile, not a statement about what this repository resolves.
+      .filter((file) => !file.split('/').includes('node_modules'))
+      .filter((file) => names.has(path.posix.basename(file)))
+      .sort();
+    if (external.lockfiles.length === 0) {
+      // Nothing to scan, reported the same way as osv-scanner's own 128 below,
+      // without spawning it.
+      return {
+        ...base,
+        productVersion: version,
+        binary,
+        durationMs: Date.now() - started,
+        ...(trustBase === undefined ? {} : { trustBase }),
+        exitCode: 0,
+        couldNotRun: null,
+        findings: [],
+        run: EMPTY_RUN,
+        diagnostics: [
+          {
+            code: 'conductor/nothing-to-scan',
+            message: `${gate.product} found nothing to scan (no tracked lockfile); treated as clean.`,
+          },
+        ],
+      };
+    }
+  }
 
   // On a pull request, the tool's config and ignore file come from the base
   // ref (or a neutral stand-in), never from the head it would otherwise

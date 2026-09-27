@@ -65,7 +65,34 @@ export interface ProductProfile {
    * error. Null for a tool whose exit code can be taken at its word.
    */
   stderrError: RegExp | null;
+  /**
+   * File names the tool is handed one by one, from the repository's tracked
+   * files, instead of being pointed at a directory to walk. Null for a tool
+   * that is not handed files.
+   */
+  lockfileNames: readonly string[] | null;
 }
+
+/**
+ * The lockfiles osv-scanner is handed, matched by base name at any depth
+ * among the repository's TRACKED files (`git ls-files`).
+ *
+ * By name, not by walking the tree, for three reasons: osv-scanner's own walk
+ * skips anything .gitignore matches, tracked or not, so a pull request could
+ * hide a committed lockfile from it with one ignore line; the walk can reach
+ * into node_modules; and an untracked lockfile is not part of what is being
+ * judged. Only the npm family is listed, because that is the ecosystem this
+ * family's own dependency gate knows (npm, pnpm, yarn, bun); osv-scanner
+ * supports more, and a repository whose only lockfile is another ecosystem's
+ * gets nothing-to-scan until a name is added here.
+ */
+export const OSV_LOCKFILE_NAMES: readonly string[] = [
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+];
 
 /**
  * The npm gates print a bare version. No capture group on purpose: the runner
@@ -99,6 +126,7 @@ function managedProfile(product: Product): ProductProfile {
     ignoreFile: null,
     remedy: managedRemedy(product),
     stderrError: null,
+    lockfileNames: null,
   };
 }
 
@@ -136,6 +164,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     // gitleaks 8.30.1 swallows a git failure: it logs "<time> ERR [git]
     // fatal: ..." and exits 0 with an empty report (tests/fixtures/README.md).
     stderrError: /^\S+\s+ERR\s/,
+    lockfileNames: null,
   },
   'osv-scanner': {
     product: 'osv-scanner',
@@ -157,6 +186,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     // osv-scanner's exit codes separate an error (127) from a verdict, and
     // its stderr is progress chatter, so the exit is taken at its word.
     stderrError: null,
+    lockfileNames: OSV_LOCKFILE_NAMES,
   },
 };
 

@@ -320,8 +320,9 @@ JSON format flag, `--staged`, and the intent gate's `--project`) are
 rejected if you also set them, rather than being silently overridden. For
 the external gates the umbrella writes `--report-format`, `--report-path`,
 `--exit-code`, `--log-opts`, `--config`, `--gitleaks-ignore-path`,
-`--redact` and `--no-banner` to gitleaks, and `--format`, `--recursive` and
-`--config` to osv-scanner, so those are reserved too. Narrow what either
+`--ignore-gitleaks-allow`, `--redact` and `--no-banner` to gitleaks, and
+`--format`, `--config` and `--lockfile` to osv-scanner, so those are
+reserved too. Narrow what either
 tool reports in its own config file (`.gitleaks.toml`, `osv-scanner.toml`)
 instead.
 
@@ -433,10 +434,16 @@ as well as for a leak, so the umbrella hands it `--exit-code 3`: 3 is a leak
 (blocked), 1 is could-not-run. gitleaks also exits 0 with an empty report
 when git itself fails (a base ref the checkout never fetched), so a clean
 exit that logged an `ERR` line is could-not-run too, never a pass. A
-gitleaks exit with no report file behind it is could-not-run. osv-scanner's
-1 is blocked, and its 128 means it found no lockfile to scan: that is
-reported as clean with a `conductor/nothing-to-scan` note, so a docs-only
-repository is not red on every pull request. Any other osv-scanner exit
+gitleaks exit with no report file behind it is could-not-run. osv-scanner is
+handed every tracked lockfile by name (`package-lock.json`,
+`npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, at any
+depth, never under `node_modules`); when the repository tracks none, it is
+not spawned at all and the gate is reported clean with a
+`conductor/nothing-to-scan` note, so a docs-only repository is not red on
+every pull request. Its 1 is blocked, and its own 128 ("no package sources
+found") is read the same way as no lockfile. Only those npm-family names are
+handed over today: a repository whose only lockfile belongs to another
+ecosystem gets nothing-to-scan from this gate. Any other osv-scanner exit
 (127 is its error code) is could-not-run. A gitleaks older than 8.19 or an
 osv-scanner older than 2.0 is could-not-run, naming the floor.
 
@@ -613,10 +620,22 @@ the same history, without the head's ignore file. A head-side change to any
 of these files is reported as a proposal line and takes effect after merge,
 exactly like a change to `.guardrails.yaml`. History is scoped to
 `<base>..HEAD` on a pull request and to `HEAD` locally, so a secret on
-another branch never reddens this one. Two head-controlled suppressions are
-not closed yet: gitleaks' inline `gitleaks:allow` comments, and a
-`.gitignore` entry covering a tracked lockfile, which osv-scanner skips by
-default.
+another branch never reddens this one.
+
+On a pull request gitleaks is also passed `--ignore-gitleaks-allow`, so an
+inline `gitleaks:allow` comment does not hide a secret: an inline allow
+lives in the tree being judged, so the pull request controls it. A
+legitimate allow belongs in the base branch's `.gitleaks.toml` allowlist or
+`.gitleaksignore`, both of which conductor already reads from the base.
+Local runs keep inline allows.
+
+osv-scanner is never pointed at a directory to walk, because its own walk
+skips anything `.gitignore` matches, tracked or not, so one ignore line in a
+pull request could hide a committed lockfile. conductor lists the tracked
+lockfiles with `git ls-files` and hands each one over with `--lockfile`. On
+a pull request that list comes from the head's index, not the base ref: the
+lockfiles are the tree being judged, and adding or removing one is visible
+in the diff.
 
 The umbrella asks each gate its version and passes the flag only to a build
 that understands it, so an older gate is not handed a flag it would reject. A

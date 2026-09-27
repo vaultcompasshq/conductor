@@ -332,7 +332,12 @@ describe('the reserved option list against the flags the umbrella writes', () =>
     // A report path, a config path and an ignore path on every call: the
     // external gates need the first and take the others on a pull request,
     // and the three npm gates ignore all three.
-    const external = { reportPath: '/dev/null', configPath: '/dev/null', ignorePath: '/dev/null' };
+    const external = {
+      reportPath: '/dev/null',
+      configPath: '/dev/null',
+      ignorePath: '/dev/null',
+      lockfiles: ['package-lock.json'],
+    };
     const runs = [
       gateArgs(gate, true, undefined, undefined, external),
       gateArgs(gate, false, undefined, undefined, external),
@@ -462,6 +467,15 @@ describe('gateArgs for the external gates', () => {
     expect(argv).not.toContain('--staged');
   });
 
+  it('ignores inline gitleaks:allow comments on a pull request, and keeps them on a local run', () => {
+    // An inline allow lives in the tree being judged, so on a pull request
+    // the pull request controls it.
+    const pr = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json' });
+    expect(pr).toContain('--ignore-gitleaks-allow');
+    const local = gateArgs(gl, false, undefined, undefined, { reportPath: '/tmp/r.json' });
+    expect(local).not.toContain('--ignore-gitleaks-allow');
+  });
+
   it('never passes --staged to gitleaks even when the run is staged', () => {
     expect(gateArgs(gl, true, undefined, undefined, { reportPath: '/tmp/r.json' })).not.toContain('--staged');
   });
@@ -470,17 +484,31 @@ describe('gateArgs for the external gates', () => {
     expect(() => gateArgs(gl, false, undefined, undefined, {})).toThrow(/report path/);
   });
 
-  it('asks osv-scanner for json on stdout over the whole tree, with the base-ref config on a pull request', () => {
-    expect(gateArgs(osv, false, undefined, undefined, {})).toEqual(['--format', 'json', '--recursive', '.']);
-    const pr = gateArgs(osv, false, undefined, 'origin/main', { configPath: '/tmp/o.toml' });
-    expect(pr).toEqual(['--format', 'json', '--recursive', '--config', '/tmp/o.toml', '.']);
+  it('asks osv-scanner for json on stdout over exactly the tracked lockfiles, with the base-ref config on a pull request', () => {
+    const lockfiles = ['package-lock.json', 'web/pnpm-lock.yaml'];
+    expect(gateArgs(osv, false, undefined, undefined, { lockfiles })).toEqual([
+      '--format', 'json', '--lockfile', 'package-lock.json', '--lockfile', 'web/pnpm-lock.yaml',
+    ]);
+    const pr = gateArgs(osv, false, undefined, 'origin/main', { configPath: '/tmp/o.toml', lockfiles });
+    expect(pr).toEqual([
+      '--format', 'json', '--config', '/tmp/o.toml', '--lockfile', 'package-lock.json', '--lockfile', 'web/pnpm-lock.yaml',
+    ]);
+    expect(pr).not.toContain('--recursive');
+    expect(pr).not.toContain('.');
   });
 
-  it('appends policy options after the umbrella flags and before the scan root', () => {
-    const argv = gateArgs({ ...osv, options: { 'call-analysis': true } }, false, undefined, undefined, {});
+  it('throws when osv-scanner is built with no lockfiles, because the runner reports that without spawning', () => {
+    expect(() => gateArgs(osv, false, undefined, undefined, {})).toThrow(/lockfile/);
+    expect(() => gateArgs(osv, false, undefined, undefined, { lockfiles: [] })).toThrow(/lockfile/);
+  });
+
+  it('appends policy options after the umbrella flags', () => {
+    const argv = gateArgs({ ...osv, options: { 'call-analysis': true } }, false, undefined, undefined, {
+      lockfiles: ['package-lock.json'],
+    });
     const i = argv.indexOf('--call-analysis');
-    expect(i).toBeGreaterThan(argv.indexOf('--recursive'));
-    expect(argv[argv.length - 1]).toBe('.');
+    expect(i).toBeGreaterThan(argv.indexOf('--lockfile'));
+    expect(argv[argv.length - 1]).toBe('--call-analysis');
   });
 });
 

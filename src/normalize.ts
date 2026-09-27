@@ -896,9 +896,10 @@ function osvFixedVersion(
 }
 
 /**
- * osv-scanner writes every manifest path absolute, whatever scan root it is
- * given, so in CI it names the runner's checkout. Made relative to the first
- * root that contains it; left as it is when none does, rather than guessed.
+ * osv-scanner writes every manifest path absolute, whatever scan root or
+ * relative --lockfile path it is given, so in CI it names the runner's
+ * checkout. Made relative to the first root that contains it; left as it is
+ * when none does, rather than guessed.
  */
 function relativeToRoots(file: string, roots: readonly string[]): string {
   for (const root of roots) {

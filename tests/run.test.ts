@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -72,8 +73,19 @@ function fivePolicy(historyEnforced = true) {
 
 const ALL_FIVE = fivePolicy();
 
+/** A repository tracking one lockfile, so the vulnerabilities gate is spawned. */
+function lockfileRepo(): string {
+  const repo = tempDir();
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repo });
+  git('init', '--quiet', '-b', 'main');
+  writeFileSync(path.join(repo, 'package-lock.json'), '{}\n');
+  git('add', 'package-lock.json');
+  git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'lockfile');
+  return repo;
+}
+
 function runFive(binDir: string, policy = ALL_FIVE) {
-  return runAll(policy, { repoRoot: tempDir(), staged: false, pathValue: binDir, tempRoot: tempDir() });
+  return runAll(policy, { repoRoot: lockfileRepo(), staged: false, pathValue: binDir, tempRoot: tempDir() });
 }
 
 /** Clean stubs for the three family gates and osv-scanner; gitleaks blocks. */

@@ -56,6 +56,27 @@ function tempGitRepo(): string {
   return dir;
 }
 
+/** Commits these files, forcing past any .gitignore, so they are tracked. */
+function commitFiles(repo: string, files: Record<string, string>, message: string): void {
+  for (const [name, body] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+    writeFileSync(path.join(repo, name), body);
+    execFileSync('git', ['add', '-f', name], { cwd: repo });
+  }
+  execFileSync(
+    'git',
+    ['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', message],
+    { cwd: repo }
+  );
+}
+
+/** A repository with one tracked lockfile, so osv-scanner has something to be handed. */
+function osvRepo(): string {
+  const repo = tempGitRepo();
+  commitFiles(repo, { 'package-lock.json': '{}\n' }, 'lockfile');
+  return repo;
+}
+
 /** A captured fixture's text, byte for byte. */
 function fixtureText(name: string): string {
   return readFileSync(path.join(FIXTURES, name), 'utf8');
@@ -901,7 +922,7 @@ describe('external gate exit semantics', () => {
   it('treats osv-scanner exit 128 as nothing to scan: clean, with a diagnostic, never could-not-run', () => {
     const bin = tempDir();
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 128, stdout: '', stderr: 'No package sources found, --help for usage information.' });
-    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.couldNotRun).toBeNull();
     expect(out.exitCode).toBe(0);
     expect(out.findings).toEqual([]);
@@ -911,22 +932,23 @@ describe('external gate exit semantics', () => {
   it('treats osv-scanner exit 127 as an error', () => {
     const bin = tempDir();
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 127, stdout: '' });
-    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.couldNotRun?.reason).toBe('gate-error');
   });
 
   it('reads the osv-scanner version from its prefixed version line', () => {
     const bin = tempDir();
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
-    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.productVersion).toBe('2.6.0');
   });
 
   it('reports an osv-scanner manifest relative to the repository, whichever spelling of the root it printed', () => {
-    // osv-scanner prints source.path absolute (tests/fixtures/README.md). The
-    // captured report, re-rooted at this test's repository in its resolved
-    // spelling, which on macOS differs from the tmpdir spelling.
-    const repo = tempGitRepo();
+    // osv-scanner prints source.path absolute (tests/fixtures/README.md),
+    // with --lockfile as with a scan root. The captured report, re-rooted at
+    // this test's repository in its resolved spelling, which on macOS differs
+    // from the tmpdir spelling.
+    const repo = osvRepo();
     const report = JSON.parse(fixtureText('osv-scanner-2.6.0-blocking.json')) as {
       results: Array<{ source: { path: string } }>;
     };
@@ -970,10 +992,66 @@ describe('external gate exit semantics', () => {
     expect(out.trustBase?.proposals.some((p) => /\.gitleaks\.toml differs/.test(p))).toBe(true);
   });
 
+  it('hands osv-scanner every tracked lockfile by name, gitignored or not, and nothing untracked or under node_modules', () => {
+    const repo = tempGitRepo();
+    // The .gitignore names the root lockfile: osv-scanner's own walk would
+    // skip it, which is the hole handing lockfiles by name closes.
+    commitFiles(
+      repo,
+      {
+        '.gitignore': 'package-lock.json\nyarn.lock\n',
+        'package-lock.json': '{}\n',
+        'web/pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
+        'node_modules/left-pad/package-lock.json': '{}\n',
+      },
+      'lockfiles'
+    );
+    writeFileSync(path.join(repo, 'yarn.lock'), '# untracked\n');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    const handed = out.argv.flatMap((token, i) => (out.argv[i - 1] === '--lockfile' ? [token] : []));
+    expect(handed).toEqual(['package-lock.json', 'web/pnpm-lock.yaml']);
+    expect(out.argv).not.toContain('--recursive');
+  });
+
+  it('reports nothing-to-scan without spawning osv-scanner when no lockfile is tracked', () => {
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: '', argvLog: log });
+    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+    expect(out.productVersion).toBe('2.6.0');
+    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(true);
+    // Only the version probe ran; a scan would have been logged.
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it('is could-not-run when the tracked lockfiles cannot be listed', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    // Not a repository: git ls-files fails, and that is not "no lockfiles".
+    const out = runGate(osv(), { repoRoot: tempDir(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('preparation-failed');
+  });
+
+  it('on a pull request, tells gitleaks to ignore inline gitleaks:allow comments; locally it does not', () => {
+    const repo = tempGitRepo();
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const pr = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(pr.argv).toContain('--ignore-gitleaks-allow');
+    const local = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(local.argv).not.toContain('--ignore-gitleaks-allow');
+  });
+
   it('never hands an external tool a config on a local run, so it reads the repository own', () => {
     const bin = tempDir();
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
-    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.argv).not.toContain('--config');
   });
 

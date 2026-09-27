@@ -6,7 +6,7 @@
 // the options, so the stub gates still run as real subprocesses.
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -38,7 +38,18 @@ function tempDir(): string {
   return dir;
 }
 
-function scanCall(): { timeout: number | undefined } | undefined {
+/** A repository tracking one lockfile, so osv-scanner is actually spawned. */
+function lockfileRepo(): string {
+  const repo = tempDir();
+  const git = (...args: string[]) => real.execFileSync('git', args, { cwd: repo });
+  git('init', '--quiet', '-b', 'main');
+  writeFileSync(path.join(repo, 'package-lock.json'), '{}\n');
+  git('add', 'package-lock.json');
+  git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'lockfile');
+  return repo;
+}
+
+function scanCall():{ timeout: number | undefined } | undefined {
   return calls.find((c) => c.args.includes('--format') || c.args.includes('-f'));
 }
 
@@ -48,7 +59,7 @@ describe('the timeout each gate is given', () => {
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
     runGate(
       { role: 'vulnerabilities', product: 'osv-scanner', enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} },
-      { repoRoot: tempDir(), staged: false, pathValue: bin, tempRoot: tempDir() }
+      { repoRoot: lockfileRepo(), staged: false, pathValue: bin, tempRoot: tempDir() }
     );
     expect(scanCall()?.timeout).toBe(300_000);
   });
@@ -68,7 +79,7 @@ describe('the timeout each gate is given', () => {
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
     runGate(
       { role: 'vulnerabilities', product: 'osv-scanner', enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} },
-      { repoRoot: tempDir(), staged: false, pathValue: bin, tempRoot: tempDir(), timeoutMs: 5_000 }
+      { repoRoot: lockfileRepo(), staged: false, pathValue: bin, tempRoot: tempDir(), timeoutMs: 5_000 }
     );
     expect(scanCall()?.timeout).toBe(5_000);
   });

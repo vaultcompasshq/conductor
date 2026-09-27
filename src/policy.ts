@@ -158,12 +158,14 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
     'log-opts',
     'config',
     'gitleaks-ignore-path',
+    'ignore-gitleaks-allow',
     'redact',
     'no-banner',
   ],
   // osv-scanner: the umbrella owns the format (json to stdout), the config on
-  // a pull-request run, and the scan root.
-  'osv-scanner': ['format', 'config', 'recursive'],
+  // a pull-request run, and which lockfiles are scanned (every tracked one,
+  // by name; there is no directory walk and so no --recursive).
+  'osv-scanner': ['format', 'config', 'lockfile'],
 };
 
 export type OptionValue = string | number | boolean | Array<string | number>;
@@ -344,6 +346,10 @@ const EXTERNAL_RESERVED_REASONS: Partial<Record<Product, Record<string, string>>
     'gitleaks-ignore-path':
       'On a pull request the ignore file is read from the base ref, so the pull request cannot ' +
       'ignore the fingerprint of the leak it adds. Commit .gitleaksignore instead.',
+    'ignore-gitleaks-allow':
+      'On a pull request inline gitleaks:allow comments are ignored, because an inline allow ' +
+      'lives in the tree being judged and the pull request controls it. A legitimate allow ' +
+      'belongs in the base ref .gitleaks.toml allowlist or .gitleaksignore.',
     redact:
       'Findings reach a pull-request comment and a SARIF upload; the umbrella keeps secrets ' +
       'redacted in the report it reads.',
@@ -354,9 +360,9 @@ const EXTERNAL_RESERVED_REASONS: Partial<Record<Product, Record<string, string>>
     config:
       'On a pull request the config is read from the base ref, so the pull request cannot ' +
       'ignore the advisory it introduces. Commit osv-scanner.toml instead.',
-    recursive:
-      'The umbrella scans the whole repository from its root, so a lockfile in a subdirectory ' +
-      'is never left out by a policy line.',
+    lockfile:
+      'The umbrella hands osv-scanner every tracked lockfile by name, so no lockfile is left ' +
+      'out by a policy line or by a .gitignore entry.',
   },
 };
 

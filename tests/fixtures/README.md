@@ -183,6 +183,27 @@ scratch directory, because osv-scanner keeps the path it was given rather
 than resolving the link, and a scratch directory's own path is a
 machine-specific one this repository's lint refuses.
 
+The umbrella no longer walks a directory: it hands each tracked lockfile
+over by name, `osv-scanner scan source --format json --lockfile <file>`.
+The fixtures were not re-captured, because the output does not differ:
+`--lockfile /tmp/conductor-osv-fixture/package-lock.json` against the same
+lockfile produced a file byte-identical to
+`osv-scanner-2.6.0-blocking.json` (exit 1). `source.path` is still
+absolute with `--lockfile`, a relative lockfile path included, so the
+umbrella still makes it repository-relative.
+
+Why not the walk, observed on a throwaway repository: with
+`package-lock.json` tracked but also listed in `.gitignore`, `--recursive`
+over the repository exits **128**, no package sources found, while
+`--lockfile package-lock.json` scans it. The walk honours `.gitignore` for
+tracked files too.
+
+gitleaks inline allows, observed on the same throwaway pull-request branch:
+a second token followed by `# gitleaks:allow` on the same line is not
+reported by a plain run, and is reported (`deploy.env:1:15`) once
+`--ignore-gitleaks-allow` is passed, which the umbrella does on a pull
+request.
+
 `osv-scanner-2.6.0-blocking.json` is a `package-lock.json` resolving
 `lodash@4.17.20` (exit 1): five advisories in three `groups[]` entries,
 each group carrying `max_severity` as a CVSS base score string (`5.3`,
