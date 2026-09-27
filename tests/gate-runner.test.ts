@@ -839,12 +839,20 @@ describe('external gate exit semantics', () => {
     const bin = tempDir();
     stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: fixtureText('gitleaks-8.30.1-history-blocking.json'), exit: 3, stdout: '' });
     const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
     expect(out.exitCode).toBe(3);
+    expect(out.findings.length).toBeGreaterThan(0);
+    expect(out.findings.every((f) => f.blocking)).toBe(true);
     expect(out.productVersion).toBe('8.30.1');
-    // The report was found and the exit read as a verdict, not an error. The
-    // findings themselves arrive with the gitleaks normalizer.
-    expect(out.couldNotRun?.reason).not.toBe('report-missing');
-    expect(out.couldNotRun?.reason).not.toBe('gate-error');
+  });
+
+  it('reads a clean gitleaks report as no findings and nothing blocking', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: fixtureText('gitleaks-8.30.1-history-clean.json'), exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
   });
 
   it('treats gitleaks exit 1 as an error, not a leak', () => {

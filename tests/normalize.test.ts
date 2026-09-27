@@ -7,10 +7,12 @@ import {
   GATE_STATE_REASON_KINDS,
   classifyGateStateReason,
   normalizeDepGuard,
+  normalizeGitleaks,
   normalizeIntentGuard,
   normalizeMissingGate,
   normalizeVaultGuard,
 } from '../src/normalize.js';
+import { NormalizeError } from '../src/envelope.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -758,5 +760,64 @@ describe("intent-guard's pull-request-mode refusals", () => {
         '1.4.0'
       )
     ).toThrow(/trustBase\.proposals\[0\] should be a string/);
+  });
+});
+
+describe('gitleaks 8.30.1 normalization', () => {
+  const blocking = fixture('gitleaks-8.30.1-history-blocking.json');
+  const clean = fixture('gitleaks-8.30.1-history-clean.json');
+  // The planted token's first twelve characters, recorded in
+  // tests/fixtures/README.md. The report is redacted, and the normalizer must
+  // never carry Secret, Match or Line even when a report is not.
+  const PLANTED_PREFIX = 'dp.pt.q7ZkR2';
+
+  it('turns each report entry into a high, blocking finding at the leaked line with the rule as the id', () => {
+    const out = normalizeGitleaks(blocking, '8.30.1', true);
+    expect(out.findings.length).toBe((blocking as unknown[]).length);
+    const f = out.findings[0]!;
+    expect(f.product).toBe('gitleaks');
+    expect(f.productVersion).toBe('8.30.1');
+    expect(f.ruleId).toBe('gitleaks/doppler-api-token');
+    expect(f.severity).toBe('high');
+    expect(f.severityIsDerived).toBe(true);
+    expect(f.blocking).toBe(true);
+    expect(f.subject).toEqual({ kind: 'location', file: 'config.json', line: 3, column: 22, endColumn: 70 });
+    expect(f.fingerprint).toEqual({
+      value: (blocking as Array<{ Fingerprint: string }>)[0]!.Fingerprint,
+      scope: 'gitleaks',
+      stability: 'stable',
+    });
+    expect(f.details.commit).toBe((blocking as Array<{ Commit: string }>)[0]!.Commit);
+    expect(JSON.stringify(f)).not.toContain(PLANTED_PREFIX);
+    expect(JSON.stringify(f)).not.toContain('REDACTED');
+  });
+
+  it('never carries the matched text, even from an unredacted report', () => {
+    const unredacted = (blocking as Array<Record<string, unknown>>).map((entry) => ({
+      ...entry,
+      Secret: `${PLANTED_PREFIX}xxxx`,
+      Match: `token: ${PLANTED_PREFIX}xxxx`,
+      Line: `"doppler_token": "${PLANTED_PREFIX}xxxx"`,
+    }));
+    const out = normalizeGitleaks(unredacted, '8.30.1', true);
+    expect(JSON.stringify(out)).not.toContain(PLANTED_PREFIX);
+  });
+
+  it('marks findings non-blocking when the exit code did not say blocked', () => {
+    expect(normalizeGitleaks(blocking, '8.30.1', false).findings.every((f) => !f.blocking)).toBe(true);
+  });
+
+  it('returns no findings for an empty report', () => {
+    expect(normalizeGitleaks(clean, '8.30.1', false).findings).toEqual([]);
+  });
+
+  it('rejects a report that is not an array', () => {
+    expect(() => normalizeGitleaks({ findings: [] }, '8.30.1', false)).toThrow(NormalizeError);
+  });
+
+  it('rejects an entry without a RuleID or a File', () => {
+    expect(() => normalizeGitleaks([{ File: 'a', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
+    expect(() => normalizeGitleaks([{ RuleID: 'x', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
+    expect(() => normalizeGitleaks([null], '8.30.1', false)).toThrow(NormalizeError);
   });
 });

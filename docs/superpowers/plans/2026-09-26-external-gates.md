@@ -830,7 +830,7 @@ git -C <worktree> commit -m "Classify external gate exits, read report files, ap
 - Produces: `export function normalizeGitleaks(raw: unknown, version: string | null, blocked: boolean): NormalizedGateOutput` and `normalizeFor(product, raw, version, context: { blocked: boolean })`.
 - Consumes: gitleaks report fields `RuleID, Description, File, StartLine, StartColumn, EndColumn, Commit, Author, Email, Date, Fingerprint, Entropy, Tags` (per the gitleaks README; verify against the captured fixture before writing assertions, and if a field name differs in the capture, the capture wins).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // tests/normalize.test.ts, new describe in the existing per-product style
@@ -878,12 +878,12 @@ describe('gitleaks <ver> normalization', () => {
 
 The `Secret` assertion holds only when the fixture was captured with `--redact` (Task 3 did); the redacted value is `REDACTED`, so assert the original planted token prefix is absent instead: keep the planted token in `tests/fixtures/README.md` and assert its first 8 characters never appear in any finding.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts 2>&1 | tail -20`
 Expected: FAIL, `normalizeGitleaks` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 // src/normalize.ts
@@ -945,7 +945,7 @@ function normalizeFor(product: Product, raw: unknown, version: string | null, co
 
 Until Task 7 lands, keep the `osv-scanner` case as the Task 2 throw so the file compiles.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts tests/gate-runner.test.ts 2>&1 | tail -20`
 Expected: PASS.

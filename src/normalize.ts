@@ -694,6 +694,91 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
   };
 }
 
+// -- gitleaks (external, git history mode) -------------------------------
+//
+// The report is a JSON array written to a file, one entry per leak, with
+// the field names in tests/fixtures/README.md. gitleaks has no severity of
+// its own: a rule matched or it did not. So every finding is `high`, marked
+// derived, and whether it blocks comes from the exit code the runner read
+// (3, the leak code the umbrella moves it to), not from anything in the
+// entry.
+//
+// NEVER CARRIED: Secret, Match and Line. The umbrella passes --redact, but a
+// report can be unredacted if a tool changes or a policy finds a way round
+// it, and this report is posted to a pull request and uploaded as SARIF.
+// Email is not carried either: a commit author's address has no bearing on
+// fixing a leak and would be published with it.
+
+export function normalizeGitleaks(
+  raw: unknown,
+  version: string | null,
+  blocked: boolean
+): NormalizedGateOutput {
+  const product = 'gitleaks';
+  const entries = needArray(raw, product, 'the report');
+  const findings: Finding[] = entries.map((rawEntry, index) => {
+    const where = `report[${index}]`;
+    const entry = needRecord(rawEntry, product, where);
+    const rule = needString(entry.RuleID, product, `${where}.RuleID`);
+    const file = needString(entry.File, product, `${where}.File`);
+    const line = needNumber(entry.StartLine, product, `${where}.StartLine`);
+    // Carried as gitleaks reports them, which is also what its own SARIF
+    // output uses. In 8.30.1 they sit one past the 1-based character: the
+    // fixture's token begins at character 21 of its line and is reported at
+    // 22 to 70, a span of exactly the token's 49 characters. Not corrected
+    // here, because a correction would be a guess about every other version.
+    const column = typeof entry.StartColumn === 'number' ? entry.StartColumn : 1;
+    const endColumn = typeof entry.EndColumn === 'number' ? entry.EndColumn : undefined;
+    const commit = optionalString(entry.Commit, product, `${where}.Commit`);
+    const author = optionalString(entry.Author, product, `${where}.Author`);
+    const date = optionalString(entry.Date, product, `${where}.Date`);
+    // gitleaks' own Fingerprint is commit:file:rule:line, identical across
+    // runs over the same history, so it is stable. Rebuilt in that shape if
+    // a report ever omits it.
+    const fingerprint =
+      optionalString(entry.Fingerprint, product, `${where}.Fingerprint`) ??
+      `${commit ?? ''}:${file}:${rule}:${line}`;
+    return {
+      schemaVersion: 1,
+      product,
+      productVersion: version,
+      ruleId: `gitleaks/${rule}`,
+      severity: 'high',
+      severityIsDerived: true,
+      blocking: blocked,
+      message:
+        optionalString(entry.Description, product, `${where}.Description`) ?? `${rule} matched`,
+      subject: {
+        kind: 'location',
+        file,
+        line,
+        column,
+        ...(endColumn === undefined ? {} : { endColumn }),
+      },
+      fingerprint: { value: fingerprint, scope: product, stability: 'stable' },
+      details: {
+        ...(commit === undefined ? {} : { commit }),
+        ...(author === undefined ? {} : { author }),
+        ...(date === undefined ? {} : { date }),
+        ...(typeof entry.Entropy === 'number' ? { entropy: entry.Entropy } : {}),
+        ...(Array.isArray(entry.Tags) ? { tags: entry.Tags } : {}),
+      },
+    };
+  });
+  return {
+    findings,
+    run: {
+      // Any match fails the gate: gitleaks has no threshold to report.
+      failOn: 'any',
+      suppressed: 0,
+      ignored: 0,
+      diagnostics: [],
+      details: { entries: entries.length },
+    },
+    diagnostics: [],
+  };
+}
+
 // -- the umbrella's own findings ------------------------------------------
 //
 // Every way a gate can fail to produce a usable result gets a finding here.

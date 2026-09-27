@@ -26,6 +26,7 @@ import { NormalizeError } from './envelope.js';
 import {
   normalizeDepGuard,
   normalizeFailedGate,
+  normalizeGitleaks,
   normalizeIntentGuard,
   normalizeMisconfiguredGate,
   normalizeMissingGate,
@@ -628,6 +629,7 @@ function normalizeFor(
     case 'intent-guard':
       return normalizeIntentGuard(parsed, version);
     case 'gitleaks':
+      return normalizeGitleaks(parsed, version, context.blocked);
     case 'osv-scanner':
       throw new Error('external gates are wired in a later task');
   }
