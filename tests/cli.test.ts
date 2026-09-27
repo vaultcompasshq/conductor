@@ -596,6 +596,25 @@ describe('conductor run --project (issue #55)', () => {
     expect(result.stderr).toContain(outside);
     expect(result.stderr).not.toMatch(STACK_FRAME);
   });
+
+  it('names --project a git directory rather than "not a git repository" when it points at .git', () => {
+    // Mutation this catches: repoRoot's single generic "not a git
+    // repository" message, which is technically true of a .git directory
+    // (git rev-parse --show-toplevel refuses there too, "must be run in a
+    // work tree") but sends the reader to the wrong fix -- there IS a
+    // repository, it is one level up.
+    const bin = allThreeStubbed();
+    const repo = repoWithPolicy();
+    const gitDir = path.join(repo, '.git');
+
+    const result = runCli(tempDir(), ['run', '--staged', '--project', gitDir], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git directory, not a working tree/);
+    expect(result.stderr).toContain(gitDir);
+    expect(result.stderr).not.toMatch(/not a git repository/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
 });
 
 describe('conductor init --project (issue #55)', () => {
@@ -643,6 +662,86 @@ describe('conductor init --project (issue #55)', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(outside);
     expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+
+  it('--revert --project finds the manifest in the named repository, not the cwd', () => {
+    // Mutation this catches: --revert reading the manifest from the cwd
+    // instead of the resolved --project root, which would report
+    // no-manifest for a repository that has one.
+    const repo = gitRepo();
+    const elsewhere = tempDir();
+
+    const init = runCli(elsewhere, ['init', '--project', repo], tempDir());
+    expect(init.status).toBe(0);
+    expect(existsSync(path.join(repo, '.guardrails.yaml'))).toBe(true);
+
+    const revert = runCli(elsewhere, ['init', '--revert', '--project', repo], tempDir());
+
+    expect(revert.status).toBe(0);
+    expect(existsSync(path.join(repo, '.guardrails.yaml'))).toBe(false);
+  });
+});
+
+describe('conductor init without --project (regression guard, issue #55)', () => {
+  // A fix round found that resolveProjectRoot(cwd, undefined) is
+  // repoRoot(cwd), which THROWS on a non-repository, while planInit and
+  // revertInit REPORT one as a structured conflict and return it. Calling
+  // resolveProjectRoot unconditionally at the top of init's action -- an
+  // earlier draft of this feature did exactly that -- made a plain
+  // "conductor init" (and "init --revert") outside a repository throw a
+  // differently-worded, JSON-less error instead of main's own conflict
+  // shape, and separately changed the CHECK ORDER: planInit refuses --adopt
+  // or --force without --hook BEFORE it asks whether it is in a repository
+  // at all, and the unconditional resolver asked the repository question
+  // first. These pin the exact JSON body and conflict reason, not just the
+  // exit code, because the exit code was 2 either way and would not have
+  // caught either regression.
+  it('reports the structured not-a-git-repository conflict outside a repository, as on main', () => {
+    const outside = tempDir();
+
+    const result = runCli(outside, ['init', '--json'], tempDir());
+
+    expect(result.status).toBe(2);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      conflicts: Array<{ path: string; reason: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.conflicts).toHaveLength(1);
+    expect(parsed.conflicts[0]?.reason).toBe('not-a-git-repository');
+    expect(result.stderr).toBe('');
+  });
+
+  it('reports the structured not-a-git-repository conflict on --revert outside a repository, as on main', () => {
+    const outside = tempDir();
+
+    const result = runCli(outside, ['init', '--revert', '--json'], tempDir());
+
+    expect(result.status).toBe(2);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      conflicts: Array<{ path: string; reason: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.conflicts).toHaveLength(1);
+    expect(parsed.conflicts[0]?.reason).toBe('not-a-git-repository');
+    expect(result.stderr).toBe('');
+  });
+
+  it('reports flag-requires-hook for --adopt without --hook outside a repository, not not-a-git-repository', () => {
+    const outside = tempDir();
+
+    const result = runCli(outside, ['init', '--adopt', '--json'], tempDir());
+
+    expect(result.status).toBe(2);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      conflicts: Array<{ path: string; reason: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.conflicts).toHaveLength(1);
+    expect(parsed.conflicts[0]?.reason).toBe('flag-requires-hook');
+    expect(result.stderr).toBe('');
   });
 });
 

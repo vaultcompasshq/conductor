@@ -65,6 +65,32 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
  * one line on stderr with no stack and the could-not-run exit code, so
  * nothing here has to know about either.
  */
+/**
+ * True when `cwd` is itself a `.git` directory (or another directory git
+ * manages as one, such as a worktree's own git dir), rather than a working
+ * tree with no repository at all.
+ *
+ * Only consulted once `--show-toplevel` has already failed, so the extra
+ * spawn is on an error path already about to fail the whole command, never
+ * on the path every ordinary run takes. Both failure shapes exit non-zero,
+ * so this is what tells "point conductor at a .git directory" apart from
+ * "point conductor at a plain, ungoverned directory" without guessing from
+ * the path's spelling.
+ */
+function isGitDirectory(cwd: string): boolean {
+  try {
+    return (
+      execFileSync('git', ['rev-parse', '--is-inside-git-dir'], {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
 function repoRoot(cwd: string): string {
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], {
@@ -83,6 +109,12 @@ function repoRoot(cwd: string): string {
       // git ran and refused. The directory is named because it is the one
       // thing the reader has to check, and it is the directory they typed
       // the command in rather than anything internal to this tool.
+      if (isGitDirectory(cwd)) {
+        throw new Error(
+          `${cwd} is a git directory, not a working tree. Point conductor at the repository's ` +
+            'working tree instead of at its .git directory.'
+        );
+      }
       throw new Error(
         `not a git repository: ${cwd}. conductor anchors every gate at the working-tree ` +
           'root, so run it inside a checkout.'
@@ -419,7 +451,27 @@ export function buildProgram(): Command {
         project?: string;
       }) => {
         try {
-          const cwd = resolveProjectRoot(process.cwd(), options.project);
+          // options.project === undefined takes the EXACT path main always
+          // did: process.cwd() straight through, with no resolveProjectRoot
+          // call at all. planInit and revertInit already do their own
+          // repoRootOf(options.cwd) and report a non-repository as a
+          // structured conflict (not-a-git-repository, JSON under --json,
+          // exit 2 through the ordinary result.ok branch below) rather than
+          // throwing, and planInit checks flag-requires-hook (--adopt or
+          // --force without --hook) BEFORE it ever asks whether it is in a
+          // repository at all. Calling resolveProjectRoot unconditionally
+          // here used to short-circuit both of those: it threw its own
+          // differently-worded, JSON-less error before planInit ever ran, so
+          // a plain "conductor init" outside a repository stopped matching
+          // main, and "--adopt" without "--hook" outside a repository
+          // reported the wrong conflict. Only an EXPLICIT --project goes
+          // through resolveProjectRoot, whose own usage errors (a path that
+          // does not exist, is not a directory, or is not inside a git
+          // repository) are new behaviour this flag introduces on purpose.
+          const cwd =
+            options.project === undefined
+              ? process.cwd()
+              : resolveProjectRoot(process.cwd(), options.project);
           const shared = { cwd, pathValue: process.env.PATH ?? '' };
 
           if (options.revert) {
@@ -461,11 +513,15 @@ export function buildProgram(): Command {
           }
           process.exitCode = result.ok ? 0 : EXIT_COULD_NOT_RUN;
         } catch (err) {
-          // Only --project's own usage errors reach here: planInit, applyInit
-          // and revertInit report every ordinary conflict as a structured
-          // result rather than throwing, exactly as they did before this flag
-          // existed. One line, no stack, the same shape "run"'s own catch
-          // below uses for the same kind of failure.
+          // planInit, applyInit and revertInit report every ordinary
+          // conflict as a structured result rather than throwing, exactly as
+          // they did before this flag existed, so in practice only an
+          // explicit --project's own usage error reaches here. But this is
+          // not narrowed to that: any throw from this block lands here and
+          // gets the same one-line, no-stack treatment main's own outer catch
+          // gives an uncaught error, which is what this local catch replaces
+          // for the init command, the same shape "run"'s own catch below
+          // uses for the same kind of failure.
           process.exitCode = fail(`conductor: ${err instanceof Error ? err.message : String(err)}`);
         }
       }

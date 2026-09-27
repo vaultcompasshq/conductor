@@ -3796,57 +3796,83 @@ Known open, each a limit rather than a bypass on a pull request:
 
 ## The repository root comes from --project or the cwd, and is passed explicitly everywhere
 
-New in 0.5.0, issue #55. dep-guard, vault-guard and intent-guard each take a
+Unreleased, issue #55. dep-guard, vault-guard and intent-guard each take a
 path or `--project`, so a script can point any of them at a repository
 without changing into it first; conductor took nothing, which forced a `cd`
 compound onto every scripted call. `--project <dir>` closes that on `init`
 and `run`, the only two commands that resolve a repository root, and it
 changes WHERE the repository is, never WHAT is trusted.
 
-RESOLUTION IS ONE FUNCTION, CALLED FROM BOTH COMMANDS. `resolveProjectRoot`
-(src/cli.ts:120-139) returns `repoRoot(cwd)` unchanged when `--project` is
-absent, so the no-flag path is exactly the function that has anchored
-`run` since before this release. When `--project` is given, the value is
-resolved against the process's own working directory with `path.resolve`
-before anything else runs, so a relative value means what the person typing
-it expects rather than something resolved against a path discovered later.
-The resolved path is then checked to exist and be a directory with
-`statSync`, and only then handed to `repoRoot` (src/cli.ts:68-96) exactly as
-the bare working directory always was, the same `git rev-parse
+OMITTING THE FLAG IS UNTOUCHED, ON BOTH COMMANDS, AND DELIBERATELY NOT
+ROUTED THROUGH THE NEW RESOLVER. A fix round found this the hard way:
+`resolveProjectRoot(cwd, undefined)` returns `repoRoot(cwd)`, which THROWS
+on a non-repository, while `init`'s own `planInit` and `revertInit` (through
+their own `repoRootOf`, src/init.ts:351-353) REPORT a non-repository as a
+structured conflict and return it rather than throwing -- `not-a-git-
+repository`, the "Run git init first" guidance, JSON on stdout under
+`--json`, exit 2 through the ordinary `result.ok` branch. Calling
+`resolveProjectRoot` unconditionally at the top of `init`'s action, which an
+earlier draft of this feature did, made a plain `conductor init` or `init
+--revert` outside a repository throw a differently-worded, JSON-less error
+instead, and it changed the CHECK ORDER besides: `planInit` refuses
+`--adopt` or `--force` without `--hook` (`flag-requires-hook`) BEFORE it
+ever asks whether it is in a repository at all (src/init.ts:447-458), and
+the unconditional resolver asked the repository question first, so
+`--adopt` without `--hook` outside a repository reported the wrong
+conflict. The fix, and the invariant this section now states: `src/cli.ts`
+calls `resolveProjectRoot` for `init` ONLY when `options.project` is
+defined; when it is not, `process.cwd()` is passed straight through to
+`planInit`/`applyInit`/`revertInit` exactly as it was before this flag
+existed, byte for byte (src/cli.ts:471-474, the `options.project ===
+undefined` branch of the ternary that assigns `cwd`). `run` has no
+equivalent structured-conflict path to preserve -- it always threw through
+`repoRoot` before this flag existed -- so its own call (src/cli.ts:582)
+passes `options.project` to `resolveProjectRoot` unconditionally and that
+was correct from the start.
+
+RESOLUTION FOR AN EXPLICIT --project IS ONE FUNCTION, CALLED FROM BOTH
+COMMANDS. `resolveProjectRoot` (src/cli.ts:152-171) resolves the value
+against the process's own working directory with `path.resolve` before
+anything else runs, so a relative value means what the person typing it
+expects rather than something resolved against a path discovered later. The
+resolved path is then checked to exist and be a directory with `statSync`,
+and only then handed to `repoRoot` (src/cli.ts:94-128) exactly as the bare
+working directory always was for `run`, the same `git rev-parse
 --show-toplevel` call, so a subdirectory of a repository resolves to that
 repository's top level exactly as it does with no flag at all. A path that
 does not exist, is not a directory, or is not inside a git repository is a
-thrown `Error` naming it, never a silent fall back to the cwd.
+thrown `Error` naming it, never a silent fall back to the cwd. This
+resolve-then-validate-then-discover shape is new behaviour that `--project`
+introduces on purpose; only the NO-FLAG path is required to match what
+existed before it.
 
-BOTH CALL SITES THREAD THE RESULT EXPLICITLY FROM THERE ON. `run`'s action
-calls it once (src/cli.ts:526) and passes the return value on as `root` into
-`policyForRun`, `loadPolicy` and `runAll`'s own `repoRoot` option, the same
-wiring that existed before this release; nothing downstream reads
-`process.cwd()` again. `init`'s action calls it once (src/cli.ts:422) and
-passes the return value on as the `cwd` field of `InitOptions`, which
-`planInit`, `applyInit` and `revertInit` already treated as the repository's
-anchor rather than as the literal process cwd: they re-derive the root from
-it with their own `repoRootOf` (src/init.ts:351-353, called from
-src/init.ts:460 and 944), which is the same `git rev-parse --show-toplevel`
-call under a different name, so a repository root resolveProjectRoot already
-found resolves to itself again there. That second call is redundant when
-`--project` was valid and is the reason a `--project` value that fails
-validation never reaches `init.ts` at all: the usage error is raised at
-`resolveProjectRoot` before either module's own repository-root discovery
-would otherwise have to invent a second way to name the path.
+BOTH CALL SITES THREAD THE RESULT EXPLICITLY FROM THERE ON, WHICHEVER PATH
+PRODUCED IT. `run`'s action passes the root on as `root` into `policyForRun`,
+`loadPolicy` and `runAll`'s own `repoRoot` option, the same wiring that
+existed before this release; nothing downstream reads `process.cwd()`
+again. `init`'s action passes the root on as the `cwd` field of
+`InitOptions`, which `planInit`, `applyInit` and `revertInit` already
+treated as the repository's anchor rather than as the literal process cwd:
+on the `--project` path they re-derive the root from it with their own
+`repoRootOf`, which is the same `git rev-parse --show-toplevel` call under a
+different name, so a root `resolveProjectRoot` already found resolves to
+itself again there; on the no-flag path they are the ONLY place the root is
+discovered, exactly as before this issue.
 
 NO `process.cwd()` READ SURVIVES RESOLUTION. Before this release exactly two
 sites read it, both in `src/cli.ts`: the `init` action and the `run` action,
-each immediately below its own `.action(...)` call. Both are now the single
-argument `resolveProjectRoot` takes as `cwd`, read once, before `--project`
-is applied, and are not read again afterward in either action. Grepped for
-across `src/` at the time this was written: those were the only two
-`process.cwd()` calls in the package outside a comment; every other module
-that needs the repository root already took it as an explicit parameter
-(`repoRoot` on `RunOptions` in src/run.ts, `repoRoot` on `GateRunnerOptions`
-in src/gate-runner.ts, `repoRoot` in src/trust-base.ts's exported functions,
-`cwd` in `InitOptions`), which is what made this a two-line change at the
-two entry points rather than a rewrite of everything a gate or a git call
+each immediately below its own `.action(...)` call. Both still read it
+exactly once, at the same place, and pass it on: `run` always through
+`resolveProjectRoot`, `init` through `resolveProjectRoot` only when
+`--project` is given and directly to `InitOptions.cwd` otherwise. Neither
+action reads `process.cwd()` a second time afterward. Grepped for across
+`src/` at the time this was written: those were the only two `process.cwd()`
+calls in the package outside a comment; every other module that needs the
+repository root already took it as an explicit parameter (`repoRoot` on
+`RunOptions` in src/run.ts, `repoRoot` on `GateRunnerOptions` in
+src/gate-runner.ts, `repoRoot` in src/trust-base.ts's exported functions,
+`cwd` in `InitOptions`), which is what made this a small change at the two
+entry points rather than a rewrite of everything a gate or a git call
 touches.
 
 THE TRUST BOUNDARY DOES NOT MOVE WITH THE FLAG. `--project` selects a
@@ -3856,6 +3882,7 @@ that logic already did against the resolved root is unchanged: the
 `options.trustBase !== undefined` and reads `options.repoRoot`
 (src/gate-runner.ts:848-849), the program-vetting rule is called with that
 same `options.repoRoot` (src/gate-runner.ts:920, calling
+`refuseHeadControlledBinary`, src/gate-runner.ts:393-408, which itself calls
 `refuseHeadControlledProgram`, src/trust-base.ts:510-598), and
 `refuseTrustBaseRef` (src/trust-base.ts:158-210) runs its own `git` calls
 with `cwd: repoRoot` exactly as before -- `--project` only changes what
@@ -3877,28 +3904,49 @@ threaded through explicitly, which is the reason no gate-runner or
 trust-base source file needed an edit for this issue, only `src/cli.ts`
 did.
 
+A `.git` DIRECTORY GETS ITS OWN MESSAGE, NOT THE GENERIC ONE. `git
+rev-parse --show-toplevel` run with `cwd` set to a repository's own `.git`
+directory fails the same way an ordinary non-repository does, "this
+operation must be run in a work tree", so `--project <repo>/.git` used to
+read as "not a git repository" -- true of neither shape without a second
+check. `isGitDirectory` (src/cli.ts:80-92) asks `git rev-parse
+--is-inside-git-dir` only once `--show-toplevel` has already failed, so the
+extra spawn is on a path already about to fail the command; `repoRoot`
+(src/cli.ts:94-128) reads it to choose between "is a git directory, not a
+working tree" and the ordinary "not a git repository" message. This applies
+to the bare working directory too, not just to `--project`, since `repoRoot`
+is the one function both paths share.
+
 PINNED, WITH THE COVERAGE STATED PRECISELY BECAUSE IT IS UNEVEN. All three
 of `resolveProjectRoot`'s usage-error branches -- missing, not a directory,
 outside any repository -- are driven through the real, built CLI on the
 `run` command in tests/cli.test.ts, under "conductor run --project (issue
 #55)", each asserting exit 2, the path named in `stderr`, and no stack
-frame. `init`'s own wiring is pinned separately, under "conductor init
---project (issue #55)": that a real `init` run writes the policy file and
-the manifest into the named repository and not into the cwd it was invoked
-from, that a `--hook` init writes byte-identical hook content whether or
-not `--project` was given (the flag moves WHERE init writes, never WHAT),
+frame; the same suite pins the `.git`-directory message separately. `init`'s
+own wiring is pinned separately, under "conductor init --project (issue
+#55)": that a real `init` run writes the policy file and the manifest into
+the named repository and not into the cwd it was invoked from, that a
+`--hook` init writes byte-identical hook content whether or not `--project`
+was given (the flag moves WHERE init writes, never WHAT), that `--revert
+--project` finds the manifest in the named repository rather than the cwd,
 and that a directory outside any git repository is refused naming the path.
 `init` is NOT separately pinned for the missing-path and not-a-directory
-branches, because both commands call the same `resolveProjectRoot` and
-`run`'s suite already exercises both against the shared function before
-either command's own logic runs; this is stated here rather than left
-implicit, per this file's own rule that an admitted gap is worth more than
-a citation that quietly walks past one. The subdirectory-resolves-to-top
-and relative-resolves-against-cwd cases, and running from an unrelated cwd
-producing a byte-identical report to running inside the repository, are
-pinned on `run` only, for the same reason: `init`'s own repository-root
-discovery, `repoRootOf`, is a separate function from `run`'s `repoRoot` and
-is exercised by `init.test.ts`'s existing suite on its own terms; this
-section's claim is only that `--project` reaches `init` correctly, which
-the two `init`-specific tests above establish, not that it re-proves
-`repoRootOf` itself.
+branches, because both commands call the same `resolveProjectRoot` on the
+`--project` path and `run`'s suite already exercises both against the
+shared function; this is stated here rather than left implicit, per this
+file's own rule that an admitted gap is worth more than a citation that
+quietly walks past one. The NO-FLAG regression itself -- a plain `init` and
+`init --revert` outside a repository, and `--adopt` without `--hook`
+outside a repository -- is pinned directly under "conductor init without
+--project (regression guard, issue #55)", against the exact JSON body and
+conflict reason `planInit`/`revertInit` return, not merely against the exit
+code, because the exit code alone was still 2 on both the correct and the
+regressed behaviour and would not have caught this. The
+subdirectory-resolves-to-top and relative-resolves-against-cwd cases, and
+running from an unrelated cwd producing a byte-identical report to running
+inside the repository, are pinned on `run` only, for the same reason:
+`init`'s own repository-root discovery, `repoRootOf`, is a separate
+function from `run`'s `repoRoot` and is exercised by `init.test.ts`'s
+existing suite on its own terms; this section's claim is only that
+`--project` reaches `init` correctly, which the `init`-specific tests above
+establish, not that it re-proves `repoRootOf` itself.

@@ -470,7 +470,11 @@ proceeds normally without mentioning them.
   CI step that uploads it. One line still goes to stdout, because a job whose
   only product is an uploaded artifact otherwise reads as a job that did
   nothing. A path that cannot be written is exit 2, not a green run beside a
-  report nobody can read.
+  report nobody can read. A relative value resolves against the current
+  directory the command was invoked from, not against `--project` or the
+  repository root: with `--project` pointing elsewhere, a relative
+  `--output` still lands next to where you are, not next to the repository
+  being judged.
 - `--verbose` prints the full per-gate report even when the run is clean.
   Text output only; the SARIF log never changes shape with it.
 - `--compact-on-refusal` shrinks the report to the version, the verdict and
