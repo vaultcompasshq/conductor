@@ -148,7 +148,17 @@ own decision, and it belongs beside the `TRUST_BASE_MIN_VERSION` table in
 `src/gate-runner.ts`, which is the other place this repository names a gate
 version. Check that the two agree: the Action must not install a build
 below the floor that table sets, or every adopter's pull request reports
-that gate as could-not-run.
+that gate as could-not-run. A gate default has the same shadow the
+`conductor-version` default has: its `TAG_DEP_GUARD_*`,
+`TAG_VAULT_GUARD_*` or `TAG_INTENT_GUARD_*` constants in the same
+version-pin step, which the backward-pin rule measures that input against.
+Move them with the default (a test asserts each pair agrees), and re-derive
+the published-versions-below counts stated in the step's comments, in
+`tests/action.test.ts` and in `docs/INVARIANTS.md` from `npm view <package>
+versions`, since a moved floor puts one more published version below it.
+Such a bump ships as an action-only tag: `package.json` stays put, and the
+CHANGELOG section for the tag has to say what the newer gate changes for an
+adopter who took the default, including anything it stops blocking.
 
 A change that adds an Action input the CLI must understand to act on, the
 `advisory` input and `--advisory` flag being the example on record, is always
