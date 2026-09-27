@@ -3,9 +3,34 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { citationFindings, lineCountsUnder } from '../check-invariant-citations.mjs';
+import { citationFindings, countLines, lineCountsUnder } from '../check-invariant-citations.mjs';
 
 const DOC = 'docs/INVARIANTS.md';
+
+describe('countLines', () => {
+  it('does not count the empty string after a trailing newline as a line', () => {
+    expect(countLines('a\nb\n')).toBe(2);
+  });
+
+  it('counts a last line with no trailing newline', () => {
+    expect(countLines('a\nb')).toBe(2);
+  });
+
+  it('counts an empty file as zero lines', () => {
+    expect(countLines('')).toBe(0);
+  });
+
+  it('is what a citation one past the end of a real file is judged against', () => {
+    const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const counts = lineCountsUnder(path.join(root, 'src'));
+    const cliLines = counts.get('src/cli.ts');
+    expect(cliLines).toBe(countLines(readFileSync(path.join(root, 'src/cli.ts'), 'utf8')));
+    const onePast = `src/cli.ts:${cliLines + 1}\n`;
+    expect(citationFindings(onePast, (file) => counts.get(file))).toEqual([
+      `${DOC}:1: src/cli.ts:${cliLines + 1} exceeds src/cli.ts (${cliLines} lines)`,
+    ]);
+  });
+});
 
 describe('citationFindings', () => {
   it('reports a range whose end is past the file', () => {

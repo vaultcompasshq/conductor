@@ -11,6 +11,18 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DOC = 'docs/INVARIANTS.md';
 const CITE = /src\/[A-Za-z0-9._/-]+\.ts:\d+(?:-\d+)?/g;
 
+// The number of lines an editor shows for the text: a trailing newline ends
+// the last line rather than starting an empty one, so "a\nb\n" is two lines,
+// not three. Splitting on "\n" alone counts that phantom line and lets a
+// citation one past the end of the file through.
+export function countLines(text) {
+  if (text.length === 0) {
+    return 0;
+  }
+  const parts = text.split('\n');
+  return text.endsWith('\n') ? parts.length - 1 : parts.length;
+}
+
 export function lineCountsUnder(dir) {
   const counts = new Map();
 
@@ -21,7 +33,7 @@ export function lineCountsUnder(dir) {
         walk(abs);
       } else if (name.endsWith('.ts')) {
         const rel = path.relative(ROOT, abs).split(path.sep).join('/');
-        counts.set(rel, readFileSync(abs, 'utf8').split('\n').length);
+        counts.set(rel, countLines(readFileSync(abs, 'utf8')));
       }
     }
   }
