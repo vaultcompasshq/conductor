@@ -150,8 +150,17 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   // file it owns, the exit code for a leak is moved off 1 so an error and a
   // leak stop sharing a number, history is scoped by --log-opts so one
   // branch's secret cannot redden every other pull request, and the config
-  // is read from the base ref on a pull request.
-  gitleaks: ['report-format', 'report-path', 'exit-code', 'log-opts', 'config', 'redact', 'no-banner'],
+  // is read from the base ref on a pull request, as is the ignore file.
+  gitleaks: [
+    'report-format',
+    'report-path',
+    'exit-code',
+    'log-opts',
+    'config',
+    'gitleaks-ignore-path',
+    'redact',
+    'no-banner',
+  ],
   // osv-scanner: the umbrella owns the format (json to stdout), the config on
   // a pull-request run, and the scan root.
   'osv-scanner': ['format', 'config', 'recursive'],
@@ -332,6 +341,9 @@ const EXTERNAL_RESERVED_REASONS: Partial<Record<Product, Record<string, string>>
     config:
       'On a pull request the config is read from the base ref, so the pull request cannot ' +
       'allowlist what it adds. Commit .gitleaks.toml instead.',
+    'gitleaks-ignore-path':
+      'On a pull request the ignore file is read from the base ref, so the pull request cannot ' +
+      'ignore the fingerprint of the leak it adds. Commit .gitleaksignore instead.',
     redact:
       'Findings reach a pull-request comment and a SARIF upload; the umbrella keeps secrets ' +
       'redacted in the report it reads.',

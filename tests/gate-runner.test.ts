@@ -290,6 +290,15 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     expect(decideTrustBase(intentGate, nativeIntent, undefined, '1.4.0')).toBeUndefined();
   });
 
+  it('puts both external products in pull-request mode at their floors instead of withholding', () => {
+    const gl = gate({ role: 'secrets-history', product: 'gitleaks' });
+    expect(decideTrustBase(gl, undefined, 'origin/main', '8.30.1')?.withheld).toBeNull();
+    expect(decideTrustBase(gl, undefined, 'origin/main', '8.18.4')?.withheld).toMatch(/8\.19\.0/);
+    const osv = gate({ role: 'vulnerabilities', product: 'osv-scanner' });
+    expect(decideTrustBase(osv, undefined, 'origin/main', '2.6.0')?.withheld).toBeNull();
+    expect(decideTrustBase(osv, undefined, 'origin/main', null)?.refused).not.toBeNull();
+  });
+
   it('passes the flag to an intent-guard at the version it arrived in', () => {
     expect(decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.4.0')).toEqual({
       ref: 'origin/main',
@@ -929,6 +938,43 @@ describe('external gate exit semantics', () => {
     expect(out.findings.length).toBeGreaterThan(0);
     expect(out.findings.every((f) => f.blocking)).toBe(true);
     expect(out.findings[0]!.subject).toEqual({ kind: 'package', name: 'lodash', manifest: 'package-lock.json' });
+  });
+
+  it('on a pull request, hands gitleaks the base config and ignore file and scopes history to base..HEAD', () => {
+    const repo = tempGitRepo();
+    const commitAll = (message: string) => {
+      execFileSync('git', ['add', '-A'], { cwd: repo });
+      execFileSync('git', ['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', message], { cwd: repo });
+    };
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[extend]\nuseDefault = true\n');
+    commitAll('base config');
+    execFileSync('git', ['checkout', '--quiet', '-b', 'pr'], { cwd: repo });
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[allowlist]\npaths = ["src/"]\n');
+    commitAll('head widens the allowlist');
+
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', argvLog: log });
+    const out = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+
+    expect(out.couldNotRun).toBeNull();
+    const argv = out.argv;
+    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('main..HEAD');
+    expect(argv).toContain('--config');
+    expect(argv).toContain('--gitleaks-ignore-path');
+    // Scanned from the git directory, not ".": gitleaks loads the scan
+    // root's own .gitleaksignore whatever --gitleaks-ignore-path says.
+    expect(argv[argv.length - 1]).toBe(realpathSync(path.join(repo, '.git')));
+    expect(argv).not.toContain('--trust-base');
+    expect(out.trustBase?.withheld).toBeNull();
+    expect(out.trustBase?.proposals.some((p) => /\.gitleaks\.toml differs/.test(p))).toBe(true);
+  });
+
+  it('never hands an external tool a config on a local run, so it reads the repository own', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.argv).not.toContain('--config');
   });
 
   it('refuses a gitleaks older than the floor as could-not-run, naming the floor', () => {

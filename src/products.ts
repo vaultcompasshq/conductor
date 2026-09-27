@@ -44,6 +44,20 @@ export interface ProductProfile {
   configFile: string | null;
   /** What to pass as the config when the base ref has none, so the head's cannot be auto-loaded. */
   neutralConfig: string | null;
+  /**
+   * A second file the tool auto-loads from the scanned tree that suppresses
+   * findings, and the flag that points it elsewhere. Read from the base ref
+   * on a pull request, like the config.
+   */
+  ignoreFile: {
+    name: string;
+    flag: string;
+    /**
+     * The tool ALSO loads `<scan root>/<name>` whatever the flag says, so on
+     * a pull request the scan root must be somewhere the head cannot write.
+     */
+    alsoLoadedFromScanRoot: boolean;
+  } | null;
   /** How to install the tool, for a missing-binary finding. */
   remedy: (skipNodeModules: boolean) => string;
   /**
@@ -82,6 +96,7 @@ function managedProfile(product: Product): ProductProfile {
     minVersion: null,
     configFile: null,
     neutralConfig: null,
+    ignoreFile: null,
     remedy: managedRemedy(product),
     stderrError: null,
   };
@@ -107,6 +122,13 @@ const PROFILES: Record<Product, ProductProfile> = {
     minVersion: '8.19.0',
     configFile: '.gitleaks.toml',
     neutralConfig: '[extend]\nuseDefault = true\n',
+    // .gitleaksignore lists fingerprints the scan skips: a pull request
+    // adding its own leak's fingerprint there is the config hole through a
+    // second file. gitleaks 8.30.1 loads the one at --gitleaks-ignore-path
+    // AND the one at the root of the scanned source, whatever the flag says
+    // (observed against the real binary, tests/fixtures/README.md), so the
+    // flag alone does not close it.
+    ignoreFile: { name: '.gitleaksignore', flag: '--gitleaks-ignore-path', alsoLoadedFromScanRoot: true },
     remedy: () =>
       'Install gitleaks 8.19 or later on the machine or runner before conductor runs (a pinned ' +
       'release download with a checksum is the usual step), or disable the secrets-history gate ' +
@@ -128,6 +150,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     minVersion: '2.0.0',
     configFile: 'osv-scanner.toml',
     neutralConfig: '',
+    ignoreFile: null,
     remedy: () =>
       'Install osv-scanner 2.x on the machine or runner before conductor runs, or disable the ' +
       'vulnerabilities gate in .guardrails.yaml. conductor does not download it.',

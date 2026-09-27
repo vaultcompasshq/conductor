@@ -40,6 +40,8 @@ describe('product profiles', () => {
     expect(g.minVersion).toBe('8.19.0');
     expect(g.configFile).toBe('.gitleaks.toml');
     expect(g.neutralConfig).toBe('[extend]\nuseDefault = true\n');
+    expect(g.ignoreFile).toEqual({ name: '.gitleaksignore', flag: '--gitleaks-ignore-path', alsoLoadedFromScanRoot: true });
+    expect(profileFor('osv-scanner').ignoreFile).toBeNull();
     expect(g.remedy(true)).toMatch(/install gitleaks/i);
     expect(g.remedy(true)).not.toContain('npm install');
 

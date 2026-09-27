@@ -329,10 +329,10 @@ describe('the reserved option list against the flags the umbrella writes', () =>
       baseSource: 'flag' as const,
       cleanup: () => {},
     };
-    // A report path and a config path on every call: the external gates need
-    // the first and take the second on a pull request, and the three npm
-    // gates ignore both.
-    const external = { reportPath: '/dev/null', configPath: '/dev/null' };
+    // A report path, a config path and an ignore path on every call: the
+    // external gates need the first and take the others on a pull request,
+    // and the three npm gates ignore all three.
+    const external = { reportPath: '/dev/null', configPath: '/dev/null', ignorePath: '/dev/null' };
     const runs = [
       gateArgs(gate, true, undefined, undefined, external),
       gateArgs(gate, false, undefined, undefined, external),

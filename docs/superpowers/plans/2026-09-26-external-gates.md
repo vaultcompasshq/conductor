@@ -1152,7 +1152,7 @@ git -C <worktree> commit -m "Normalize osv-scanner results into package findings
   Returns null when the profile has no `configFile`. Otherwise reads `<configFile>` from the trust base with `git show <trustBase>:<configFile>`; if present writes it to `<tempRoot>/<product>-config<ext>` and returns `source: 'base'`; if absent writes `profile.neutralConfig` and returns `source: 'neutral'`. In both cases compares with the head's `<repoRoot>/<configFile>` (if any) and sets `proposal` to `"<configFile> differs from the base ref; the base's copy was used and this change takes effect after merge"` when they differ or when the head has one and the base does not.
 - Consumes: Task 1 profiles.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // tests/external-config.test.ts
@@ -1208,12 +1208,12 @@ it('puts both external products in pull-request mode at their floors instead of 
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/external-config.test.ts tests/gate-runner.test.ts 2>&1 | tail -30`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 // src/external-config.ts
@@ -1252,7 +1252,7 @@ In `src/gate-runner.ts`:
 - In `runGateInner`, when the trust base is decided and not withheld and the profile has a `configFile`, call `materializeExternalConfig` with `options.tempRoot ?? <the mkdtemp from Task 5>` and set `external.configPath = result.path`; push `result.proposal` (when not null) into the outcome's `trustBase.proposals` exactly where the policy proposal is pushed for the npm gates (read how `proposals` reaches `GateOutcome.trustBase` and reuse it).
 - `TRUST_BASE_MIN_VERSION` is `Partial<Record<Product, string>>`, so the `decideTrustBase` "no pull-request mode yet" branch (:190-196) is no longer taken for these products.
 
-- [ ] **Step 4: Run, mutate, commit**
+- [x] **Step 4: Run, mutate, commit**
 
 Run the two test files, then the full suite. Mutation: in `materializeExternalConfig` return the head's file when the base has none; the neutral-config test must go RED. Restore.
 

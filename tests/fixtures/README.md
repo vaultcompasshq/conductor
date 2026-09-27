@@ -147,6 +147,16 @@ Two error observations the runner depends on:
   alone this is a clean pass over nothing, so the runner also reads
   stderr for an `ERR` line.
 
+One suppression observation, from a throwaway pull-request branch that
+added the token and then a `.gitleaksignore` naming its fingerprint:
+gitleaks loads `<scan root>/.gitleaksignore` even when
+`--gitleaks-ignore-path` points somewhere else, so the flag alone does not
+stop a head-side ignore file. With the scan root given as the repository's
+git directory (`git rev-parse --absolute-git-dir`) instead of `.`, the same
+history is scanned, `File` values are still repository-relative, the head's
+ignore file is not loaded, and an ignore file passed through the flag still
+applies. That is what the umbrella does on a pull request.
+
 ## osv-scanner 2.6.0
 
 Release `v2.6.0`, the `osv-scanner_darwin_arm64` binary from the

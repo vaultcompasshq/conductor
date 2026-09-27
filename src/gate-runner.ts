@@ -37,6 +37,7 @@ import {
 import type { ContractSource, IntentPreparation } from './intent-prepare.js';
 import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
+import { materializeExternalConfig } from './external-config.js';
 import { profileFor } from './products.js';
 import type { ProductProfile } from './products.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
@@ -116,10 +117,19 @@ export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
   'intent-guard': '1.4.0',
   'vault-guard': '1.7.0',
   'dep-guard': '0.6.0',
-  // All three products are in. The table stays a table rather than becoming
-  // a boolean: a fourth role can arrive without one, and the "no
-  // pull-request mode yet" branch below is what keeps that gate from being
-  // handed a flag it would reject.
+  // The two external tools have no --trust-base and are never handed one.
+  // For them the umbrella itself provides pull-request mode: it scopes the
+  // history to base..HEAD and hands over the config (and gitleaks' ignore
+  // file) read from the base ref (src/external-config.ts). So the entry here
+  // is their command-line floor, the same value as `minVersion` in
+  // src/products.ts, and being in the table is what makes an unreadable
+  // version a refusal on a pull request rather than a quiet withholding.
+  gitleaks: '8.19.0',
+  'osv-scanner': '2.0.0',
+  // The table stays a table rather than becoming a boolean: a new role can
+  // arrive without pull-request mode, and the "no pull-request mode yet"
+  // branch below is what keeps that gate from being handed a flag it would
+  // reject.
 };
 
 /**
@@ -439,6 +449,14 @@ export function gateProgramRefused(
 export interface ExternalArgs {
   reportPath?: string;
   configPath?: string;
+  /** Where the tool's ignore file was materialised (gitleaks only). */
+  ignorePath?: string;
+  /**
+   * What gitleaks scans, when not the working tree. On a pull request it is
+   * the repository's git directory: the same history, with no head-written
+   * .gitleaksignore at its root for gitleaks to load on its own.
+   */
+  scanRoot?: string;
 }
 
 /**
@@ -564,8 +582,9 @@ export function gateArgs(
         '--log-opts',
         scope,
         ...config,
+        ...(external.ignorePath === undefined ? [] : ['--gitleaks-ignore-path', external.ignorePath]),
         ...passthrough,
-        '.',
+        external.scanRoot ?? '.',
       ];
     }
     case 'osv-scanner':
@@ -936,8 +955,11 @@ function runGateInner(
   // report gitleaks writes. Made under the caller's temporary root when there
   // is one, and removed whatever happens, so a run leaves nothing behind. The
   // npm gates need none, and get none.
+  const decidedRef =
+    trustBase === undefined || trustBase.withheld !== null ? undefined : trustBase.ref;
+  const needsConfig = decidedRef !== undefined && profile.configFile !== null;
   const workDir =
-    profile.output.kind === 'report-file'
+    profile.output.kind === 'report-file' || needsConfig
       ? mkdtempSync(path.join(options.tempRoot ?? tmpdir(), 'conductor-gate-'))
       : null;
   try {
@@ -989,16 +1011,68 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   if (profile.output.kind === 'report-file' && workDir !== null) {
     external.reportPath = path.join(workDir, `${gate.product}-report${profile.output.extension}`);
   }
+  const decidedRef =
+    trustBase === undefined || trustBase.withheld !== null ? undefined : trustBase.ref;
+
+  // On a pull request, the tool's config and ignore file come from the base
+  // ref (or a neutral stand-in), never from the head it would otherwise
+  // auto-load them from. A head-side change is a proposal, carried the same
+  // way an npm gate's own proposals are.
+  const configProposals: string[] = [];
+  if (decidedRef !== undefined && workDir !== null) {
+    const materialized = materializeExternalConfig({
+      repoRoot: options.repoRoot,
+      trustBase: decidedRef,
+      profile,
+      tempRoot: workDir,
+    });
+    if (materialized !== null) {
+      external.configPath = materialized.path;
+      if (materialized.proposal !== null) {
+        configProposals.push(materialized.proposal);
+      }
+      if (materialized.ignore !== null) {
+        external.ignorePath = materialized.ignore.dir;
+        if (materialized.ignore.proposal !== null) {
+          configProposals.push(materialized.ignore.proposal);
+        }
+      }
+    }
+    if (profile.ignoreFile?.alsoLoadedFromScanRoot === true) {
+      const gitDir = spawnSync('git', ['rev-parse', '--absolute-git-dir'], {
+        cwd: options.repoRoot,
+        encoding: 'utf8',
+      });
+      const resolved = typeof gitDir.stdout === 'string' ? gitDir.stdout.trim() : '';
+      if (gitDir.status !== 0 || resolved === '') {
+        // No git directory means no history to scan and nowhere safe to scan
+        // it from. Not a clean result.
+        const detail =
+          `the repository's git directory could not be found, so ${gate.product} could not be ` +
+          'pointed away from the head tree on this pull request.';
+        return {
+          ...base,
+          productVersion: version,
+          binary,
+          durationMs: Date.now() - started,
+          ...(trustBase === undefined ? {} : { trustBase }),
+          couldNotRun: { reason: 'preparation-failed', detail },
+          findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+          run: EMPTY_RUN,
+          diagnostics: [],
+        };
+      }
+      external.scanRoot = resolved;
+    }
+  }
+  const trustBaseOut: GateTrustBase | undefined =
+    trustBase === undefined || configProposals.length === 0
+      ? trustBase
+      : { ...trustBase, proposals: [...trustBase.proposals, ...configProposals] };
 
   const argv = [
     ...binary.argvPrefix,
-    ...gateArgs(
-      gate,
-      options.staged,
-      options.intent,
-      trustBase === undefined || trustBase.withheld !== null ? undefined : trustBase.ref,
-      external
-    ),
+    ...gateArgs(gate, options.staged, options.intent, decidedRef, external),
   ];
 
   const child = spawnSync(binary.command, argv, {
@@ -1020,7 +1094,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     // could not run as when it could, and the withheld reason is the only
     // place a report can say a gate read its own rules out of the tree under
     // judgment.
-    ...(trustBase === undefined ? {} : { trustBase }),
+    ...(trustBaseOut === undefined ? {} : { trustBase: trustBaseOut }),
   };
   // Keep the backstop's view current, so an unexpected throw below still
   // reports which binary ran and what it printed.
