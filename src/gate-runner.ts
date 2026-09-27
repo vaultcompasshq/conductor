@@ -502,6 +502,9 @@ export function gateArgs(
         ...passthrough,
       ];
     }
+    case 'gitleaks':
+    case 'osv-scanner':
+      throw new Error('external gates are wired in a later task');
   }
 }
 
@@ -548,6 +551,9 @@ function normalizeFor(product: Product, parsed: unknown, version: string | null)
       return normalizeVaultGuard(parsed, version);
     case 'intent-guard':
       return normalizeIntentGuard(parsed, version);
+    case 'gitleaks':
+    case 'osv-scanner':
+      throw new Error('external gates are wired in a later task');
   }
 }
 

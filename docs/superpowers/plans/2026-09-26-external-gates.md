@@ -251,7 +251,7 @@ git -C <worktree> commit -m "Add per-product profiles and route version probe, t
 - Produces: `GATE_ROLES = ['dependencies', 'secrets', 'intent', 'secrets-history', 'vulnerabilities']`, `PRODUCTS = ['dep-guard', 'vault-guard', 'intent-guard', 'gitleaks', 'osv-scanner']`, `PRODUCT_FOR_ROLE['secrets-history'] === 'gitleaks'`, `PRODUCT_FOR_ROLE['vulnerabilities'] === 'osv-scanner'`, default stage `ci` for both.
 - Consumes: `ProductProfile` from Task 1.
 
-- [ ] **Step 1: Extend the pinned-set tests so they fail**
+- [x] **Step 1: Extend the pinned-set tests so they fail**
 
 In `tests/policy.test.ts` at the test "keys gates by role, not by product" (line 36) change the expected array to `['dependencies', 'secrets', 'intent', 'secrets-history', 'vulnerabilities']`. Add next to it:
 
@@ -313,12 +313,12 @@ it('marks the two external tools as not managed, with their own output, exit and
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts tests/products.test.ts 2>&1 | tail -30`
 Expected: FAIL on the role list, the unknown role, and the missing profiles (TypeScript will also fail to compile `PROFILES` once `PRODUCTS` grows; that is the next step).
 
-- [ ] **Step 3: Extend the policy model**
+- [x] **Step 3: Extend the policy model**
 
 `src/policy.ts`:
 
@@ -380,7 +380,7 @@ gitleaks: {
 },
 ```
 
-- [ ] **Step 4: Fix every exhaustive switch the compiler now flags**
+- [x] **Step 4: Fix every exhaustive switch the compiler now flags**
 
 Run `pnpm --dir <worktree> typecheck 2>&1 | tail -30`. Expected errors: `gateArgs` (gate-runner.ts:423), `normalizeFor` (gate-runner.ts:533), `CANDIDATES` (resolve.ts:113), `reservedReason` if written as a Record. For THIS task add only what compiles with today's behaviour: in `gateArgs` and `normalizeFor` add `case 'gitleaks': case 'osv-scanner': throw new Error('external gates are wired in a later task');` (Tasks 4 and 6 replace these). In `CANDIDATES` add:
 
@@ -391,12 +391,12 @@ gitleaks: [{ name: 'gitleaks', prefix: ['git'], versionSafe: true }],
 
 Note for `versionSafe`: gitleaks `version` and osv-scanner `--version` both print and exit without scanning; the implementer confirms this in Task 6 against the real binaries and records it in `tests/fixtures/README.md`.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts tests/products.test.ts tests/resolve.test.ts tests/init.test.ts 2>&1 | tail -30`
 Expected: policy and products PASS. `tests/resolve.test.ts:231-243` ("has exactly one candidate for the two gates that were never renamed") may still pass; if a test asserts the candidate table has exactly three keys, extend it to five with the two new single-candidate entries. `tests/init.test.ts`: the rendered policy now has two more roles; update the expected rendering to include them as "not found" lines when the test environment has no gitleaks or osv-scanner on PATH, and add one case with a stubbed `gitleaks` on PATH showing the role rendered as found.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git -C <worktree> add src/policy.ts src/products.ts src/init-policy.ts src/resolve.ts src/gate-runner.ts schema/guardrails.schema.json tests/policy.test.ts tests/products.test.ts tests/resolve.test.ts tests/init.test.ts

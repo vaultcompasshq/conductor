@@ -18,7 +18,9 @@
       "properties": {
         "dependencies": { "$ref": "#/$defs/gate" },
         "secrets": { "$ref": "#/$defs/gate" },
-        "intent": { "$ref": "#/$defs/gate" }
+        "intent": { "$ref": "#/$defs/gate" },
+        "secrets-history": { "$ref": "#/$defs/gate" },
+        "vulnerabilities": { "$ref": "#/$defs/gate" }
       }
     },
     "report": {
@@ -39,8 +41,8 @@
       "required": ["product"],
       "properties": {
         "product": {
-          "description": "Which product currently fills this role.",
-          "enum": ["dep-guard", "vault-guard", "intent-guard"]
+          "description": "Which product currently fills this role. gitleaks and osv-scanner are installed by the adopter, never by conductor.",
+          "enum": ["dep-guard", "vault-guard", "intent-guard", "gitleaks", "osv-scanner"]
         },
         "enabled": {
           "description": "Whether this gate runs. Defaults to true. A gate that is enabled but whose binary cannot be found is a blocking finding, never a silent skip.",
@@ -53,7 +55,7 @@
           "default": true
         },
         "stage": {
-          "description": "When this gate runs. Stages are cumulative in the order commit, push, ci: a gate runs at its own stage and at every later one, so a run at ci runs everything enabled. Defaults to commit for dependencies and secrets, and to ci for intent, because only the intent gate carries per-task ceremony. A run with no --stage runs every enabled gate whatever its stage.",
+          "description": "When this gate runs. Stages are cumulative in the order commit, push, ci: a gate runs at its own stage and at every later one, so a run at ci runs everything enabled. Defaults to commit for dependencies and secrets, and to ci for intent, secrets-history and vulnerabilities: the intent gate carries per-task ceremony, and a history scan or a registry lookup is pull-request work. A run with no --stage runs every enabled gate whatever its stage.",
           "enum": ["commit", "push", "ci"]
         },
         "command": {
@@ -67,7 +69,7 @@
           "items": { "type": "string" }
         },
         "options": {
-          "description": "Handed to this gate unchanged. Each key is one of that gate's own long-flag spellings without the leading dashes; true renders as --key, false as --no-key, a scalar as --key value, and an array as one --key value pair per entry. The umbrella does not interpret any of them. Per-gate thresholds live here; there is deliberately no shared threshold, because the three products do not share one severity scale.",
+          "description": "Handed to this gate unchanged. Each key is one of that gate's own long-flag spellings without the leading dashes; true renders as --key, false as --no-key, a scalar as --key value, and an array as one --key value pair per entry. The umbrella does not interpret any of them. Per-gate thresholds live here; there is deliberately no shared threshold, because the five products do not share one severity scale.",
           "type": "object",
           "propertyNames": { "pattern": "^[a-z0-9][a-z0-9-]*$" },
           "additionalProperties": {

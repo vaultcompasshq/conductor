@@ -43,6 +43,10 @@ const ROLE_DESCRIPTION: Record<GateRole, string> = {
   dependencies: 'what comes in: hallucinated names, typosquats, tampered lockfile entries',
   secrets: 'what goes out: credentials about to be committed',
   intent: 'what was approved: drift from a frozen intent contract, and change budgets',
+  'secrets-history':
+    'credentials anywhere in git history, by gitleaks (installed by you, not by conductor)',
+  vulnerabilities:
+    'known vulnerabilities in the resolved dependency tree, by osv-scanner (installed by you, not by conductor)',
 };
 
 /**

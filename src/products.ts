@@ -85,6 +85,44 @@ const PROFILES: Record<Product, ProductProfile> = {
   'dep-guard': managedProfile('dep-guard'),
   'vault-guard': managedProfile('vault-guard'),
   'intent-guard': managedProfile('intent-guard'),
+  gitleaks: {
+    product: 'gitleaks',
+    managed: false,
+    versionProbe: { argv: ['version'], pattern: /(\d+\.\d+\.\d+)/ },
+    // gitleaks writes its JSON report to a file, never to stdout.
+    output: { kind: 'report-file', flag: '--report-path', extension: '.json' },
+    // gitleaks exits 1 for a leak AND for an error by default. The umbrella
+    // passes --exit-code 3 (src/gate-runner.ts, gateArgs), so 3 is a leak and
+    // 1 is left meaning an error.
+    exit: { clean: [0], blocked: [3], nothingToScan: [] },
+    // A full-history scan on a large repository outlives the npm gates' two
+    // minutes; could-not-run on every pull request is the failure to avoid.
+    timeoutMs: 600_000,
+    minVersion: '8.19.0',
+    configFile: '.gitleaks.toml',
+    neutralConfig: '[extend]\nuseDefault = true\n',
+    remedy: () =>
+      'Install gitleaks 8.19 or later on the machine or runner before conductor runs (a pinned ' +
+      'release download with a checksum is the usual step), or disable the secrets-history gate ' +
+      'in .guardrails.yaml. conductor does not download it.',
+  },
+  'osv-scanner': {
+    product: 'osv-scanner',
+    managed: false,
+    versionProbe: { argv: ['--version'], pattern: /(\d+\.\d+\.\d+)/ },
+    // JSON goes to stdout and everything else to stderr.
+    output: { kind: 'stdout' },
+    // 128 is osv-scanner's "no package sources found": a repository with no
+    // lockfile has nothing to scan, which is clean, not an error.
+    exit: { clean: [0], blocked: [1], nothingToScan: [128] },
+    timeoutMs: 300_000,
+    minVersion: '2.0.0',
+    configFile: 'osv-scanner.toml',
+    neutralConfig: '',
+    remedy: () =>
+      'Install osv-scanner 2.x on the machine or runner before conductor runs, or disable the ' +
+      'vulnerabilities gate in .guardrails.yaml. conductor does not download it.',
+  },
 };
 
 export function profileFor(product: Product): ProductProfile {

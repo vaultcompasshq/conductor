@@ -240,6 +240,16 @@ describe('candidate table', () => {
     expect(CANDIDATES['dep-guard'].map((candidate) => candidate.name)).toEqual(['dep-guard']);
     expect(CANDIDATES['vault-guard'].map((candidate) => candidate.name)).toEqual(['vault-guard']);
   });
+
+  it('resolves each external tool under its one name, with the subcommand it scans with', () => {
+    expect(CANDIDATES.gitleaks).toEqual([{ name: 'gitleaks', prefix: ['git'], versionSafe: true }]);
+    expect(CANDIDATES['osv-scanner']).toEqual([
+      { name: 'osv-scanner', prefix: ['scan', 'source'], versionSafe: true },
+    ]);
+    expect(Object.keys(CANDIDATES).sort()).toEqual(
+      ['dep-guard', 'gitleaks', 'intent-guard', 'osv-scanner', 'vault-guard']
+    );
+  });
 });
 
 /**

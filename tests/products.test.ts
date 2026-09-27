@@ -30,6 +30,31 @@ describe('product profiles', () => {
     expect(NPM_VERSION_PATTERN.exec('usage: dep-guard')).toBeNull();
   });
 
+  it('marks the two external tools as not managed, with their own output, exit and config rules', () => {
+    const g = profileFor('gitleaks');
+    expect(g.managed).toBe(false);
+    expect(g.versionProbe).toEqual({ argv: ['version'], pattern: /(\d+\.\d+\.\d+)/ });
+    expect(g.output).toEqual({ kind: 'report-file', flag: '--report-path', extension: '.json' });
+    expect(g.exit).toEqual({ clean: [0], blocked: [3], nothingToScan: [] });
+    expect(g.timeoutMs).toBe(600_000);
+    expect(g.minVersion).toBe('8.19.0');
+    expect(g.configFile).toBe('.gitleaks.toml');
+    expect(g.neutralConfig).toBe('[extend]\nuseDefault = true\n');
+    expect(g.remedy(true)).toMatch(/install gitleaks/i);
+    expect(g.remedy(true)).not.toContain('npm install');
+
+    const o = profileFor('osv-scanner');
+    expect(o.managed).toBe(false);
+    expect(o.versionProbe).toEqual({ argv: ['--version'], pattern: /(\d+\.\d+\.\d+)/ });
+    expect(o.output).toEqual({ kind: 'stdout' });
+    expect(o.exit).toEqual({ clean: [0], blocked: [1], nothingToScan: [128] });
+    expect(o.timeoutMs).toBe(300_000);
+    expect(o.minVersion).toBe('2.0.0');
+    expect(o.configFile).toBe('osv-scanner.toml');
+    expect(o.neutralConfig).toBe('');
+    expect(o.remedy(false)).toMatch(/install osv-scanner/i);
+  });
+
   it('names the npm install and the action input in the remedy for a managed product', () => {
     expect(profileFor('dep-guard').remedy(false)).toContain('npm install -g @vaultcompass/dep-guard');
     expect(profileFor('dep-guard').remedy(true)).toContain('dep-guard-version');

@@ -124,6 +124,10 @@ export const CANDIDATES: Record<Product, Candidate[]> = {
     { name: 'intent-guard', prefix: ['check'], versionSafe: true },
     { name: 'intent-guard-check', prefix: [], versionSafe: false },
   ],
+  // The two external tools. Each has one name, and both version probes
+  // (gitleaks version, osv-scanner --version) print and exit without scanning.
+  gitleaks: [{ name: 'gitleaks', prefix: ['git'], versionSafe: true }],
+  'osv-scanner': [{ name: 'osv-scanner', prefix: ['scan', 'source'], versionSafe: true }],
 };
 
 export interface ResolveOptions {

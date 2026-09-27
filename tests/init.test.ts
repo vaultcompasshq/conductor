@@ -282,6 +282,28 @@ describe('what init writes', () => {
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: false/);
     expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
+    // The two external roles are listed too, off, with the line saying why.
+    expect(policy).toMatch(
+      /# not found in node_modules\/\.bin or on PATH\. Install gitleaks, then set enabled: true\.\n\s+secrets-history:\n\s+product: gitleaks\n\s+enabled: false\n\s+stage: ci/
+    );
+    expect(policy).toMatch(
+      /# not found in node_modules\/\.bin or on PATH\. Install osv-scanner, then set enabled: true\.\n\s+vulnerabilities:\n\s+product: osv-scanner\n\s+enabled: false\n\s+stage: ci/
+    );
+  });
+
+  it('enables an external gate it finds on PATH, and says conductor does not install it', () => {
+    const repo = gitRepo();
+    const bin = tempDir();
+    shim(bin, 'gitleaks');
+
+    init(repo, { pathValue: bin });
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(policy).toMatch(
+      /# credentials anywhere in git history, by gitleaks \(installed by you, not by conductor\)\n\s+secrets-history:\n\s+product: gitleaks\n\s+enabled: true/
+    );
+    expect(policy).toMatch(/vulnerabilities:\n\s+product: osv-scanner\n\s+enabled: false/);
+    expect(parsePolicy(policy, POLICY_FILE_NAME).gates['secrets-history']?.stage).toBe('ci');
   });
 
   it('writes each gate stage explicitly, so the file explains when each one runs', () => {

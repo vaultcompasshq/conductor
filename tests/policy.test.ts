@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import { gateArgs } from '../src/gate-runner.js';
 import {
+  DEFAULT_STAGE_FOR_ROLE,
   GATE_ROLES,
   GATE_STAGES,
   POLICY_FILE_NAME,
@@ -34,7 +35,30 @@ describe('policy file', () => {
   });
 
   it('keys gates by role, not by product', () => {
-    expect(GATE_ROLES).toEqual(['dependencies', 'secrets', 'intent']);
+    expect(GATE_ROLES).toEqual(['dependencies', 'secrets', 'intent', 'secrets-history', 'vulnerabilities']);
+  });
+
+  it('maps the two external roles to their tools and defaults them to the ci stage', () => {
+    expect(PRODUCT_FOR_ROLE['secrets-history']).toBe('gitleaks');
+    expect(PRODUCT_FOR_ROLE['vulnerabilities']).toBe('osv-scanner');
+    expect(DEFAULT_STAGE_FOR_ROLE['secrets-history']).toBe('ci');
+    expect(DEFAULT_STAGE_FOR_ROLE['vulnerabilities']).toBe('ci');
+  });
+
+  it('parses a policy that names both external gates', () => {
+    const policy = parsePolicy(
+      ['version: 1', 'gates:', '  secrets-history:', '    product: gitleaks', '  vulnerabilities:', '    product: osv-scanner', ''].join('\n'),
+      POLICY_FILE_NAME
+    );
+    expect(policy.gates['secrets-history']?.product).toBe('gitleaks');
+    expect(policy.gates['secrets-history']?.stage).toBe('ci');
+    expect(policy.gates.vulnerabilities?.product).toBe('osv-scanner');
+  });
+
+  it('still rejects a product in the wrong role for the new roles', () => {
+    expect(() =>
+      parsePolicy(['version: 1', 'gates:', '  secrets-history:', '    product: vault-guard', ''].join('\n'), POLICY_FILE_NAME)
+    ).toThrow(/secrets-history/);
   });
 
   it('parses a minimal policy and keeps the declared enabled flags', () => {
@@ -346,10 +370,17 @@ describe('the reserved option list against the flags the umbrella writes', () =>
     // The umbrella passes --paths, and a --base would be resolved against a
     // --project that may be a temporary directory with no repository in it.
     'intent-guard': ['base'],
+    // The umbrella writes every reserved flag for the two external tools.
+    gitleaks: [],
+    'osv-scanner': [],
   };
 
+  // TEMPORARY: gateArgs for the two external roles lands in the next task of
+  // the external-gates plan, and this filter is removed there.
+  const WIRED_ROLES = GATE_ROLES.filter((role) => role !== 'secrets-history' && role !== 'vulnerabilities');
+
   it('reserves every flag the umbrella writes, which is the direction that can hurt', () => {
-    for (const role of GATE_ROLES) {
+    for (const role of WIRED_ROLES) {
       const product = PRODUCT_FOR_ROLE[role];
       const reserved = new Set(RESERVED_OPTIONS[product]);
       const unreserved = [...flagsWritten(role)].filter((flag) => !reserved.has(flag)).sort();
@@ -358,7 +389,7 @@ describe('the reserved option list against the flags the umbrella writes', () =>
   });
 
   it('reserves nothing else without a stated reason', () => {
-    for (const role of GATE_ROLES) {
+    for (const role of WIRED_ROLES) {
       const product = PRODUCT_FOR_ROLE[role];
       const written = flagsWritten(role);
       const extra = RESERVED_OPTIONS[product].filter((key) => !written.has(key)).sort();
