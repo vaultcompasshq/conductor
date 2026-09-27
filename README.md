@@ -88,12 +88,28 @@ required.
    ```
 
    which writes `.guardrails.yaml` with every gate listed and only the ones
-   it found switched on, one pre-commit hook running every enabled gate
-   whose stage is `commit`, and `.guardrails/manifest.json`, the record init
-   reads back on a later `--revert`.
+   it found switched on, and `.guardrails/manifest.json`, the record init
+   reads back on a later `--revert`. **It writes no pre-commit hook unless
+   you ask for one:**
+
+   ```
+   conductor init --hook
+   ```
+
+   adds one pre-commit hook on top of that, running every enabled gate whose
+   stage is `commit`. A CI-only adopter that never runs conductor locally can
+   stop at the first `conductor init`, with no hook at all.
+
+   **`.git/hooks` is never part of a clone**, so a hook one checkout has does
+   not follow a teammate's clone, or a fresh clone of your own: each of those
+   needs its own `conductor init --hook`. A `prepare` script in
+   `package.json` (`"prepare": "conductor init --hook"`) runs that on every
+   `npm install`, including the one a fresh clone does, so nobody has to
+   remember it by hand.
 
    **`.guardrails/manifest.json` records the absolute path on the machine
-   that ran `init`**, for the hook and for the policy file alike, and
+   that ran `init`**, for the hook, when there is one, and for the policy
+   file alike, and
    conductor does not add a `.gitignore` entry for it. That path is specific
    to your checkout, so do not commit the file: add
    `.guardrails/manifest.json` to your own `.gitignore` today. The file
@@ -299,24 +315,42 @@ that gate, for pointing at a build that is not installed anywhere.
 
 ## Commands
 
-`conductor init` writes the policy file, one pre-commit hook, and
-`.guardrails/manifest.json`, the record `--revert` reads back later. The
-manifest currently records absolute machine paths rather than repo-relative
-ones (see "Adopting conductor" above); do not commit it.
+`conductor init` writes the policy file and `.guardrails/manifest.json`, the
+record `--revert` reads back later. The manifest currently records absolute
+machine paths rather than repo-relative ones (see "Adopting conductor"
+above); do not commit it.
 
+- `--hook` also writes one pre-commit hook running every enabled gate whose
+  stage is `commit`. Without it, init writes only the policy file and the
+  manifest: no hook, and none of the hook-manager detection below runs
+  either. `.git/hooks` is never part of a clone, so a hook one checkout has
+  does not follow a teammate's clone, or a fresh clone of your own; each
+  needs its own `conductor init --hook`, or a `package.json` `prepare`
+  script that runs it on every install. `--revert` still removes a hook a
+  previous `--hook` run left behind, whether or not this invocation passes
+  `--hook` itself.
 - `--dry-run` prints every file it would write or change and writes nothing.
 - `--revert` removes exactly what a previous init wrote, and nothing else.
   A file changed since init is reported and left alone.
 - `--adopt` replaces one gate's own pre-commit hook with the umbrella hook.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
-  does not recognise is never replaced, with or without `--adopt`.
+  does not recognise is never replaced, with or without `--adopt`. Only
+  meaningful together with `--hook`; without it, init errors rather than
+  silently ignoring the flag, because there is no hook for it to act on.
 - `--force` acts on a file **conductor itself wrote** and that has changed
   since: on its own it replaces a managed hook somebody has edited, and with
   `--revert` it removes one, restoring an adopted hook if there was one. It
   never overrides a foreign-hook or gate-hook refusal, with or without
   `--adopt`: those hooks were never conductor's, and no flag here turns
-  somebody else's file into one this tool may overwrite.
+  somebody else's file into one this tool may overwrite. Like `--adopt`,
+  only meaningful together with `--hook` on an init (not on a `--revert`);
+  without it, init errors.
+
+The rest of this section, on hook managers already wired into the
+repository, applies only when `--hook` is given: none of it is consulted,
+and none of it can block the policy file from being written, on a plain
+`conductor init`.
 
 Init recognises the hook manager already wired into the repository. husky is
 redirected to the tracked hook it maintains rather than the generated

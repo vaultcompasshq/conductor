@@ -1457,8 +1457,22 @@ level, naming the role and the flag) and 171.
 
 ## The hook: one hook, one command, one exit code
 
-`conductor init` writes exactly one pre-commit hook, and it runs the
-umbrella once rather than three gates (src/init.ts:467-548). It runs
+UPDATED (issue #48, spec decision 6): `conductor init` writes no pre-commit
+hook by default. `--hook` opts in, and everything below this paragraph is
+about what happens once it is given. Without `--hook`, planInit skips hook
+detection and hook writing entirely (src/init.ts, the `wantsHook` branch in
+`planInit`) and writes only the policy file and the manifest; `--adopt` and
+`--force` on an init with no `--hook` are refused with `flag-requires-hook`
+rather than silently ignored, because both flags are about the hook alone.
+`--revert` is unaffected by this flag: it still removes a hook a previous
+`--hook` run wrote, whether or not the `--revert` invocation itself carries
+`--hook`. This exists because `.git/hooks` is never part of a clone, so a
+hook written unconditionally could not reach a second contributor's checkout
+regardless, and every CI-only adopter that never wanted a local hook got one
+it never asked for (spec section 2.2).
+
+When `--hook` IS given, `conductor init` writes exactly one pre-commit hook,
+and it runs the umbrella once rather than three gates (src/init.ts). It runs
 `conductor run --staged --stage commit`, not every stage: a pre-commit
 hook IS the commit stopping point, and running the intent gate's ceremony
 there is what makes a team switch the hook off.

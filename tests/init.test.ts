@@ -217,8 +217,12 @@ const PRE_COMMIT_FRAMEWORK_GENERATED = [
   '',
 ].join('\n');
 
+// `hook: true` by default, because almost every test in this file is about
+// hook behaviour and predates --hook being opt-in. The opt-in default itself
+// is covered by the "init without --hook" describe block below, which
+// overrides it explicitly.
 function init(cwd: string, options: Record<string, unknown> = {}) {
-  const opts = { cwd, pathValue: '', ...options } as Parameters<typeof planInit>[0];
+  const opts = { cwd, pathValue: '', hook: true, ...options } as Parameters<typeof planInit>[0];
   const plan = planInit(opts);
   return applyInit(plan, opts);
 }
@@ -361,6 +365,108 @@ describe('what init writes', () => {
     const result = init(tempDir());
     expect(result.ok).toBe(false);
     expect(result.conflicts[0].reason).toBe('not-a-git-repository');
+  });
+});
+
+// The hook is opt-in (issue #48, spec decision 6): a fresh `conductor init`
+// writes the policy file and the manifest, and nothing under .git/hooks,
+// unless --hook is given. .git/hooks is never part of a clone, so writing one
+// unconditionally is a promise init cannot keep past the first checkout, and
+// every CI-only adopter that never wanted a local hook got one anyway.
+describe('init without --hook', () => {
+  it('writes the policy file and the manifest, and no hook at all', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.hookRequested).toBe(false);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('prints one line saying no hook was written and how to add one', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false });
+    const rendered = renderInitHuman(result);
+
+    expect(rendered.trimEnd().split('\n').pop()).toMatch(/^No pre-commit hook was written/);
+    expect(rendered).toMatch(/conductor init --hook/);
+  });
+
+  it('--dry-run reflects the same: no hook is planned and the same line prints', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false, dryRun: true });
+    const rendered = renderInitHuman(result);
+
+    expect(result.hookPath).toBe('');
+    expect(result.actions.some((action) => action.kind === 'write' && action.path.includes('hook'))).toBe(
+      false
+    );
+    expect(rendered.trimEnd().split('\n').pop()).toMatch(/^No pre-commit hook was written/);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('is not blocked by a hook conflict that would refuse a --hook run', () => {
+    // A repository wired for husky gets its policy file exactly as readily
+    // as one with nothing wired at all, because none of that hook-manager
+    // detection runs when no hook was asked for.
+    const repo = huskyRepoWithGateHook();
+
+    const result = init(repo, { hook: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
+  });
+
+  it('--adopt without --hook errors clearly rather than silently doing nothing', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false, adopt: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].reason).toBe('flag-requires-hook');
+    expect(result.conflicts[0].guidance).toMatch(/--adopt only makes sense together with --hook/);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('--force without --hook errors clearly rather than silently doing nothing', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false, force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('flag-requires-hook');
+    expect(result.conflicts[0].guidance).toMatch(/--force only makes sense together with --hook/);
+  });
+
+  it('--revert still removes a hook a previous --hook run wrote', () => {
+    const repo = gitRepo();
+    init(repo, { hook: true });
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('with --hook, still writes the hook exactly as before', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.hookRequested).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
+    const rendered = renderInitHuman(result);
+    expect(rendered).toMatch(/Note: the pre-commit hook uses/);
+    expect(rendered).not.toMatch(/No pre-commit hook was written/);
   });
 });
 
@@ -2167,6 +2273,7 @@ describe('a crafted manifest cannot escape the repository', () => {
       conflicts: [],
       hookPath: '',
       hookManager: 'native' as const,
+      hookRequested: false,
       repoRoot: repo,
       adoptedFrom: null,
       writes: [{ path: outside, content: 'not ours\n', executable: false, kind: 'policy' as const }],

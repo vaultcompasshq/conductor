@@ -315,21 +315,27 @@ export function buildProgram(): Command {
 
   program
     .command('init')
-    .description(
-      'Write the policy file and one pre-commit hook that runs the commit-stage gates.'
-    )
+    .description('Write the policy file. Add --hook for a pre-commit hook running the commit-stage gates.')
     .option('--dry-run', 'print every file that would be written or changed, and write nothing')
-    .option('--adopt', "replace a gate's own pre-commit hook with the umbrella hook")
+    .option(
+      '--hook',
+      'also write a pre-commit hook running the commit-stage gates. Without it, only the policy ' +
+        'file and the manifest are written. .git/hooks is never part of a clone, so a second ' +
+        'clone needs its own "conductor init --hook".'
+    )
+    .option('--adopt', "replace a gate's own pre-commit hook with the umbrella hook (needs --hook)")
     .option('--revert', 'remove exactly what a previous init wrote')
     .option(
       '--force',
-      'act on a file that has changed since init wrote it: replace a managed hook somebody has edited, or with --revert remove one and restore any adopted hook'
+      'act on a file that has changed since init wrote it: replace a managed hook somebody has ' +
+        'edited (needs --hook), or with --revert remove one and restore any adopted hook'
     )
     .option('--json', 'print the result as JSON')
     .exitOverride()
     .action(
       (options: {
         dryRun?: boolean;
+        hook?: boolean;
         adopt?: boolean;
         revert?: boolean;
         force?: boolean;
@@ -362,6 +368,7 @@ export function buildProgram(): Command {
         const initOptions = {
           ...shared,
           ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+          ...(options.hook === undefined ? {} : { hook: options.hook }),
           ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
           ...(options.force === undefined ? {} : { force: options.force }),
         };

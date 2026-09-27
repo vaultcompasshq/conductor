@@ -14,6 +14,17 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- **Behaviour change:** `conductor init` no longer writes a pre-commit hook
+  by default. It writes only `.guardrails.yaml` and the manifest, and prints
+  one line saying no hook was written and how to add one. Pass `--hook` to
+  get the previous behaviour. `--adopt` and `--force` now error when given
+  without `--hook` on an init, rather than being silently ignored, since both
+  are entirely about the hook. `--revert` is unaffected: it still removes a
+  hook a previous `--hook` run wrote. `.git/hooks` is never part of a clone,
+  so writing one unconditionally could never reach a second contributor's
+  checkout anyway; the README now documents re-running
+  `conductor init --hook` per clone, or wiring it into a `prepare` script
+  (issue #48).
 - On a pull-request run, the gate runner now also passes `--base` to
   dep-guard, pointing at the same ref as `--trust-base`. Before this,
   dep-guard only ever received `--trust-base` from the umbrella, so every
