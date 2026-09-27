@@ -155,7 +155,7 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.4.7
+   conductor 0.5.0
    conductor run: 2 gate(s), 1 finding(s)
 
    dependencies  dep-guard 0.2.1  exit 0  251ms  via dep-guard on path
@@ -967,7 +967,7 @@ jobs:
         with:
           node-version: '22.11.0'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.4.7
+        uses: vaultcompasshq/conductor@v0.5.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1016,7 +1016,7 @@ jobs:
       # pinned below.
       - run: pnpm install --frozen-lockfile
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.4.7
+        uses: vaultcompasshq/conductor@v0.5.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These four
@@ -1027,7 +1027,7 @@ jobs:
           # request of their own. Forward only on a pull request: the action
           # refuses a pin below what its tag ships, and the four lines can be
           # left out entirely to take that tag's own versions.
-          conductor-version: 0.4.7
+          conductor-version: 0.5.0
           dep-guard-version: 0.7.0
           vault-guard-version: 1.8.0
           intent-guard-version: 1.5.2
@@ -1122,7 +1122,7 @@ jobs:
           node-version: '22.11.0'
       - id: conductor
         timeout-minutes: 5
-        uses: vaultcompasshq/conductor@v0.4.7
+        uses: vaultcompasshq/conductor@v0.5.0
         with:
           pr-comment: true
           advisory: true
@@ -1194,7 +1194,7 @@ step and add `pull-requests: write` to the job's `permissions`:
     steps:
       # ... checkout, pnpm, setup-node, install, as in the example above ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.4.7
+        uses: vaultcompasshq/conductor@v0.5.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1246,12 +1246,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.4.7
+        uses: vaultcompasshq/conductor@v0.5.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.4.7
+        uses: vaultcompasshq/conductor@v0.5.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
