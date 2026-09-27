@@ -715,8 +715,9 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
 // diff (--diff-merges=first-parent) so a secret added inside a merge is seen,
 // and under an Actions-style merge that shows a pull request's change twice:
 // in its own commit and in the merge. Entries sharing rule, file, line and
-// column collapse to the one with the earliest Date (the first seen when a
-// date is missing), and the other commits are listed in details.alsoIn.
+// column collapse to the one with the earliest Date (the last in report
+// order on a tie or a missing date, since git log lists newest first), and
+// the other commits are listed in details.alsoIn.
 
 export function normalizeGitleaks(
   raw: unknown,
@@ -778,10 +779,15 @@ export function normalizeGitleaks(
       byPlace.set(place, { finding, time, alsoIn: [] });
       return;
     }
-    const newer = !Number.isNaN(time) && !Number.isNaN(seen.time) && time < seen.time;
-    const dropped = newer ? seen.finding : finding;
+    // The later entry replaces the kept one unless both dates are known and
+    // it is strictly newer. So an earlier date wins, and on a tie or a
+    // missing date the LAST entry in report order wins: git log lists newer
+    // commits first, so the last is the oldest, never a synthetic merge.
+    const bothDated = !Number.isNaN(time) && !Number.isNaN(seen.time);
+    const replace = !bothDated || time <= seen.time;
+    const dropped = replace ? seen.finding : finding;
     const droppedCommit = dropped.details.commit;
-    if (newer) {
+    if (replace) {
       seen.finding = finding;
       seen.time = time;
     }

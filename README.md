@@ -690,7 +690,10 @@ extended file is never read; a head-side edit to one is a proposal, and an
 extended file the base does not have makes the gate could-not-run, naming
 it. gitleaks' log level is pinned at `info` and `log-level` is reserved,
 because conductor reads gitleaks' error lines to tell a failed scan from a
-clean one.
+clean one. Write the extend as a plain relative path in an `[extend]` table:
+a base `.gitleaks.toml` whose extend target is a symbolic link, or which
+writes the extend as an inline table or a quoted key, fails closed on every
+pull request until it is rewritten that way.
 
 **Local runs and `.gitattributes`.** On a pull request gitleaks scans the
 repository's git directory, where the head's `.gitattributes` is not read.

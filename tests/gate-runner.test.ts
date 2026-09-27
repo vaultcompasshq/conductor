@@ -885,6 +885,23 @@ describe('external gate exit semantics', () => {
     expect(out.findings).toEqual([]);
   });
 
+  it('strips ANSI colour codes from gitleaks stderr before it reaches the report or the gate-failed message', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      exit: 1,
+      stdout: '',
+      stderr: '\u001b[90m6:36PM\u001b[0m \u001b[31mFTL\u001b[0m \u001b[1munable to load gitleaks config\u001b[0m\n',
+    });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.stderr).toContain('FTL unable to load gitleaks config');
+    expect(out.stderr).not.toContain('\u001b');
+    expect(JSON.stringify(out.findings)).not.toContain('\\u001b');
+    expect(out.findings.some((f) => f.message.includes('unable to load gitleaks config'))).toBe(true);
+  });
+
   it('treats gitleaks exit 1 as an error, not a leak', () => {
     const bin = tempDir();
     stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', exit: 1, stdout: '', stderr: 'fatal: not a git repository' });

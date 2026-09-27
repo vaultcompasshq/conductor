@@ -1217,7 +1217,11 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     argv,
     binary,
     durationMs: Date.now() - started,
-    stderr: child.stderr ?? '',
+    // Colour codes stripped here, once, so neither the text report nor the
+    // gate-failed finding (which carries a summary of this into SARIF and a
+    // pull-request comment) shows escape sequences: gitleaks colours its log
+    // even when stderr is not a terminal.
+    stderr: stripAnsi(child.stderr ?? ''),
     // Carried on every return path below, the failures included: WHETHER
     // this gate was in pull-request mode is exactly as interesting when it
     // could not run as when it could, and the withheld reason is the only

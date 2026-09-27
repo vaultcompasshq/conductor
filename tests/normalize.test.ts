@@ -828,6 +828,24 @@ describe('gitleaks 8.30.1 normalization', () => {
     }
   });
 
+  it('on equal or missing dates keeps the LAST entry in report order, which git log lists oldest', () => {
+    // git log lists newer commits first, so the last entry is the oldest
+    // commit and never a synthetic merge made after it.
+    const original = (blocking as Array<Record<string, unknown>>)[0]!;
+    const merge = { ...original, Commit: 'b'.repeat(40) };
+    const tie = normalizeGitleaks([merge, original], '8.30.1', true).findings;
+    expect(tie).toHaveLength(1);
+    expect(tie[0]!.details.commit).toBe(original.Commit);
+    expect(tie[0]!.details.alsoIn).toEqual(['b'.repeat(40)]);
+
+    const undated = { ...original };
+    delete undated.Date;
+    const undatedMerge = { ...undated, Commit: 'c'.repeat(40) };
+    const missing = normalizeGitleaks([undatedMerge, undated], '8.30.1', true).findings;
+    expect(missing[0]!.details.commit).toBe(original.Commit);
+    expect(missing[0]!.details.alsoIn).toEqual(['c'.repeat(40)]);
+  });
+
   it('keeps leaks at different places apart', () => {
     const original = (blocking as Array<Record<string, unknown>>)[0]!;
     const elsewhere = { ...original, StartLine: 9, Commit: 'c'.repeat(40) };

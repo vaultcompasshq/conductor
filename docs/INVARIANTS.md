@@ -152,8 +152,11 @@ calls the acceptance criterion for the wave now runs, in the dogfood suite,
 against all three at once. The two external gates join it in 0.5.0 by a
 different mechanism, since neither tool has a `--trust-base`: see "External
 gates" at the end of this file. What is still open for them is listed there
-as KNOWN-OPEN: coverage limits and a local-run limit, none of them a way for
-a pull request to suppress its own finding.
+as KNOWN-OPEN: coverage limits and a local-run limit. One of them is a way
+for a pull request to silence the vulnerabilities gate, and it is visible
+rather than silent: rewriting a tracked lockfile to `{}` makes osv-scanner
+exit 128, which is reported as `conductor/lockfiles-empty` naming the file
+and treated as clean.
 
 1. KNOWN-OPEN: THE INTENT GATE'S IMPORTED-CONTRACT PATH IS OUTSIDE THE
    BOUNDARY, and this one is a HOLE rather than work in flight, so it is
@@ -3468,3 +3471,12 @@ Known open, each a limit rather than a bypass on a pull request:
    red, which fails closed rather than open.
 4. KNOWN-OPEN: on a LOCAL run a `.gitattributes` binary mark hides a file
    from gitleaks (see above); pull requests are protected.
+5. KNOWN-OPEN: a PULL REQUEST that rewrites a tracked lockfile to `{}`
+   silences the vulnerabilities gate for that lockfile: osv-scanner exits
+   128, reported as `conductor/lockfiles-empty` naming the file and treated
+   as clean. It is the one visible exception to "a pull request cannot
+   suppress its own finding", and the rewrite is in the diff.
+6. KNOWN-OPEN: a base `.gitleaks.toml` whose `[extend] path` target is a
+   symbolic link, or which writes the extend as an inline table or a quoted
+   key, fails closed on every pull request (`preparation-failed`, or a
+   missing file for gitleaks) until it is rewritten as a plain relative path.
