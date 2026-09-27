@@ -34,7 +34,7 @@ import {
 import type { CliOverrides, GateRole, GateStage, Policy } from './policy.js';
 import { refusedTrustBase, runAll } from './run.js';
 import type { RunTrustBase } from './run.js';
-import { policyDiffers, readPolicyAtRef, refuseTrustBaseRef } from './trust-base.js';
+import { headTreeEqualsBase, policyDiffers, readPolicyAtRef, refuseTrustBaseRef } from './trust-base.js';
 
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
@@ -255,6 +255,12 @@ function policyForRun(
       ref: trustBase,
       policyChanged: policyDiffers(baseText, headText),
       refusal: null,
+      // Computed AFTER refuseTrustBaseRef has already returned null, on the
+      // one shape that check accepts despite an identical tree: a merge
+      // commit whose first parent is this ref (issue #69). runAll reads this
+      // to run only the gates whose profile says readsHistory and to report
+      // every other enabled gate as tree-unchanged instead of spawning it.
+      treeUnchanged: headTreeEqualsBase(root, trustBase),
     },
   };
 }

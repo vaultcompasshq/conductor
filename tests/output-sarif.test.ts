@@ -47,7 +47,8 @@ function result(
   gates: GateOutcome[],
   deferred: RunResult['deferred'] = [],
   skipped: RunResult['skipped'] = [],
-  excluded: RunResult['excluded'] = []
+  excluded: RunResult['excluded'] = [],
+  treeUnchanged: RunResult['treeUnchanged'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -57,6 +58,7 @@ function result(
     deferred,
     skipped,
     excluded,
+    treeUnchanged,
     findings,
     trustBase: null,
     proposals: [],
@@ -206,6 +208,36 @@ describe('coverage statements are notifications rather than results', () => {
     expect(
       notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
     ).not.toContain('conductor/gate-excluded');
+  });
+
+  it('records a gate skipped because the head tree is unchanged, as a note beside the others (issue #69)', () => {
+    // Same discriminator again: the head tree matching the base's is a
+    // statement about this run's shape, not about anybody's code, so it is a
+    // notification and never a result.
+    const TREE_UNCHANGED = result(
+      [outcome({ role: 'secrets-history', product: 'gitleaks', exitCode: 0, findings: [] })],
+      [],
+      [],
+      [],
+      [{ role: 'dependencies', product: 'dep-guard' }]
+    );
+
+    expect(umbrellaResultIds(sarif(TREE_UNCHANGED))).not.toContain('conductor/tree-unchanged');
+    const entry = notificationsOf(sarif(TREE_UNCHANGED)).find(
+      (candidate) => (candidate.descriptor as Record<string, unknown>).id === 'conductor/tree-unchanged'
+    ) as Record<string, unknown>;
+
+    expect(entry).toBeDefined();
+    expect(entry.level).toBe('note');
+    expect((entry.message as Record<string, unknown>).text).toMatch(/dependencies/);
+    expect((entry.message as Record<string, unknown>).text).toMatch(/identical to the/);
+  });
+
+  it('says nothing about tree-unchanged when nothing was skipped that way', () => {
+    const log = sarif(result([outcome({ exitCode: 0, findings: [] })]));
+    expect(
+      notificationsOf(log).map((entry) => (entry.descriptor as Record<string, unknown>).id)
+    ).not.toContain('conductor/tree-unchanged');
   });
 
   it('moves gate-not-enforced out of results', () => {

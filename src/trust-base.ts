@@ -40,6 +40,30 @@
 //    on a pull_request event `github.sha` IS the merge commit, and what
 //    GitHub publishes as the merge ref carries the head branch's tree
 //    whenever the base has not moved since the fork.
+//
+//    ONE NARROW EXCEPTION to the tree rule, added for issue #69. When a pull
+//    request's net diff is empty -- a value committed and then backed out in
+//    the same pull request -- the merge ref GitHub builds has a tree
+//    byte-identical to the base's, and the refusal above would stop
+//    secrets-history (gitleaks) from running on exactly the shape it exists
+//    to catch: the value is gone from the tree but still in the history
+//    between the base and HEAD. The discriminator is FIRST-PARENT IDENTITY,
+//    not ancestry: GitHub always builds the merge ref with the base branch as
+//    the first parent and the pull request's own head as the second, so a
+//    trust base that resolves to HEAD's first parent is the base the merge
+//    ref was actually built from, while HEAD's second parent is the pull
+//    request's own branch -- also an ancestor of HEAD, also carrying the
+//    same tree, and exactly the ref this rule must keep refusing, because
+//    trusting it would put the policy back inside the tree being judged. An
+//    ancestry check cannot tell those two apart; first-parent identity can.
+//    The exception applies ONLY when HEAD has two or more parents (a real
+//    merge commit) and the ref resolves to the first one; every other
+//    equal-tree shape -- a non-merge HEAD, the second parent, any other
+//    ancestor -- keeps refusing exactly as before. And the exception does not
+//    change what a tree-reading gate is told: it changes only whether the
+//    RUN proceeds, so the caller can still learn the trees matched
+//    (`headTreeEqualsBase` below) and run only the gates whose input is
+//    history rather than the tree.
 
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -68,6 +92,49 @@ function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): str
 }
 
 /**
+ * HEAD's own parent commits, in order, or an empty list when they cannot be
+ * read.
+ *
+ * `git rev-list --parents -n 1 HEAD` prints one line, HEAD's own sha
+ * followed by each parent's, in order. The first entry is dropped here so
+ * this returns parents only: for an ordinary commit that is one entry, for a
+ * merge commit two or more, and GitHub's merge ref always puts the base
+ * branch first and the pull request's own head second.
+ */
+function headParents(repoRoot: string): string[] {
+  const child = spawnSync('git', ['rev-list', '--parents', '-n', '1', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (child.error !== undefined || child.status !== 0) {
+    return [];
+  }
+  const line = (child.stdout ?? '').trim();
+  if (line === '') {
+    return [];
+  }
+  return line.split(/\s+/).slice(1);
+}
+
+/**
+ * Whether HEAD's tree is byte-identical to the trust base's tree.
+ *
+ * Exported separately from `refuseTrustBaseRef` rather than folded into its
+ * return value, so that function's return type stays the simple `string |
+ * null` every other caller and test already reads. The one caller that needs
+ * this fact (`policyForRun` in cli.ts) calls it AFTER the refusal check has
+ * already passed, on the one shape that is accepted despite an identical
+ * tree: a merge commit whose first parent is the base. In that shape every
+ * tree-reading gate still has nothing to judge, and the caller uses this to
+ * decide which gates run.
+ */
+export function headTreeEqualsBase(repoRoot: string, ref: string): boolean {
+  const baseTree = resolveRev(repoRoot, ref, 'tree');
+  const headTree = resolveRev(repoRoot, 'HEAD', 'tree');
+  return baseTree !== null && headTree !== null && baseTree === headTree;
+}
+
+/**
  * Why this ref cannot be a trust base, or null when it can.
  *
  * A string rather than a thrown error, because the caller does not print it
@@ -80,6 +147,13 @@ function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): str
  * the umbrella never spawns a child at all on a base it has already decided
  * it cannot judge against, and it means the two gates give a user the same
  * answer to the same mistake.
+ *
+ * The identical-tree refusal carries ONE exception (issue #69): when HEAD is
+ * a merge commit and this ref is HEAD's first parent, this returns null
+ * rather than refusing, because that is precisely the shape GitHub's own
+ * merge ref takes on a pull request whose net diff is empty. See the header
+ * comment above and `headTreeEqualsBase` below, which is how the caller
+ * learns the trees matched even on this accepted path.
  */
 export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null {
   const base = resolveRev(repoRoot, ref, 'commit');
@@ -113,6 +187,16 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
   const baseTree = resolveRev(repoRoot, ref, 'tree');
   const headTree = resolveRev(repoRoot, 'HEAD', 'tree');
   if (baseTree !== null && headTree !== null && baseTree === headTree) {
+    // THE ONE EXCEPTION: HEAD is a real merge commit (two or more parents)
+    // and this ref resolves to HEAD's FIRST parent, which is the base
+    // GitHub's merge ref was actually built from. Checked by identity against
+    // `base` above, never by ancestry: HEAD's SECOND parent -- the pull
+    // request's own branch -- is an ancestor too and carries the same tree,
+    // and trusting it would be exactly the hole this rule closes.
+    const parents = headParents(repoRoot);
+    if (parents.length >= 2 && parents[0] === base) {
+      return null;
+    }
     return (
       `refusing "${ref}" as the trust base: it is a different commit from HEAD but carries an ` +
       `identical tree (${headTree}), so the policy would come from the tree being judged and ` +

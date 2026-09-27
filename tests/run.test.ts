@@ -874,3 +874,98 @@ describe('pull-request mode through a whole run', () => {
     expect(result.proposals).toEqual([]);
   });
 });
+
+describe('the equal-tree exception (issue #69)', () => {
+  /**
+   * dep-guard, vault-guard, intent-guard and osv-scanner are deliberately
+   * NOT stubbed onto this PATH. If the runner spawned any of them anyway --
+   * which is exactly the mistake this exception must not make, since a
+   * pull-request run with --trust-base and --base pointed at an
+   * equal-tree ref is dep-guard 0.8.0's own refusal case -- the missing
+   * binary would surface as a could-not-run gate, which the assertions
+   * below on result.gates and result.exitCode would catch.
+   */
+  function equalTreeRun(gitleaks: { exit: number; reportBody: string }) {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      reportFlag: '--report-path',
+      reportBody: gitleaks.reportBody,
+      exit: gitleaks.exit,
+      stdout: '',
+    });
+    return runAll(fivePolicy(), {
+      repoRoot: lockfileRepo(),
+      staged: false,
+      pathValue: bin,
+      tempRoot: tempDir(),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null, treeUnchanged: true },
+    });
+  }
+
+  it('runs only the history gate and reports every other enabled gate as tree-unchanged', () => {
+    const result = equalTreeRun({ exit: 0, reportBody: '[]' });
+
+    expect(result.gates).toHaveLength(1);
+    expect(result.gates[0].product).toBe('gitleaks');
+    expect(result.treeUnchanged.map((gate) => gate.product).sort()).toEqual([
+      'dep-guard',
+      'intent-guard',
+      'osv-scanner',
+      'vault-guard',
+    ]);
+    // Never a GateOutcome: nothing was spawned for these, so there is no
+    // exit code or binary to report, exactly like DeferredGate and
+    // ExcludedGate.
+    expect(result.treeUnchanged.every((gate) => 'role' in gate && 'product' in gate)).toBe(true);
+  });
+
+  it('takes the exit code from the history gate alone', () => {
+    const result = equalTreeRun({
+      exit: 3,
+      reportBody: readFileSync(path.join(FIXTURES, 'gitleaks-8.30.1-history-blocking.json'), 'utf8'),
+    });
+
+    expect(result.gates).toHaveLength(1);
+    expect(result.gates[0].product).toBe('gitleaks');
+    expect(result.exitCode).toBe(1);
+    expect(result.summary.blocking).toBeGreaterThan(0);
+  });
+
+  it('exits 0 when the history gate is clean, with the other four gates skipped', () => {
+    const result = equalTreeRun({ exit: 0, reportBody: '[]' });
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('does not skip anything outside the equal-tree shape, even in pull-request mode', () => {
+    // treeUnchanged: false (the ordinary pull-request case) must not trigger
+    // the skip. Every gate needs a stub here, unlike equalTreeRun above,
+    // precisely because all five are expected to run.
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD });
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', stdout: CLEAN_OSV_SCANNER, exit: 0 });
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      reportFlag: '--report-path',
+      reportBody: '[]',
+      exit: 0,
+      stdout: '',
+    });
+
+    const result = runAll(fivePolicy(), {
+      repoRoot: lockfileRepo(),
+      staged: false,
+      pathValue: bin,
+      tempRoot: tempDir(),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null, treeUnchanged: false },
+    });
+
+    expect(result.gates).toHaveLength(5);
+    expect(result.treeUnchanged).toEqual([]);
+  });
+});

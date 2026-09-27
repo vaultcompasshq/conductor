@@ -77,6 +77,22 @@ export interface ProductProfile {
    * materialised from the base ref and the tool is run from that directory.
    */
   followsConfigExtend: boolean;
+  /**
+   * Whether this gate's INPUT is git history rather than the tree being
+   * judged.
+   *
+   * True only for gitleaks. Every other gate here reads the tree (vault-guard
+   * and dep-guard scan files, intent-guard reads a diff of paths) or a
+   * lockfile in it (osv-scanner), so when the head tree is byte-identical to
+   * the trust base's -- issue #69's shape, a value committed and then backed
+   * out inside one pull request -- those gates have nothing to judge that the
+   * base ref did not already judge, and the umbrella skips them rather than
+   * reporting a clean scan of a change that is not there. gitleaks' report is
+   * about commits between the base and HEAD, not about either tree, so it is
+   * the one gate an equal tree does not blind: see `decideTrustBase` and the
+   * equal-tree branch in `runAll` (src/run.ts).
+   */
+  readsHistory: boolean;
 }
 
 /**
@@ -134,6 +150,7 @@ function managedProfile(product: Product): ProductProfile {
     stderrError: null,
     lockfileNames: null,
     followsConfigExtend: false,
+    readsHistory: false,
   };
 }
 
@@ -173,6 +190,11 @@ const PROFILES: Record<Product, ProductProfile> = {
     stderrError: /^\S+\s+ERR\s/,
     lockfileNames: null,
     followsConfigExtend: true,
+    // gitleaks reads git history (--log-opts), never the tree, which is
+    // exactly what makes it the one gate an equal-tree pull request does not
+    // blind (issue #69): the history between the base and HEAD still holds
+    // whatever was committed and backed out, even when the two trees match.
+    readsHistory: true,
   },
   'osv-scanner': {
     product: 'osv-scanner',
@@ -196,6 +218,9 @@ const PROFILES: Record<Product, ProductProfile> = {
     stderrError: null,
     lockfileNames: OSV_LOCKFILE_NAMES,
     followsConfigExtend: false,
+    // osv-scanner reads the tracked lockfiles it is handed, which are the
+    // tree being judged, not history.
+    readsHistory: false,
   },
 };
 

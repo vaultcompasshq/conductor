@@ -51,7 +51,8 @@ function result(
   exitCode: number,
   deferred: RunResult['deferred'] = [],
   skipped: RunResult['skipped'] = [],
-  excluded: RunResult['excluded'] = []
+  excluded: RunResult['excluded'] = [],
+  treeUnchanged: RunResult['treeUnchanged'] = []
 ): RunResult {
   const findings = gates.flatMap((gate) => gate.findings);
   return {
@@ -61,6 +62,7 @@ function result(
     deferred,
     skipped,
     excluded,
+    treeUnchanged,
     findings,
     trustBase: null,
     proposals: [],
@@ -937,6 +939,64 @@ describe('a run restricted with --gate', () => {
     expect(
       renderText(result([outcome({ exitCode: 0 })], 0), { verbose: true })
     ).not.toMatch(/excluded|--gate/);
+  });
+});
+
+describe('a gate skipped because the head tree is unchanged (issue #69)', () => {
+  const treeUnchanged: RunResult['treeUnchanged'] = [
+    { role: 'dependencies', product: 'dep-guard' },
+    { role: 'intent', product: 'intent-guard' },
+  ];
+
+  it('names the tree-unchanged gates and the reason, in the full report', () => {
+    // Same reasoning as deferred and excluded: a gate that is enabled and did
+    // not run has to be on screen, and the reason here is neither "later
+    // stage" nor "--gate left it out", so it needs its own line.
+    const text = renderText(
+      result([outcome({ role: 'secrets-history', product: 'gitleaks', exitCode: 0 })], 0, [], [], [], treeUnchanged),
+      { verbose: true }
+    );
+
+    expect(text).toMatch(/tree-unchanged/);
+    expect(text).toMatch(/dependencies/);
+    expect(text).toMatch(/intent/);
+    expect(text).toMatch(/identical to the base tree/);
+  });
+
+  it('does not dress it up as a gate that could not run', () => {
+    const text = renderText(
+      result([outcome({ role: 'secrets-history', product: 'gitleaks', exitCode: 0 })], 0, [], [], [], treeUnchanged),
+      { verbose: true }
+    );
+
+    expect(text).not.toMatch(/DID NOT RUN/);
+  });
+
+  it('names them on the one-line summary of a clean run too', () => {
+    const text = renderText(
+      result([outcome({ role: 'secrets-history', product: 'gitleaks', exitCode: 0 })], 0, [], [], [], treeUnchanged)
+    );
+
+    expect(text.trimEnd().split('\n')).toHaveLength(1);
+    expect(text).toMatch(/dependencies \(dep-guard\)/);
+    expect(text).toMatch(/intent \(intent-guard\)/);
+  });
+
+  it('says nothing about it when nothing was skipped this way', () => {
+    const text = renderText(result([outcome({ exitCode: 0 })], 0), { verbose: true });
+    expect(text).not.toMatch(/tree-unchanged/);
+  });
+
+  it('gives its own verdict when every enabled gate was tree-unchanged, rather than "none is enabled"', () => {
+    // A policy enabling only tree-reading gates, all skipped by the
+    // exception: result.gates is empty, but this is not the same state as
+    // nobody having enabled anything, and telling somebody to set
+    // enabled: true would be the wrong advice.
+    const text = renderText(result([], 0, [], [], [], treeUnchanged), { verbose: true });
+
+    expect(text).toMatch(/verdict: exit 0/);
+    expect(text).not.toMatch(/none is enabled/);
+    expect(text).toMatch(/identical to the base tree/);
   });
 });
 

@@ -661,6 +661,30 @@ judged while still reporting pull-request mode as on. Pass the base
 commit, which is HEAD. If the base branch has no `.guardrails.yaml` at all,
 the run has no rules and exits 2 rather than using the pull request's; the
 file the pull request adds decides what runs once it is on the base branch.
+
+**One narrow exception to the equal-tree refusal (issue #69).** When a pull
+request's net diff is empty -- a value committed and then backed out inside
+the same pull request -- the merge ref GitHub builds has a tree
+byte-identical to the base's, and the refusal above would stop
+secrets-history from running on exactly the shape it exists to catch: the
+value is gone from the tree but still in the history between the base and
+HEAD. So the refusal makes one exception, and only one: when HEAD is a real
+merge commit (two or more parents) and `--trust-base` resolves to HEAD's
+**first** parent, the run is not refused. First-parent identity is the
+discriminator, not ancestry, because GitHub always builds the merge ref with
+the base branch as the first parent and the pull request's own head as the
+second: a trust base resolving to HEAD's **second** parent is also an
+ancestor and also carries the same tree, and it is exactly the ref this rule
+must keep refusing. In the accepted shape the umbrella still does not judge
+the unchanged tree as if it were the change: it runs every enabled gate
+whose input is git history rather than the tree -- gitleaks today -- with its
+ordinary arguments (already scoped to `<base>..HEAD`), and every other
+enabled gate is reported as tree-unchanged rather than spawned: one line in
+the full report, a clause on the one-line summary, and a
+`conductor/tree-unchanged` notification in the SARIF log, never reaching the
+exit code. Every other equal-tree shape -- a non-merge HEAD, the second
+parent, any other ancestor -- keeps refusing exactly as before.
+
 That is why adopting conductor takes one merge before the gates can judge
 anything, and it is not an oversight: the policy file can name a program to
 run, so a run that read it from the pull request would let the pull request
