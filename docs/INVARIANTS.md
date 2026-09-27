@@ -1264,7 +1264,7 @@ unchanged"): the full-report line, the one-line summary clause, the verdict
 branch for an empty gate list, and the SARIF notification at note level,
 absent entirely when nothing was skipped this way.
 
-
+## The intent gate's own reasons are classified by prefix, and every prefix is a liability
 
 The intent gate can block for reasons that are neither a budget violation
 nor drift, and it pushes all of them into one `reasons` array with nothing

@@ -495,36 +495,46 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
     .flatMap((gate) => gate.findings)
     .filter((finding) => finding.blocking).length;
 
-  if (result.gates.length === 0 && result.deferred.length > 0) {
-    // Distinct from "none is enabled" below. A policy file with everything
-    // switched off and a stage with nothing to do at it are two different
-    // states, and telling somebody to set enabled: true is the wrong advice
-    // for the second one.
-    const names = result.deferred.map((gate) => `${gate.role} at stage ${gate.stage}`).join(', ');
-    return `verdict: exit 0, nothing ran at this stage: every enabled gate is deferred (${names}).`;
-  }
-  if (result.gates.length === 0 && result.treeUnchanged.length > 0) {
-    // A fourth distinct state, sitting beside deferred and skipped for the
-    // same reason: the gate IS on, but the head tree is identical to the
-    // trust base's, so there is nothing for it to judge (issue #69).
-    // Telling somebody to enable a gate here would be exactly the wrong fix.
-    const names = result.treeUnchanged.map((gate) => gate.role).join(', ');
-    return (
-      `verdict: exit 0, nothing was checked here: the head tree is identical to the base tree, ` +
-      `so there is no change for these gates to judge (${names}).`
-    );
-  }
-  if (result.gates.length === 0 && result.skipped.length > 0) {
-    // A third distinct state, and telling somebody to switch a gate on is
-    // wrong advice here too: the gate IS on, it ran, and it had nothing to
-    // check. What to do about that is NOT the same in both cases, which is
-    // why the clause comes from the skip reason rather than being written
-    // here: for a missing spec the fix is to write one, and for a waiver
-    // there is nothing to fix, because a person decided it.
-    const clauses = result.skipped
-      .map((gate) => `${gate.role} ${skipWording(gate.reason).verdict}`)
-      .join(', ');
-    return `verdict: exit 0, nothing was checked: ${clauses}.`;
+  if (
+    result.gates.length === 0 &&
+    (result.deferred.length > 0 || result.treeUnchanged.length > 0 || result.skipped.length > 0)
+  ) {
+    // Three distinct states can each leave result.gates empty, and a run can
+    // land in more than one of them at once: a stage that deferred one gate
+    // while another was tree-unchanged (issue #69) is a real shape, not a
+    // hypothetical, so this names EVERY one that applies rather than the
+    // first one found. Naming only "every enabled gate is deferred" when a
+    // tree-unchanged gate was also in the mix would be false: not every gate
+    // was deferred, some had nothing to judge for a different reason. All
+    // three are also distinct from "none is enabled" below, and each needs
+    // its own fix: set enabled: true is wrong for all three of them, since
+    // every gate named here IS enabled.
+    const clauses: string[] = [];
+    if (result.deferred.length > 0) {
+      // Never "every enabled gate is deferred" here: that claim is only true
+      // when nothing else in this branch fired, and a mix with a
+      // tree-unchanged or skipped gate makes it false.
+      const names = result.deferred.map((gate) => `${gate.role} at stage ${gate.stage}`).join(', ');
+      clauses.push(`deferred to a later stage (${names})`);
+    }
+    if (result.treeUnchanged.length > 0) {
+      // The head tree is identical to the trust base's, so there is nothing
+      // for these gates to judge (issue #69).
+      const names = result.treeUnchanged.map((gate) => gate.role).join(', ');
+      clauses.push(
+        `the head tree is identical to the base tree, so there is no change for these gates to judge (${names})`
+      );
+    }
+    if (result.skipped.length > 0) {
+      // What to do about this is NOT the same for every reason, which is why
+      // the clause comes from the skip reason rather than being written
+      // here: for a missing spec the fix is to write one, and for a waiver
+      // there is nothing to fix, because a person decided it.
+      clauses.push(
+        result.skipped.map((gate) => `${gate.role} ${skipWording(gate.reason).verdict}`).join(', ')
+      );
+    }
+    return `verdict: exit 0, nothing was checked: ${clauses.join('; ')}.`;
   }
   if (result.gates.length === 0) {
     // Exit 0 with an empty report is indistinguishable from a clean run at a

@@ -998,6 +998,31 @@ describe('a gate skipped because the head tree is unchanged (issue #69)', () => 
     expect(text).not.toMatch(/none is enabled/);
     expect(text).toMatch(/identical to the base tree/);
   });
+
+  it('names both dispositions when one gate is deferred and the rest are tree-unchanged', () => {
+    // secrets-history deferred to a later stage, every other enabled gate
+    // tree-unchanged: no gate ran, but "every enabled gate is deferred"
+    // would be false, since the rest were not deferred, they were
+    // tree-unchanged. The verdict must not pick one disposition and drop
+    // the other silently.
+    const text = renderText(
+      result(
+        [],
+        0,
+        [{ role: 'secrets-history', product: 'gitleaks', stage: 'ci' }],
+        [],
+        [],
+        treeUnchanged
+      ),
+      { verbose: true }
+    );
+
+    const last = text.trimEnd().split('\n').pop() as string;
+    expect(last).toMatch(/exit 0/);
+    expect(last).toMatch(/deferred/);
+    expect(last).toMatch(/identical to the base tree/);
+    expect(last).not.toMatch(/every enabled gate is deferred/);
+  });
 });
 
 describe('a run where every enabled gate was deferred', () => {
