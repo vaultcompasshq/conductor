@@ -210,6 +210,90 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
 }
 
 /**
+ * Why an explicit --trust-base cannot be honoured on a pull request, or null.
+ *
+ * Issue #58. The refusal above only refuses a ref that resolves to HEAD's own
+ * commit or to HEAD's own tree, which covers HEAD itself and an UNMOVED
+ * origin/<pr-branch>. Once the base branch has moved, origin/<pr-branch> no
+ * longer matches either test, so a same-repo pull request could set
+ * trust-base to its own branch, in its own workflow file, and have this
+ * package read .guardrails.yaml from the pull request after all -- at which
+ * point the pull request controls the whole policy, which is the one thing
+ * pull-request mode exists to prevent.
+ *
+ * action.yml's validate step now refuses an explicit trust-base input
+ * outright on a pull_request or pull_request_target event, the stronger line
+ * dep-guard's own base input took in 0.8.0. This function is the CLI's own
+ * line of defence for anyone invoking it directly in CI, bypassing that step.
+ *
+ * GITHUB_BASE_REF IS ACTIONS' OWN PULL-REQUEST SIGNAL: the base branch's
+ * NAME on a pull_request or pull_request_target event, and empty everywhere
+ * else -- a push, a schedule, workflow_dispatch, merge_group, a local run, or
+ * a platform that never sets it. When it is set, the given ref is accepted
+ * only when it resolves to the SAME COMMIT as origin/<githubBaseRef>, which
+ * is exactly what the composite action itself always passes
+ * (`--trust-base "origin/$GITHUB_BASE_REF"` in action.yml's gates step). So
+ * an ordinary pull-request run sees the given ref and the expected ref as the
+ * identical spelling and this returns null immediately, before
+ * refuseTrustBaseRef's own checks -- HEAD, and the equal-tree exception from
+ * issue #69/#73 -- ever run: this check is narrower than those and says
+ * nothing about HEAD or about tree equality, only about whether the given ref
+ * agrees with the one Actions says this run must use. A ref naming the pull
+ * request's own branch, or anything else that disagrees, is refused with both
+ * refs and both commits named.
+ *
+ * FAILS CLOSED when origin/<githubBaseRef> itself does not resolve, naming
+ * it: reachable on the default actions/checkout (fetch-depth: 1), which does
+ * not carry the base branch at all. The README already asks for
+ * fetch-depth: 0, and a checkout that does not carry the base branch is not a
+ * reason to skip the comparison.
+ *
+ * When the GIVEN ref does not resolve at all, this returns null rather than
+ * refusing: refuseTrustBaseRef is the function with its own sentence for an
+ * unresolvable ref, and repeating it here under a second name would only
+ * confuse which check actually fired.
+ *
+ * A no-op -- always null -- when githubBaseRef is undefined or empty, which
+ * is every push, schedule, workflow_dispatch, merge_group and local run.
+ */
+export function refuseTrustBaseForPullRequest(
+  repoRoot: string,
+  ref: string,
+  githubBaseRef: string | undefined
+): string | null {
+  if (githubBaseRef === undefined || githubBaseRef === '') {
+    return null;
+  }
+
+  const expectedRef = `origin/${githubBaseRef}`;
+  const expectedCommit = resolveRev(repoRoot, expectedRef, 'commit');
+  if (expectedCommit === null) {
+    return (
+      `cannot verify "${ref}" as the trust base: "${expectedRef}" does not resolve to a commit ` +
+      'in this repository, so there is nothing to compare it against. Nothing was checked. In ' +
+      'CI, fetch the base branch (actions/checkout with fetch-depth: 0) before running the gates.'
+    );
+  }
+
+  const givenCommit = resolveRev(repoRoot, ref, 'commit');
+  if (givenCommit === null) {
+    return null;
+  }
+
+  if (givenCommit === expectedCommit) {
+    return null;
+  }
+
+  return (
+    `refusing "${ref}" as the trust base: GITHUB_BASE_REF is set to "${githubBaseRef}", so this ` +
+    'run is a pull request, and on a pull request the trust base must be the base branch and ' +
+    `nothing else. "${ref}" resolves to ${givenCommit}, and "${expectedRef}" resolves to ` +
+    `${expectedCommit}, a different commit. Pass ${expectedRef} instead, or remove --trust-base ` +
+    'and let the caller derive it. Nothing was checked.'
+  );
+}
+
+/**
  * The policy file's contents at a ref, or null when that ref carries none.
  *
  * `git show`, never a checkout switch and never a read from the working

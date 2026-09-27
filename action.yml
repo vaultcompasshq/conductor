@@ -26,11 +26,15 @@ inputs:
       Leave it empty and, on a pull_request event, the action passes
       origin/$GITHUB_BASE_REF itself; on any other event it passes nothing and
       behaviour is unchanged. Set it to name the ref explicitly, for a
-      platform where GITHUB_BASE_REF is not set. There is deliberately no
-      value that turns pull-request mode off: base-ref judging is the floor
-      and not a knob, and on a pull_request event the workflow file itself
-      comes from the pull request's own ref, so an opt-out here would be
-      settable by the pull request it exists to judge.
+      platform where GITHUB_BASE_REF is not set. On a pull_request or
+      pull_request_target event this input is refused outright, in the
+      validate step: the workflow file is the pull request's own on that
+      event, so a value here that redirects the trust base is settable by the
+      thing it judges. There is deliberately no value that turns pull-request
+      mode off: base-ref judging is the floor and not a knob, and on a
+      pull_request event the workflow file itself comes from the pull
+      request's own ref, so an opt-out here would be settable by the pull
+      request it exists to judge.
     default: ''
   spec:
     description: >-
@@ -162,6 +166,8 @@ runs:
         # as the gates step below, which reads the same value for the same
         # event. See the comment on the gate itself for why it is declared.
         GITHUB_BASE_REF: ${{ github.base_ref }}
+        # Read here only to be refused on a pull request; see the check below.
+        TRUST_BASE: ${{ inputs.trust-base }}
       run: |
         set -eu
 
@@ -349,6 +355,46 @@ runs:
             echo "REMOVE the input and this cannot happen: the default is the version this action tag ships. Pinning FORWARD is still accepted on a pull request, on the assumption that a newer gate is at least as strict; the rule does not bound how far forward you pin." >&2
             exit 1
           fi
+        fi
+
+        # ON A PULL REQUEST, AN EXPLICIT trust-base INPUT IS REFUSED OUTRIGHT
+        # (issue #58).
+        #
+        # THE HOLE. refuseTrustBaseRef (src/trust-base.ts) refuses a ref that
+        # resolves to HEAD's own commit or to HEAD's own tree, which covers
+        # HEAD itself and an UNMOVED origin/<pr-branch>. Once the base branch
+        # has moved, origin/<pr-branch> no longer matches either test, so a
+        # same-repo pull request could set trust-base to its own branch, in
+        # its OWN workflow file, and have conductor read .guardrails.yaml from
+        # the pull request after all. At that point the pull request controls
+        # the whole policy, which is the one thing pull-request mode exists to
+        # prevent. dep-guard's own base input took this stronger line for
+        # exactly this reason (0.8.0): on a pull_request event an explicit
+        # value is refused outright rather than merely checked against HEAD.
+        # Same rule here.
+        #
+        # THE SAME EVENT TEST as the backward-pin rule above and as the gates
+        # step's own branch: GITHUB_BASE_REF non-empty, declared in THIS
+        # step's own env mapping from github.base_ref, so it cannot come from
+        # the workflow file even if the platform guarantee failed. See the
+        # comment on the backward-pin rule's own copy of this test for the
+        # two lines of defence behind it.
+        #
+        # OFF A pull_request OR pull_request_target EVENT -- push, schedule,
+        # workflow_dispatch, merge_group, or a platform where GITHUB_BASE_REF
+        # is not set at all -- this input keeps working exactly as before,
+        # since that is what it exists for: naming the ref explicitly
+        # somewhere GITHUB_BASE_REF is not set could never be a pull request
+        # this rule needs to refuse.
+        #
+        # THE FIX IS TO REMOVE THE INPUT, never to set it to some other value:
+        # the action already derives origin/$GITHUB_BASE_REF itself on this
+        # event, which is the base branch's own commit at the time the job
+        # runs and is exactly what pull-request mode requires.
+        if [ -n "${GITHUB_BASE_REF:-}" ] && [ -n "${TRUST_BASE:-}" ]; then
+          echo "conductor: the trust-base input may not be set on a pull_request or pull_request_target event. It was set to \"${TRUST_BASE}\"." >&2
+          echo "On this event the workflow file is the pull request's own, so an input that redirects the trust base is settable by the thing it judges. REMOVE the input: the action derives origin/\$GITHUB_BASE_REF itself." >&2
+          exit 1
         fi
 
     # UNCONDITIONAL, on push and on pull_request alike, so there is one code

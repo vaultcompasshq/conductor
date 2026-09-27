@@ -14,6 +14,26 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- **Security:** an explicit `trust-base` input is now refused outright on a
+  pull request, at two layers. `refuseTrustBaseRef` only refused a ref that
+  resolved to HEAD's own commit or to HEAD's own tree, which covers HEAD
+  itself and an unmoved `origin/<pr-branch>`; once the base branch had moved,
+  `origin/<pr-branch>` matched neither test, so a same-repo pull request could
+  set `trust-base` to its own branch, in its own workflow file, and have
+  conductor read `.guardrails.yaml` from the pull request after all, handing
+  the pull request the whole policy. Found in review of #53. dep-guard's own
+  base input took the stronger line for exactly this reason in 0.8.0: on a
+  `pull_request` event an explicit value is refused outright. action.yml's
+  validate step now does the same for `trust-base`, naming the value given and
+  the fix. The CLI gets the equivalent rule as defence in depth for anyone
+  invoking it directly in CI, bypassing that step: when `GITHUB_BASE_REF` is
+  set, `--trust-base` is accepted only when it resolves to the same commit as
+  `origin/$GITHUB_BASE_REF`, which is what the Action itself always passes, so
+  an ordinary pull-request run is unaffected (issue #58). **The one consumer
+  cost:** a workflow that set `trust-base` explicitly on a pull request must
+  remove the input; the Action already derives `origin/$GITHUB_BASE_REF`
+  itself on that event.
+
 - **Fixed:** a pull request whose net diff is empty (a value committed and
   then backed out inside the same pull request) built a merge ref whose tree
   was byte-identical to the base branch's, and the equal-tree refusal in

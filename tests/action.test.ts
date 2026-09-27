@@ -335,6 +335,49 @@ describe('action.yml enters pull-request mode', () => {
 });
 
 /**
+ * Issue #58: dep-guard's own base input took the stronger line for its base
+ * input in 0.8.0, refusing an explicit value outright on a pull_request
+ * event. conductor's own trust-base input now does the same, in the validate
+ * step -- modelled on the backward-pin rule above, same event test
+ * (GITHUB_BASE_REF non-empty), same accept-only-if-clean shape. Driven by
+ * running the real validate step's script, the same device the backward-pin
+ * suite uses, not by pattern-matching the YAML.
+ */
+describe('action.yml refuses an explicit trust-base input on a pull request', () => {
+  it(
+    'refuses it on a pull_request event, naming the event, the value given, and the fix',
+    () => {
+      // Mutation proof: dropping the `-n "${TRUST_BASE:-}"` half of the guard
+      // (always refusing on a pull_request event) turns the accepted
+      // "no input given" case below red; dropping the
+      // `-n "${GITHUB_BASE_REF:-}"` half turns the "off a pull_request event"
+      // case below red.
+      const run = runValidate({}, { GITHUB_BASE_REF: 'main', TRUST_BASE: 'refs/heads/feature/x' });
+
+      expect(run.status).toBe(1);
+      expect(run.stderr).toMatch(/trust-base/);
+      expect(run.stderr).toMatch(/pull_request/);
+      expect(run.stderr).toContain('refs/heads/feature/x');
+      expect(run.stderr).toMatch(/remove the input/i);
+      expect(run.stderr).toContain('origin/$GITHUB_BASE_REF');
+    }
+  );
+
+  it('accepts the same input off a pull_request event, where it exists for exactly this', () => {
+    const run = runValidate({}, { GITHUB_BASE_REF: '', TRUST_BASE: 'refs/heads/feature/x' });
+    expect(run.status).toBe(0);
+  });
+
+  it('does not refuse a pull_request event when no trust-base input was given at all', () => {
+    // The ordinary case: the action derives origin/$GITHUB_BASE_REF itself
+    // (see "action.yml enters pull-request mode" above), and this rule must
+    // never stand in the way of that.
+    const run = runValidate({}, { GITHUB_BASE_REF: 'main' });
+    expect(run.status).toBe(0);
+  });
+});
+
+/**
  * The base-ref fetch, run for real against a real (if tiny) git remote.
  *
  * A shallow checkout is what actions/checkout gives a consumer by default

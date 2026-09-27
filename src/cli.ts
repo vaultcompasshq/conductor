@@ -34,7 +34,13 @@ import {
 import type { CliOverrides, GateRole, GateStage, Policy } from './policy.js';
 import { refusedTrustBase, runAll } from './run.js';
 import type { RunTrustBase } from './run.js';
-import { headTreeEqualsBase, policyDiffers, readPolicyAtRef, refuseTrustBaseRef } from './trust-base.js';
+import {
+  headTreeEqualsBase,
+  policyDiffers,
+  readPolicyAtRef,
+  refuseTrustBaseForPullRequest,
+  refuseTrustBaseRef,
+} from './trust-base.js';
 
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
@@ -182,13 +188,25 @@ function inventoryFromHead(root: string, overrides: CliOverrides): Policy {
 function policyForRun(
   root: string,
   trustBase: string | undefined,
-  overrides: CliOverrides
+  overrides: CliOverrides,
+  githubBaseRef: string | undefined
 ): PolicyForRun {
   if (trustBase === undefined) {
     return { kind: 'policy', policy: applyCliOverrides(loadPolicy(root), overrides) };
   }
 
-  const refusal = refuseTrustBaseRef(root, trustBase);
+  // DEFENCE IN DEPTH, ISSUE #58. action.yml's validate step already refuses
+  // an explicit trust-base input outright on a pull_request event; this is
+  // the same rule for anyone invoking the CLI directly in CI, bypassing that
+  // step. Checked BEFORE refuseTrustBaseRef and deliberately narrower than
+  // it: it says nothing about HEAD or about tree equality, only about
+  // whether the given ref agrees with origin/<GITHUB_BASE_REF>, which is
+  // exactly what the composite action itself always passes. So on an
+  // ordinary pull-request run this returns null immediately and
+  // refuseTrustBaseRef runs its own checks unchanged, the equal-tree
+  // first-parent exception (issue #69/#73) included.
+  const pullRequestRefusal = refuseTrustBaseForPullRequest(root, trustBase, githubBaseRef);
+  const refusal = pullRequestRefusal ?? refuseTrustBaseRef(root, trustBase);
   if (refusal !== null) {
     return {
       kind: 'refused',
@@ -448,7 +466,7 @@ export function buildProgram(): Command {
             : { gates: parseRoles(options.gate) as GateRole[] }),
         };
         const stage = parseStage(options.stage);
-        const source = policyForRun(root, options.trustBase, overrides);
+        const source = policyForRun(root, options.trustBase, overrides, process.env.GITHUB_BASE_REF);
         const policy = source.kind === 'policy' ? source.policy : source.inventory;
         const format = parseFormat(options.format ?? policy.report.format);
 

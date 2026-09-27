@@ -456,7 +456,11 @@ proceeds normally without mentioning them.
   control input of the gates that support it. See "The pull-request trust
   boundary" below. `--base` and `--trust-base` are independent and a
   pull-request run passes both: `--base` decides which paths are judged,
-  `--trust-base` decides what they are judged by.
+  `--trust-base` decides what they are judged by. When `GITHUB_BASE_REF` is
+  set, an explicit `--trust-base` is accepted only when it resolves to the
+  same commit as `origin/$GITHUB_BASE_REF` (issue #58); anyone invoking the
+  CLI directly on a pull request, rather than through the Action, gets this
+  as its own refusal, named below.
 - `--spec <path>` names the spec the intent gate imports its contract from.
 - `--output <path>` writes the report to a file instead of to stdout, for a
   CI step that uploads it. One line still goes to stdout, because a job whose
@@ -647,6 +651,31 @@ one-line summary and on the verdict, with a line each under `--verbose` and a
 `conductor/control-change-proposed` notification each in the SARIF log. A
 reflow, a re-quote or an edited comment is not a proposal: the two files are
 compared as parsed documents.
+
+**An explicit `--trust-base` is refused outright on a pull request, at two
+layers (issue #58).** `refuseTrustBaseRef` above only refuses a ref that
+resolves to HEAD's own commit or to HEAD's own tree, which covers HEAD itself
+and an *unmoved* `origin/<pr-branch>`. Once the base branch has moved,
+`origin/<pr-branch>` no longer matches either test, so a same-repo pull
+request could set `trust-base` to its own branch, in its own workflow file,
+and have conductor read `.guardrails.yaml` from the pull request after all,
+at which point the pull request controls the whole policy. dep-guard's own
+base input took the stronger line for its base input in 0.8.0: on a
+`pull_request` event an explicit value is refused outright. Conductor now does
+the same, at two layers. **The Action's validate step** refuses an explicit
+`trust-base` input outright on a `pull_request` or `pull_request_target`
+event, naming the value given and the fix, which is to remove the input; see
+"The Action" below. **The CLI itself** is the defence in depth for anyone
+invoking it directly in CI, bypassing that step: when `GITHUB_BASE_REF` is
+set, an explicit `--trust-base` is accepted only when it resolves to the same
+commit as `origin/$GITHUB_BASE_REF`, which is exactly what the Action itself
+always passes, so an ordinary pull-request run is unaffected. A ref naming the
+pull request's own branch, or anything else that disagrees, is refused with
+both refs and both commits named, through the same could-not-run path as
+every other trust-base refusal: exit 2, the report leads with the reason, and
+nothing is checked. When `origin/$GITHUB_BASE_REF` itself does not resolve,
+this fails closed too, naming it, for the same reason the fetch-depth remedy
+below exists.
 
 **It fails closed.** A `--trust-base` that does not resolve is not a reason to
 fall back to the pull request's own file, because that fallback is the hole:
@@ -977,7 +1006,13 @@ rules it is judged by; a change to the rules shows as a proposal line and
 takes effect after merge. See "The pull-request trust boundary" above. On any
 other event it passes nothing and behaviour is unchanged. The `trust-base`
 input names the ref explicitly, for a platform where `GITHUB_BASE_REF` is not
-set.
+set. **On a `pull_request` or `pull_request_target` event this input is
+refused outright, in the validate step** (issue #58): on that event the
+workflow file is the pull request's own, so a value here that redirects the
+trust base is settable by the thing it judges, the same reasoning that
+already rules out an opt-out value for this input. The refusal names the
+value that was given and the fix, which is to remove the input: the action
+already derives `origin/$GITHUB_BASE_REF` itself on that event.
 
 There is deliberately **no input that turns pull-request mode off**.
 Base-ref judging is the floor rather than a knob, and on a `pull_request`
