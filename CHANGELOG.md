@@ -14,6 +14,33 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- **Added:** a `--project <dir>` option on `conductor init` and `conductor
+  run`. dep-guard, vault-guard and intent-guard each take a path or
+  `--project`, so a script can point any of them at a repository; conductor
+  took nothing, so the only way to run it against a directory was to change
+  into it first, which forces a `cd` compound onto every scripted call.
+  Found setting up the public proof repository as a first-time adopter
+  (issue #55). Omitting the flag is untouched on both commands: `run`
+  resolves the root from the current directory exactly as it always has, and
+  `init` and `init --revert` pass the current directory straight through to
+  their own existing repository-root discovery, which already reports a
+  non-repository as a structured conflict rather than throwing. Only an
+  EXPLICIT `--project <dir>` goes through new resolution: the value resolves
+  against the current directory when it is relative, and the repository root
+  is then discovered from the result with the same `git rev-parse
+  --show-toplevel` call `repoRoot` already made for the current directory,
+  so a subdirectory of a repository resolves to that repository's top level.
+  A path that does not exist, is not a directory, or is not inside a git
+  repository is a usage error naming the path and exits 2, never a silent
+  fall back to the current directory. From there on the resolved root is
+  threaded through explicitly exactly as it already was: nothing downstream
+  reads the working directory again, so the trust-base checks, the
+  node_modules/.bin skip on a pull-request run, the program-vetting rules,
+  and every child gate's own working directory are unaffected by where the
+  flag points, only by what the resolved root is.
+  The Action itself gains no new input: it always runs from the checkout it
+  is given, and this flag is for scripted and local use outside it.
+
 - **Security:** `refuseTrustBaseRef` only refused a `trust-base` ref that
   resolved to HEAD's own commit or to HEAD's own tree, which covers HEAD
   itself and an unmoved `origin/<pr-branch>`; once the base branch had moved,
