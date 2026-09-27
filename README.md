@@ -962,6 +962,15 @@ or the pull-request comment, which the Action always renders with
 `--verbose`), and, on an otherwise-clean run with neither, counted without
 their text in the one-line summary's own note count instead.
 
+**A prose-sourced constraint finding is never marked blocking, even when the
+run blocks for an unrelated reason.** intent-guard 1.6.0 caps a constraint
+whose source is one of those same prose rules files at advisory: a strong
+match is still reported, but it never raises the gate's own exit code. A run
+that blocks on scope creep alone still carries that capped finding in its
+report, and it is rendered as a non-blocking, lower-severity line in the text
+report and with `properties.blocking: false` in SARIF, rather than inheriting
+the run's own blocking flag the way every other drift finding does.
+
 ## The Action
 
 `action.yml` at the root is a composite action that runs the gates at the

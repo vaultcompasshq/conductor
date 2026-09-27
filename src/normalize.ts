@@ -517,6 +517,29 @@ function readIntentWarnings(raw: unknown): string[] {
 }
 
 /**
+ * intent-guard 1.6.0 (issue #34) caps a constraint finding at advisory when
+ * its `source` is a prose rules file (CLAUDE.md, AGENTS.md, GEMINI.md,
+ * cursor rules): a strong match is still reported, but it never raises
+ * `constraint_violation`, `criticalViolated`, or the gate's own exit code.
+ *
+ * `finding_details` carries no field saying so. `strength` is "strong" for a
+ * capped prose match exactly the same as an uncapped one, and the
+ * constraint's `source` is never carried onto the finding at all. The ONLY
+ * surviving signal is this literal prefix, which intent-guard's own drift.ts
+ * puts on the message for this one case.
+ *
+ * THIS IS NOT A SAFETY NET. Nothing in this repository detects an upstream
+ * rewording of that prefix: there is no test against the live binary, only
+ * a static fixture capture, so a wording change in a future intent-guard
+ * release would silently stop matching here and a capped finding would go
+ * back to rendering as blocking with no warning anywhere in this report or
+ * in CI. Filed upstream as intent-guard #114, asking for a machine-readable
+ * per-finding field so this can stop keying on message text; this constant
+ * is the interim measure until that lands, not a substitute for it.
+ */
+const ADVISORY_CONSTRAINT_PREFIX = 'advisory ';
+
+/**
  * The three ways the intent gate can block on the STATE of the contract
  * rather than on anything in the diff.
  *
@@ -692,6 +715,12 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
     const where = `drift.finding_details[${index}]`;
     const detail = needRecord(rawDetail, product, where);
     const category = needString(detail.category, product, `${where}.category`);
+    const message = needString(detail.message, product, `${where}.message`);
+
+    // See ADVISORY_CONSTRAINT_PREFIX. A capped finding never contributed to
+    // driftAction, so it must not inherit that action's blocking flag or
+    // severity the way every other drift finding here does (issue #34).
+    const advisoryCapped = category === 'constraint_violation' && message.startsWith(ADVISORY_CONSTRAINT_PREFIX);
 
     findings.push({
       schemaVersion: 1,
@@ -701,10 +730,10 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
       // rule id that contains a user's sentence is not a rule id. The full
       // value goes in details.
       ruleId: `intent-guard/drift.${category}`,
-      severity: DRIFT_SEVERITY[driftAction] ?? 'info',
+      severity: advisoryCapped ? 'low' : (DRIFT_SEVERITY[driftAction] ?? 'info'),
       severityIsDerived: true,
-      blocking: driftBlocks,
-      message: needString(detail.message, product, `${where}.message`),
+      blocking: advisoryCapped ? false : driftBlocks,
+      message,
       // No paths subject: `matched` here is "tokens or paths", so treating
       // it as a path list would sometimes point at a file that does not
       // exist. It stays in details, where it is not claiming to be a location.

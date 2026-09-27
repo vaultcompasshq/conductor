@@ -254,3 +254,38 @@ Two exit observations the runner depends on:
   --help for usage information.` on stderr, and exits **128**.
 - A `--config` path that does not exist prints `Failed to read config
   file` on stderr and exits **127**.
+
+## intent-guard 1.7.0 (advisory-capped constraint findings, issue #34)
+
+    intent-guard check --project . --paths src/billing/export.ts \
+      --signals "touched billing export path" --json
+
+Run against a throwaway project with a frozen, approved contract:
+`out_of_scope: ["billing export"]`, one critical constraint sourced from
+`CLAUDE.md` ("Never touch the billing export path"), and the one changed
+path above. This is the exact reproduction from issue #34.
+
+`intent-guard-1.7.0-check-advisory-capped.json` is that run (exit 1,
+`drift.action: soft_block`, score 71). It carries two drift findings: a
+`scope_creep` finding at `strength: "strong"` that alone accounts for the
+whole score and is genuinely what blocked the commit, and a
+`constraint_violation` finding, also `strength: "strong"`, whose message
+carries the literal `advisory ` prefix intent-guard 1.6.0 puts on a
+constraint capped because its source is a prose rules file. Both findings
+report the same `strength` and neither carries a `source` or `advisory`
+field: the message prefix is the only signal that the second one never
+raised `constraint_violation`, `criticalViolated`, or the exit code, which
+is the gap issue #34 is about. The normalizer treats a `constraint_violation`
+finding whose message starts with `advisory ` as never blocking, regardless
+of the run's own `drift.action`.
+
+`intent-guard-1.7.0-check-uncapped-constraint-blocking.json` is the same
+command against the same throwaway project with one line of the contract
+changed: the constraint's `source` is `user-stated` rather than `CLAUDE.md`.
+Same changed path, same signal, same match. The `constraint_violation`
+finding now carries no `advisory ` prefix ("critical constraint at risk: ..."
+rather than "advisory critical constraint at risk: ..."), and its category
+score of 90 shows it counting toward the drift score this time, unlike the
+capped run where `categories.constraint_violation` stayed 0. This is the
+fixture for the case the capped-finding fix must not touch: an uncapped
+constraint_violation finding in a run that blocks stays blocking.
