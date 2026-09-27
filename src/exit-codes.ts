@@ -5,7 +5,11 @@
 // third code, 2, for "could not run the checks at all"; the other two have
 // only 0 and 1, and both use 1 for a rejected config as well as for a real
 // finding. Taking a maximum would flatten dep-guard's distinction away and
-// would call a broken config a policy violation.
+// would call a broken config a policy violation. The two external gates
+// have their own numbers again (gitleaks is handed --exit-code 3 for a
+// leak, osv-scanner uses 128 for nothing to scan); the gate runner reads
+// each child's exit through that product's profile (src/products.ts) before
+// anything reaches this file.
 //
 //   2  an enabled gate could not run: its binary is missing, it exited 2,
 //      it was rejected its own config, or its output could not be parsed.

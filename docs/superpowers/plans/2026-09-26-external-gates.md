@@ -86,7 +86,7 @@ The `guardrails-family` shared README block (README.md lines 32 to 46) is kept b
   ```
 - Consumes: `Product` from `src/policy.ts`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // tests/products.test.ts
@@ -122,12 +122,12 @@ describe('product profiles', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --dir <worktree> test -- tests/products.test.ts 2>&1 | tail -20`
 Expected: FAIL, cannot find module `../src/products.js`.
 
-- [ ] **Step 3: Write `src/products.ts`**
+- [x] **Step 3: Write `src/products.ts`**
 
 Read `missingGateRemedy` at `src/gate-runner.ts:572-588` first and move its two sentences verbatim into the managed remedy so the wording does not drift.
 
@@ -204,7 +204,7 @@ export function profileFor(product: Product): ProductProfile {
 
 If the existing `missingGateRemedy` wording differs from the two sentences above, use the existing wording; the test asserts substrings only.
 
-- [ ] **Step 4: Point `versionProbeFor` and `probeVersion` at the profile**
+- [x] **Step 4: Point `versionProbeFor` and `probeVersion` at the profile**
 
 In `src/resolve.ts` `versionProbeFor` (lines 236-260): keep the `versionSafe` guard for the candidate, and when it is safe return `{ command, argv: [...profileFor(gate.product).versionProbe!.argv] }`. If the profile probe is null, return null.
 
@@ -224,12 +224,12 @@ Replace the body of `missingGateRemedy(product, skipNodeModules, skipped)` with 
 
 Replace `options.timeoutMs ?? 120_000` at `:665` with `options.timeoutMs ?? profileFor(gate.product).timeoutMs`.
 
-- [ ] **Step 5: Run the whole suite to prove no behaviour changed**
+- [x] **Step 5: Run the whole suite to prove no behaviour changed**
 
 Run: `pnpm --dir <worktree> test 2>&1 | tail -8`
 Expected: all previously passing suites pass; `tests/products.test.ts` passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git -C <worktree> add src/products.ts src/resolve.ts src/gate-runner.ts tests/products.test.ts
@@ -251,7 +251,7 @@ git -C <worktree> commit -m "Add per-product profiles and route version probe, t
 - Produces: `GATE_ROLES = ['dependencies', 'secrets', 'intent', 'secrets-history', 'vulnerabilities']`, `PRODUCTS = ['dep-guard', 'vault-guard', 'intent-guard', 'gitleaks', 'osv-scanner']`, `PRODUCT_FOR_ROLE['secrets-history'] === 'gitleaks'`, `PRODUCT_FOR_ROLE['vulnerabilities'] === 'osv-scanner'`, default stage `ci` for both.
 - Consumes: `ProductProfile` from Task 1.
 
-- [ ] **Step 1: Extend the pinned-set tests so they fail**
+- [x] **Step 1: Extend the pinned-set tests so they fail**
 
 In `tests/policy.test.ts` at the test "keys gates by role, not by product" (line 36) change the expected array to `['dependencies', 'secrets', 'intent', 'secrets-history', 'vulnerabilities']`. Add next to it:
 
@@ -313,12 +313,12 @@ it('marks the two external tools as not managed, with their own output, exit and
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts tests/products.test.ts 2>&1 | tail -30`
 Expected: FAIL on the role list, the unknown role, and the missing profiles (TypeScript will also fail to compile `PROFILES` once `PRODUCTS` grows; that is the next step).
 
-- [ ] **Step 3: Extend the policy model**
+- [x] **Step 3: Extend the policy model**
 
 `src/policy.ts`:
 
@@ -380,7 +380,7 @@ gitleaks: {
 },
 ```
 
-- [ ] **Step 4: Fix every exhaustive switch the compiler now flags**
+- [x] **Step 4: Fix every exhaustive switch the compiler now flags**
 
 Run `pnpm --dir <worktree> typecheck 2>&1 | tail -30`. Expected errors: `gateArgs` (gate-runner.ts:423), `normalizeFor` (gate-runner.ts:533), `CANDIDATES` (resolve.ts:113), `reservedReason` if written as a Record. For THIS task add only what compiles with today's behaviour: in `gateArgs` and `normalizeFor` add `case 'gitleaks': case 'osv-scanner': throw new Error('external gates are wired in a later task');` (Tasks 4 and 6 replace these). In `CANDIDATES` add:
 
@@ -391,12 +391,12 @@ gitleaks: [{ name: 'gitleaks', prefix: ['git'], versionSafe: true }],
 
 Note for `versionSafe`: gitleaks `version` and osv-scanner `--version` both print and exit without scanning; the implementer confirms this in Task 6 against the real binaries and records it in `tests/fixtures/README.md`.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts tests/products.test.ts tests/resolve.test.ts tests/init.test.ts 2>&1 | tail -30`
 Expected: policy and products PASS. `tests/resolve.test.ts:231-243` ("has exactly one candidate for the two gates that were never renamed") may still pass; if a test asserts the candidate table has exactly three keys, extend it to five with the two new single-candidate entries. `tests/init.test.ts`: the rendered policy now has two more roles; update the expected rendering to include them as "not found" lines when the test environment has no gitleaks or osv-scanner on PATH, and add one case with a stubbed `gitleaks` on PATH showing the role rendered as found.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git -C <worktree> add src/policy.ts src/products.ts src/init-policy.ts src/resolve.ts src/gate-runner.ts schema/guardrails.schema.json tests/policy.test.ts tests/products.test.ts tests/resolve.test.ts tests/init.test.ts
@@ -423,11 +423,11 @@ git -C <worktree> commit -m "Add the secrets-history and vulnerabilities roles f
   ```
 - Consumes: nothing new.
 
-- [ ] **Step 1: Obtain both real binaries into the worktree, not the system**
+- [x] **Step 1: Obtain both real binaries into the worktree, not the system**
 
 Download the pinned releases into `<worktree>/.local/bin` (gitignored). Use WebFetch on `https://api.github.com/repos/gitleaks/gitleaks/releases/latest` and `https://api.github.com/repos/google/osv-scanner/releases/latest` for the tag, then `curl -sSL` the darwin arm64 (or the host's) asset and its checksum file into that directory, verify with `shasum -a 256 -c`, `chmod +x`. Record the exact versions; they become `<ver>` in the fixture names. If a download is refused by the harness, stop and report; do not install with a package manager.
 
-- [ ] **Step 2: Capture gitleaks fixtures from a throwaway git repo**
+- [x] **Step 2: Capture gitleaks fixtures from a throwaway git repo**
 
 In the scratchpad create a git repo with two commits: the first adds `config.json` containing a synthetic Doppler-shaped token (the shape the proof repository used, since GitHub push protection is irrelevant here and gitleaks' generic rule catches it); the second removes the file. Run:
 
@@ -437,7 +437,7 @@ In the scratchpad create a git repo with two commits: the first adds `config.jso
 
 Record the exit code (expected 3). Copy the report to `tests/fixtures/gitleaks-<ver>-history-blocking.json`. Run the same against a repo with one clean commit; record exit 0 and copy the report (expected `[]`) to `-clean.json`. Run once more against a path that is not a git repo and record the exit code and whether a report file was written; this is the error case Task 5 depends on. Also run `<bin>/gitleaks version` and record the exact stdout line.
 
-- [ ] **Step 3: Capture osv-scanner fixtures**
+- [x] **Step 3: Capture osv-scanner fixtures**
 
 In the scratchpad create a directory with a `package-lock.json` (or `pnpm-lock.yaml`) resolving `nanoid@5.0.9`, which had open advisories on 2026-09-26 (the proof repository hit them). Run:
 
@@ -447,11 +447,11 @@ In the scratchpad create a directory with a `package-lock.json` (or `pnpm-lock.y
 
 Record the exit code (expected 1); copy stdout to `tests/fixtures/osv-scanner-<ver>-blocking.json`. Repeat with a lockfile resolving only a clean package (expected 0) into `-clean.json`. Repeat against an empty directory and record the exit code (expected 128) and stdout. Run `<bin>/osv-scanner --version` and record the exact stdout line.
 
-- [ ] **Step 4: Record every capture in `tests/fixtures/README.md`**
+- [x] **Step 4: Record every capture in `tests/fixtures/README.md`**
 
 Add `## gitleaks <ver>` and `## osv-scanner <ver>` sections in the existing style: the command, the input, the exit code observed, the version-probe line observed, and the error-case observations.
 
-- [ ] **Step 5: Write the failing stub test**
+- [x] **Step 5: Write the failing stub test**
 
 ```ts
 // tests/stub-gate.test.ts
@@ -481,12 +481,12 @@ describe('stubGate for external tools', () => {
 });
 ```
 
-- [ ] **Step 6: Run to verify it fails**
+- [x] **Step 6: Run to verify it fails**
 
 Run: `pnpm --dir <worktree> test -- tests/stub-gate.test.ts 2>&1 | tail -20`
 Expected: FAIL, the stub prints the default version and ignores the report flag.
 
-- [ ] **Step 7: Extend the stub**
+- [x] **Step 7: Extend the stub**
 
 In `tests/helpers/stub-gate.ts`, extend `StubOptions` with the four fields above and change the generated sh script:
 
@@ -510,7 +510,7 @@ exit "$EXIT"
 
 Generate the script with the option values substituted as literals (the existing stub already substitutes `exit` and the sibling file paths; follow that mechanism rather than environment variables). Write `reportBody` to a `.report` sibling file. Export `CLEAN_GITLEAKS = '[]'` and `CLEAN_OSV_SCANNER = JSON.stringify({ results: [] })`.
 
-- [ ] **Step 8: Run and commit**
+- [x] **Step 8: Run and commit**
 
 Run: `pnpm --dir <worktree> test -- tests/stub-gate.test.ts 2>&1 | tail -10`
 Expected: PASS.
@@ -537,7 +537,7 @@ git -C <worktree> commit -m "Capture gitleaks and osv-scanner fixtures and teach
   osv-scanner argv (after `scan source`): `--format json --recursive [--config <configPath>] . ...passthrough`.
 - Consumes: Task 2 roles.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/policy.test.ts` in the gateArgs block:
 
@@ -583,12 +583,12 @@ describe('gateArgs for the external gates', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts 2>&1 | tail -30`
 Expected: FAIL, the placeholder `throw` from Task 2 fires.
 
-- [ ] **Step 3: Implement the two cases**
+- [x] **Step 3: Implement the two cases**
 
 In `src/gate-runner.ts`:
 
@@ -626,12 +626,12 @@ export function gateArgs(
 
 The `--trust-base` flag is never passed to an external tool; `trustBase` is used only to scope history and select the config, which is what Task 7 materialises.
 
-- [ ] **Step 4: Run, then run the reserved-flag drift guard**
+- [x] **Step 4: Run, then run the reserved-flag drift guard**
 
 Run: `pnpm --dir <worktree> test -- tests/policy.test.ts 2>&1 | tail -20`
 Expected: PASS, including "reserves every flag the umbrella writes" for the two new products (the guard calls `gateArgs` with a trust base; make sure the guard passes an `ExternalArgs` with a `reportPath` for gitleaks, or it will hit the throw; adjust the guard's call site to pass `{ reportPath: '/dev/null', configPath: '/dev/null' }` for every product, which the three npm gates ignore).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git -C <worktree> add src/gate-runner.ts tests/policy.test.ts
@@ -651,7 +651,7 @@ git -C <worktree> commit -m "Build gitleaks and osv-scanner argv: report file, m
 - Produces: `RunGateOptions.tempRoot?: string`; new `CouldNotRunReason` members `'gate-version-unsupported'` and `'report-missing'`; `runGate` classifies the child's exit through `profileFor(product).exit` before parsing; a `nothingToScan` exit yields `couldNotRun: null`, no findings, `exitCode: 0`, and a diagnostic `conductor/nothing-to-scan`.
 - Consumes: Tasks 1 to 4.
 
-- [ ] **Step 1: Write the failing runner tests**
+- [x] **Step 1: Write the failing runner tests**
 
 Add to `tests/gate-runner.test.ts` using the `gate(overrides)` helper and `stubGate`:
 
@@ -740,12 +740,12 @@ describe('external gate exit semantics', () => {
 
 `tempGitRepo()` is a helper that returns a fresh `git init` directory with one commit; if `tests/gate-runner.test.ts` already has one under another name, use it. `fixtureText(name)` reads `tests/fixtures/<name>` as a string. If the module mocks `node:child_process` differently, adapt the spy to the pattern the file already uses for `spawnSync`.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/gate-runner.test.ts 2>&1 | tail -40`
 Expected: FAIL for every new test.
 
-- [ ] **Step 3: Implement in `runGateInner`**
+- [x] **Step 3: Implement in `runGateInner`**
 
 Order inside `runGateInner`, after the binary is resolved and the version probed (around :752) and before the trust-base decision:
 
@@ -804,16 +804,16 @@ Delete the report file after reading it, inside a `try/finally`, unless `options
 
 In `src/run.ts` pass `tempRoot: options.tempRoot` into each `runGate` call (search for `runGate(` in run.ts).
 
-- [ ] **Step 4: Run the runner tests and the whole suite**
+- [x] **Step 4: Run the runner tests and the whole suite**
 
 Run: `pnpm --dir <worktree> test -- tests/gate-runner.test.ts 2>&1 | tail -30` then `pnpm --dir <worktree> test 2>&1 | tail -8`
 Expected: PASS. The npm-gate exit-2 test proves the old reading survived.
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
 Change `profile.exit.blocked.includes(exitCode)` to `exitCode === 1` and run the runner tests: the gitleaks exit-3 test must go RED. Restore. Change the `nothingToScan` branch to fall through and run: the osv exit-128 test must go RED. Restore. Record both in the commit message.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git -C <worktree> add src/gate-runner.ts src/run.ts tests/gate-runner.test.ts
@@ -830,7 +830,7 @@ git -C <worktree> commit -m "Classify external gate exits, read report files, ap
 - Produces: `export function normalizeGitleaks(raw: unknown, version: string | null, blocked: boolean): NormalizedGateOutput` and `normalizeFor(product, raw, version, context: { blocked: boolean })`.
 - Consumes: gitleaks report fields `RuleID, Description, File, StartLine, StartColumn, EndColumn, Commit, Author, Email, Date, Fingerprint, Entropy, Tags` (per the gitleaks README; verify against the captured fixture before writing assertions, and if a field name differs in the capture, the capture wins).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // tests/normalize.test.ts, new describe in the existing per-product style
@@ -878,12 +878,12 @@ describe('gitleaks <ver> normalization', () => {
 
 The `Secret` assertion holds only when the fixture was captured with `--redact` (Task 3 did); the redacted value is `REDACTED`, so assert the original planted token prefix is absent instead: keep the planted token in `tests/fixtures/README.md` and assert its first 8 characters never appear in any finding.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts 2>&1 | tail -20`
 Expected: FAIL, `normalizeGitleaks` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 // src/normalize.ts
@@ -945,7 +945,7 @@ function normalizeFor(product: Product, raw: unknown, version: string | null, co
 
 Until Task 7 lands, keep the `osv-scanner` case as the Task 2 throw so the file compiles.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts tests/gate-runner.test.ts 2>&1 | tail -20`
 Expected: PASS.
@@ -967,7 +967,7 @@ git -C <worktree> commit -m "Normalize gitleaks history reports into location fi
 - Produces: `export function normalizeOsvScanner(raw: unknown, version: string | null, blocked: boolean): NormalizedGateOutput`, `export function cvssToSeverity(score: number | null): Severity`.
 - Consumes: osv-scanner JSON `results[].source.{path,type}`, `results[].packages[].package.{name,version,ecosystem}`, `packages[].vulnerabilities[].{id,aliases,summary,severity,affected,database_specific}`, `packages[].groups[].{ids,aliases,max_severity}` (verify every name against the captured fixture; the capture wins).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 describe('osv-scanner <ver> normalization', () => {
@@ -1018,12 +1018,12 @@ describe('osv-scanner <ver> normalization', () => {
 
 If the captured blocking fixture has no vulnerability with a `fixed` event, drop the `withFix` assertion and record that in the fixture README; do not hand-edit the fixture.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts 2>&1 | tail -20`
 Expected: FAIL, not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 export function cvssToSeverity(score: number | null): Severity {
@@ -1124,7 +1124,7 @@ export function normalizeOsvScanner(raw: unknown, version: string | null, blocke
 
 Wire the `osv-scanner` case in `normalizeFor` (replacing the Task 2 throw).
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts tests/gate-runner.test.ts 2>&1 | tail -20`
 Expected: PASS.
@@ -1152,7 +1152,7 @@ git -C <worktree> commit -m "Normalize osv-scanner results into package findings
   Returns null when the profile has no `configFile`. Otherwise reads `<configFile>` from the trust base with `git show <trustBase>:<configFile>`; if present writes it to `<tempRoot>/<product>-config<ext>` and returns `source: 'base'`; if absent writes `profile.neutralConfig` and returns `source: 'neutral'`. In both cases compares with the head's `<repoRoot>/<configFile>` (if any) and sets `proposal` to `"<configFile> differs from the base ref; the base's copy was used and this change takes effect after merge"` when they differ or when the head has one and the base does not.
 - Consumes: Task 1 profiles.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // tests/external-config.test.ts
@@ -1208,12 +1208,12 @@ it('puts both external products in pull-request mode at their floors instead of 
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/external-config.test.ts tests/gate-runner.test.ts 2>&1 | tail -30`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 // src/external-config.ts
@@ -1252,7 +1252,7 @@ In `src/gate-runner.ts`:
 - In `runGateInner`, when the trust base is decided and not withheld and the profile has a `configFile`, call `materializeExternalConfig` with `options.tempRoot ?? <the mkdtemp from Task 5>` and set `external.configPath = result.path`; push `result.proposal` (when not null) into the outcome's `trustBase.proposals` exactly where the policy proposal is pushed for the npm gates (read how `proposals` reaches `GateOutcome.trustBase` and reuse it).
 - `TRUST_BASE_MIN_VERSION` is `Partial<Record<Product, string>>`, so the `decideTrustBase` "no pull-request mode yet" branch (:190-196) is no longer taken for these products.
 
-- [ ] **Step 4: Run, mutate, commit**
+- [x] **Step 4: Run, mutate, commit**
 
 Run the two test files, then the full suite. Mutation: in `materializeExternalConfig` return the head's file when the base has none; the neutral-config test must go RED. Restore.
 
@@ -1272,7 +1272,7 @@ git -C <worktree> commit -m "Read gitleaks and osv-scanner config from the base 
 **Interfaces:**
 - Consumes: everything above. Produces no new API.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/output-sarif.test.ts`: extend "emits one run per gate, in gate order" with a five-gate result whose drivers are `['dep-guard', 'vault-guard', 'intent-guard', 'gitleaks', 'osv-scanner']`, and add:
 
@@ -1312,11 +1312,11 @@ it('does not count an unenforced external gate toward the exit code', () => {
 
 `tests/dogfood.e2e.test.ts:982`: extend the shim list to five names if the e2e drives the policy through all roles; otherwise leave it and note why in the commit message.
 
-- [ ] **Step 2: Run, fix only what fails**
+- [x] **Step 2: Run, fix only what fails**
 
 Run each file. Expected: SARIF and text pass without source changes because both switch on `Subject.kind`; if `subjectLabel` or `locationsFor` turns out to special-case a product name, extend it. The run-level tests pass once Tasks 5 to 8 are in.
 
-- [ ] **Step 3: Full suite, commit**
+- [x] **Step 3: Full suite, commit**
 
 Run: `pnpm --dir <worktree> test 2>&1 | tail -8`
 
@@ -1333,7 +1333,7 @@ git -C <worktree> commit -m "Pin the five-gate report, SARIF and exit aggregatio
 - Modify: `README.md` (lines 9-13, 55-63, 180, 200-211, 228-256, 544-565, 692-700, 1147-1171; NOT 32-46), `action.yml:489-513` comments only, `docs/INVARIANTS.md` (9-15, 147-150, 166-177, 426-437, 861-866, 935-970, 1058-1066), `CHANGELOG.md`, `schema/guardrails.schema.json` descriptions, module comments in `policy.ts`, `exit-codes.ts`, `envelope.ts`, `normalize.ts`, `gate-runner.ts`, `resolve.ts`
 - Test: `pnpm lint`, `tests/action-pr-comment.test.ts` (pins README strings; keep them byte-identical), `tests/action.test.ts` (must stay green: no new inputs)
 
-- [ ] **Step 1: README**
+- [x] **Step 1: README**
 
 - Lines 9-13: replace "running three gates ... nothing here is a fourth scanner, only the umbrella over the three that exist" with: conductor runs five gates over one policy file, three from this family and two the adopter already installs, gitleaks for git history and osv-scanner for known vulnerabilities; conductor scans nothing itself and installs nothing that is not its own.
 - "Install the gates" (55-63): keep the npm line; add a paragraph: the two external gates are installed by you, on your machine and in your workflow, from their own releases; conductor finds them on PATH and reports could-not-run when they are missing. Show the two policy lines that enable them.
@@ -1344,17 +1344,17 @@ git -C <worktree> commit -m "Pin the five-gate report, SARIF and exit aggregatio
 - "What is in and what is out" (1147-1171): the gates are still the product; two of them are not this family's.
 - Every place that says "three" in a claim about the gate count is updated; the shared `guardrails-family` block (32-46) is left byte-identical.
 
-- [ ] **Step 2: INVARIANTS**
+- [x] **Step 2: INVARIANTS**
 
 For each listed line range read the claim, then rewrite it to the five-gate truth with citations to the new code: `src/products.ts` for the profile, `src/external-config.ts` for base-ref config, `gate-runner.ts` for exit classification and the floor, `TRUST_BASE_MIN_VERSION` now holding five entries. Add a new entry: "conductor downloads no third-party binary; external gates are resolved from PATH only, `managed: false` in the profile, and the Action has no input for them" citing the profile and action.yml. Update 1058-1066 (`missingGateRemedy`) to say the remedy comes from the profile and differs for external tools.
 
-- [ ] **Step 3: CHANGELOG and comments**
+- [x] **Step 3: CHANGELOG and comments**
 
 CHANGELOG Unreleased: "Added: two gate roles, secrets-history (gitleaks 8.19 or later, git history mode) and vulnerabilities (osv-scanner 2.x). Both are installed by the adopter, never by conductor; a missing binary is could-not-run. Findings appear in the report and SARIF like any gate. On a pull request their config files are read from the base ref. Unchanged: the three npm gates' behaviour, argv, exit reading and timeout." Note the minor version bump this implies (0.5.0).
 
 Update the module comments listed in the map that say "three products" or "three CLIs".
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm --dir <worktree> lint 2>&1 | tail -1`, `pnpm --dir <worktree> test -- tests/action-pr-comment.test.ts tests/action.test.ts 2>&1 | tail -6`, then the full suite once more.
 

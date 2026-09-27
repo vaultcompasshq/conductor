@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { POLICY_FILE_NAME, applyCliOverrides, parsePolicy } from '../src/policy.js';
 import { refusedTrustBase, runAll } from '../src/run.js';
+import { fileURLToPath } from 'node:url';
+
 import {
   CLEAN_DEP_GUARD,
   CLEAN_INTENT_GUARD,
+  CLEAN_OSV_SCANNER,
   CLEAN_VAULT_GUARD,
   stubGate,
 } from './helpers/stub-gate.js';
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
 const temps: string[] = [];
 
@@ -43,6 +49,86 @@ const ALL_THREE = parsePolicy(
 function runWith(binDir: string) {
   return runAll(ALL_THREE, { repoRoot: tempDir(), staged: true, pathValue: binDir });
 }
+
+function fivePolicy(historyEnforced = true) {
+  return parsePolicy(
+    [
+      'version: 1',
+      'gates:',
+      '  dependencies:',
+      '    product: dep-guard',
+      '  secrets:',
+      '    product: vault-guard',
+      '  intent:',
+      '    product: intent-guard',
+      '  secrets-history:',
+      '    product: gitleaks',
+      `    enforce: ${historyEnforced ? 'true' : 'false'}`,
+      '  vulnerabilities:',
+      '    product: osv-scanner',
+    ].join('\n'),
+    POLICY_FILE_NAME
+  );
+}
+
+const ALL_FIVE = fivePolicy();
+
+/** A repository tracking one lockfile, so the vulnerabilities gate is spawned. */
+function lockfileRepo(): string {
+  const repo = tempDir();
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repo });
+  git('init', '--quiet', '-b', 'main');
+  writeFileSync(path.join(repo, 'package-lock.json'), '{}\n');
+  git('add', 'package-lock.json');
+  git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'lockfile');
+  return repo;
+}
+
+function runFive(binDir: string, policy = ALL_FIVE) {
+  return runAll(policy, { repoRoot: lockfileRepo(), staged: false, pathValue: binDir, tempRoot: tempDir() });
+}
+
+/** Clean stubs for the three family gates and osv-scanner; gitleaks blocks. */
+function fiveStubs(): string {
+  const bin = tempDir();
+  stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+  stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+  stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+  stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', stdout: CLEAN_OSV_SCANNER, exit: 0 });
+  stubGate(bin, 'gitleaks', {
+    versionSubcommand: true,
+    versionLine: '8.30.1',
+    reportFlag: '--report-path',
+    reportBody: readFileSync(path.join(FIXTURES, 'gitleaks-8.30.1-history-blocking.json'), 'utf8'),
+    exit: 3,
+    stdout: '',
+  });
+  return bin;
+}
+
+describe('five gates, two of them external', () => {
+  it('exits 1 when only an external gate blocks, and 2 when an external binary is missing', () => {
+    const bin = fiveStubs();
+    const blocked = runFive(bin);
+    expect(blocked.gates.map((g) => g.product)).toEqual([
+      'dep-guard',
+      'vault-guard',
+      'intent-guard',
+      'gitleaks',
+      'osv-scanner',
+    ]);
+    expect(blocked.exitCode).toBe(1);
+    rmSync(path.join(bin, 'gitleaks'));
+    const missing = runFive(bin);
+    expect(missing.exitCode).toBe(2);
+    const remedy = missing.findings.find((f) => f.ruleId === 'conductor/gate-missing');
+    expect(remedy?.message).toMatch(/install gitleaks/i);
+  });
+
+  it('does not count an unenforced external gate toward the exit code', () => {
+    expect(runFive(fiveStubs(), fivePolicy(false)).exitCode).toBe(0);
+  });
+});
 
 describe('a gate whose output parses but has drifted shape', () => {
   // The reviewer's scratch run: dep-guard emits findings: [null] and exits 0.

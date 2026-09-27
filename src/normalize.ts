@@ -1,10 +1,12 @@
 // Turning each gate's own JSON into the internal envelope.
 //
-// Three separate functions rather than one table-driven mapper, because the
-// three shapes disagree in ways a table would have to paper over: one is a
-// flat findings array, one is nested by file, and the third is two
-// different streams (a change-budget evaluation and a scored drift rubric)
-// plus a gate status that can block for neither reason.
+// Separate functions rather than one table-driven mapper, because the
+// shapes disagree in ways a table would have to paper over: one is a flat
+// findings array, one is nested by file, the third is two different streams
+// (a change-budget evaluation and a scored drift rubric) plus a gate status
+// that can block for neither reason, and the two external tools' reports
+// (gitleaks, osv-scanner) carry no blocking flag at all, so whether they
+// block comes from the exit code the runner read.
 //
 // What every one of them refuses to do, in one place so it is reviewable:
 // invent a line number, invent a fingerprint, re-derive a severity a
@@ -689,6 +691,334 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
         budgetAction: budget?.action ?? null,
         reasons,
       },
+    },
+    diagnostics: [],
+  };
+}
+
+// -- gitleaks (external, git history mode) -------------------------------
+//
+// The report is a JSON array written to a file, one entry per leak, with
+// the field names in tests/fixtures/README.md. gitleaks has no severity of
+// its own: a rule matched or it did not. So every finding is `high`, marked
+// derived, and whether it blocks comes from the exit code the runner read
+// (3, the leak code the umbrella moves it to), not from anything in the
+// entry.
+//
+// NEVER CARRIED: Secret, Match and Line. The umbrella passes --redact, but a
+// report can be unredacted if a tool changes or a policy finds a way round
+// it, and this report is posted to a pull request and uploaded as SARIF.
+// Neither Email nor Author is carried: who made the commit has no bearing on
+// fixing a leak, and a name or address would be published with it.
+//
+// ONE FINDING PER PLACE. The umbrella asks git for each merge's first-parent
+// diff (--diff-merges=first-parent) so a secret added inside a merge is seen,
+// and under an Actions-style merge that shows a pull request's change twice:
+// in its own commit and in the merge. Entries sharing rule, file, line and
+// column collapse to the one with the earliest Date (the last in report
+// order on a tie or a missing date, since git log lists newest first), and
+// the other commits are listed in details.alsoIn.
+
+export function normalizeGitleaks(
+  raw: unknown,
+  version: string | null,
+  blocked: boolean
+): NormalizedGateOutput {
+  const product = 'gitleaks';
+  const entries = needArray(raw, product, 'the report');
+  const byPlace = new Map<string, { finding: Finding; time: number; alsoIn: string[] }>();
+  entries.forEach((rawEntry, index) => {
+    const where = `report[${index}]`;
+    const entry = needRecord(rawEntry, product, where);
+    const rule = needString(entry.RuleID, product, `${where}.RuleID`);
+    const file = needString(entry.File, product, `${where}.File`);
+    const line = needNumber(entry.StartLine, product, `${where}.StartLine`);
+    // Carried as gitleaks reports them, which is also what its own SARIF
+    // output uses. gitleaks 8.30.1 column numbers are not consistently 0- or
+    // 1-based across findings (one token at character 21 was reported at 22,
+    // another at character 15 at 15), so no correction is applied.
+    const column = typeof entry.StartColumn === 'number' ? entry.StartColumn : 1;
+    const endColumn = typeof entry.EndColumn === 'number' ? entry.EndColumn : undefined;
+    const commit = optionalString(entry.Commit, product, `${where}.Commit`);
+    const date = optionalString(entry.Date, product, `${where}.Date`);
+    // gitleaks' own Fingerprint is commit:file:rule:line, identical across
+    // runs over the same history, so it is stable. Rebuilt in that shape if
+    // a report ever omits it.
+    const fingerprint =
+      optionalString(entry.Fingerprint, product, `${where}.Fingerprint`) ??
+      `${commit ?? ''}:${file}:${rule}:${line}`;
+    const finding: Finding = {
+      schemaVersion: 1,
+      product,
+      productVersion: version,
+      ruleId: `gitleaks/${rule}`,
+      severity: 'high',
+      severityIsDerived: true,
+      blocking: blocked,
+      message:
+        optionalString(entry.Description, product, `${where}.Description`) ?? `${rule} matched`,
+      subject: {
+        kind: 'location',
+        file,
+        line,
+        column,
+        ...(endColumn === undefined ? {} : { endColumn }),
+      },
+      fingerprint: { value: fingerprint, scope: product, stability: 'stable' },
+      details: {
+        ...(commit === undefined ? {} : { commit }),
+        ...(date === undefined ? {} : { date }),
+        ...(typeof entry.Entropy === 'number' ? { entropy: entry.Entropy } : {}),
+        ...(Array.isArray(entry.Tags) ? { tags: entry.Tags } : {}),
+      },
+    };
+    const place = JSON.stringify([rule, file, line, column]);
+    const time = date === undefined ? Number.NaN : Date.parse(date);
+    const seen = byPlace.get(place);
+    if (seen === undefined) {
+      byPlace.set(place, { finding, time, alsoIn: [] });
+      return;
+    }
+    // The later entry replaces the kept one unless both dates are known and
+    // it is strictly newer. So an earlier date wins, and on a tie or a
+    // missing date the LAST entry in report order wins: git log lists newer
+    // commits first, so the last is the oldest, never a synthetic merge.
+    const bothDated = !Number.isNaN(time) && !Number.isNaN(seen.time);
+    const replace = !bothDated || time <= seen.time;
+    const dropped = replace ? seen.finding : finding;
+    const droppedCommit = dropped.details.commit;
+    if (replace) {
+      seen.finding = finding;
+      seen.time = time;
+    }
+    if (typeof droppedCommit === 'string') {
+      seen.alsoIn.push(droppedCommit);
+    }
+  });
+  const findings: Finding[] = [...byPlace.values()].map(({ finding, alsoIn }) =>
+    alsoIn.length === 0 ? finding : { ...finding, details: { ...finding.details, alsoIn } }
+  );
+  return {
+    findings,
+    run: {
+      // Any match fails the gate: gitleaks has no threshold to report.
+      failOn: 'any',
+      suppressed: 0,
+      ignored: 0,
+      diagnostics: [],
+      details: { entries: entries.length },
+    },
+    diagnostics: [],
+  };
+}
+
+// -- osv-scanner (external, known vulnerabilities) ------------------------
+//
+// `osv-scanner scan source --format json` prints results[] per lockfile,
+// packages[] per resolved package, vulnerabilities[] per advisory, and
+// groups[] that merge an advisory with its aliases and carry the highest
+// CVSS base score among them as `max_severity`, a string. Every field read
+// below was checked against the 2.6.0 capture (tests/fixtures/README.md).
+
+/** CVSS base score onto the shared four-level ladder, by the CVSS v3 bands. */
+export function cvssToSeverity(score: number | null): Severity {
+  if (score === null || Number.isNaN(score)) {
+    return 'medium';
+  }
+  if (score >= 9) {
+    return 'critical';
+  }
+  if (score >= 7) {
+    return 'high';
+  }
+  if (score >= 4) {
+    return 'medium';
+  }
+  return 'low';
+}
+
+function osvScore(vuln: Record<string, unknown>, groups: Record<string, unknown>[]): number | null {
+  const id = typeof vuln.id === 'string' ? vuln.id : '';
+  for (const group of groups) {
+    const ids = Array.isArray(group.ids) ? (group.ids as unknown[]) : [];
+    if (ids.includes(id) && typeof group.max_severity === 'string' && group.max_severity !== '') {
+      const score = Number(group.max_severity);
+      if (!Number.isNaN(score)) {
+        return score;
+      }
+    }
+  }
+  // No group score: fall back to the advisory database's own word, mapped
+  // to a representative score inside the matching band.
+  const specific = vuln.database_specific;
+  if (isRecord(specific) && typeof specific.severity === 'string') {
+    const word = specific.severity.toUpperCase();
+    if (word === 'CRITICAL') return 9.5;
+    if (word === 'HIGH') return 7.5;
+    if (word === 'MODERATE' || word === 'MEDIUM') return 5;
+    if (word === 'LOW') return 2;
+  }
+  return null;
+}
+
+/** Numeric parts of a version, for ordering; "0" and "4.0.0" both parse. */
+function versionParts(value: string): number[] {
+  return (value.match(/\d+/g) ?? []).map(Number);
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = versionParts(a);
+  const right = versionParts(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const difference = (left[i] ?? 0) - (right[i] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+/**
+ * The release that fixes this advisory for the INSTALLED version.
+ *
+ * An advisory can list several ranges for one package (nanoid's fixes at
+ * 3.3.16 for the 3.x line and 5.1.16 for 4.x and 5.x), so the first `fixed`
+ * event is not the answer: the fix is the one closing the range the
+ * installed version sits in. When no range can be shown to contain it, the
+ * lowest fix above the installed version is the next best statement; when
+ * there is none, no fix is claimed.
+ */
+function osvFixedVersion(
+  vuln: Record<string, unknown>,
+  name: string,
+  installed: string
+): string | undefined {
+  const affected = Array.isArray(vuln.affected) ? vuln.affected : [];
+  const candidates: string[] = [];
+  for (const entry of affected) {
+    if (!isRecord(entry)) continue;
+    if (isRecord(entry.package) && entry.package.name !== name) continue;
+    const ranges = Array.isArray(entry.ranges) ? entry.ranges : [];
+    for (const range of ranges) {
+      if (!isRecord(range) || !Array.isArray(range.events)) continue;
+      let introduced: string | undefined;
+      for (const event of range.events) {
+        if (!isRecord(event)) continue;
+        if (typeof event.introduced === 'string') {
+          introduced = event.introduced;
+        }
+        if (typeof event.fixed === 'string') {
+          candidates.push(event.fixed);
+          const inRange =
+            installed !== '' &&
+            (introduced === undefined || compareVersions(installed, introduced) >= 0) &&
+            compareVersions(installed, event.fixed) < 0;
+          if (inRange) {
+            return event.fixed;
+          }
+        }
+      }
+    }
+  }
+  const above = candidates
+    .filter((fixed) => installed === '' || compareVersions(fixed, installed) > 0)
+    .sort(compareVersions);
+  return above[0];
+}
+
+/**
+ * osv-scanner writes every manifest path absolute, whatever scan root or
+ * relative --lockfile path it is given, so in CI it names the runner's
+ * checkout. Made relative to the first root that contains it; left as it is
+ * when none does, rather than guessed.
+ */
+function relativeToRoots(file: string, roots: readonly string[]): string {
+  for (const root of roots) {
+    const prefix = root.endsWith('/') ? root : `${root}/`;
+    if (file.startsWith(prefix)) {
+      return file.slice(prefix.length);
+    }
+  }
+  return file;
+}
+
+export function normalizeOsvScanner(
+  raw: unknown,
+  version: string | null,
+  blocked: boolean,
+  /** The scan root as a path osv-scanner may have printed it, in any spelling. */
+  roots: readonly string[] = []
+): NormalizedGateOutput {
+  const product = 'osv-scanner';
+  const top = needRecord(raw, product, 'the output');
+  const results = needArray(top.results, product, 'results');
+  const findings: Finding[] = [];
+  for (const [ri, rawResult] of results.entries()) {
+    const resultWhere = `results[${ri}]`;
+    const result = needRecord(rawResult, product, resultWhere);
+    const source = needRecord(result.source, product, `${resultWhere}.source`);
+    const manifest = relativeToRoots(
+      needString(source.path, product, `${resultWhere}.source.path`),
+      roots
+    );
+    const packages = needArray(result.packages, product, `${resultWhere}.packages`);
+    for (const [pi, rawPackage] of packages.entries()) {
+      const packageWhere = `${resultWhere}.packages[${pi}]`;
+      const entry = needRecord(rawPackage, product, packageWhere);
+      const pkg = needRecord(entry.package, product, `${packageWhere}.package`);
+      const name = needString(pkg.name, product, `${packageWhere}.package.name`);
+      const installed = optionalString(pkg.version, product, `${packageWhere}.package.version`) ?? '';
+      const ecosystem = optionalString(pkg.ecosystem, product, `${packageWhere}.package.ecosystem`);
+      const groups = (
+        entry.groups === undefined ? [] : needArray(entry.groups, product, `${packageWhere}.groups`)
+      ).filter(isRecord);
+      const vulns =
+        entry.vulnerabilities === undefined
+          ? []
+          : needArray(entry.vulnerabilities, product, `${packageWhere}.vulnerabilities`);
+      for (const [vi, rawVuln] of vulns.entries()) {
+        const where = `${packageWhere}.vulnerabilities[${vi}]`;
+        const vuln = needRecord(rawVuln, product, where);
+        const id = needString(vuln.id, product, `${where}.id`);
+        const score = osvScore(vuln, groups);
+        const fixedVersion = osvFixedVersion(vuln, name, installed);
+        findings.push({
+          schemaVersion: 1,
+          product,
+          productVersion: version,
+          ruleId: `osv-scanner/${id}`,
+          severity: cvssToSeverity(score),
+          severityIsDerived: true,
+          blocking: blocked,
+          message:
+            optionalString(vuln.summary, product, `${where}.summary`) ??
+            `${id} affects ${name}@${installed}`,
+          subject: { kind: 'package', name, manifest },
+          // The advisory, the package and version it applies to, and the
+          // manifest it was found through: the same four facts on every run
+          // over the same lockfile, so the value is stable.
+          fingerprint: { value: `${id}|${name}|${installed}|${manifest}`, scope: product, stability: 'stable' },
+          details: {
+            version: installed,
+            ...(ecosystem === undefined ? {} : { ecosystem }),
+            aliases: Array.isArray(vuln.aliases) ? vuln.aliases : [],
+            ...(score === null ? {} : { cvss: score }),
+            ...(fixedVersion === undefined ? {} : { fixedVersion }),
+          },
+        });
+      }
+    }
+  }
+  return {
+    findings,
+    run: {
+      // Any known vulnerability fails the gate; a threshold, when an adopter
+      // wants one, lives in osv-scanner.toml.
+      failOn: 'any',
+      suppressed: 0,
+      ignored: 0,
+      diagnostics: [],
+      details: { sources: results.length },
     },
     diagnostics: [],
   };

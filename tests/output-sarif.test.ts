@@ -8,8 +8,10 @@ import type { GateOutcome } from '../src/gate-runner.js';
 import {
   normalizeDepGuard,
   normalizeFailedGate,
+  normalizeGitleaks,
   normalizeIntentGuard,
   normalizeMissingGate,
+  normalizeOsvScanner,
   normalizeVaultGuard,
 } from '../src/normalize.js';
 import { fingerprintKey, placeArtifact, renderSarif } from '../src/output-sarif.js';
@@ -82,6 +84,35 @@ const THREE_GATES = result([
     findings: intentGuard.findings,
   }),
 ]);
+
+const gitleaks = normalizeGitleaks(fixture('gitleaks-8.30.1-history-blocking.json'), '8.30.1', true);
+const osvScanner = normalizeOsvScanner(fixture('osv-scanner-2.6.0-blocking.json'), '2.6.0', true, [
+  '/tmp/conductor-osv-fixture',
+]);
+
+/** The three family gates plus the two external ones, over captured output. */
+function fiveGateResult(): RunResult {
+  return result([
+    ...THREE_GATES.gates,
+    outcome({
+      role: 'secrets-history',
+      product: 'gitleaks',
+      productVersion: '8.30.1',
+      stage: 'ci',
+      exitCode: 3,
+      findings: gitleaks.findings,
+      run: gitleaks.run,
+    }),
+    outcome({
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      productVersion: '2.6.0',
+      stage: 'ci',
+      findings: osvScanner.findings,
+      run: osvScanner.run,
+    }),
+  ]);
+}
 
 function sarif(runResult: RunResult): Record<string, never> & {
   runs: Array<Record<string, unknown>>;
@@ -564,6 +595,25 @@ describe('one SARIF log, one run per gate', () => {
       (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name as string)
     );
     expect(drivers).toEqual(['dep-guard', 'vault-guard', 'intent-guard']);
+    const five = sarif(fiveGateResult()).runs.map(
+      (run) => ((run.tool as Record<string, Record<string, unknown>>).driver.name as string)
+    );
+    expect(five).toEqual(['dep-guard', 'vault-guard', 'intent-guard', 'gitleaks', 'osv-scanner']);
+  });
+
+  it('places a gitleaks finding at its file and line and an osv-scanner finding on its manifest', () => {
+    const log = JSON.parse(renderSarif(fiveGateResult(), '0.5.0'));
+    type Run = { tool: { driver: { name: string; rules: Array<{ id: string; name: string }> } }; results: any[] };
+    const gl = log.runs.find((r: Run) => r.tool.driver.name === 'gitleaks');
+    expect(gl.results[0].locations[0].physicalLocation.region.startLine).toBeGreaterThan(0);
+    expect(gl.results[0].locations[0].physicalLocation.artifactLocation.uri).toBe('config.json');
+    const osv = log.runs.find((r: Run) => r.tool.driver.name === 'osv-scanner');
+    expect(osv.results[0].locations[0].physicalLocation.artifactLocation.uri).toMatch(/lock/);
+    // The same rule shape as every other gate: the id keeps the product
+    // namespace the finding carries, and the name is the tool's own id.
+    expect(osv.tool.driver.rules[0].id).toMatch(/^osv-scanner\/GHSA-/);
+    expect(osv.tool.driver.rules[0].name).not.toContain('osv-scanner/');
+    expect(JSON.stringify(log)).not.toContain('dp.pt.q7ZkR2');
   });
 
   it('takes each run tool name and version from that gate, not from the umbrella', () => {

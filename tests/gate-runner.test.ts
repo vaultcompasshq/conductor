@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -16,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decideTrustBase, runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
-import { CLEAN_INTENT_GUARD, stubGate } from './helpers/stub-gate.js';
+import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -42,6 +43,43 @@ function gate(overrides: Partial<GatePolicy> = {}): GatePolicy {
     options: {},
     ...overrides,
   } as GatePolicy;
+}
+
+/** A fresh repository on `main` with one commit, for gates that read git. */
+function tempGitRepo(): string {
+  const dir = tempDir();
+  const run = (args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+  run(['init', '--quiet', '-b', 'main']);
+  writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
+  run(['add', 'README.md']);
+  run(['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'init']);
+  return dir;
+}
+
+/** Commits these files, forcing past any .gitignore, so they are tracked. */
+function commitFiles(repo: string, files: Record<string, string>, message: string): void {
+  for (const [name, body] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+    writeFileSync(path.join(repo, name), body);
+    execFileSync('git', ['add', '-f', name], { cwd: repo });
+  }
+  execFileSync(
+    'git',
+    ['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', message],
+    { cwd: repo }
+  );
+}
+
+/** A repository with one tracked lockfile, so osv-scanner has something to be handed. */
+function osvRepo(): string {
+  const repo = tempGitRepo();
+  commitFiles(repo, { 'package-lock.json': '{}\n' }, 'lockfile');
+  return repo;
+}
+
+/** A captured fixture's text, byte for byte. */
+function fixtureText(name: string): string {
+  return readFileSync(path.join(FIXTURES, name), 'utf8');
 }
 
 const DEP_GUARD_JSON = readFileSync(path.join(FIXTURES, 'dep-guard-0.2.0-blocking.json'), 'utf8');
@@ -271,6 +309,15 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
 
   it('says nothing at all when the run is not in pull-request mode', () => {
     expect(decideTrustBase(intentGate, nativeIntent, undefined, '1.4.0')).toBeUndefined();
+  });
+
+  it('puts both external products in pull-request mode at their floors instead of withholding', () => {
+    const gl = gate({ role: 'secrets-history', product: 'gitleaks' });
+    expect(decideTrustBase(gl, undefined, 'origin/main', '8.30.1')?.withheld).toBeNull();
+    expect(decideTrustBase(gl, undefined, 'origin/main', '8.18.4')?.withheld).toMatch(/8\.19\.0/);
+    const osv = gate({ role: 'vulnerabilities', product: 'osv-scanner' });
+    expect(decideTrustBase(osv, undefined, 'origin/main', '2.6.0')?.withheld).toBeNull();
+    expect(decideTrustBase(osv, undefined, 'origin/main', null)?.refused).not.toBeNull();
   });
 
   it('passes the flag to an intent-guard at the version it arrived in', () => {
@@ -811,5 +858,287 @@ describe('a pull-request run and the file the version probe would spawn', () => 
     expect(existsSync(fixture.marker)).toBe(true);
     expect(outcome.couldNotRun).toBeNull();
     expect(outcome.productVersion).toBe('1.4.0');
+  });
+});
+
+describe('external gate exit semantics', () => {
+  const gl = () => gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci' });
+  const osv = () => gate({ role: 'vulnerabilities', product: 'osv-scanner', stage: 'ci' });
+
+  it('reads gitleaks findings from the report file and treats exit 3 as blocked', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: fixtureText('gitleaks-8.30.1-history-blocking.json'), exit: 3, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(3);
+    expect(out.findings.length).toBeGreaterThan(0);
+    expect(out.findings.every((f) => f.blocking)).toBe(true);
+    expect(out.productVersion).toBe('8.30.1');
+  });
+
+  it('reads a clean gitleaks report as no findings and nothing blocking', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: fixtureText('gitleaks-8.30.1-history-clean.json'), exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+  });
+
+  it('strips ANSI colour codes from gitleaks stderr before it reaches the report or the gate-failed message', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      exit: 1,
+      stdout: '',
+      stderr: '\u001b[90m6:36PM\u001b[0m \u001b[31mFTL\u001b[0m \u001b[1munable to load gitleaks config\u001b[0m\n',
+    });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.stderr).toContain('FTL unable to load gitleaks config');
+    expect(out.stderr).not.toContain('\u001b');
+    expect(JSON.stringify(out.findings)).not.toContain('\\u001b');
+    expect(out.findings.some((f) => f.message.includes('unable to load gitleaks config'))).toBe(true);
+  });
+
+  it('treats gitleaks exit 1 as an error, not a leak', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', exit: 1, stdout: '', stderr: 'fatal: not a git repository' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('reports report-missing when gitleaks exits clean but wrote no report', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('report-missing');
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('treats a clean gitleaks exit that logged a git error as an error, never as a clean scan of nothing', () => {
+    // Captured from gitleaks 8.30.1 with --log-opts naming a base ref the
+    // checkout never fetched: exit 0, report [], and these ERR lines.
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      reportFlag: '--report-path',
+      reportBody: fixtureText('gitleaks-8.30.1-history-clean.json'),
+      exit: 0,
+      stdout: '',
+      stderr: fixtureText('gitleaks-8.30.1-unknown-base-ref.stderr.txt'),
+    });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.couldNotRun?.detail).toMatch(/ERR/);
+  });
+
+  it('treats osv-scanner exit 128 on handed lockfiles as lockfiles that parsed to no packages, naming them', () => {
+    // osvRepo's lockfile is "{}": handed over, it yields zero packages and
+    // osv-scanner exits 128. That is not the same news as "no lockfile".
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 128, stdout: '', stderr: 'No package sources found, --help for usage information.' });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+    const diagnostic = out.diagnostics.find((d) => d.code === 'conductor/lockfiles-empty');
+    expect(diagnostic?.message).toContain('package-lock.json');
+    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(false);
+  });
+
+  it('reports a nested osv-scanner.toml the pull request adds as a proposal, like the root one', () => {
+    const repo = osvRepo();
+    execFileSync('git', ['checkout', '--quiet', '-b', 'pr'], { cwd: repo });
+    commitFiles(repo, { 'web/package-lock.json': '{}\n', 'web/osv-scanner.toml': '[[PackageOverrides]]\nname = "lodash"\nignore = true\n' }, 'nested config');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.trustBase?.proposals.some((p) => /^web\/osv-scanner\.toml differs/.test(p))).toBe(true);
+    // Overridden for this run by the base-ref --config.
+    expect(out.argv).toContain('--config');
+  });
+
+  it('runs gitleaks from its own work directory on a pull request, and from the repository locally', () => {
+    const repo = tempGitRepo();
+    const bin = tempDir();
+    const prLog = path.join(tempDir(), 'pr-cwd.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', cwdLog: prLog });
+    runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    // Relative [extend] paths resolve against it; the head tree must not be it.
+    const prCwd = readFileSync(prLog, 'utf8').trim();
+    expect(prCwd.startsWith(realpathSync(repo))).toBe(false);
+    expect(path.basename(prCwd)).toBe('cwd');
+
+    const localBin = tempDir();
+    const localLog = path.join(tempDir(), 'local-cwd.txt');
+    stubGate(localBin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', cwdLog: localLog });
+    runGate(gl(), { repoRoot: repo, staged: false, pathValue: localBin, tempRoot: tempDir() });
+    expect(readFileSync(localLog, 'utf8').trim()).toBe(realpathSync(repo));
+  });
+
+  it('is preparation-failed on a pull request whose base config extends a file the base does not have', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { '.gitleaks.toml': '[extend]\npath = "gl-extra.toml"\n' }, 'extend a missing file');
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(out.couldNotRun?.reason).toBe('preparation-failed');
+    expect(out.couldNotRun?.detail).toContain('gl-extra.toml');
+  });
+
+  it('treats osv-scanner exit 127 as an error', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 127, stdout: '' });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+  });
+
+  it('reads the osv-scanner version from its prefixed version line', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.productVersion).toBe('2.6.0');
+  });
+
+  it('reports an osv-scanner manifest relative to the repository, whichever spelling of the root it printed', () => {
+    // osv-scanner prints source.path absolute (tests/fixtures/README.md),
+    // with --lockfile as with a scan root. The captured report, re-rooted at
+    // this test's repository in its resolved spelling, which on macOS differs
+    // from the tmpdir spelling.
+    const repo = osvRepo();
+    const report = JSON.parse(fixtureText('osv-scanner-2.6.0-blocking.json')) as {
+      results: Array<{ source: { path: string } }>;
+    };
+    report.results[0]!.source.path = path.join(realpathSync(repo), 'package-lock.json');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: JSON.stringify(report) });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.findings.length).toBeGreaterThan(0);
+    expect(out.findings.every((f) => f.blocking)).toBe(true);
+    expect(out.findings[0]!.subject).toEqual({ kind: 'package', name: 'lodash', manifest: 'package-lock.json' });
+  });
+
+  it('on a pull request, hands gitleaks the base config and ignore file and scopes history to base..HEAD', () => {
+    const repo = tempGitRepo();
+    const commitAll = (message: string) => {
+      execFileSync('git', ['add', '-A'], { cwd: repo });
+      execFileSync('git', ['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', message], { cwd: repo });
+    };
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[extend]\nuseDefault = true\n');
+    commitAll('base config');
+    execFileSync('git', ['checkout', '--quiet', '-b', 'pr'], { cwd: repo });
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[allowlist]\npaths = ["src/"]\n');
+    commitAll('head widens the allowlist');
+
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', argvLog: log });
+    const out = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+
+    expect(out.couldNotRun).toBeNull();
+    const argv = out.argv;
+    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('--diff-merges=first-parent main..HEAD');
+    expect(argv).toContain('--config');
+    expect(argv).toContain('--gitleaks-ignore-path');
+    // Scanned from the git directory, not ".": gitleaks loads the scan
+    // root's own .gitleaksignore whatever --gitleaks-ignore-path says.
+    expect(argv[argv.length - 1]).toBe(realpathSync(path.join(repo, '.git')));
+    expect(argv).not.toContain('--trust-base');
+    expect(out.trustBase?.withheld).toBeNull();
+    expect(out.trustBase?.proposals.some((p) => /\.gitleaks\.toml differs/.test(p))).toBe(true);
+  });
+
+  it('hands osv-scanner every tracked lockfile by name, gitignored or not, and nothing untracked or under node_modules', () => {
+    const repo = tempGitRepo();
+    // The .gitignore names the root lockfile: osv-scanner's own walk would
+    // skip it, which is the hole handing lockfiles by name closes.
+    commitFiles(
+      repo,
+      {
+        '.gitignore': 'package-lock.json\nyarn.lock\n',
+        'package-lock.json': '{}\n',
+        'web/pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
+        'node_modules/left-pad/package-lock.json': '{}\n',
+      },
+      'lockfiles'
+    );
+    writeFileSync(path.join(repo, 'yarn.lock'), '# untracked\n');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    const handed = out.argv.flatMap((token, i) => (out.argv[i - 1] === '--lockfile' ? [token] : []));
+    expect(handed).toEqual(['package-lock.json', 'web/pnpm-lock.yaml']);
+    expect(out.argv).not.toContain('--recursive');
+  });
+
+  it('reports nothing-to-scan without spawning osv-scanner when no lockfile is tracked', () => {
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: '', argvLog: log });
+    const out = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+    expect(out.productVersion).toBe('2.6.0');
+    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(true);
+    // Only the version probe ran; a scan would have been logged.
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it('is could-not-run when the tracked lockfiles cannot be listed', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    // Not a repository: git ls-files fails, and that is not "no lockfiles".
+    const out = runGate(osv(), { repoRoot: tempDir(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('preparation-failed');
+  });
+
+  it('on a pull request, tells gitleaks to ignore inline gitleaks:allow comments; locally it does not', () => {
+    const repo = tempGitRepo();
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const pr = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(pr.argv).toContain('--ignore-gitleaks-allow');
+    const local = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(local.argv).not.toContain('--ignore-gitleaks-allow');
+  });
+
+  it('never hands an external tool a config on a local run, so it reads the repository own', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.argv).not.toContain('--config');
+  });
+
+  it('refuses a gitleaks older than the floor as could-not-run, naming the floor', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.18.4', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('gate-version-unsupported');
+    expect(out.couldNotRun?.detail).toContain('8.19.0');
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('leaves nothing behind in the temporary root it was given', () => {
+    const bin = tempDir();
+    const root = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: root });
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it('keeps the npm gates on the old exit reading: exit 2 is gate-error', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { exit: 2, stdout: '' });
+    const out = runGate(gate({ role: 'secrets', product: 'vault-guard' }), { repoRoot: tempGitRepo(), staged: false, pathValue: bin });
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.couldNotRun?.detail).toBe('the gate exited 2, which it uses for "could not run".');
   });
 });

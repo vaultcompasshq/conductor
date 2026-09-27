@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import { gateArgs } from '../src/gate-runner.js';
 import {
+  DEFAULT_STAGE_FOR_ROLE,
   GATE_ROLES,
   GATE_STAGES,
   POLICY_FILE_NAME,
@@ -34,7 +35,30 @@ describe('policy file', () => {
   });
 
   it('keys gates by role, not by product', () => {
-    expect(GATE_ROLES).toEqual(['dependencies', 'secrets', 'intent']);
+    expect(GATE_ROLES).toEqual(['dependencies', 'secrets', 'intent', 'secrets-history', 'vulnerabilities']);
+  });
+
+  it('maps the two external roles to their tools and defaults them to the ci stage', () => {
+    expect(PRODUCT_FOR_ROLE['secrets-history']).toBe('gitleaks');
+    expect(PRODUCT_FOR_ROLE['vulnerabilities']).toBe('osv-scanner');
+    expect(DEFAULT_STAGE_FOR_ROLE['secrets-history']).toBe('ci');
+    expect(DEFAULT_STAGE_FOR_ROLE['vulnerabilities']).toBe('ci');
+  });
+
+  it('parses a policy that names both external gates', () => {
+    const policy = parsePolicy(
+      ['version: 1', 'gates:', '  secrets-history:', '    product: gitleaks', '  vulnerabilities:', '    product: osv-scanner', ''].join('\n'),
+      POLICY_FILE_NAME
+    );
+    expect(policy.gates['secrets-history']?.product).toBe('gitleaks');
+    expect(policy.gates['secrets-history']?.stage).toBe('ci');
+    expect(policy.gates.vulnerabilities?.product).toBe('osv-scanner');
+  });
+
+  it('still rejects a product in the wrong role for the new roles', () => {
+    expect(() =>
+      parsePolicy(['version: 1', 'gates:', '  secrets-history:', '    product: vault-guard', ''].join('\n'), POLICY_FILE_NAME)
+    ).toThrow(/secrets-history/);
   });
 
   it('parses a minimal policy and keeps the declared enabled flags', () => {
@@ -305,25 +329,37 @@ describe('the reserved option list against the flags the umbrella writes', () =>
       baseSource: 'flag' as const,
       cleanup: () => {},
     };
+    // A report path, a config path and an ignore path on every call: the
+    // external gates need the first and take the others on a pull request,
+    // and the three npm gates ignore all three.
+    const external = {
+      reportPath: '/dev/null',
+      configPath: '/dev/null',
+      ignorePath: '/dev/null',
+      lockfiles: ['package-lock.json'],
+    };
     const runs = [
-      gateArgs(gate, true, undefined),
-      gateArgs(gate, false, undefined),
-      gateArgs(gate, true, intent),
-      gateArgs(gate, false, { ...intent, paths: null }),
+      gateArgs(gate, true, undefined, undefined, external),
+      gateArgs(gate, false, undefined, undefined, external),
+      gateArgs(gate, true, intent, undefined, external),
+      gateArgs(gate, false, { ...intent, paths: null }, undefined, external),
       // Pull-request mode, in both shapes it can take. Without these the
       // derived direction below would not cover --trust-base at all, and a
       // policy file could write the flag that decides where a gate reads its
       // rules from, with the winner settled by that CLI argument parser.
-      gateArgs(gate, false, undefined, 'origin/main'),
-      gateArgs(gate, false, intent, 'origin/main'),
+      gateArgs(gate, false, undefined, 'origin/main', external),
+      gateArgs(gate, false, intent, 'origin/main', external),
     ];
     const flags = new Set<string>();
     for (const argv of runs) {
-      for (const token of argv) {
-        if (token.startsWith('-')) {
+      argv.forEach((token, i) => {
+        // The value of --log-opts is git's own option string
+        // ("--diff-merges=first-parent HEAD"), a value rather than a flag of
+        // the gate's; --log-opts itself is what a policy could collide with.
+        if (token.startsWith('-') && argv[i - 1] !== '--log-opts') {
           flags.add(token.replace(/^--?/, ''));
         }
-      }
+      });
     }
     return flags;
   }
@@ -346,6 +382,9 @@ describe('the reserved option list against the flags the umbrella writes', () =>
     // The umbrella passes --paths, and a --base would be resolved against a
     // --project that may be a temporary directory with no repository in it.
     'intent-guard': ['base'],
+    // The umbrella writes every reserved flag for the two external tools.
+    gitleaks: [],
+    'osv-scanner': [],
   };
 
   it('reserves every flag the umbrella writes, which is the direction that can hurt', () => {
@@ -410,6 +449,91 @@ describe('gateArgs, --base on a pull-request run', () => {
     const argv = gateArgs(gateFor('intent'), false, undefined, 'origin/main');
     expect(argv).toContain('--trust-base');
     expect(argv).not.toContain('--base');
+  });
+});
+
+describe('gateArgs for the external gates', () => {
+  const gl = { role: 'secrets-history', product: 'gitleaks', enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} } as const;
+  const osv = { role: 'vulnerabilities', product: 'osv-scanner', enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} } as const;
+
+  it('scopes gitleaks to HEAD history on a local run and writes the report to the path the runner owns', () => {
+    const argv = gateArgs(gl, false, undefined, undefined, { reportPath: '/tmp/r.json' });
+    expect(argv).toEqual([
+      '--report-format', 'json', '--report-path', '/tmp/r.json', '--exit-code', '3', '--redact', '--no-banner',
+      '--log-level', 'info', '--log-opts', '--diff-merges=first-parent HEAD', '.',
+    ]);
+  });
+
+  it('pins gitleaks to log level info, because an ERR line is how a failed scan is told from a clean one', () => {
+    const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json' });
+    expect(argv[argv.indexOf('--log-level') + 1]).toBe('info');
+  });
+
+  it('rejects a policy that sets gitleaks log-level, saying why', () => {
+    expect(() =>
+      parsePolicy(
+        ['version: 1', 'gates:', '  secrets-history:', '    product: gitleaks', '    options:', '      log-level: fatal', ''].join('\n'),
+        POLICY_FILE_NAME
+      )
+    ).toThrow(/log-level[\s\S]*ERR/);
+  });
+
+  it('shows gitleaks each merge commit first-parent diff, so a secret added inside a merge is scanned', () => {
+    const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json' });
+    expect(argv[argv.indexOf('--log-opts') + 1]).toBe('--diff-merges=first-parent origin/main..HEAD');
+  });
+
+  it('scopes gitleaks to base..HEAD and passes the base-ref config on a pull-request run', () => {
+    const argv = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json', configPath: '/tmp/c.toml' });
+    expect(argv).toContain('--log-opts');
+    expect(argv[argv.indexOf('--log-opts') + 1]).toMatch(/ origin\/main\.\.HEAD$/);
+    expect(argv[argv.indexOf('--config') + 1]).toBe('/tmp/c.toml');
+    expect(argv).not.toContain('--trust-base');
+    expect(argv).not.toContain('--staged');
+  });
+
+  it('ignores inline gitleaks:allow comments on a pull request, and keeps them on a local run', () => {
+    // An inline allow lives in the tree being judged, so on a pull request
+    // the pull request controls it.
+    const pr = gateArgs(gl, false, undefined, 'origin/main', { reportPath: '/tmp/r.json' });
+    expect(pr).toContain('--ignore-gitleaks-allow');
+    const local = gateArgs(gl, false, undefined, undefined, { reportPath: '/tmp/r.json' });
+    expect(local).not.toContain('--ignore-gitleaks-allow');
+  });
+
+  it('never passes --staged to gitleaks even when the run is staged', () => {
+    expect(gateArgs(gl, true, undefined, undefined, { reportPath: '/tmp/r.json' })).not.toContain('--staged');
+  });
+
+  it('throws when gitleaks is built without a report path, because its report cannot go to stdout', () => {
+    expect(() => gateArgs(gl, false, undefined, undefined, {})).toThrow(/report path/);
+  });
+
+  it('asks osv-scanner for json on stdout over exactly the tracked lockfiles, with the base-ref config on a pull request', () => {
+    const lockfiles = ['package-lock.json', 'web/pnpm-lock.yaml'];
+    expect(gateArgs(osv, false, undefined, undefined, { lockfiles })).toEqual([
+      '--format', 'json', '--lockfile', 'package-lock.json', '--lockfile', 'web/pnpm-lock.yaml',
+    ]);
+    const pr = gateArgs(osv, false, undefined, 'origin/main', { configPath: '/tmp/o.toml', lockfiles });
+    expect(pr).toEqual([
+      '--format', 'json', '--config', '/tmp/o.toml', '--lockfile', 'package-lock.json', '--lockfile', 'web/pnpm-lock.yaml',
+    ]);
+    expect(pr).not.toContain('--recursive');
+    expect(pr).not.toContain('.');
+  });
+
+  it('throws when osv-scanner is built with no lockfiles, because the runner reports that without spawning', () => {
+    expect(() => gateArgs(osv, false, undefined, undefined, {})).toThrow(/lockfile/);
+    expect(() => gateArgs(osv, false, undefined, undefined, { lockfiles: [] })).toThrow(/lockfile/);
+  });
+
+  it('appends policy options after the umbrella flags', () => {
+    const argv = gateArgs({ ...osv, options: { 'call-analysis': true } }, false, undefined, undefined, {
+      lockfiles: ['package-lock.json'],
+    });
+    const i = argv.indexOf('--call-analysis');
+    expect(i).toBeGreaterThan(argv.indexOf('--lockfile'));
+    expect(argv[argv.length - 1]).toBe('--call-analysis');
   });
 });
 

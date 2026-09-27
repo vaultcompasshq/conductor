@@ -488,6 +488,13 @@ runs:
         # Checked against the real registry rather than assumed to carry over
         # from any one gate: all four install and report their own versions
         # correctly with the flag set.
+        #
+        # Exactly four, and deliberately not six. The two external gates
+        # (gitleaks, osv-scanner) are installed by the adopter's own workflow
+        # step, pinned and checksummed there; conductor downloads no
+        # third-party binary and this action has no input for either. A
+        # policy that enables one of them on a runner without it gets
+        # could-not-run, with the install step named in the report.
         npm install -g --ignore-scripts \
           "@vaultcompass/conductor@$CONDUCTOR_VERSION" \
           "@vaultcompass/dep-guard@$DEP_GUARD_VERSION" \

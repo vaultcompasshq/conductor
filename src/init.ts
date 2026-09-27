@@ -111,6 +111,8 @@ import type { Manifest, ManifestFile } from './init-manifest.js';
 
 import { POLICY_FILE_NAME, detectGates, renderPolicy } from './init-policy.js';
 import { frozenNativeContractPath } from './intent-prepare.js';
+import { GATE_ROLES, PRODUCT_FOR_ROLE } from './policy.js';
+import { profileFor } from './products.js';
 
 export {
   MANAGED_HOOK_MARKER,
@@ -255,6 +257,8 @@ export interface AdoptedHook {
 }
 
 export interface InitResult {
+  /** One-line notes printed after the actions, such as an external gate enabled from PATH. */
+  notes?: string[];
   ok: boolean;
   dryRun: boolean;
   alreadyInstalled: boolean;
@@ -696,14 +700,31 @@ function finishPlan(
   hook: { hookPath: string; hookManager: HookManager; adoptedFrom: AdoptedHook | null }
 ): InitResult {
   const existingPolicy = readIfExists(policyPath);
+  const notes: string[] = [];
   if (existingPolicy === undefined) {
+    const detected = detectGates(root, options.pathValue);
     writes.push({
       path: policyPath,
-      content: renderPolicy(detectGates(root, options.pathValue), frozenNativeContractPath(root)),
+      content: renderPolicy(detected, frozenNativeContractPath(root)),
       executable: false,
       kind: 'policy',
     });
     actions.push({ kind: 'write', path: POLICY_FILE_NAME, detail: 'create' });
+    // An external gate is enabled because its tool is on THIS machine's PATH.
+    // Nothing installs it anywhere else: the Action installs only the npm
+    // packages, so a workflow that does not install it too reports the gate
+    // could-not-run on the first pull request.
+    const external = GATE_ROLES.filter(
+      (role) => detected.has(role) && !profileFor(PRODUCT_FOR_ROLE[role]).managed
+    ).map((role) => `${role} (${PRODUCT_FOR_ROLE[role]})`);
+    if (external.length > 0) {
+      const one = external.length === 1;
+      notes.push(
+        `Note: ${external.join(' and ')} ${one ? 'is' : 'are'} enabled because ` +
+          `${one ? 'its tool was' : 'their tools were'} found on this machine's PATH; your CI ` +
+          `workflow must install ${one ? 'it' : 'them'} too, conductor does not.`
+      );
+    }
   } else {
     // Never rewritten. The policy file is the one artifact a user edits by
     // hand, and re-running init must not have an opinion about their edits.
@@ -731,6 +752,7 @@ function finishPlan(
     adoptedFrom: hook.adoptedFrom,
     writes,
     records,
+    notes,
   };
 }
 
@@ -1184,6 +1206,8 @@ export function renderInitHuman(result: InitResult): string {
     const verb = action.kind === 'skip' ? 'skip' : result.dryRun ? 'would write' : 'wrote';
     lines.push(`  ${verb} ${action.path} (${action.detail})`);
   }
+  // One line per external gate init enabled from this machine's PATH (N6).
+  lines.push(...(result.notes ?? []));
   if (result.hookRequested) {
     // Two different answers, and saying only the second one is wrong about
     // the hook this command just wrote. The pre-commit hook runs `conductor

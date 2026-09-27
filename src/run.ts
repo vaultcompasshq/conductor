@@ -479,6 +479,9 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           // so a gate with no pull-request mode yet is not handed a flag it
           // would reject, and the reason it was withheld is on the outcome.
           ...(options.trustBase === undefined ? {} : { trustBase: options.trustBase.ref }),
+          // Where an external gate's working directory goes (its report file,
+          // its config from the base ref). The runner removes what it makes.
+          ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
         })
       );
     }

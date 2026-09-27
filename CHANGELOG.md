@@ -54,6 +54,26 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   dep-guard's own CLI refuses `--staged` and `--base` together; vault-guard
   and intent-guard are unaffected, since the umbrella never passed either
   gate a `--base` flag and still does not.
+- Added: two gate roles, `secrets-history` (gitleaks 8.19 or later, git
+  history mode) and `vulnerabilities` (osv-scanner 2.x). Both are installed
+  by the adopter, never by conductor; a missing binary is could-not-run.
+  Findings appear in the report and SARIF like any gate. On a pull request
+  their config files (`.gitleaks.toml`, `.gitleaksignore`,
+  `osv-scanner.toml`) are read from the base ref, with a neutral stand-in
+  when the base has none, and a head-side change is reported as a proposal.
+  gitleaks' exit for a leak is moved to 3 so its error exit 1 reads as
+  could-not-run, and a clean gitleaks exit that logged a git error is
+  could-not-run too. On a pull request gitleaks also ignores inline
+  `gitleaks:allow` comments. osv-scanner is handed each tracked npm-family
+  lockfile by name (`git ls-files`, never a directory walk, so `.gitignore`
+  cannot hide one); with none tracked it is not spawned and the gate is
+  clean with a note, as is its own exit 128. On a pull request gitleaks runs
+  from a directory holding the base ref's copies of any files its config
+  extends, scans merge commits by their first-parent diff (one finding per
+  leak, other commits listed), and logs at a pinned info level. `init`
+  says in one line when it enabled an external gate because the tool was on
+  this machine's PATH. Unchanged: the three npm gates' behaviour, argv, exit reading,
+  version probe and timeout. This implies a minor version bump, to 0.5.0.
 
 ## [0.4.7] - 2026-09-26
 

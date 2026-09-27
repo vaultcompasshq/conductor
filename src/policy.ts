@@ -1,6 +1,7 @@
 // The one policy file.
 //
-// Gates are keyed by the ROLE they fill (dependencies, secrets, intent) and
+// Gates are keyed by the ROLE they fill (dependencies, secrets, intent,
+// secrets-history, vulnerabilities) and
 // name the product filling it in a `product` field. That indirection is
 // worth the extra line: a product rename, or swapping one gate for another,
 // becomes a one-line edit instead of a rename of the key a repository wrote
@@ -9,18 +10,19 @@
 // Two rules this file exists to enforce, both of them decisions rather than
 // mechanics:
 //
-//  1. THERE IS NO SHARED SEVERITY THRESHOLD. Two of the three products
-//     happen to share a four-level scale; the third scores a weighted
-//     rubric from 0 to 100 and has no per-finding severity at all. A single
-//     `failOn` at the top of the file would read as one decision and mean
-//     three different things, so a top-level `failOn` is rejected outright
+//  1. THERE IS NO SHARED SEVERITY THRESHOLD. Five products, two of them
+//     external tools. Two of the family's three share a four-level scale; the
+//     third scores a weighted rubric from 0 to 100, gitleaks reports match
+//     or no match, and osv-scanner carries CVSS scores. A single `failOn` at
+//     the top of the file would read as one decision and mean five
+//     different things, so a top-level `failOn` is rejected outright
 //     rather than silently ignored. Each gate keeps its own threshold in
 //     its own passthrough block, spelled the way that gate spells it.
 //
 //  2. THE PASSTHROUGH IS ACTUALLY A PASSTHROUGH. `options` keys are the
 //     gate's own long-flag names with the dashes stripped, and this file
 //     never maps, renames, or interprets one. That is what keeps the
-//     umbrella from growing a second, drifting copy of three CLIs, and it
+//     umbrella from growing a second, drifting copy of five CLIs, and it
 //     is why a gate gains a flag without this package needing a release.
 //     The only keys rejected are the handful the umbrella itself passes,
 //     because two writers of the same flag is a fight the user would have
@@ -38,10 +40,22 @@ import { parse as parseYaml } from 'yaml';
 
 export const POLICY_FILE_NAME = '.guardrails.yaml';
 
-export const GATE_ROLES = ['dependencies', 'secrets', 'intent'] as const;
+export const GATE_ROLES = [
+  'dependencies',
+  'secrets',
+  'intent',
+  'secrets-history',
+  'vulnerabilities',
+] as const;
 export type GateRole = (typeof GATE_ROLES)[number];
 
-export const PRODUCTS = ['dep-guard', 'vault-guard', 'intent-guard'] as const;
+/**
+ * Five products. The first three are this family's own npm packages, which
+ * the Action installs. The last two are external tools the adopter installs
+ * on their own machine or runner; conductor finds them on PATH and downloads
+ * nothing (src/products.ts, `managed: false`).
+ */
+export const PRODUCTS = ['dep-guard', 'vault-guard', 'intent-guard', 'gitleaks', 'osv-scanner'] as const;
 export type Product = (typeof PRODUCTS)[number];
 
 /**
@@ -59,8 +73,8 @@ export type GateStage = (typeof GATE_STAGES)[number];
 /**
  * Where each gate sits when the policy file does not say.
  *
- * Runtime is not what decides this. All three gates together take under a
- * second on a staged commit; the cost is CEREMONY, and only the intent gate
+ * Runtime is not what decides this for the three family gates: together they
+ * take under a second on a staged commit; the cost is CEREMONY, and only the intent gate
  * has any, because it wants a contract approved before the work starts.
  * The other two are silent until they find something, and a secret that
  * reaches a pull request is already on a remote, so the earliest stage is
@@ -70,6 +84,11 @@ export const DEFAULT_STAGE_FOR_ROLE: Record<GateRole, GateStage> = {
   dependencies: 'commit',
   secrets: 'commit',
   intent: 'ci',
+  // A history scan and a registry lookup are pull-request work, not
+  // commit-time work: one reads every commit, the other asks a network
+  // service, and neither says anything about the files being staged.
+  'secrets-history': 'ci',
+  vulnerabilities: 'ci',
 };
 
 /** Whether a gate at `gateStage` runs during a run asked for at `requested`. */
@@ -91,6 +110,8 @@ export const PRODUCT_FOR_ROLE: Record<GateRole, Product> = {
   dependencies: 'dep-guard',
   secrets: 'vault-guard',
   intent: 'intent-guard',
+  'secrets-history': 'gitleaks',
+  vulnerabilities: 'osv-scanner',
 };
 
 /**
@@ -125,6 +146,27 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   // problem rather than a confusion, since the loser decides where the gate
   // reads its rules from.
   'intent-guard': ['json', 'staged', 'project', 'paths', 'base', 'trust-base'],
+  // The umbrella writes every one of these for gitleaks: the report goes to a
+  // file it owns, the exit code for a leak is moved off 1 so an error and a
+  // leak stop sharing a number, history is scoped by --log-opts so one
+  // branch's secret cannot redden every other pull request, and the config
+  // is read from the base ref on a pull request, as is the ignore file.
+  gitleaks: [
+    'report-format',
+    'report-path',
+    'exit-code',
+    'log-opts',
+    'config',
+    'gitleaks-ignore-path',
+    'ignore-gitleaks-allow',
+    'redact',
+    'no-banner',
+    'log-level',
+  ],
+  // osv-scanner: the umbrella owns the format (json to stdout), the config on
+  // a pull-request run, and which lockfiles are scanned (every tracked one,
+  // by name; there is no directory walk and so no --recursive).
+  'osv-scanner': ['format', 'config', 'lockfile'],
 };
 
 export type OptionValue = string | number | boolean | Array<string | number>;
@@ -271,11 +313,63 @@ function reservedReason(product: Product, key: string): string {
       'parser. The report format is chosen with the umbrella own --format.'
     );
   }
+  const external = EXTERNAL_RESERVED_REASONS[product]?.[key];
+  if (external !== undefined) {
+    return `The umbrella passes --${key} to ${product} itself. ${external}`;
+  }
   return (
     `The umbrella passes that flag to ${product} itself, and two writers of one flag ` +
     'would resolve differently depending on that CLI argument parser.'
   );
 }
+
+/**
+ * Why each flag the umbrella writes for an external tool is the umbrella's.
+ * Every one of them is written; the sentence says what a second writer would
+ * break, which for these tools is a verdict rather than a formatting detail.
+ */
+const EXTERNAL_RESERVED_REASONS: Partial<Record<Product, Record<string, string>>> = {
+  gitleaks: {
+    'report-format':
+      'The report is parsed as JSON; another format would make every run unparseable.',
+    'report-path':
+      'The report goes to a file the umbrella owns and reads back; pointing it elsewhere would ' +
+      'leave the umbrella nothing to read.',
+    'exit-code':
+      'The umbrella moves the leak exit code to 3 because gitleaks also exits 1 on an error; ' +
+      'another value would make a crash read as a leak, or a leak read as clean.',
+    'log-opts':
+      'The umbrella scopes history to HEAD, or to base..HEAD on a pull request, so a secret on ' +
+      'another branch cannot redden this one. Narrow the scan in .gitleaks.toml instead.',
+    config:
+      'On a pull request the config is read from the base ref, so the pull request cannot ' +
+      'allowlist what it adds. Commit .gitleaks.toml instead.',
+    'gitleaks-ignore-path':
+      'On a pull request the ignore file is read from the base ref, so the pull request cannot ' +
+      'ignore the fingerprint of the leak it adds. Commit .gitleaksignore instead.',
+    'ignore-gitleaks-allow':
+      'On a pull request inline gitleaks:allow comments are ignored, because an inline allow ' +
+      'lives in the tree being judged and the pull request controls it. A legitimate allow ' +
+      'belongs in the base ref .gitleaks.toml allowlist or .gitleaksignore.',
+    redact:
+      'Findings reach a pull-request comment and a SARIF upload; the umbrella keeps secrets ' +
+      'redacted in the report it reads.',
+    'no-banner': 'The banner is noise on stderr, which the report shows when a gate fails.',
+    'log-level':
+      'The umbrella depends on gitleaks ERR lines to tell a failed scan from a clean one: gitleaks ' +
+      'reports a git failure as exit 0 with an empty report. A lower level would silence them and ' +
+      'turn a scan that never happened into a pass, so the umbrella pins it at info.',
+  },
+  'osv-scanner': {
+    format: 'The output is parsed as JSON from stdout; another format would make every run unparseable.',
+    config:
+      'On a pull request the config is read from the base ref, so the pull request cannot ' +
+      'ignore the advisory it introduces. Commit osv-scanner.toml instead.',
+    lockfile:
+      'The umbrella hands osv-scanner every tracked lockfile by name, so no lockfile is left ' +
+      'out by a policy line or by a .gitignore entry.',
+  },
+};
 
 /**
  * Parses and validates policy YAML.

@@ -64,6 +64,7 @@ import { accessSync, constants, statSync } from 'node:fs';
 import path from 'node:path';
 
 import type { GatePolicy, Product } from './policy.js';
+import { profileFor } from './products.js';
 
 export type ResolutionSource = 'policy' | 'path' | 'node_modules';
 
@@ -123,6 +124,10 @@ export const CANDIDATES: Record<Product, Candidate[]> = {
     { name: 'intent-guard', prefix: ['check'], versionSafe: true },
     { name: 'intent-guard-check', prefix: [], versionSafe: false },
   ],
+  // The two external tools. Each has one name, and both version probes
+  // (gitleaks version, osv-scanner --version) print and exit without scanning.
+  gitleaks: [{ name: 'gitleaks', prefix: ['git'], versionSafe: true }],
+  'osv-scanner': [{ name: 'osv-scanner', prefix: ['scan', 'source'], versionSafe: true }],
 };
 
 export interface ResolveOptions {
@@ -241,8 +246,14 @@ function versionProbeFor(
   pathValue: string,
   skipNodeModules: boolean
 ): VersionProbe | null {
+  // How to ask is the product's (src/products.ts); whether this particular
+  // binary can be asked safely is the candidate's, per rule 2 above.
+  const spec = profileFor(product).versionProbe;
+  if (spec === null) {
+    return null;
+  }
   if (resolvedCandidate.versionSafe) {
-    return { command: resolvedCommand, argv: ['--version'] };
+    return { command: resolvedCommand, argv: [...spec.argv] };
   }
   for (const candidate of CANDIDATES[product]) {
     if (!candidate.versionSafe) {
@@ -253,7 +264,7 @@ function versionProbeFor(
     // head-chosen program in order to answer a question about it.
     const found = locate(candidate.name, repoRoot, pathValue, skipNodeModules);
     if (found !== null) {
-      return { command: found.command, argv: ['--version'] };
+      return { command: found.command, argv: [...spec.argv] };
     }
   }
   return null;
@@ -313,8 +324,12 @@ export function resolveGateBinary(
         argvPrefix: [gate.command, ...prefix],
         source: 'policy',
         candidate: candidateName,
-        versionProbe: candidate.versionSafe
-          ? { command: process.execPath, argv: [gate.command, '--version'] }
+        versionProbe:
+          candidate.versionSafe && profileFor(gate.product).versionProbe !== null
+            ? {
+                command: process.execPath,
+                argv: [gate.command, ...(profileFor(gate.product).versionProbe?.argv ?? [])],
+              }
           : versionProbeFor(
               gate.product,
               candidate,

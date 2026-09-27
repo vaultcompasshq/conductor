@@ -6,11 +6,15 @@ import { fileURLToPath } from 'node:url';
 import {
   GATE_STATE_REASON_KINDS,
   classifyGateStateReason,
+  cvssToSeverity,
   normalizeDepGuard,
+  normalizeGitleaks,
   normalizeIntentGuard,
   normalizeMissingGate,
+  normalizeOsvScanner,
   normalizeVaultGuard,
 } from '../src/normalize.js';
+import { NormalizeError } from '../src/envelope.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -758,5 +762,208 @@ describe("intent-guard's pull-request-mode refusals", () => {
         '1.4.0'
       )
     ).toThrow(/trustBase\.proposals\[0\] should be a string/);
+  });
+});
+
+describe('gitleaks 8.30.1 normalization', () => {
+  const blocking = fixture('gitleaks-8.30.1-history-blocking.json');
+  const clean = fixture('gitleaks-8.30.1-history-clean.json');
+  // The planted token's first twelve characters, recorded in
+  // tests/fixtures/README.md. The report is redacted, and the normalizer must
+  // never carry Secret, Match or Line even when a report is not.
+  const PLANTED_PREFIX = 'dp.pt.q7ZkR2';
+
+  it('turns each report entry into a high, blocking finding at the leaked line with the rule as the id', () => {
+    const out = normalizeGitleaks(blocking, '8.30.1', true);
+    expect(out.findings.length).toBe((blocking as unknown[]).length);
+    const f = out.findings[0]!;
+    expect(f.product).toBe('gitleaks');
+    expect(f.productVersion).toBe('8.30.1');
+    expect(f.ruleId).toBe('gitleaks/doppler-api-token');
+    expect(f.severity).toBe('high');
+    expect(f.severityIsDerived).toBe(true);
+    expect(f.blocking).toBe(true);
+    expect(f.subject).toEqual({ kind: 'location', file: 'config.json', line: 3, column: 22, endColumn: 70 });
+    expect(f.fingerprint).toEqual({
+      value: (blocking as Array<{ Fingerprint: string }>)[0]!.Fingerprint,
+      scope: 'gitleaks',
+      stability: 'stable',
+    });
+    expect(f.details.commit).toBe((blocking as Array<{ Commit: string }>)[0]!.Commit);
+    expect(JSON.stringify(f)).not.toContain(PLANTED_PREFIX);
+    expect(JSON.stringify(f)).not.toContain('REDACTED');
+  });
+
+  it('never carries the matched text, even from an unredacted report', () => {
+    const unredacted = (blocking as Array<Record<string, unknown>>).map((entry) => ({
+      ...entry,
+      Secret: `${PLANTED_PREFIX}xxxx`,
+      Match: `token: ${PLANTED_PREFIX}xxxx`,
+      Line: `"doppler_token": "${PLANTED_PREFIX}xxxx"`,
+    }));
+    const out = normalizeGitleaks(unredacted, '8.30.1', true);
+    expect(JSON.stringify(out)).not.toContain(PLANTED_PREFIX);
+  });
+
+  it('carries the commit and date but never the author or the email', () => {
+    const f = normalizeGitleaks(blocking, '8.30.1', true).findings[0]!;
+    expect(f.details.commit).toBeDefined();
+    expect(f.details.date).toBeDefined();
+    expect(f.details.author).toBeUndefined();
+    expect(JSON.stringify(f)).not.toContain('fixture@example.invalid');
+    expect(JSON.stringify(f)).not.toContain('"Fixture"');
+  });
+
+  it('collapses the same leak seen in two commits into one finding, keeping the earliest and naming the other', () => {
+    // --diff-merges=first-parent shows a pull request's change twice: in its
+    // own commit and in the merge's first-parent diff.
+    const original = (blocking as Array<Record<string, unknown>>)[0]!;
+    const merge = { ...original, Commit: 'b'.repeat(40), Date: '2099-01-01T00:00:00Z', Fingerprint: `${'b'.repeat(40)}:config.json:doppler-api-token:3` };
+    for (const report of [[original, merge], [merge, original]]) {
+      const out = normalizeGitleaks(report, '8.30.1', true);
+      expect(out.findings).toHaveLength(1);
+      expect(out.findings[0]!.details.commit).toBe(original.Commit);
+      expect(out.findings[0]!.details.alsoIn).toEqual(['b'.repeat(40)]);
+      expect(out.findings[0]!.fingerprint?.value).toBe(original.Fingerprint);
+    }
+  });
+
+  it('on equal or missing dates keeps the LAST entry in report order, which git log lists oldest', () => {
+    // git log lists newer commits first, so the last entry is the oldest
+    // commit and never a synthetic merge made after it.
+    const original = (blocking as Array<Record<string, unknown>>)[0]!;
+    const merge = { ...original, Commit: 'b'.repeat(40) };
+    const tie = normalizeGitleaks([merge, original], '8.30.1', true).findings;
+    expect(tie).toHaveLength(1);
+    expect(tie[0]!.details.commit).toBe(original.Commit);
+    expect(tie[0]!.details.alsoIn).toEqual(['b'.repeat(40)]);
+
+    const undated = { ...original };
+    delete undated.Date;
+    const undatedMerge = { ...undated, Commit: 'c'.repeat(40) };
+    const missing = normalizeGitleaks([undatedMerge, undated], '8.30.1', true).findings;
+    expect(missing[0]!.details.commit).toBe(original.Commit);
+    expect(missing[0]!.details.alsoIn).toEqual(['c'.repeat(40)]);
+  });
+
+  it('keeps leaks at different places apart', () => {
+    const original = (blocking as Array<Record<string, unknown>>)[0]!;
+    const elsewhere = { ...original, StartLine: 9, Commit: 'c'.repeat(40) };
+    expect(normalizeGitleaks([original, elsewhere], '8.30.1', true).findings).toHaveLength(2);
+  });
+
+  it('marks findings non-blocking when the exit code did not say blocked', () => {
+    expect(normalizeGitleaks(blocking, '8.30.1', false).findings.every((f) => !f.blocking)).toBe(true);
+  });
+
+  it('returns no findings for an empty report', () => {
+    expect(normalizeGitleaks(clean, '8.30.1', false).findings).toEqual([]);
+  });
+
+  it('rejects a report that is not an array', () => {
+    expect(() => normalizeGitleaks({ findings: [] }, '8.30.1', false)).toThrow(NormalizeError);
+  });
+
+  it('rejects an entry without a RuleID or a File', () => {
+    expect(() => normalizeGitleaks([{ File: 'a', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
+    expect(() => normalizeGitleaks([{ RuleID: 'x', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
+    expect(() => normalizeGitleaks([null], '8.30.1', false)).toThrow(NormalizeError);
+  });
+});
+
+describe('osv-scanner 2.6.0 normalization', () => {
+  const blocking = fixture('osv-scanner-2.6.0-blocking.json');
+  const clean = fixture('osv-scanner-2.6.0-clean.json');
+  type Raw = {
+    results: Array<{
+      source: { path: string };
+      packages: Array<{ package: { name: string; version: string }; vulnerabilities: Array<{ id: string }> }>;
+    }>;
+  };
+
+  it('emits one finding per vulnerability id on a package, keyed by the OSV id', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true);
+    const raw = blocking as Raw;
+    const expectedCount = raw.results.flatMap((r) => r.packages.flatMap((p) => p.vulnerabilities)).length;
+    expect(out.findings.length).toBe(expectedCount);
+    const first = out.findings[0]!;
+    const rawFirst = raw.results[0]!.packages[0]!;
+    expect(first.product).toBe('osv-scanner');
+    expect(first.ruleId).toBe(`osv-scanner/${rawFirst.vulnerabilities[0]!.id}`);
+    expect(first.subject).toEqual({ kind: 'package', name: rawFirst.package.name, manifest: raw.results[0]!.source.path });
+    expect(first.blocking).toBe(true);
+    expect(first.severityIsDerived).toBe(true);
+    expect(['critical', 'high', 'medium', 'low']).toContain(first.severity);
+    expect(first.fingerprint?.stability).toBe('stable');
+    expect(first.details.version).toBe(rawFirst.package.version);
+  });
+
+  it('takes severity from the group max_severity that names the advisory', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true);
+    // GHSA-35jh-r3h4-6jhm sits in the group scored 8.1; GHSA-29mw-wpgm-hmr9 in 5.3.
+    const high = out.findings.find((f) => f.ruleId === 'osv-scanner/GHSA-35jh-r3h4-6jhm')!;
+    expect(high.severity).toBe('high');
+    expect(high.details.cvss).toBe(8.1);
+    const medium = out.findings.find((f) => f.ruleId === 'osv-scanner/GHSA-29mw-wpgm-hmr9')!;
+    expect(medium.severity).toBe('medium');
+  });
+
+  it('carries aliases and the fixed version when the advisory names one', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true);
+    const withFix = out.findings.find((f) => f.details.fixedVersion !== undefined);
+    expect(withFix).toBeDefined();
+    expect(out.findings.find((f) => f.ruleId === 'osv-scanner/GHSA-29mw-wpgm-hmr9')?.details.fixedVersion).toBe('4.17.21');
+    expect(Array.isArray(out.findings[0]!.details.aliases)).toBe(true);
+  });
+
+  it('takes the fixed version from the range the installed version is in, not the first fix listed', () => {
+    // The shape of nanoid's GHSA-28wg-ghj8-5hjv in the osv-scanner 2.6.0
+    // capture that could not be committed (tests/fixtures/README.md): one
+    // advisory, two ranges for the same package.
+    const raw = {
+      results: [
+        {
+          source: { path: 'package-lock.json', type: 'lockfile' },
+          packages: [
+            {
+              package: { name: 'nanoid', version: '5.0.9', ecosystem: 'npm' },
+              groups: [{ ids: ['GHSA-28wg-ghj8-5hjv'], max_severity: '8.2' }],
+              vulnerabilities: [
+                {
+                  id: 'GHSA-28wg-ghj8-5hjv',
+                  affected: [
+                    { package: { name: 'nanoid' }, ranges: [{ events: [{ introduced: '0' }, { fixed: '3.3.16' }] }] },
+                    { package: { name: 'nanoid' }, ranges: [{ events: [{ introduced: '4.0.0' }, { fixed: '5.1.16' }] }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(normalizeOsvScanner(raw, '2.6.0', true).findings[0]!.details.fixedVersion).toBe('5.1.16');
+  });
+
+  it('makes an absolute manifest path relative to the scan root it was given', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true, ['/tmp/conductor-osv-fixture']);
+    expect(out.findings[0]!.subject).toEqual({ kind: 'package', name: 'lodash', manifest: 'package-lock.json' });
+    expect(out.findings[0]!.fingerprint?.value).not.toContain('/tmp/');
+  });
+
+  it('gives no findings for an empty results array', () => {
+    expect(normalizeOsvScanner(clean, '2.6.0', false).findings).toEqual([]);
+  });
+
+  it('rejects output without a results array', () => {
+    expect(() => normalizeOsvScanner({ packages: [] }, '2.6.0', false)).toThrow(NormalizeError);
+  });
+
+  it('maps CVSS scores onto the shared ladder', () => {
+    expect(cvssToSeverity(9.8)).toBe('critical');
+    expect(cvssToSeverity(7.5)).toBe('high');
+    expect(cvssToSeverity(5.0)).toBe('medium');
+    expect(cvssToSeverity(2.1)).toBe('low');
+    expect(cvssToSeverity(null)).toBe('medium');
   });
 });

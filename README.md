@@ -6,11 +6,12 @@ scanners cannot do on their own: a hallucinated package name, a credential
 caught before the edit lands, a pull request that edits its own gate, a
 change that reaches outside what was approved for it.
 
-It does that by running three gates that each already work on their own,
-over one policy file, one init, one hook and one report. Delete conductor
-and every one of those three still runs, with exactly the configuration it
-had: nothing here is a fourth scanner, only the umbrella over the three
-that exist.
+It does that by running five gates over one policy file, one init, one
+hook and one report: three from this family, and two the adopter already
+installs, gitleaks for secrets anywhere in git history and osv-scanner for
+known vulnerabilities. conductor scans nothing itself and installs nothing
+that is not its own. Delete conductor and every one of those five still
+runs, with exactly the configuration it had.
 
 The claim is checked in public. The
 [conductor-proof](https://github.com/vaultcompasshq/conductor-proof)
@@ -64,6 +65,22 @@ required.
 
    ```
    npm install -g @vaultcompass/conductor
+   ```
+
+   The two external gates are installed by you, on your machine and in your
+   workflow, from their own releases: [gitleaks](https://github.com/gitleaks/gitleaks)
+   8.19 or later and [osv-scanner](https://github.com/google/osv-scanner)
+   2.x. conductor never downloads either one. It finds them on `PATH`, and
+   when one is enabled in the policy and missing, the run reports
+   could-not-run (exit 2) with the install step in the report. Two policy
+   lines switch them on:
+
+   ```yaml
+   gates:
+     secrets-history:
+       product: gitleaks
+     vulnerabilities:
+       product: osv-scanner
    ```
 
    **Globally, and that is the guidance for CI too.** A devDependency is
@@ -205,8 +222,9 @@ the pull request page.
 
 ## Why
 
-Run all three and you have three inits, three config files, three output
-shapes, and three pre-commit hooks fighting over one file. That is the
+Run all three family gates and you have three inits, three config files,
+three output shapes, and three pre-commit hooks fighting over one file, and
+a separate job for the two external scanners. That is the
 friction this repository removes, and that is all it removes:
 
 - **one policy file**, `.guardrails.yaml`, keyed by the role each gate
@@ -225,8 +243,8 @@ it is what makes a team switch a hook off.
 
 ## What it deliberately is not
 
-It is not a fourth gate. It finds no bugs of its own and scans nothing.
-Every finding about your code came from one of the three gates and is
+It is not a sixth gate. It finds no bugs of its own and scans nothing.
+Every finding about your code came from one of the five gates and is
 labelled with which one. The only findings it adds are about the gates
 themselves, and they are labelled `conductor`: a gate that is switched on
 and could not run, and a gate whose output it could not read. Those exist
@@ -236,8 +254,8 @@ whole family exists to prevent.
 It is not something you adopt before the gates are useful. Each gate keeps
 its own config file, its own baseline, its own thresholds, and its own exit
 codes. The umbrella never writes into any of them: it passes a policy to
-each gate as command-line flags, which every one of the three already
-treats as higher precedence than its own config. Delete this tool and every
+each gate as command-line flags, which every one of them already treats as
+higher precedence than its own config. Delete this tool and every
 gate still runs, with exactly the configuration it had, because nothing
 here ever touched it.
 
@@ -275,13 +293,26 @@ gates:
     enforce: false
     options:
       require-frozen: false
+  secrets-history:
+    product: gitleaks
+    enabled: true
+    stage: ci
+    enforce: true
+  vulnerabilities:
+    product: osv-scanner
+    enabled: true
+    stage: ci
+    enforce: true
 
 report:
   format: text
 ```
 
-**Gates are keyed by role**, not by product. `dependencies`, `secrets`,
-`intent`. The `product` field says which binary fills that role today.
+**Gates are keyed by role**, not by product. `dependencies` (dep-guard),
+`secrets` (vault-guard), `intent` (intent-guard), `secrets-history`
+(gitleaks, scanning git history) and `vulnerabilities` (osv-scanner, over
+the resolved dependency tree). The `product` field says which binary fills
+that role today. The last two are external tools you install yourself.
 
 **`enabled`** defaults to true. A gate that is enabled and whose binary
 cannot be found is a blocking finding of the umbrella's own
@@ -290,7 +321,9 @@ cannot be found is a blocking finding of the umbrella's own
 **`stage`** says when a gate runs: `commit`, `push`, or `ci`. Stages are
 **cumulative** in that order, so a gate runs at its own stage and at every
 later one, and a run at `ci` runs everything that is enabled. The defaults
-are `commit` for `dependencies` and `secrets` and `ci` for `intent`.
+are `commit` for `dependencies` and `secrets`, and `ci` for `intent`,
+`secrets-history` and `vulnerabilities`: a history scan and a registry
+lookup are pull-request work, not commit-time work.
 
 A gate held back by the stage filter is never silent. It is one line in the
 text report naming the stage it is waiting for, and a `conductor/gate-deferred`
@@ -319,10 +352,18 @@ becomes `--fail-on high`, `online: true` becomes `--online`,
 `require-frozen: false` becomes `--no-require-frozen`, and a list becomes
 one flag per entry. The handful of flags the umbrella supplies itself (the
 JSON format flag, `--staged`, and the intent gate's `--project`) are
-rejected if you also set them, rather than being silently overridden.
+rejected if you also set them, rather than being silently overridden. For
+the external gates the umbrella writes `--report-format`, `--report-path`,
+`--exit-code`, `--log-opts`, `--config`, `--gitleaks-ignore-path`,
+`--ignore-gitleaks-allow`, `--log-level`, `--redact` and `--no-banner` to
+gitleaks, and
+`--format`, `--config` and `--lockfile` to osv-scanner, so those are
+reserved too. Narrow what either
+tool reports in its own config file (`.gitleaks.toml`, `osv-scanner.toml`)
+instead.
 
 **There is no shared severity threshold, on purpose.** One top-level
-`failOn` would read as one decision and mean three different things, so
+`failOn` would read as one decision and mean five different things, so
 setting one is an error rather than a knob that half works. Each gate keeps
 its own threshold in its own `options` block, spelled the way that gate
 spells it.
@@ -439,7 +480,29 @@ proceeds normally without mentioning them.
 - **2** an enabled gate could not run: its binary is missing, it exited with
   its own could-not-run code, or it exited 1 with nothing parseable on
   stdout, which is what a rejected config file looks like from two of the
-  three.
+  three family gates.
+
+The external gates' exits are read per tool. gitleaks exits 1 for an error
+as well as for a leak, so the umbrella hands it `--exit-code 3`: 3 is a leak
+(blocked), 1 is could-not-run. gitleaks also exits 0 with an empty report
+when git itself fails (a base ref the checkout never fetched), so a clean
+exit that logged an `ERR` line is could-not-run too, never a pass. A
+gitleaks exit with no report file behind it is could-not-run. osv-scanner is
+handed every tracked lockfile by name (`package-lock.json`,
+`npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, at any
+depth, never under `node_modules`); when the repository tracks none, it is
+not spawned at all and the gate is reported clean with a
+`conductor/nothing-to-scan` note, so a docs-only repository is not red on
+every pull request. Its 1 is blocked. Its own 128 ("no package sources
+found") on lockfiles it WAS handed means they parsed to no packages; that is
+clean too, with a distinct `conductor/lockfiles-empty` note naming the
+files. Only those npm-family names are handed over today: a repository
+whose only lockfile belongs to another ecosystem gets nothing-to-scan from
+this gate. Lockfiles inside git submodules are never listed. In a sparse
+checkout a tracked lockfile that is not on disk is still handed over and
+osv-scanner exits 127 on it, a false could-not-run that fails closed. Any other osv-scanner exit
+(127 is its error code) is could-not-run. A gitleaks older than 8.19 or an
+osv-scanner older than 2.0 is could-not-run, naming the floor.
 
 `run --advisory` maps exit 1 to exit 0. It never touches exit 2: a gate that
 could not run is a different failure from a blocking finding, and advisory
@@ -593,8 +656,66 @@ choose its own judge on exactly the repositories that have no rules yet. See
 "Adopting conductor" below for the sequence and for how to see what your
 policy will do before you merge it.
 
-**Which gates are covered.** All three: dep-guard from **0.6.0**,
-intent-guard from **1.4.0**, vault-guard from **1.7.0**.
+**Which gates are covered.** All five: dep-guard from **0.6.0**,
+intent-guard from **1.4.0**, vault-guard from **1.7.0**, and the two
+external gates at their command-line floors, gitleaks **8.19.0** and
+osv-scanner **2.0.0**.
+
+**The external gates get their pull-request mode from the umbrella.**
+Neither tool has a `--trust-base`, and both auto-load a config from the tree
+they scan, which on a pull request is the head: a pull request could add an
+allowlist entry for exactly the secret or advisory it introduces. So on a
+pull-request run the umbrella reads `.gitleaks.toml` and `osv-scanner.toml`
+from the base ref with `git show` and passes each tool that copy with
+`--config`. When the base has none, the tool gets a neutral one (gitleaks'
+built-in rules, an empty osv-scanner config) rather than nothing, because
+nothing would let it find the head's file on its own. gitleaks'
+`.gitleaksignore` is handled the same way, and because gitleaks also loads
+the ignore file at the root of whatever it scans, the umbrella scans the
+repository's git directory instead of the working tree on a pull request:
+the same history, without the head's ignore file. A head-side change to any
+of these files is reported as a proposal line and takes effect after merge,
+exactly like a change to `.guardrails.yaml`. History is scoped to
+`<base>..HEAD` on a pull request and to `HEAD` locally, so a secret on
+another branch never reddens this one. Merge commits are scanned by their
+first-parent diff, so a secret added inside a merge (while resolving a
+conflict, say) is found; the same leak seen in a pull request's commit and
+again in its merge is reported once, with the other commit listed.
+
+A base `.gitleaks.toml` can name another file with `[extend] path`, which
+gitleaks resolves against its working directory. On a pull request
+conductor copies every file in that chain from the base ref into a
+directory of its own and runs gitleaks from there, so the head's copy of an
+extended file is never read; a head-side edit to one is a proposal, and an
+extended file the base does not have makes the gate could-not-run, naming
+it. gitleaks' log level is pinned at `info` and `log-level` is reserved,
+because conductor reads gitleaks' error lines to tell a failed scan from a
+clean one. Write the extend as a plain relative path in an `[extend]` table:
+a base `.gitleaks.toml` whose extend target is a symbolic link, or which
+writes the extend as an inline table or a quoted key, fails closed on every
+pull request until it is rewritten that way.
+
+**Local runs and `.gitattributes`.** On a pull request gitleaks scans the
+repository's git directory, where the head's `.gitattributes` is not read.
+A local run scans the working tree, so a file your own `.gitattributes`
+marks `binary` is skipped by gitleaks there. Pull requests are not affected.
+
+On a pull request gitleaks is also passed `--ignore-gitleaks-allow`, so an
+inline `gitleaks:allow` comment does not hide a secret: an inline allow
+lives in the tree being judged, so the pull request controls it. A
+legitimate allow belongs in the base branch's `.gitleaks.toml` allowlist or
+`.gitleaksignore`, both of which conductor already reads from the base.
+Local runs keep inline allows.
+
+osv-scanner is never pointed at a directory to walk, because its own walk
+skips anything `.gitignore` matches, tracked or not, so one ignore line in a
+pull request could hide a committed lockfile. conductor lists the tracked
+lockfiles with `git ls-files` and hands each one over with `--lockfile`. On
+a pull request that list comes from the head's index, not the base ref: the
+lockfiles are the tree being judged, and adding or removing one is visible
+in the diff. Only the root `osv-scanner.toml` is read from the base and
+passed with `--config`, which overrides any nested one for the run; a
+nested one the pull request adds or edits is reported as a proposal.
 
 The umbrella asks each gate its version and passes the flag only to a build
 that understands it, so an older gate is not handed a flag it would reject. A
@@ -614,7 +735,7 @@ the flag.
 
 ## Intent at a pull request
 
-The intent gate is the only one of the three with any ceremony: its native
+The intent gate is the only one of the five with any ceremony: its native
 flow wants a contract approved before the work starts, which is a per-task
 human step. That step is exactly what a pull request cannot carry, so at the
 `ci` stage the umbrella stands in for it.
@@ -925,6 +1046,37 @@ jobs:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
 ```
 
+**The two external gates are installed by your workflow, not by the
+Action.** The Action still installs exactly its four npm packages and has no
+input for gitleaks or osv-scanner; conductor downloads, pins and checksums
+no third-party binary. If the policy enables `secrets-history` or
+`vulnerabilities`, add a step before the conductor step that puts both tools
+on `PATH`, pinned by version and checked against the release's own
+checksum, the same way you would for a standalone security job:
+
+```yaml
+      - name: Install gitleaks and osv-scanner
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/external-gates"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          curl -sSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C "$bin" gitleaks
+          curl -sSL -o "$bin/osv-scanner" https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64
+          echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  $bin/osv-scanner" | sha256sum -c -
+          chmod +x "$bin/osv-scanner"
+          echo "$bin" >> "$GITHUB_PATH"
+```
+
+`fetch-depth: 0` on the checkout matters more with gitleaks enabled: on a
+pull request conductor scans `<base>..HEAD`, and a base that was never
+fetched is a git error gitleaks itself would report as a clean scan of
+nothing. conductor reads that error off gitleaks' log and reports the gate
+as could-not-run instead. A missing tool is could-not-run as well, with the
+install step named in the report.
+
 The `@v4` pins there are readable, not safe: a tag moves, so pinning by one
 runs whatever its author pushes to it next. Pin every third-party action by
 commit digest in a workflow you actually run, the way this repository's own
@@ -1202,12 +1354,16 @@ In: the policy file and its schema, `init` with dry-run, revert, and adopt,
 `run` producing the combined text report and a combined SARIF log, the
 composed exit code, per-gate `stage` and `enforce`, `run --stage`, the intent
 gate at a pull request (`--base`, `--spec`, the imported contract, the
-no-contract advisory), and the composite Action.
+no-contract advisory), the two external gates (gitleaks over git history and
+osv-scanner over the dependency tree, run from `PATH`, their config read
+from the base ref on a pull request), and the composite Action.
 
 Out, deliberately: a unified baseline or ledger (each gate keeps its own, and
 their fingerprints are not equally durable, so one shared file would expire
 entries silently for one product and not another), an MCP registration,
-running the gates concurrently, and any finding of the umbrella's own about
+running the gates concurrently, downloading or pinning any third-party
+binary (the adopter installs gitleaks and osv-scanner), and any finding of
+the umbrella's own about
 anybody's CODE. The findings it does raise are all about the gates
 themselves: `conductor/gate-missing`, `conductor/gate-output-unparseable`
 and `conductor/gate-failed`, plus the two diagnostics
@@ -1220,7 +1376,8 @@ runs inside an agent session or on save, which intent-guard's own optional
 session hooks already cover.
 
 This is a young tool rather than a finished one. The gates are still the
-product; this is the convenience layer over them.
+product, two of them are not this family's, and this is the layer that
+makes them one required check.
 
 ## Design notes
 
