@@ -1,4 +1,5 @@
-// `conductor init`: one policy file, one pre-commit hook, one manifest.
+// `conductor init`: one policy file, one manifest, and with --hook one
+// pre-commit hook.
 //
 // The manifest is what makes --revert honest. Without one, "undo the init"
 // means guessing which files were the tool's, and a tool that guesses about
@@ -109,6 +110,7 @@ import {
 import type { Manifest, ManifestFile } from './init-manifest.js';
 
 import { POLICY_FILE_NAME, detectGates, renderPolicy } from './init-policy.js';
+import { frozenNativeContractPath } from './intent-prepare.js';
 
 export {
   MANAGED_HOOK_MARKER,
@@ -226,7 +228,14 @@ export type ConflictReason =
   | 'no-manifest'
   | 'manifest-unreadable'
   | 'changed-since-init'
-  | 'write-failed';
+  | 'write-failed'
+  /**
+   * --adopt or --force was given on an init that does not also carry --hook.
+   * Both flags are about the hook alone -- replacing a gate's own, or
+   * overwriting one somebody edited -- and with no --hook there is no hook
+   * being written for either of them to act on.
+   */
+  | 'flag-requires-hook';
 
 export interface InitConflict {
   path: string;
@@ -253,6 +262,16 @@ export interface InitResult {
   conflicts: InitConflict[];
   /** Absolute path of the hook file, empty when there is nothing to write. */
   hookPath: string;
+  /**
+   * Whether this run was asked to write a hook at all. False is the default:
+   * a fresh `conductor init` writes only the policy file and the manifest,
+   * and `--hook` opts into the pre-commit hook on top of that. Carried on the
+   * result so the human renderer can say, at the end of a run that did not
+   * ask for one, that no hook was written and how to add one -- rather than
+   * a reader inferring it from an empty hookPath, which is also what a
+   * refused run reports.
+   */
+  hookRequested: boolean;
   /**
    * Which hook manager owns this repository's pre-commit hook, as detected.
    * `husky` means hookPath is the TRACKED file rather than the generated
@@ -286,6 +305,16 @@ export interface InitOptions {
   /** PATH used for gate detection. Injected so tests never depend on the machine. */
   pathValue: string;
   dryRun?: boolean;
+  /**
+   * Opt into the pre-commit hook. Without it, init writes only the policy
+   * file and the manifest: no hook is detected, written, or reported on.
+   * Every CI-only adopter that does not want a local hook at all otherwise
+   * gets one it never asked for, and a hook `.git/hooks` never carries to a
+   * second clone anyway, so writing one by default is a promise init cannot
+   * keep past the first checkout. Ignored by --revert, which always removes
+   * whatever a previous --hook run wrote.
+   */
+  hook?: boolean;
   /** Replace a per-gate hook with the umbrella's. Never replaces a foreign one. */
   adopt?: boolean;
   /**
@@ -384,6 +413,7 @@ function samePath(left: string, right: string): boolean {
 
 export function planInit(options: InitOptions): InitResult {
   const dryRun = Boolean(options.dryRun);
+  const wantsHook = Boolean(options.hook);
   const actions: InitAction[] = [];
   const conflicts: InitConflict[] = [];
   const writes: InitResult['writes'] = [];
@@ -397,11 +427,31 @@ export function planInit(options: InitOptions): InitResult {
     conflicts,
     hookPath: '',
     hookManager: 'native',
+    hookRequested: wantsHook,
     repoRoot: '',
     adoptedFrom: null,
     writes,
     records,
   };
+
+  // Both flags are entirely about the hook -- replacing a gate's own, or
+  // overwriting one somebody edited -- so neither means anything without
+  // --hook, and running one anyway silently does nothing rather than erroring
+  // is how a flag typed on the command line gets ignored without a word.
+  // Checked before anything about the repository, because this is wrong
+  // however the repository looks.
+  if (!wantsHook && (options.adopt || options.force)) {
+    const flag = options.adopt ? '--adopt' : '--force';
+    conflicts.push({
+      path: flag,
+      reason: 'flag-requires-hook',
+      guidance:
+        `${flag} only makes sense together with --hook: without --hook, init writes no ` +
+        `pre-commit hook, so there is nothing for ${flag} to act on. Add --hook to the command, ` +
+        `or drop ${flag} if you only want the policy file.`,
+    });
+    return base;
+  }
 
   const root = repoRootOf(options.cwd);
   if (root === null) {
@@ -411,6 +461,17 @@ export function planInit(options: InitOptions): InitResult {
       guidance: 'Run "git init" first: a pre-commit hook has nothing to attach to otherwise.',
     });
     return base;
+  }
+
+  const policyPath = path.join(root, POLICY_FILE_NAME);
+
+  if (!wantsHook) {
+    actions.push({
+      kind: 'skip',
+      path: 'pre-commit hook',
+      detail: 'not written: pass --hook to add one',
+    });
+    return finishPlanWithoutHook(options, root, policyPath, base, actions, writes, records);
   }
 
   const hooks = effectiveHooksDir(options.cwd, root);
@@ -497,8 +558,6 @@ export function planInit(options: InitOptions): InitResult {
   const hookManager: HookManager = husky ? 'husky' : 'native';
   const hookPath = huskyDir === null ? executedHookPath : path.join(huskyDir, 'pre-commit');
   const relHook = path.relative(root, hookPath).split(path.sep).join('/');
-  const policyPath = path.join(root, POLICY_FILE_NAME);
-  const manifestPath = path.join(root, MANIFEST_RELATIVE_PATH);
 
   // Under husky this is the TRACKED file, never the dispatcher: reading the
   // dispatcher reported a real gate hook as foreign, which is exactly what
@@ -613,11 +672,34 @@ export function planInit(options: InitOptions): InitResult {
     writes.push({ path: hookPath, content: HOOK, executable: true, kind: 'hook' });
   }
 
+  return finishPlan(options, root, policyPath, base, actions, writes, records, {
+    hookPath,
+    hookManager,
+    adoptedFrom,
+  });
+}
+
+/**
+ * The tail every path through planInit shares once the hook question is
+ * settled, one way or the other: the policy file, which is never rewritten
+ * once it exists, and the manifest action, which is work even when nothing
+ * is written because the manifest itself still has to be rebuilt.
+ */
+function finishPlan(
+  options: InitOptions,
+  root: string,
+  policyPath: string,
+  base: InitResult,
+  actions: InitAction[],
+  writes: InitResult['writes'],
+  records: InitResult['records'],
+  hook: { hookPath: string; hookManager: HookManager; adoptedFrom: AdoptedHook | null }
+): InitResult {
   const existingPolicy = readIfExists(policyPath);
   if (existingPolicy === undefined) {
     writes.push({
       path: policyPath,
-      content: renderPolicy(detectGates(root, options.pathValue)),
+      content: renderPolicy(detectGates(root, options.pathValue), frozenNativeContractPath(root)),
       executable: false,
       kind: 'policy',
     });
@@ -643,13 +725,37 @@ export function planInit(options: InitOptions): InitResult {
     ...base,
     ok: true,
     alreadyInstalled,
-    hookPath,
-    hookManager,
+    hookPath: hook.hookPath,
+    hookManager: hook.hookManager,
     repoRoot: root,
-    adoptedFrom,
+    adoptedFrom: hook.adoptedFrom,
     writes,
     records,
   };
+}
+
+/**
+ * The whole plan when --hook was not given: no hook is detected, no hook
+ * manager is consulted, and no hook conflict can block the policy file from
+ * being written. A repository wired for husky, or already hooked by another
+ * gate, gets its policy file exactly as readily as one with nothing wired at
+ * all, because none of that is in this run's way when it never touches
+ * .git/hooks.
+ */
+function finishPlanWithoutHook(
+  options: InitOptions,
+  root: string,
+  policyPath: string,
+  base: InitResult,
+  actions: InitAction[],
+  writes: InitResult['writes'],
+  records: InitResult['records']
+): InitResult {
+  return finishPlan(options, root, policyPath, base, actions, writes, records, {
+    hookPath: '',
+    hookManager: 'native',
+    adoptedFrom: null,
+  });
 }
 
 export function applyInit(plan: InitResult, options: InitOptions): InitResult {
@@ -1078,20 +1184,36 @@ export function renderInitHuman(result: InitResult): string {
     const verb = action.kind === 'skip' ? 'skip' : result.dryRun ? 'would write' : 'wrote';
     lines.push(`  ${verb} ${action.path} (${action.detail})`);
   }
-  // Two different answers, and saying only the second one is wrong about the
-  // hook this command just wrote. The pre-commit hook runs `conductor run
-  // --staged --stage commit` with no --trust-base, and policyForRun reads the
-  // working tree when trustBase is undefined, so the hook honours this file on
-  // the very next commit. A pull request is the opposite: it is judged by the
-  // base branch's own copy, never by the one it is proposing, so the first
-  // pull request after adoption is inert and reports could-not-run. Said once,
-  // here, at the point of use, rather than left for somebody to discover from
-  // a could-not-run comment on their first pull request.
-  lines.push(
-    `Note: the pre-commit hook uses ${POLICY_FILE_NAME} from your working tree right away. ` +
-      'On a pull request conductor reads it from the base branch instead, so pull requests ' +
-      'report could-not-run until this file is merged there.'
-  );
+  if (result.hookRequested) {
+    // Two different answers, and saying only the second one is wrong about
+    // the hook this command just wrote. The pre-commit hook runs `conductor
+    // run --staged --stage commit` with no --trust-base, and policyForRun
+    // reads the working tree when trustBase is undefined, so the hook
+    // honours this file on the very next commit. A pull request is the
+    // opposite: it is judged by the base branch's own copy, never by the one
+    // it is proposing, so the first pull request after adoption is inert and
+    // reports could-not-run. Said once, here, at the point of use, rather
+    // than left for somebody to discover from a could-not-run comment on
+    // their first pull request.
+    lines.push(
+      `Note: the pre-commit hook uses ${POLICY_FILE_NAME} from your working tree right away. ` +
+        'On a pull request conductor reads it from the base branch instead, so pull requests ' +
+        'report could-not-run until this file is merged there.'
+    );
+  } else {
+    // The line #48 exists for: .git/hooks is never part of a clone, so
+    // saying nothing here leaves a second contributor to discover the gap
+    // from a commit nothing ever checked. Printed on every run that did not
+    // ask for a hook, including one where a hook from an earlier --hook run
+    // is still sitting on disk untouched, because that hook still is not
+    // what THIS run did.
+    lines.push(
+      'No pre-commit hook was written: conductor init only writes one when --hook is given. ' +
+        'Run "conductor init --hook" to add it on this machine. .git/hooks is never part of a ' +
+        'clone, so a second clone or a teammate\'s checkout needs its own "conductor init ' +
+        '--hook" too; the manifest this writes is per machine.'
+    );
+  }
   return lines.join('\n');
 }
 

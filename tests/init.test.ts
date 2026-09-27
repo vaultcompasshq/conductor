@@ -217,8 +217,12 @@ const PRE_COMMIT_FRAMEWORK_GENERATED = [
   '',
 ].join('\n');
 
+// `hook: true` by default, because almost every test in this file is about
+// hook behaviour and predates --hook being opt-in. The opt-in default itself
+// is covered by the "init without --hook" describe block below, which
+// overrides it explicitly.
 function init(cwd: string, options: Record<string, unknown> = {}) {
-  const opts = { cwd, pathValue: '', ...options } as Parameters<typeof planInit>[0];
+  const opts = { cwd, pathValue: '', hook: true, ...options } as Parameters<typeof planInit>[0];
   const plan = planInit(opts);
   return applyInit(plan, opts);
 }
@@ -312,17 +316,21 @@ describe('what init writes', () => {
     expect(policy).toMatch(/intent:\n(?:.*\n)*?\s+enforce: false/);
   });
 
-  it('starts the intent gate off the exit code, which is the ramp the design calls for', () => {
+  it('starts the intent gate off the exit code when there is no frozen contract yet, which is the ramp the design calls for', () => {
     // The adoption ramp is a thing a fresh init should PRODUCE, not a thing
     // it describes and leaves for somebody to hand-edit into three
-    // repositories, which is what actually happened.
+    // repositories, which is what actually happened. This repository has no
+    // .intent-guard/intent-contract.yaml, so the ramp still applies (issue
+    // #57 changes the default only once a contract IS frozen -- see "init
+    // and the intent gate's enforce default" below).
     const repo = gitRepo();
     init(repo);
     const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
     const intent = policy.slice(policy.indexOf('  intent:'));
 
-    expect(intent).toMatch(/# It runs and reports in CI without failing the run/);
-    expect(intent).toMatch(/Flip it to\n\s+# true once a few pull requests/);
+    expect(intent).toMatch(/# No frozen contract yet \(\.intent-guard\/intent-contract\.yaml\)/);
+    expect(intent).toMatch(/set this to true by hand/);
+    expect(intent).toMatch(/enforce: false/);
   });
 
   it('writes a policy file that still validates against the shipped schema', () => {
@@ -361,6 +369,233 @@ describe('what init writes', () => {
     const result = init(tempDir());
     expect(result.ok).toBe(false);
     expect(result.conflicts[0].reason).toBe('not-a-git-repository');
+  });
+});
+
+// The hook is opt-in (issue #48, spec decision 6): a fresh `conductor init`
+// writes the policy file and the manifest, and nothing under .git/hooks,
+// unless --hook is given. .git/hooks is never part of a clone, so writing one
+// unconditionally is a promise init cannot keep past the first checkout, and
+// every CI-only adopter that never wanted a local hook got one anyway.
+describe('init without --hook', () => {
+  it('writes the policy file and the manifest, and no hook at all', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.hookRequested).toBe(false);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
+    expect(existsSync(path.join(repo, MANIFEST_RELATIVE_PATH))).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+
+    // The manifest itself, not only the filesystem: a hook entry recorded
+    // here with no hook on disk is exactly the state that made an earlier
+    // --revert report success while a hook kept running (see init.ts's
+    // revertInit doc comment). Nothing of kind 'hook' belongs in this
+    // manifest at all.
+    const manifest = JSON.parse(
+      readFileSync(path.join(repo, MANIFEST_RELATIVE_PATH), 'utf8')
+    ) as { files: Array<{ kind: string }> };
+    expect(manifest.files.some((file) => file.kind === 'hook')).toBe(false);
+  });
+
+  // The `init` helper above defaults `hook` to true so the rest of this file,
+  // which predates --hook being opt-in, does not have to say so on every
+  // call. That default would silently hide a regression in planInit's own
+  // default, so this test bypasses the helper and calls planInit/applyInit
+  // directly with `hook` left OUT of the options entirely, exactly as the
+  // real CLI does when nobody passes --hook.
+  it('writes no hook when hook is absent from the options, not merely false', () => {
+    const repo = gitRepo();
+    const options = { cwd: repo, pathValue: '' } as Parameters<typeof planInit>[0];
+
+    const plan = planInit(options);
+    const result = applyInit(plan, options);
+
+    expect(result.ok).toBe(true);
+    expect(result.hookRequested).toBe(false);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+    const rendered = renderInitHuman(result);
+    expect(rendered.trimEnd().split('\n').pop()).toMatch(/^No pre-commit hook was written/);
+  });
+
+  it('prints one line saying no hook was written and how to add one', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false });
+    const rendered = renderInitHuman(result);
+
+    expect(rendered.trimEnd().split('\n').pop()).toMatch(/^No pre-commit hook was written/);
+    expect(rendered).toMatch(/conductor init --hook/);
+  });
+
+  it('--dry-run reflects the same: no hook is planned and the same line prints', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false, dryRun: true });
+    const rendered = renderInitHuman(result);
+
+    expect(result.hookPath).toBe('');
+    expect(result.actions.some((action) => action.kind === 'write' && action.path.includes('hook'))).toBe(
+      false
+    );
+    expect(rendered.trimEnd().split('\n').pop()).toMatch(/^No pre-commit hook was written/);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+    // The policy file and the manifest are still planned, dry run or not:
+    // --hook only ever changes whether a hook is among the writes.
+    expect(rendered).toMatch(/would write \.guardrails\.yaml/);
+    expect(rendered).toMatch(/would write \.guardrails\/manifest\.json/);
+  });
+
+  it('is not blocked by a hook conflict that would refuse a --hook run', () => {
+    // A repository wired for husky gets its policy file exactly as readily
+    // as one with nothing wired at all, because none of that hook-manager
+    // detection runs when no hook was asked for.
+    const repo = huskyRepoWithGateHook();
+
+    const result = init(repo, { hook: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(true);
+  });
+
+  it('--adopt without --hook errors clearly rather than silently doing nothing', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false, adopt: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].reason).toBe('flag-requires-hook');
+    expect(result.conflicts[0].guidance).toMatch(/--adopt only makes sense together with --hook/);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('--force without --hook errors clearly rather than silently doing nothing', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: false, force: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.conflicts[0].reason).toBe('flag-requires-hook');
+    expect(result.conflicts[0].guidance).toMatch(/--force only makes sense together with --hook/);
+  });
+
+  it('--revert still removes a hook a previous --hook run wrote', () => {
+    const repo = gitRepo();
+    init(repo, { hook: true });
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
+
+    const revert = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(revert.ok).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+  });
+
+  it('with --hook, still writes the hook exactly as before', () => {
+    const repo = gitRepo();
+
+    const result = init(repo, { hook: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.hookRequested).toBe(true);
+    expect(existsSync(path.join(repo, '.git', 'hooks', 'pre-commit'))).toBe(true);
+    const rendered = renderInitHuman(result);
+    expect(rendered).toMatch(/Note: the pre-commit hook uses/);
+    expect(rendered).not.toMatch(/No pre-commit hook was written/);
+  });
+});
+
+// Issue #57: a fresh init used to leave the intent gate unenforced no matter
+// what, so a frozen contract with protected paths produced findings that
+// never failed the check until somebody hand-edited enforce: true in on a
+// separate commit. Init now writes enforce: true from the start when a
+// frozen contract already exists at init time.
+describe("init and the intent gate's enforce default", () => {
+  /** Exactly the shape intent-guard's own isContractFrozen reads: both
+   * frozen_by: user AND an approval block, matching intent-prepare.ts's own
+   * contractIsFrozenAt, which is what src/init-policy.ts's
+   * intentContractIsFrozen reuses. */
+  function freezeIntentContract(repo: string): void {
+    mkdirSync(path.join(repo, '.intent-guard'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.intent-guard', 'intent-contract.yaml'),
+      ['contract_id: ic-1', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join('\n')
+    );
+  }
+
+  it('writes the intent gate enforced when a frozen contract already exists', () => {
+    const repo = gitRepo();
+    freezeIntentContract(repo);
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const intent = policy.slice(policy.indexOf('  intent:'));
+
+    expect(result.ok).toBe(true);
+    expect(intent).toMatch(/enforce: true/);
+    expect(intent).toMatch(/# A frozen contract already exists at \.intent-guard\/intent-contract\.yaml/);
+    const parsed = parsePolicy(policy, POLICY_FILE_NAME);
+    expect(parsed.gates.intent?.enforce).toBe(true);
+  });
+
+  it('writes the intent gate unenforced, with a comment saying why, when there is no frozen contract', () => {
+    const repo = gitRepo();
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const intent = policy.slice(policy.indexOf('  intent:'));
+
+    expect(result.ok).toBe(true);
+    expect(intent).toMatch(/enforce: false/);
+    expect(intent).toMatch(/# No frozen contract yet \(\.intent-guard\/intent-contract\.yaml\)/);
+    const parsed = parsePolicy(policy, POLICY_FILE_NAME);
+    expect(parsed.gates.intent?.enforce).toBe(false);
+  });
+
+  it('does not enforce on an unfrozen draft: frozen_by alone, with no approval, is not frozen', () => {
+    // The same rule intent-prepare.ts's contractIsFrozenAt documents: a real
+    // freeze always writes both frozen_by and approval, so requiring both
+    // excludes no contract either tool actually produces, and admitting
+    // frozen_by alone would enforce against a draft nobody approved.
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.intent-guard'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.intent-guard', 'intent-contract.yaml'),
+      'contract_id: ic-1\nfrozen_by: user\n'
+    );
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+
+    expect(result.ok).toBe(true);
+    expect(policy.slice(policy.indexOf('  intent:'))).toMatch(/enforce: false/);
+  });
+
+  it('reads the frozen contract from the legacy .conductor directory too', () => {
+    // intent-prepare.ts's frozenNativeContractPath checks the legacy path as
+    // a fallback, and this reuses that same function rather than a narrower
+    // check of its own, so the two cannot disagree.
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, '.conductor'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.conductor', 'intent-contract.yaml'),
+      ['contract_id: ic-1', 'frozen_by: user', 'approval:', '  approved_by: a person', ''].join('\n')
+    );
+
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const intent = policy.slice(policy.indexOf('  intent:'));
+
+    expect(result.ok).toBe(true);
+    expect(intent).toMatch(/enforce: true/);
+    // The comment must name the path the frozen contract was ACTUALLY found
+    // at. renderPolicy used to always name the canonical
+    // .intent-guard/intent-contract.yaml here even when the frozen contract
+    // that triggered enforcement lived at this legacy path instead.
+    expect(intent).toMatch(/# A frozen contract already exists at \.conductor\/intent-contract\.yaml/);
   });
 });
 
@@ -2167,6 +2402,7 @@ describe('a crafted manifest cannot escape the repository', () => {
       conflicts: [],
       hookPath: '',
       hookManager: 'native' as const,
+      hookRequested: false,
       repoRoot: repo,
       adoptedFrom: null,
       writes: [{ path: outside, content: 'not ours\n', executable: false, kind: 'policy' as const }],
