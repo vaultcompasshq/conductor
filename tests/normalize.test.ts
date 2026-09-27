@@ -136,6 +136,133 @@ describe('dep-guard 0.2.0 normalization', () => {
   });
 });
 
+describe('dep-guard online reporting (issue #72, fix round)', () => {
+  it('prints dep-guard\'s own enabled claim, true, even when the umbrella never passed --online', () => {
+    // dep-guard also turns online checks on from "online": true in its own
+    // config, with no flag at all. If the umbrella asserted "online false"
+    // from the missing flag here, that would be a stated fact contradicted
+    // by dep-guard's own JSON on the very next line.
+    const withOnline = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    withOnline.run.online = { enabled: true };
+    const out = normalizeDepGuard(withOnline, '0.2.0', false);
+    expect(out.run.details.online).toBe(true);
+    expect(out.run.details['online-flag']).toBeUndefined();
+  });
+
+  it('prints dep-guard\'s own enabled claim, false, even when the umbrella did pass --online', () => {
+    // dep-guard's own statement about what it actually did wins over the
+    // umbrella's statement about what it asked for.
+    const withOnline = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    withOnline.run.online = { enabled: false };
+    const out = normalizeDepGuard(withOnline, '0.2.0', true);
+    expect(out.run.details.online).toBe(false);
+    expect(out.run.details['online-flag']).toBeUndefined();
+  });
+
+  it('prints the flag as a flag, never as "online false", when there is no online object to read', () => {
+    const noFlag = normalizeDepGuard(DEP_GUARD_CLEAN, '0.2.0', false);
+    expect(noFlag.run.details['online-flag']).toBe('not passed');
+    expect(noFlag.run.details.online).toBeUndefined();
+
+    const withFlag = normalizeDepGuard(DEP_GUARD_CLEAN, '0.2.0', true);
+    expect(withFlag.run.details['online-flag']).toBe('passed');
+    expect(withFlag.run.details.online).toBeUndefined();
+  });
+
+  it('defaults to the not-passed flag wording when the caller says nothing, for every existing call site', () => {
+    expect(normalizeDepGuard(DEP_GUARD_CLEAN, '0.2.0').run.details['online-flag']).toBe('not passed');
+  });
+
+  it('reads lookup and skipped counts from a well-formed online object', () => {
+    const withOnline = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    withOnline.run.online = { enabled: true, lookupsAttempted: 5, lookupsSkippedByDeadline: 2 };
+    const out = normalizeDepGuard(withOnline, '0.2.0', true);
+    expect(out.run.details.online).toBe(true);
+    expect(out.run.details.lookups).toBe(5);
+    expect(out.run.details['skipped-by-deadline']).toBe(2);
+  });
+
+  it('surfaces an older dep-guard\'s own online-deadline-exceeded diagnostic, with no online object present', () => {
+    const oldStyle = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as {
+      run: { diagnostics: Array<{ code: string; message: string }> };
+    };
+    oldStyle.run.diagnostics = [
+      {
+        code: 'online-deadline-exceeded',
+        message:
+          'publish-age: the per-run online budget (20000ms) was spent before 3 lookup(s) could run; ' +
+          'those findings kept their offline result',
+      },
+    ];
+    const out = normalizeDepGuard(oldStyle, '0.2.0', true);
+    expect(out.run.details['online-flag']).toBe('passed');
+    expect(out.run.details.lookups).toBeUndefined();
+    expect(out.run.diagnostics.map((d) => d.code)).toContain('online-deadline-exceeded');
+    expect(
+      out.run.diagnostics.find((d) => d.code === 'online-deadline-exceeded')?.message
+    ).toMatch(/budget/);
+  });
+
+  it('never mints a second note about the same cut-short event: dep-guard\'s own diagnostic is the only one', () => {
+    // A dep-guard carrying the new online object still raises its own
+    // online-deadline-exceeded diagnostic when the budget runs out, so if
+    // the umbrella ALSO synthesized one, a single cut-short event would
+    // print twice. Only dep-guard's own note survives.
+    const raw = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as {
+      run: Record<string, unknown> & { diagnostics: Array<{ code: string; message: string }> };
+    };
+    raw.run.online = {
+      enabled: true,
+      lookupsAttempted: 5,
+      lookupsSkippedByDeadline: 2,
+      // Present in the raw payload, exactly as a real dep-guard's would be
+      // when its own diagnostic below fires, even though the umbrella no
+      // longer reads this field: a synthesis reintroduced here would still
+      // trigger on it and duplicate dep-guard's own note.
+      deadlineExceeded: true,
+    };
+    raw.run.diagnostics = [
+      {
+        code: 'online-deadline-exceeded',
+        message:
+          'publish-age: the per-run online budget (20000ms) was spent before 2 lookup(s) could run; ' +
+          'those findings kept their offline result',
+      },
+    ];
+    const out = normalizeDepGuard(raw, '0.2.0', true);
+    expect(out.run.diagnostics).toEqual([
+      {
+        code: 'online-deadline-exceeded',
+        message:
+          'publish-age: the per-run online budget (20000ms) was spent before 2 lookup(s) could run; ' +
+          'those findings kept their offline result',
+      },
+    ]);
+  });
+
+  it('ignores a malformed online object rather than failing the gate, and prints the flag-derived part only', () => {
+    // enabled is valid here, but lookupsAttempted is not: the whole object
+    // is untrustworthy once one of its claims is suspect, so this falls all
+    // the way back to the flag wording, never partway to "online true".
+    const malformed = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    malformed.run.online = { enabled: true, lookupsAttempted: 'five', lookupsSkippedByDeadline: 2 };
+    expect(() => normalizeDepGuard(malformed, '0.2.0', true)).not.toThrow();
+    const out = normalizeDepGuard(malformed, '0.2.0', true);
+    expect(out.run.details['online-flag']).toBe('passed');
+    expect(out.run.details.online).toBeUndefined();
+    expect(out.run.details.lookups).toBeUndefined();
+    expect(out.run.details['skipped-by-deadline']).toBeUndefined();
+  });
+
+  it('ignores a malformed enabled field the same way as any other malformed field', () => {
+    const malformed = JSON.parse(JSON.stringify(DEP_GUARD_CLEAN)) as { run: Record<string, unknown> };
+    malformed.run.online = { enabled: 'yes' };
+    const out = normalizeDepGuard(malformed, '0.2.0', false);
+    expect(out.run.details['online-flag']).toBe('not passed');
+    expect(out.run.details.online).toBeUndefined();
+  });
+});
+
 describe('vault-guard 1.4.2 normalization', () => {
   const result = normalizeVaultGuard(VAULT_GUARD_BLOCKING, '1.4.2');
 
@@ -965,5 +1092,67 @@ describe('osv-scanner 2.6.0 normalization', () => {
     expect(cvssToSeverity(5.0)).toBe('medium');
     expect(cvssToSeverity(2.1)).toBe('low');
     expect(cvssToSeverity(null)).toBe('medium');
+  });
+
+  describe('the lockfile fact (issue #72)', () => {
+    it('names the lockfile the umbrella passed and counts zero sources with findings, on a clean scan', () => {
+      const out = normalizeOsvScanner(clean, '2.6.0', false, [], ['pnpm-lock.yaml']);
+      expect(out.run.details.lockfiles).toBe('1 (pnpm-lock.yaml)');
+      expect(out.run.details['sources-with-findings']).toBe(0);
+    });
+
+    it('names the lockfile and counts the sources with findings, on a run that found something', () => {
+      const out = normalizeOsvScanner(blocking, '2.6.0', true, [], ['package-lock.json']);
+      expect(out.run.details.lockfiles).toBe('1 (package-lock.json)');
+      expect(out.run.details['sources-with-findings']).toBe(1);
+    });
+
+    it('names every lockfile passed, not just the first', () => {
+      const out = normalizeOsvScanner(clean, '2.6.0', false, [], [
+        'pnpm-lock.yaml',
+        'apps/api/package-lock.json',
+      ]);
+      expect(out.run.details.lockfiles).toBe('2 (pnpm-lock.yaml, apps/api/package-lock.json)');
+    });
+
+    it('falls back to a bare zero when no lockfile list was given', () => {
+      expect(normalizeOsvScanner(clean, '2.6.0', false).run.details.lockfiles).toBe('0');
+    });
+
+    it('counts every source with findings, not just whether there was one', () => {
+      // Not a committed fixture: tests/fixtures/README.md is explicit that
+      // every file there is a real binary's literal stdout, captured once,
+      // and a hand-written one would only prove the normalizer agrees with
+      // whoever wrote it. A two-lockfile capture was not available, so this
+      // follows the same precedent as the nanoid shape above and builds the
+      // minimal real 2.x shape (two `results[]` entries, each with its own
+      // `source.path` and a finding) in the test itself instead.
+      const raw = {
+        results: [
+          {
+            source: { path: 'package-lock.json', type: 'lockfile' },
+            packages: [
+              {
+                package: { name: 'lodash', version: '4.17.20', ecosystem: 'npm' },
+                vulnerabilities: [{ id: 'GHSA-29mw-wpgm-hmr9' }],
+              },
+            ],
+          },
+          {
+            source: { path: 'web/pnpm-lock.yaml', type: 'lockfile' },
+            packages: [
+              {
+                package: { name: 'axios', version: '0.21.0', ecosystem: 'npm' },
+                vulnerabilities: [{ id: 'GHSA-4w2v-q235-vp99' }],
+              },
+            ],
+          },
+        ],
+      };
+      const out = normalizeOsvScanner(raw, '2.6.0', true, [], ['package-lock.json', 'web/pnpm-lock.yaml']);
+      expect(out.run.details.lockfiles).toBe('2 (package-lock.json, web/pnpm-lock.yaml)');
+      expect(out.run.details['sources-with-findings']).toBe(2);
+      expect(out.findings).toHaveLength(2);
+    });
   });
 });
