@@ -21,7 +21,7 @@ import {
   revertInit,
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
-import { renderText } from './output-text.js';
+import { jobLogSummary, renderText } from './output-text.js';
 import {
   GATE_ROLES,
   GATE_STAGES,
@@ -315,21 +315,27 @@ export function buildProgram(): Command {
 
   program
     .command('init')
-    .description(
-      'Write the policy file and one pre-commit hook that runs the commit-stage gates.'
-    )
+    .description('Write the policy file. Add --hook for a pre-commit hook running the commit-stage gates.')
     .option('--dry-run', 'print every file that would be written or changed, and write nothing')
-    .option('--adopt', "replace a gate's own pre-commit hook with the umbrella hook")
+    .option(
+      '--hook',
+      'also write a pre-commit hook running the commit-stage gates. Without it, only the policy ' +
+        'file and the manifest are written. .git/hooks is never part of a clone, so a second ' +
+        'clone needs its own "conductor init --hook".'
+    )
+    .option('--adopt', "replace a gate's own pre-commit hook with the umbrella hook (needs --hook)")
     .option('--revert', 'remove exactly what a previous init wrote')
     .option(
       '--force',
-      'act on a file that has changed since init wrote it: replace a managed hook somebody has edited, or with --revert remove one and restore any adopted hook'
+      'act on a file that has changed since init wrote it: replace a managed hook somebody has ' +
+        'edited (needs --hook), or with --revert remove one and restore any adopted hook'
     )
     .option('--json', 'print the result as JSON')
     .exitOverride()
     .action(
       (options: {
         dryRun?: boolean;
+        hook?: boolean;
         adopt?: boolean;
         revert?: boolean;
         force?: boolean;
@@ -362,6 +368,7 @@ export function buildProgram(): Command {
         const initOptions = {
           ...shared,
           ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+          ...(options.hook === undefined ? {} : { hook: options.hook }),
           ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
           ...(options.force === undefined ? {} : { force: options.force }),
         };
@@ -481,10 +488,15 @@ export function buildProgram(): Command {
           // fail on a missing file with no explanation here.
           writeFileSync(options.output, rendered);
           // One line, so a CI job whose only product is an uploaded artifact
-          // does not read as a job that did nothing.
+          // does not read as a job that did nothing. jobLogSummary carries
+          // its own "N gate(s), N finding(s)" on an ordinary run, unchanged,
+          // and a refusal sentence instead on a refused run: refusedTrustBase
+          // fills result.gates and result.findings with one couldNotRun
+          // outcome per enabled gate, so the plain count used to read as
+          // "N gate(s), N finding(s)" on a run where nothing ran and nothing
+          // was found (issue #46).
           process.stdout.write(
-            `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s); ` +
-              `${format} report written to ${options.output}\n`
+            `conductor run: ${jobLogSummary(result)}; ${format} report written to ${options.output}\n`
           );
         }
         process.exitCode = applyAdvisory(result.exitCode, advisory);

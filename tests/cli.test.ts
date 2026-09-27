@@ -373,6 +373,54 @@ describe('conductor run --output', () => {
     expect(result.stderr).toMatch(/conductor\.sarif/);
     expect(result.stderr).not.toMatch(STACK_FRAME);
   });
+
+  // Issue #46: refusedTrustBase fills result.gates and result.findings with
+  // one couldNotRun outcome PER ENABLED GATE, so the job-log line used to
+  // read "N gate(s), N finding(s)" on a run where the trust base was refused
+  // and nothing ran at all -- indistinguishable, on the log alone, from an
+  // ordinary run that found N real findings.
+  it('prints a normal run\'s count unchanged, exactly as before', () => {
+    const repo = repoWithPolicy();
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', target],
+      allThreeStubbed()
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(
+      `conductor run: 3 gate(s), 0 finding(s); sarif report written to ${target}\n`
+    );
+  });
+
+  it('prints the refusal, and no finding count, when the trust base was refused and no gate ran', () => {
+    const repo = repoWithPolicy();
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--trust-base', 'origin/nope', '--format', 'sarif', '--output', target],
+      allThreeStubbed()
+    );
+
+    expect(result.status).toBe(2);
+    // "refused the trust base", and the gate's own refusal detail (which
+    // already says "Nothing was checked" as part of its own sentence, see
+    // trust-base.ts's refuseTrustBaseRef) -- said ONCE, not the phrase
+    // repeated by a redundant lead-in, and never a bare count that implies
+    // gates ran.
+    expect(result.stdout).toMatch(/^conductor run: refused the trust base "origin\/nope": /);
+    expect(result.stdout).toMatch(/does not resolve to a commit/);
+    const occurrences = result.stdout.match(/Nothing was checked/g) ?? [];
+    expect(occurrences).toHaveLength(1);
+    expect(result.stdout).not.toMatch(/\d+ gate\(s\), \d+ finding\(s\)/);
+    // No period sitting directly before the "; sarif report written to..."
+    // separator cli.ts joins this line with.
+    expect(result.stdout).not.toMatch(/\.;/);
+    expect(result.stdout).toContain(target);
+  });
 });
 
 describe('conductor run from a subdirectory', () => {

@@ -230,7 +230,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
   });
 
   it('init writes one policy file and one hook, and enables what it found', () => {
-    const result = conductor(['init']);
+    const result = conductor(['init', '--hook']);
 
     expect(result.status).toBe(0);
     expect(existsSync(path.join(clone, '.guardrails.yaml'))).toBe(true);

@@ -105,12 +105,37 @@ required.
    ```
 
    which writes `.guardrails.yaml` with every gate listed and only the ones
-   it found switched on, one pre-commit hook running every enabled gate
-   whose stage is `commit`, and `.guardrails/manifest.json`, the record init
-   reads back on a later `--revert`.
+   it found switched on, and `.guardrails/manifest.json`, the record init
+   reads back on a later `--revert`. The intent gate is written unenforced
+   unless a frozen contract already exists at `.intent-guard/intent-contract.yaml`,
+   in which case init enforces it from the start rather than leaving a
+   frozen contract's protected paths reporting without blocking. **It writes
+   no pre-commit hook unless you ask for one:**
+
+   ```
+   conductor init --hook
+   ```
+
+   adds one pre-commit hook on top of that, running every enabled gate whose
+   stage is `commit`. A CI-only adopter that never runs conductor locally can
+   stop at the first `conductor init`, with no hook at all.
+
+   **`.git/hooks` is never part of a clone**, so a hook one checkout has does
+   not follow a teammate's clone, or a fresh clone of your own: hooks are per
+   clone and per machine. Each clone that wants the hook runs
+   `conductor init --hook` once; a repository that already has
+   `.guardrails.yaml` gets only the hook from that run, since init never
+   rewrites a policy file that already exists.
+
+   Do not wire this into a `package.json` `prepare` script. A failing init
+   (no `.git` in a Docker build, a foreign hook already installed, husky's
+   own `prepare` key, or conductor not yet installed at install time) would
+   fail `npm install` itself for everyone who runs it, not only for the
+   person who wanted the hook.
 
    **`.guardrails/manifest.json` records the absolute path on the machine
-   that ran `init`**, for the hook and for the policy file alike, and
+   that ran `init`**, for the hook, when there is one, and for the policy
+   file alike, and
    conductor does not add a `.gitignore` entry for it. That path is specific
    to your checkout, so do not commit the file: add
    `.guardrails/manifest.json` to your own `.gitignore` today. The file
@@ -118,7 +143,10 @@ required.
    recording repo-relative paths there instead of absolute ones is a known
    gap, not a design; it has not been fixed yet.
 
-   Commit something. A clean commit prints one line:
+   Commit something, now that `--hook` above has installed the pre-commit
+   hook (this walkthrough's output below only appears when the hook is
+   installed; a bare `conductor init` with no `--hook` runs no gate on
+   commit at all). A clean commit prints one line:
 
    ```
    conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 1 note(s). Re-run with --verbose for the full report.
@@ -201,9 +229,9 @@ friction this repository removes, and that is all it removes:
 
 - **one policy file**, `.guardrails.yaml`, keyed by the role each gate
   fills rather than by the product filling it;
-- **one init**, which writes that file and a single pre-commit hook running
-  every enabled gate whose stage is `commit`, which by default is every gate
-  but the intent one;
+- **one init**, which writes that file, and with `--hook` a single
+  pre-commit hook running every enabled gate whose stage is `commit`, which
+  by default is every gate but the intent one;
 - **one report**, as text for a terminal or as a single SARIF 2.1.0 log
   with one run per gate.
 
@@ -309,7 +337,14 @@ enforced gate's do. The only thing it cannot do is change the exit code: its
 blocking findings do not raise it, and its failing to run at all does not
 make the run exit 2. That is the adoption ramp, so a gate can be switched on
 and read for a few weeks before it is allowed to refuse anybody's commit.
-`init` writes it out for every gate, and starts the intent gate at `false`.
+`init` writes it out for every gate. For the intent gate it writes `true`
+when a frozen contract already exists at init time
+(`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
+`.conductor/intent-contract.yaml`), since the ramp is already climbed by
+then, and leaving it unenforced would silently let a frozen contract's
+protected paths produce findings that never fail the check. It writes
+`false`, with a comment explaining why, when there is no contract yet to
+enforce against.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
@@ -340,24 +375,41 @@ that gate, for pointing at a build that is not installed anywhere.
 
 ## Commands
 
-`conductor init` writes the policy file, one pre-commit hook, and
-`.guardrails/manifest.json`, the record `--revert` reads back later. The
-manifest currently records absolute machine paths rather than repo-relative
-ones (see "Adopting conductor" above); do not commit it.
+`conductor init` writes the policy file and `.guardrails/manifest.json`, the
+record `--revert` reads back later. The manifest currently records absolute
+machine paths rather than repo-relative ones (see "Adopting conductor"
+above); do not commit it.
 
+- `--hook` also writes one pre-commit hook running every enabled gate whose
+  stage is `commit`. Without it, init writes only the policy file and the
+  manifest: no hook, and none of the hook-manager detection below runs
+  either. `.git/hooks` is never part of a clone, so a hook one checkout has
+  does not follow a teammate's clone, or a fresh clone of your own; each
+  needs its own `conductor init --hook`. `--revert` still removes a hook a
+  previous `--hook` run left behind, whether or not this invocation passes
+  `--hook` itself.
 - `--dry-run` prints every file it would write or change and writes nothing.
 - `--revert` removes exactly what a previous init wrote, and nothing else.
   A file changed since init is reported and left alone.
 - `--adopt` replaces one gate's own pre-commit hook with the umbrella hook.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
-  does not recognise is never replaced, with or without `--adopt`.
+  does not recognise is never replaced, with or without `--adopt`. Only
+  meaningful together with `--hook`; without it, init errors rather than
+  silently ignoring the flag, because there is no hook for it to act on.
 - `--force` acts on a file **conductor itself wrote** and that has changed
   since: on its own it replaces a managed hook somebody has edited, and with
   `--revert` it removes one, restoring an adopted hook if there was one. It
   never overrides a foreign-hook or gate-hook refusal, with or without
   `--adopt`: those hooks were never conductor's, and no flag here turns
-  somebody else's file into one this tool may overwrite.
+  somebody else's file into one this tool may overwrite. Like `--adopt`,
+  only meaningful together with `--hook` on an init (not on a `--revert`);
+  without it, init errors.
+
+The rest of this section, on hook managers already wired into the
+repository, applies only when `--hook` is given: none of it is consulted,
+and none of it can block the policy file from being written, on a plain
+`conductor init`.
 
 Init recognises the hook manager already wired into the repository. husky is
 redirected to the tracked hook it maintains rather than the generated
