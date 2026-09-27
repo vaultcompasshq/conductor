@@ -165,6 +165,15 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   intent-guard #114, asking for a machine-readable per-finding field.
   Found by independent review of intent-guard PR #93 (issue #34).
 
+- README: the advisory-workflow recipe now says why it carries no `paths:`
+  filter by default -- gitleaks and vault-guard read the whole changed set
+  because a secret can land in any file, so a filter that skips a docs-only
+  pull request skips secrets scanning on it too -- and shows GitHub's own
+  `paths:` syntax as an explicit trade for an adopter who wants it anyway,
+  plus a note that renaming the job or workflow means updating branch
+  protection's required-checks list separately, since GitHub matches a
+  required check by context name (issue #39).
+
 ## [0.5.1] - 2026-09-27
 
 **An action-only release. The tag moves; the npm package does not.**
