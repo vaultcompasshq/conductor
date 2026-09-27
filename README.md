@@ -952,7 +952,11 @@ and keeps it committed.
 **What blocks is unchanged.** Blocking stays where intent-guard puts it:
 budget breaches block, subject to `enforce`. Drift on its own is reported and
 not blocked, which is already intent-guard's own behaviour. The umbrella adds
-no severity threshold of its own here either.
+no severity threshold of its own here either, and intent-guard 1.7.0's own
+advance-notice warnings about an unmatchable `protected_paths` or
+`allowed_paths` entry print as notes on the intent line and never reach the
+exit code either, right up until the 2.0.0 release where intent-guard turns
+that same shape into a blocking reason.
 
 ## The Action
 

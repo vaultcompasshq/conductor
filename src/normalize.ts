@@ -486,6 +486,37 @@ const DRIFT_SEVERITY: Record<string, Severity> = {
 };
 
 /**
+ * intent-guard's own namespace for its advance-notice warnings, not the
+ * umbrella's: the umbrella never mints a `conductor/` id for this, because
+ * the statement being relayed is entirely intent-guard's own (see AGENTS.md
+ * on the umbrella's fixed set of ids).
+ */
+export const INTENT_WARNING = 'intent-guard/warning';
+
+/**
+ * intent-guard 1.7.0's own advance notice that a frozen contract's
+ * `protected_paths` or `allowed_paths` carries an entry no git path can
+ * ever match (a leading slash, an empty path segment, and the like), read
+ * from the optional `warnings` array. 1.7.0 warns about this; 2.0.0 turns it
+ * into a blocking reason (intent-guard's own budget-paths.ts).
+ *
+ * Tolerant on purpose, unlike everything else this file validates: this is
+ * reporting, never judgment, so a shape an installed intent-guard did not
+ * send correctly must never turn into a could-not-run for the gate. Absent
+ * (1.6.0 and earlier, which never sent this field) means none. A value that
+ * is not an array, or an array holding even one non-string entry, is
+ * ignored outright rather than partially read: half-reading it would print
+ * some warnings and silently drop others, which is worse than saying
+ * nothing until the shape is understood again.
+ */
+function readIntentWarnings(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.every((entry) => typeof entry === 'string') ? (raw as string[]) : [];
+}
+
+/**
  * The three ways the intent gate can block on the STATE of the contract
  * rather than on anything in the diff.
  *
@@ -596,6 +627,7 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
     fail(product, 'status', 'either "ok" or "blocked"');
   }
   const trustBase = readTrustBase(root.trustBase, product);
+  const warnings = readIntentWarnings(root.warnings);
 
   const findings: Finding[] = [];
   const budget = root.budget === undefined ? undefined : needRecord(root.budget, product, 'budget');
@@ -764,7 +796,10 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
       failOn: null,
       suppressed: 0,
       ignored: 0,
-      diagnostics: [],
+      // intent-guard's own advance-notice warnings (1.7.0's budget-path
+      // deprecation notes). Reporting, never a finding: no severity, no
+      // fingerprint, no blocking flag, and no effect on the exit code.
+      diagnostics: warnings.map((message) => ({ code: INTENT_WARNING, message })),
       details: {
         contractFound: root.contractFound ?? null,
         contractFrozen: root.contractFrozen ?? null,

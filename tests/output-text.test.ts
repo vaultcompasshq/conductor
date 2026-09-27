@@ -8,6 +8,7 @@ import type { GateOutcome } from '../src/gate-runner.js';
 import {
   normalizeDepGuard,
   normalizeGitleaks,
+  normalizeIntentGuard,
   normalizeMissingGate,
   normalizeOsvScanner,
   normalizeVaultGuard,
@@ -307,6 +308,36 @@ describe('the dependencies line reports whether dep-guard ran online (issue #72,
     expect(line).toMatch(/online-flag passed/);
     expect(line).not.toMatch(/\bonline true\b/);
     expect(line).not.toMatch(/lookups/);
+  });
+});
+
+describe("the intent line prints intent-guard's own 1.7.0 advance-notice warnings", () => {
+  function intentLine(run: RunSummary): string {
+    const text = renderText(
+      result(
+        [outcome({ role: 'intent', product: 'intent-guard', productVersion: '1.7.0', run, findings: [] })],
+        0
+      )
+    );
+    return text.slice(text.indexOf('intent'));
+  }
+
+  it('prints each warning as a note under the gate, never as a finding', () => {
+    const normalized = normalizeIntentGuard(fixture('intent-guard-1.7.0-check-warnings.json'), '1.7.0');
+    const line = intentLine(normalized.run);
+    expect(line).toMatch(
+      /note intent-guard\/warning: Budget protected_paths entry '\/etc\/widget\.conf'/
+    );
+    expect(line).toMatch(
+      /note intent-guard\/warning: Budget allowed_paths entry 'src\/widget\/\/export\.ts'/
+    );
+    expect(normalized.findings).toEqual([]);
+  });
+
+  it('says nothing extra when an installed intent-guard never sent a warnings field', () => {
+    const normalized = normalizeIntentGuard(fixture('intent-guard-1.2.1-check-passing.json'), '1.2.1');
+    const line = intentLine(normalized.run);
+    expect(line).not.toMatch(/note intent-guard\/warning/);
   });
 });
 

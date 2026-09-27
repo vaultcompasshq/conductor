@@ -14,6 +14,19 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- **Added:** intent-guard 1.7.0's own advance-notice warnings now appear on
+  the intent line. 1.7.0 warns, rather than blocks, when a frozen contract's
+  `protected_paths` or `allowed_paths` carries an entry no git path can ever
+  match, and says the same shape will become a blocking reason in 2.0.0.
+  conductor reads that gate's optional `warnings` array and relays each
+  string as a note under the intent gate in the text report and as a
+  note-level notification in the SARIF log, the same channel dep-guard's own
+  run diagnostics already use, so an adopter sees the notice now instead of
+  meeting the 2.0.0 block cold. It is reporting only: no severity, no
+  fingerprint, no finding, and no change to the composed exit code. Absent
+  on an installed intent-guard older than 1.7.0, and ignored rather than
+  treated as a could-not-run when the field is present but malformed.
+
 - **Added:** a `--project <dir>` option on `conductor init` and `conductor
   run`. dep-guard, vault-guard and intent-guard each take a path or
   `--project`, so a script can point any of them at a repository; conductor

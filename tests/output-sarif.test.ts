@@ -489,6 +489,70 @@ describe('coverage statements are notifications rather than results', () => {
 });
 
 /**
+ * intent-guard 1.7.0's own advance-notice warnings, relayed as notifications.
+ *
+ * A frozen contract's protected_paths or allowed_paths carrying a shape no
+ * git path can ever match is a statement about the contract's own
+ * configuration, not about this commit's correctness today, so it belongs
+ * beside the no-contract and skipped notes above: a notification, never a
+ * result, at note level, with no effect on the exit code.
+ */
+describe("intent-guard's own 1.7.0 advance-notice warnings", () => {
+  const intentWarnings = normalizeIntentGuard(
+    fixture('intent-guard-1.7.0-check-warnings.json'),
+    '1.7.0'
+  );
+  const WARNED = result([
+    outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: '1.7.0',
+      exitCode: 0,
+      findings: intentWarnings.findings,
+      run: intentWarnings.run,
+    }),
+  ]);
+
+  it('moves each warning out of results, keeping the gate own namespace', () => {
+    expect(umbrellaResultIds(sarif(WARNED))).not.toContain('intent-guard/warning');
+    const ids = notificationsOf(sarif(WARNED)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+    expect(ids.filter((id) => id === 'intent-guard/warning')).toHaveLength(2);
+  });
+
+  it('sends each warning at note level, with the message text unchanged', () => {
+    const entries = notificationsOf(sarif(WARNED)).filter(
+      (candidate) => (candidate.descriptor as Record<string, unknown>).id === 'intent-guard/warning'
+    );
+    for (const entry of entries) {
+      expect(entry.level).toBe('note');
+    }
+    const texts = entries.map((entry) => (entry.message as Record<string, unknown>).text);
+    expect(texts).toContain(
+      "Budget protected_paths entry '/etc/widget.conf' is invalid: must not start with '/' " +
+        '(paths are matched git-relative; a leading slash can never match). This will block ' +
+        'check and report starting in 2.0.0; edit the contract and run intent-guard freeze ' +
+        'again before then.'
+    );
+  });
+
+  it('says nothing when the intent gate sent no warnings', () => {
+    const ids = notificationsOf(sarif(THREE_GATES)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+    expect(ids).not.toContain('intent-guard/warning');
+  });
+
+  it('never turns a warning into a blocking result or changes the exit code', () => {
+    const before = WARNED.exitCode;
+    const log = sarif(WARNED);
+    expect(umbrellaResultIds(log)).not.toContain('intent-guard/warning');
+    expect(WARNED.exitCode).toBe(before);
+  });
+});
+
+/**
  * executionSuccessful is a claim, so it has to be made in both directions.
  *
  * It was being written only when there were notifications to hang it on, so
