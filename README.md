@@ -344,8 +344,7 @@ above); do not commit it.
   manifest: no hook, and none of the hook-manager detection below runs
   either. `.git/hooks` is never part of a clone, so a hook one checkout has
   does not follow a teammate's clone, or a fresh clone of your own; each
-  needs its own `conductor init --hook`, or a `package.json` `prepare`
-  script that runs it on every install. `--revert` still removes a hook a
+  needs its own `conductor init --hook`. `--revert` still removes a hook a
   previous `--hook` run left behind, whether or not this invocation passes
   `--hook` itself.
 - `--dry-run` prints every file it would write or change and writes nothing.

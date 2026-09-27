@@ -73,7 +73,7 @@ one of them by fixing a real bug rather than only testing around it:
    `JSON.parse`, so a corrupt one threw where `readManifest` treats the
    same file as missing. Revert now answers `manifest-unreadable`, which
    is deliberately a different conflict from `no-manifest`, and removes
-   nothing. Pinned by tests/init.test.ts:926.
+   nothing. Pinned by tests/init.test.ts:1162.
 2. THE SUCCESS HALF OF THE TEMPORARY-DIRECTORY CLEANUP. Pinned by
    tests/intent-run.test.ts:171, which drives a full passing `runAll`
    through the import and freeze chain and finds no `conductor-intent-`
@@ -433,7 +433,7 @@ manifest was truncated by a crash or a bad merge got `Unexpected end of
 JSON input` and no indication which file was unreadable or that the fix
 is to repair or delete it by hand. Nothing pinned it, because every test
 that touched the manifest wrote valid JSON back. Now pinned by
-tests/init.test.ts:926.
+tests/init.test.ts:1162.
 
 ## The gates are installed without scripts, and verified before they are trusted
 
@@ -1852,7 +1852,7 @@ is left and, after an `--adopt`, the only copy of the replaced hook. The
 `.guardrails` directory goes with it only when it is empty, using
 `rmdirSync` rather than `rmSync`, and when it is not empty that is
 REPORTED rather than passed over (src/init.ts:1636-1673). Pinned by
-tests/init.test.ts:960 (the manifest survives and still holds entries),
+tests/init.test.ts:1020 (the manifest survives and still holds entries),
 917 (the directory goes with the last file), 929 (it stays, and is
 reported as skipped, when somebody else's file is in it) and 950 (it is
 reported as removed when it went).
@@ -1920,14 +1920,14 @@ manifest could hold that shape, and there the code does what the old flag
 did: nothing is restored.
 
 No manifest at all means nothing is removed and the command fails
-(src/init.ts:1461-1471). Pinned by tests/init.test.ts:920.
+(src/init.ts:1461-1471). Pinned by tests/init.test.ts:1156.
 
 A manifest that will not parse is a SECOND conflict rather than the same
 one (src/init.ts:1479-1494). Revert deliberately does not go through
 `readManifest`, which answers null for both: missing means there is no
 record to act on, unreadable means there is a record and it cannot be
 trusted, and the two send a reader to different fixes. Nothing is removed
-and nothing is guessed either way. Pinned by tests/init.test.ts:926,
+and nothing is guessed either way. Pinned by tests/init.test.ts:1162,
 which corrupts the manifest of a real install and asserts the reason is
 `manifest-unreadable`, that the guidance says nothing was removed and
 sends the user to the file by hand, and that the hook, the policy file and
