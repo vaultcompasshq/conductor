@@ -21,7 +21,7 @@ import {
   revertInit,
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
-import { renderText } from './output-text.js';
+import { jobLogSummary, renderText } from './output-text.js';
 import {
   GATE_ROLES,
   GATE_STAGES,
@@ -488,10 +488,15 @@ export function buildProgram(): Command {
           // fail on a missing file with no explanation here.
           writeFileSync(options.output, rendered);
           // One line, so a CI job whose only product is an uploaded artifact
-          // does not read as a job that did nothing.
+          // does not read as a job that did nothing. jobLogSummary carries
+          // its own "N gate(s), N finding(s)" on an ordinary run, unchanged,
+          // and a refusal sentence instead on a refused run: refusedTrustBase
+          // fills result.gates and result.findings with one couldNotRun
+          // outcome per enabled gate, so the plain count used to read as
+          // "N gate(s), N finding(s)" on a run where nothing ran and nothing
+          // was found (issue #46).
           process.stdout.write(
-            `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s); ` +
-              `${format} report written to ${options.output}\n`
+            `conductor run: ${jobLogSummary(result)}; ${format} report written to ${options.output}\n`
           );
         }
         process.exitCode = applyAdvisory(result.exitCode, advisory);

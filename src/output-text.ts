@@ -420,6 +420,33 @@ function refusalLines(result: RunResult): string[] {
   ];
 }
 
+/**
+ * The one-line summary a `--output` run prints to the job log after writing
+ * its report to a file (see cli.ts). Refused first, exactly like every other
+ * renderer in this file, and for the same reason: `refusedTrustBase` fills
+ * `result.gates` and `result.findings` with a could-not-run outcome PER
+ * ENABLED GATE, so counting them the ordinary way reports "N gate(s), N
+ * finding(s)" on a run where nothing ran and nothing was found -- issue #46.
+ * A reader with only this line, no --verbose and no pull-request comment
+ * (a fork's read-only token, or pr-comment left off) deserves the same words
+ * the comment's own compact body gives them, not a count that implies gates
+ * ran.
+ *
+ * A normal run is untouched: the exact same
+ * "N gate(s), N finding(s)" text as before, so a working adopter's log does
+ * not change.
+ */
+export function jobLogSummary(result: RunResult): string {
+  const refusal = result.trustBase?.refusal;
+  if (refusal !== undefined && refusal !== null) {
+    return (
+      `refused the trust base "${result.trustBase?.ref ?? ''}". Nothing was checked: ${refusal} ` +
+      'No gate ran and nothing here is a result of any kind.'
+    );
+  }
+  return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
+}
+
 function verdict(result: RunResult, advisory: boolean): string {
   const refusal = result.trustBase?.refusal;
   if (refusal !== undefined && refusal !== null) {

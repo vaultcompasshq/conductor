@@ -25,6 +25,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   checkout anyway; the README now documents re-running
   `conductor init --hook` per clone, or wiring it into a `prepare` script
   (issue #48).
+- Fixed the job-log summary line `conductor run --output` prints after
+  writing a report to a file: it used to report "N gate(s), N finding(s)"
+  even when the trust base was refused and no gate ran at all, because a
+  refused run's report carries one could-not-run outcome per enabled gate,
+  which read exactly like N real findings on a log with no comment and no
+  `--verbose` to explain it. It now prints the same refusal sentence the
+  pull-request comment's compact body uses -- what was refused and why --
+  instead of a count. An ordinary run's line is unchanged (issue #46).
 - On a pull-request run, the gate runner now also passes `--base` to
   dep-guard, pointing at the same ref as `--trust-base`. Before this,
   dep-guard only ever received `--trust-base` from the umbrella, so every
