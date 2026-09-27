@@ -4,7 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { GateOutcome } from '../src/gate-runner.js';
-import { normalizeDepGuard, normalizeMissingGate, normalizeVaultGuard } from '../src/normalize.js';
+import {
+  normalizeDepGuard,
+  normalizeGitleaks,
+  normalizeMissingGate,
+  normalizeOsvScanner,
+  normalizeVaultGuard,
+} from '../src/normalize.js';
 import { renderText } from '../src/output-text.js';
 import type { RunResult } from '../src/run.js';
 
@@ -69,6 +75,61 @@ function result(
 
 const depGuard = normalizeDepGuard(fixture('dep-guard-0.2.0-blocking.json'), '0.2.0');
 const vaultGuard = normalizeVaultGuard(fixture('vault-guard-1.4.2-blocking.json'), '1.4.2');
+
+describe('the text report with the two external gates', () => {
+  const gitleaks = normalizeGitleaks(fixture('gitleaks-8.30.1-history-blocking.json'), '8.30.1', true);
+  const osv = normalizeOsvScanner(fixture('osv-scanner-2.6.0-blocking.json'), '2.6.0', true, [
+    '/tmp/conductor-osv-fixture',
+  ]);
+  const text = renderText(
+    result(
+      [
+        outcome({ findings: depGuard.findings, run: depGuard.run }),
+        outcome({
+          role: 'secrets',
+          product: 'vault-guard',
+          productVersion: '1.4.2',
+          findings: vaultGuard.findings,
+          run: vaultGuard.run,
+        }),
+        outcome({ role: 'intent', product: 'intent-guard', productVersion: '1.2.0', exitCode: 0 }),
+        outcome({
+          role: 'secrets-history',
+          product: 'gitleaks',
+          productVersion: '8.30.1',
+          stage: 'ci',
+          exitCode: 3,
+          findings: gitleaks.findings,
+          run: gitleaks.run,
+        }),
+        outcome({
+          role: 'vulnerabilities',
+          product: 'osv-scanner',
+          productVersion: '2.6.0',
+          stage: 'ci',
+          findings: osv.findings,
+          run: osv.run,
+        }),
+      ],
+      1
+    )
+  );
+
+  it('has a header line per gate naming each external tool and its version', () => {
+    expect(text).toMatch(/secrets-history\s+gitleaks 8\.30\.1/);
+    expect(text).toMatch(/vulnerabilities\s+osv-scanner 2\.6\.0/);
+  });
+
+  it('names the leak by file:line and never prints the secret', () => {
+    expect(text).toMatch(/gitleaks\/doppler-api-token\s+config\.json:3/);
+    expect(text).not.toContain('dp.pt.q7ZkR2');
+    expect(text).not.toContain('REDACTED');
+  });
+
+  it('names the package and the OSV id on each vulnerability line', () => {
+    expect(text).toMatch(/osv-scanner\/GHSA-35jh-r3h4-6jhm\s+lodash \(package-lock\.json\)/);
+  });
+});
 
 describe('the combined text report', () => {
   const text = renderText(

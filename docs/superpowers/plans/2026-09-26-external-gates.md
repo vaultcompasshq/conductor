@@ -1272,7 +1272,7 @@ git -C <worktree> commit -m "Read gitleaks and osv-scanner config from the base 
 **Interfaces:**
 - Consumes: everything above. Produces no new API.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/output-sarif.test.ts`: extend "emits one run per gate, in gate order" with a five-gate result whose drivers are `['dep-guard', 'vault-guard', 'intent-guard', 'gitleaks', 'osv-scanner']`, and add:
 
@@ -1312,11 +1312,11 @@ it('does not count an unenforced external gate toward the exit code', () => {
 
 `tests/dogfood.e2e.test.ts:982`: extend the shim list to five names if the e2e drives the policy through all roles; otherwise leave it and note why in the commit message.
 
-- [ ] **Step 2: Run, fix only what fails**
+- [x] **Step 2: Run, fix only what fails**
 
 Run each file. Expected: SARIF and text pass without source changes because both switch on `Subject.kind`; if `subjectLabel` or `locationsFor` turns out to special-case a product name, extend it. The run-level tests pass once Tasks 5 to 8 are in.
 
-- [ ] **Step 3: Full suite, commit**
+- [x] **Step 3: Full suite, commit**
 
 Run: `pnpm --dir <worktree> test 2>&1 | tail -8`
 
