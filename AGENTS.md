@@ -34,7 +34,9 @@ gate depend on the umbrella to function.
     pnpm test
 
 `pnpm lint` runs `scripts/check-public-hygiene.mjs`, the public-repository
-hygiene guard (see below). `pnpm test` builds first, since some tests spawn
+hygiene guard (see below), and `scripts/check-invariant-citations.mjs`,
+which fails when a `src/*.ts` line citation in `docs/INVARIANTS.md` runs
+past the end of that file. `pnpm test` builds first, since some tests spawn
 the compiled `dist/` output.
 
 ## Hygiene rules for tracked files
@@ -49,6 +51,9 @@ the compiled `dist/` output.
   `scripts/check-public-hygiene.mjs`. The blocklist holds hashes only; the
   internal product names it stands for are never written down in this
   repository.
+
+`pnpm lint` also fails when `docs/INVARIANTS.md` cites a `src/*.ts` line
+past the end of that file (`scripts/check-invariant-citations.mjs`).
 
 See CONTRIBUTING.md, public repository hygiene section, for the full detail
 and for how to add a blocklist entry.

@@ -37,8 +37,9 @@
     "pretest": "pnpm build",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "typecheck": "tsc -b && tsc --noEmit -p tsconfig.test.json",
-    "lint": "pnpm check:public-hygiene",
-    "check:public-hygiene": "node scripts/check-public-hygiene.mjs"
+    "lint": "pnpm check:public-hygiene && pnpm check:invariant-citations",
+    "check:public-hygiene": "node scripts/check-public-hygiene.mjs",
+    "check:invariant-citations": "node scripts/check-invariant-citations.mjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",
