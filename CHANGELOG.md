@@ -20,28 +20,31 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   get the previous behaviour. `--adopt` and `--force` now error when given
   without `--hook` on an init, rather than being silently ignored, since both
   are entirely about the hook. `--revert` is unaffected: it still removes a
-  hook a previous `--hook` run wrote. `.git/hooks` is never part of a clone,
-  so writing one unconditionally could never reach a second contributor's
-  checkout anyway; the README now documents re-running
-  `conductor init --hook` per clone, or wiring it into a `prepare` script
-  (issue #48).
+  hook a previous `--hook` run wrote. A repository whose hook came from an
+  older conductor must re-run `conductor init --hook` to refresh it: a plain
+  re-init no longer touches hooks at all, and now prints the no-hook line
+  even while that older hook still sits on disk. `.git/hooks` is never part
+  of a clone, so writing one unconditionally could never reach a second
+  contributor's checkout anyway; the README now documents re-running
+  `conductor init --hook` on each clone that wants it (issue #48).
 - Fixed the job-log summary line `conductor run --output` prints after
   writing a report to a file: it used to report "N gate(s), N finding(s)"
   even when the trust base was refused and no gate ran at all, because a
   refused run's report carries one could-not-run outcome per enabled gate,
   which read exactly like N real findings on a log with no comment and no
   `--verbose` to explain it. It now prints the same refusal sentence the
-  pull-request comment's compact body uses -- what was refused and why --
+  pull-request comment's compact body uses, naming what was refused and why,
   instead of a count. An ordinary run's line is unchanged (issue #46).
-- `conductor init` now writes the intent gate enforced (`enforce: true`) when
-  a frozen intent contract already exists at init time
-  (`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
+- **Behaviour change:** `conductor init` now writes the intent gate enforced
+  (`enforce: true`) when a frozen intent contract already exists at init
+  time (`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
   `.conductor/intent-contract.yaml`), instead of always leaving it
   unenforced. Without a frozen contract it is still written unenforced,
   now with a comment explaining why and what to change once one is frozen.
-  Before this, a frozen contract with protected paths produced findings on a
-  pull request without ever failing the check, which needed a separate
-  commit to fix on the public demo repository (issue #57).
+  This can turn a green check red once a contract is frozen: before this, a
+  frozen contract with protected paths produced findings on a pull request
+  without ever failing the check, which needed a separate commit to fix on
+  the public demo repository (issue #57).
 - On a pull-request run, the gate runner now also passes `--base` to
   dep-guard, pointing at the same ref as `--trust-base`. Before this,
   dep-guard only ever received `--trust-base` from the umbrella, so every
