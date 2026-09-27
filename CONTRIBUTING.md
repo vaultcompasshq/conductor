@@ -35,7 +35,8 @@ tool it did.
 ## Public repository hygiene
 
 `pnpm lint` runs `scripts/check-public-hygiene.mjs` over every tracked
-file. It fails on four things:
+file, then `scripts/check-invariant-citations.mjs`. The hygiene guard fails
+on four things:
 
 - a token whose SHA-256 matches an entry in the blocklist. The blocklist
   holds hashes only. The plaintext it stands for is never written down in
@@ -64,6 +65,12 @@ Two files are allowlisted from the content checks, this one and the guard
 script itself, because both have to discuss the rules they enforce. An
 allowlist exempts a file's contents, never its name: a file path is visible
 on a public tree whether or not its contents are scanned.
+
+The citation check then reads `docs/INVARIANTS.md` and fails when a
+`src/*.ts` line or range runs past the end of that file, or names a file
+that is not under `src`. It does not judge whether the lines still describe
+the function; that re-derivation is a docs change. The check only stops a
+range the file no longer has from staying green.
 
 ## Commit messages
 
