@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
 
-import { NATIVE_CONTRACT_PATH, frozenNativeContractPath } from './intent-prepare.js';
+import { NATIVE_CONTRACT_PATH } from './intent-prepare.js';
 import { DEFAULT_STAGE_FOR_ROLE, GATE_ROLES, POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
 import type { GateRole } from './policy.js';
 import { CANDIDATES } from './resolve.js';
@@ -40,20 +40,6 @@ function isExecutable(file: string): boolean {
   }
 }
 
-/**
- * Whether this repository already has a frozen intent contract at init time
- * (issue #57). Reuses intent-prepare.ts's own `frozenNativeContractPath`
- * rather than re-deriving "frozen" from the schema: that function is the
- * same predicate the intent gate's own pull-request preparation uses
- * (`frozen_by: user` AND an `approval` block, checked at both the canonical
- * `.intent-guard/intent-contract.yaml` and the pre-1.3.0
- * `.conductor/intent-contract.yaml`), so this cannot disagree with the gate
- * about what counts as frozen.
- */
-export function intentContractIsFrozen(root: string): boolean {
-  return frozenNativeContractPath(root) !== null;
-}
-
 const ROLE_DESCRIPTION: Record<GateRole, string> = {
   dependencies: 'what comes in: hallucinated names, typosquats, tampered lockfile entries',
   secrets: 'what goes out: credentials about to be committed',
@@ -66,8 +52,8 @@ const ROLE_DESCRIPTION: Record<GateRole, string> = {
  * each key is for is most of a first-run experience, and a YAML emitter
  * cannot carry them.
  *
- * `intentContractFrozen` decides the intent gate's `enforce` default (issue
- * #57): true when this repository already has a frozen contract at init
+ * `frozenContractPath` decides the intent gate's `enforce` default (issue
+ * #57): non-null when this repository already has a frozen contract at init
  * time, so the ramp init would otherwise produce is already climbed, and
  * leaving it unenforced would silently drop the one protection a contract
  * with protected paths exists to give -- exactly what a frozen contract's
@@ -75,8 +61,19 @@ const ROLE_DESCRIPTION: Record<GateRole, string> = {
  * False is still the default with no contract, for the same ramp reasoning
  * as before: a fresh intent gate with nothing frozen yet has nothing to
  * enforce against.
+ *
+ * The caller passes intent-prepare.ts's own `frozenNativeContractPath(root)`
+ * directly, not a boolean, so the comment below can name the path a frozen
+ * contract was ACTUALLY found at -- the canonical
+ * `.intent-guard/intent-contract.yaml` or the legacy
+ * `.conductor/intent-contract.yaml` -- rather than always naming the
+ * canonical one even when the frozen contract that triggered enforcement
+ * lives at the legacy path.
  */
-export function renderPolicy(detected: Set<GateRole>, intentContractFrozen: boolean): string {
+export function renderPolicy(
+  detected: Set<GateRole>,
+  frozenContractPath: string | null
+): string {
   const lines: string[] = [
     '# Guardrail policy. One file for every gate this repository runs.',
     '#',
@@ -125,9 +122,9 @@ export function renderPolicy(detected: Set<GateRole>, intentContractFrozen: bool
     // frozen contract's protected paths from producing findings that never
     // fail the check (issue #57).
     if (role === 'intent') {
-      if (intentContractFrozen) {
+      if (frozenContractPath !== null) {
         lines.push(
-          `    # A frozen contract already exists at ${NATIVE_CONTRACT_PATH}, so this gate`
+          `    # A frozen contract already exists at ${frozenContractPath}, so this gate`
         );
         lines.push('    # enforces from the start rather than only reporting.');
         lines.push('    enforce: true');

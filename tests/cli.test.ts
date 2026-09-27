@@ -406,14 +406,19 @@ describe('conductor run --output', () => {
     );
 
     expect(result.status).toBe(2);
-    // The same words the pull-request comment's compact body uses (see
-    // output-text.ts's verdict() and refusalLines()): "refused the trust
-    // base", "Nothing was checked", "no gate ran and nothing here is a
-    // result of any kind". Never a bare count that implies gates ran.
-    expect(result.stdout).toMatch(/^conductor run: refused the trust base "origin\/nope"\. Nothing was checked:/);
+    // "refused the trust base", and the gate's own refusal detail (which
+    // already says "Nothing was checked" as part of its own sentence, see
+    // trust-base.ts's refuseTrustBaseRef) -- said ONCE, not the phrase
+    // repeated by a redundant lead-in, and never a bare count that implies
+    // gates ran.
+    expect(result.stdout).toMatch(/^conductor run: refused the trust base "origin\/nope": /);
     expect(result.stdout).toMatch(/does not resolve to a commit/);
-    expect(result.stdout).toMatch(/No gate ran and nothing here is a result of any kind/);
+    const occurrences = result.stdout.match(/Nothing was checked/g) ?? [];
+    expect(occurrences).toHaveLength(1);
     expect(result.stdout).not.toMatch(/\d+ gate\(s\), \d+ finding\(s\)/);
+    // No period sitting directly before the "; sarif report written to..."
+    // separator cli.ts joins this line with.
+    expect(result.stdout).not.toMatch(/\.;/);
     expect(result.stdout).toContain(target);
   });
 });

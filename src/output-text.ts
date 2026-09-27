@@ -432,6 +432,15 @@ function refusalLines(result: RunResult): string[] {
  * the comment's own compact body gives them, not a count that implies gates
  * ran.
  *
+ * `refusal` (from refuseTrustBaseRef in trust-base.ts) already says "Nothing
+ * was checked" itself as part of its own sentence, so this does not repeat
+ * that lead-in: doing so used to print the phrase twice on one line. Nor
+ * does it append its own closing sentence: cli.ts joins this return value
+ * with "; " before the rest of the job-log line, and a trailing period here
+ * left every refused run's log line reading "...; sarif report written",
+ * with a period sitting directly before that semicolon. A trailing period
+ * on `refusal` itself is trimmed for the same reason.
+ *
  * A normal run is untouched: the exact same
  * "N gate(s), N finding(s)" text as before, so a working adopter's log does
  * not change.
@@ -439,10 +448,7 @@ function refusalLines(result: RunResult): string[] {
 export function jobLogSummary(result: RunResult): string {
   const refusal = result.trustBase?.refusal;
   if (refusal !== undefined && refusal !== null) {
-    return (
-      `refused the trust base "${result.trustBase?.ref ?? ''}". Nothing was checked: ${refusal} ` +
-      'No gate ran and nothing here is a result of any kind.'
-    );
+    return `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
   }
   return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
 }

@@ -1,4 +1,5 @@
-// `conductor init`: one policy file, one pre-commit hook, one manifest.
+// `conductor init`: one policy file, one manifest, and with --hook one
+// pre-commit hook.
 //
 // The manifest is what makes --revert honest. Without one, "undo the init"
 // means guessing which files were the tool's, and a tool that guesses about
@@ -108,12 +109,8 @@ import {
 } from './init-manifest.js';
 import type { Manifest, ManifestFile } from './init-manifest.js';
 
-import {
-  POLICY_FILE_NAME,
-  detectGates,
-  intentContractIsFrozen,
-  renderPolicy,
-} from './init-policy.js';
+import { POLICY_FILE_NAME, detectGates, renderPolicy } from './init-policy.js';
+import { frozenNativeContractPath } from './intent-prepare.js';
 
 export {
   MANAGED_HOOK_MARKER,
@@ -702,7 +699,7 @@ function finishPlan(
   if (existingPolicy === undefined) {
     writes.push({
       path: policyPath,
-      content: renderPolicy(detectGates(root, options.pathValue), intentContractIsFrozen(root)),
+      content: renderPolicy(detectGates(root, options.pathValue), frozenNativeContractPath(root)),
       executable: false,
       kind: 'policy',
     });
