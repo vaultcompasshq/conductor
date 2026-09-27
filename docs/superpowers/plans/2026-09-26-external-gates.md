@@ -967,7 +967,7 @@ git -C <worktree> commit -m "Normalize gitleaks history reports into location fi
 - Produces: `export function normalizeOsvScanner(raw: unknown, version: string | null, blocked: boolean): NormalizedGateOutput`, `export function cvssToSeverity(score: number | null): Severity`.
 - Consumes: osv-scanner JSON `results[].source.{path,type}`, `results[].packages[].package.{name,version,ecosystem}`, `packages[].vulnerabilities[].{id,aliases,summary,severity,affected,database_specific}`, `packages[].groups[].{ids,aliases,max_severity}` (verify every name against the captured fixture; the capture wins).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 describe('osv-scanner <ver> normalization', () => {
@@ -1018,12 +1018,12 @@ describe('osv-scanner <ver> normalization', () => {
 
 If the captured blocking fixture has no vulnerability with a `fixed` event, drop the `withFix` assertion and record that in the fixture README; do not hand-edit the fixture.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts 2>&1 | tail -20`
 Expected: FAIL, not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 export function cvssToSeverity(score: number | null): Severity {
@@ -1124,7 +1124,7 @@ export function normalizeOsvScanner(raw: unknown, version: string | null, blocke
 
 Wire the `osv-scanner` case in `normalizeFor` (replacing the Task 2 throw).
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `pnpm --dir <worktree> test -- tests/normalize.test.ts tests/gate-runner.test.ts 2>&1 | tail -20`
 Expected: PASS.

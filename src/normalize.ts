@@ -779,6 +779,217 @@ export function normalizeGitleaks(
   };
 }
 
+// -- osv-scanner (external, known vulnerabilities) ------------------------
+//
+// `osv-scanner scan source --format json` prints results[] per lockfile,
+// packages[] per resolved package, vulnerabilities[] per advisory, and
+// groups[] that merge an advisory with its aliases and carry the highest
+// CVSS base score among them as `max_severity`, a string. Every field read
+// below was checked against the 2.6.0 capture (tests/fixtures/README.md).
+
+/** CVSS base score onto the shared four-level ladder, by the CVSS v3 bands. */
+export function cvssToSeverity(score: number | null): Severity {
+  if (score === null || Number.isNaN(score)) {
+    return 'medium';
+  }
+  if (score >= 9) {
+    return 'critical';
+  }
+  if (score >= 7) {
+    return 'high';
+  }
+  if (score >= 4) {
+    return 'medium';
+  }
+  return 'low';
+}
+
+function osvScore(vuln: Record<string, unknown>, groups: Record<string, unknown>[]): number | null {
+  const id = typeof vuln.id === 'string' ? vuln.id : '';
+  for (const group of groups) {
+    const ids = Array.isArray(group.ids) ? (group.ids as unknown[]) : [];
+    if (ids.includes(id) && typeof group.max_severity === 'string' && group.max_severity !== '') {
+      const score = Number(group.max_severity);
+      if (!Number.isNaN(score)) {
+        return score;
+      }
+    }
+  }
+  // No group score: fall back to the advisory database's own word, mapped
+  // to a representative score inside the matching band.
+  const specific = vuln.database_specific;
+  if (isRecord(specific) && typeof specific.severity === 'string') {
+    const word = specific.severity.toUpperCase();
+    if (word === 'CRITICAL') return 9.5;
+    if (word === 'HIGH') return 7.5;
+    if (word === 'MODERATE' || word === 'MEDIUM') return 5;
+    if (word === 'LOW') return 2;
+  }
+  return null;
+}
+
+/** Numeric parts of a version, for ordering; "0" and "4.0.0" both parse. */
+function versionParts(value: string): number[] {
+  return (value.match(/\d+/g) ?? []).map(Number);
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = versionParts(a);
+  const right = versionParts(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const difference = (left[i] ?? 0) - (right[i] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+/**
+ * The release that fixes this advisory for the INSTALLED version.
+ *
+ * An advisory can list several ranges for one package (nanoid's fixes at
+ * 3.3.16 for the 3.x line and 5.1.16 for 4.x and 5.x), so the first `fixed`
+ * event is not the answer: the fix is the one closing the range the
+ * installed version sits in. When no range can be shown to contain it, the
+ * lowest fix above the installed version is the next best statement; when
+ * there is none, no fix is claimed.
+ */
+function osvFixedVersion(
+  vuln: Record<string, unknown>,
+  name: string,
+  installed: string
+): string | undefined {
+  const affected = Array.isArray(vuln.affected) ? vuln.affected : [];
+  const candidates: string[] = [];
+  for (const entry of affected) {
+    if (!isRecord(entry)) continue;
+    if (isRecord(entry.package) && entry.package.name !== name) continue;
+    const ranges = Array.isArray(entry.ranges) ? entry.ranges : [];
+    for (const range of ranges) {
+      if (!isRecord(range) || !Array.isArray(range.events)) continue;
+      let introduced: string | undefined;
+      for (const event of range.events) {
+        if (!isRecord(event)) continue;
+        if (typeof event.introduced === 'string') {
+          introduced = event.introduced;
+        }
+        if (typeof event.fixed === 'string') {
+          candidates.push(event.fixed);
+          const inRange =
+            installed !== '' &&
+            (introduced === undefined || compareVersions(installed, introduced) >= 0) &&
+            compareVersions(installed, event.fixed) < 0;
+          if (inRange) {
+            return event.fixed;
+          }
+        }
+      }
+    }
+  }
+  const above = candidates
+    .filter((fixed) => installed === '' || compareVersions(fixed, installed) > 0)
+    .sort(compareVersions);
+  return above[0];
+}
+
+/**
+ * osv-scanner writes every manifest path absolute, whatever scan root it is
+ * given, so in CI it names the runner's checkout. Made relative to the first
+ * root that contains it; left as it is when none does, rather than guessed.
+ */
+function relativeToRoots(file: string, roots: readonly string[]): string {
+  for (const root of roots) {
+    const prefix = root.endsWith('/') ? root : `${root}/`;
+    if (file.startsWith(prefix)) {
+      return file.slice(prefix.length);
+    }
+  }
+  return file;
+}
+
+export function normalizeOsvScanner(
+  raw: unknown,
+  version: string | null,
+  blocked: boolean,
+  /** The scan root as a path osv-scanner may have printed it, in any spelling. */
+  roots: readonly string[] = []
+): NormalizedGateOutput {
+  const product = 'osv-scanner';
+  const top = needRecord(raw, product, 'the output');
+  const results = needArray(top.results, product, 'results');
+  const findings: Finding[] = [];
+  for (const [ri, rawResult] of results.entries()) {
+    const resultWhere = `results[${ri}]`;
+    const result = needRecord(rawResult, product, resultWhere);
+    const source = needRecord(result.source, product, `${resultWhere}.source`);
+    const manifest = relativeToRoots(
+      needString(source.path, product, `${resultWhere}.source.path`),
+      roots
+    );
+    const packages = needArray(result.packages, product, `${resultWhere}.packages`);
+    for (const [pi, rawPackage] of packages.entries()) {
+      const packageWhere = `${resultWhere}.packages[${pi}]`;
+      const entry = needRecord(rawPackage, product, packageWhere);
+      const pkg = needRecord(entry.package, product, `${packageWhere}.package`);
+      const name = needString(pkg.name, product, `${packageWhere}.package.name`);
+      const installed = optionalString(pkg.version, product, `${packageWhere}.package.version`) ?? '';
+      const ecosystem = optionalString(pkg.ecosystem, product, `${packageWhere}.package.ecosystem`);
+      const groups = (
+        entry.groups === undefined ? [] : needArray(entry.groups, product, `${packageWhere}.groups`)
+      ).filter(isRecord);
+      const vulns =
+        entry.vulnerabilities === undefined
+          ? []
+          : needArray(entry.vulnerabilities, product, `${packageWhere}.vulnerabilities`);
+      for (const [vi, rawVuln] of vulns.entries()) {
+        const where = `${packageWhere}.vulnerabilities[${vi}]`;
+        const vuln = needRecord(rawVuln, product, where);
+        const id = needString(vuln.id, product, `${where}.id`);
+        const score = osvScore(vuln, groups);
+        const fixedVersion = osvFixedVersion(vuln, name, installed);
+        findings.push({
+          schemaVersion: 1,
+          product,
+          productVersion: version,
+          ruleId: `osv-scanner/${id}`,
+          severity: cvssToSeverity(score),
+          severityIsDerived: true,
+          blocking: blocked,
+          message:
+            optionalString(vuln.summary, product, `${where}.summary`) ??
+            `${id} affects ${name}@${installed}`,
+          subject: { kind: 'package', name, manifest },
+          // The advisory, the package and version it applies to, and the
+          // manifest it was found through: the same four facts on every run
+          // over the same lockfile, so the value is stable.
+          fingerprint: { value: `${id}|${name}|${installed}|${manifest}`, scope: product, stability: 'stable' },
+          details: {
+            version: installed,
+            ...(ecosystem === undefined ? {} : { ecosystem }),
+            aliases: Array.isArray(vuln.aliases) ? vuln.aliases : [],
+            ...(score === null ? {} : { cvss: score }),
+            ...(fixedVersion === undefined ? {} : { fixedVersion }),
+          },
+        });
+      }
+    }
+  }
+  return {
+    findings,
+    run: {
+      // Any known vulnerability fails the gate; a threshold, when an adopter
+      // wants one, lives in osv-scanner.toml.
+      failOn: 'any',
+      suppressed: 0,
+      ignored: 0,
+      diagnostics: [],
+      details: { sources: results.length },
+    },
+    diagnostics: [],
+  };
+}
+
 // -- the umbrella's own findings ------------------------------------------
 //
 // Every way a gate can fail to produce a usable result gets a finding here.

@@ -913,6 +913,24 @@ describe('external gate exit semantics', () => {
     expect(out.productVersion).toBe('2.6.0');
   });
 
+  it('reports an osv-scanner manifest relative to the repository, whichever spelling of the root it printed', () => {
+    // osv-scanner prints source.path absolute (tests/fixtures/README.md). The
+    // captured report, re-rooted at this test's repository in its resolved
+    // spelling, which on macOS differs from the tmpdir spelling.
+    const repo = tempGitRepo();
+    const report = JSON.parse(fixtureText('osv-scanner-2.6.0-blocking.json')) as {
+      results: Array<{ source: { path: string } }>;
+    };
+    report.results[0]!.source.path = path.join(realpathSync(repo), 'package-lock.json');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: JSON.stringify(report) });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    expect(out.findings.length).toBeGreaterThan(0);
+    expect(out.findings.every((f) => f.blocking)).toBe(true);
+    expect(out.findings[0]!.subject).toEqual({ kind: 'package', name: 'lodash', manifest: 'package-lock.json' });
+  });
+
   it('refuses a gitleaks older than the floor as could-not-run, naming the floor', () => {
     const bin = tempDir();
     stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.18.4', exit: 0, stdout: '' });

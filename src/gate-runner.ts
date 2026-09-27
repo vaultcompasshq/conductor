@@ -17,7 +17,7 @@
 // for all three.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -30,6 +30,7 @@ import {
   normalizeIntentGuard,
   normalizeMisconfiguredGate,
   normalizeMissingGate,
+  normalizeOsvScanner,
   normalizeUnparseableGate,
   normalizeVaultGuard,
 } from './normalize.js';
@@ -619,7 +620,7 @@ function normalizeFor(
   product: Product,
   parsed: unknown,
   version: string | null,
-  context: { blocked: boolean }
+  context: { blocked: boolean; roots: readonly string[] }
 ) {
   switch (product) {
     case 'dep-guard':
@@ -631,8 +632,26 @@ function normalizeFor(
     case 'gitleaks':
       return normalizeGitleaks(parsed, version, context.blocked);
     case 'osv-scanner':
-      throw new Error('external gates are wired in a later task');
+      return normalizeOsvScanner(parsed, version, context.blocked, context.roots);
   }
+}
+
+/**
+ * The repository root in every spelling a child could print it in: as given,
+ * and with symbolic links resolved (a macOS temporary directory is the
+ * everyday case: /var is a link to /private/var).
+ */
+function rootSpellings(repoRoot: string): string[] {
+  const spellings = [path.resolve(repoRoot)];
+  try {
+    const real = realpathSync(repoRoot);
+    if (!spellings.includes(real)) {
+      spellings.push(real);
+    }
+  } catch {
+    // A root that cannot be resolved has one spelling.
+  }
+  return spellings;
 }
 
 /**
@@ -1138,7 +1157,10 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   }
 
   try {
-    const normalized = normalizeFor(gate.product, parsed, version, { blocked });
+    const normalized = normalizeFor(gate.product, parsed, version, {
+      blocked,
+      roots: rootSpellings(options.repoRoot),
+    });
     return {
       ...withRun,
       exitCode,

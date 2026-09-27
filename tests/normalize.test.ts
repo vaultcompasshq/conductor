@@ -6,10 +6,12 @@ import { fileURLToPath } from 'node:url';
 import {
   GATE_STATE_REASON_KINDS,
   classifyGateStateReason,
+  cvssToSeverity,
   normalizeDepGuard,
   normalizeGitleaks,
   normalizeIntentGuard,
   normalizeMissingGate,
+  normalizeOsvScanner,
   normalizeVaultGuard,
 } from '../src/normalize.js';
 import { NormalizeError } from '../src/envelope.js';
@@ -819,5 +821,102 @@ describe('gitleaks 8.30.1 normalization', () => {
     expect(() => normalizeGitleaks([{ File: 'a', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
     expect(() => normalizeGitleaks([{ RuleID: 'x', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
     expect(() => normalizeGitleaks([null], '8.30.1', false)).toThrow(NormalizeError);
+  });
+});
+
+describe('osv-scanner 2.6.0 normalization', () => {
+  const blocking = fixture('osv-scanner-2.6.0-blocking.json');
+  const clean = fixture('osv-scanner-2.6.0-clean.json');
+  type Raw = {
+    results: Array<{
+      source: { path: string };
+      packages: Array<{ package: { name: string; version: string }; vulnerabilities: Array<{ id: string }> }>;
+    }>;
+  };
+
+  it('emits one finding per vulnerability id on a package, keyed by the OSV id', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true);
+    const raw = blocking as Raw;
+    const expectedCount = raw.results.flatMap((r) => r.packages.flatMap((p) => p.vulnerabilities)).length;
+    expect(out.findings.length).toBe(expectedCount);
+    const first = out.findings[0]!;
+    const rawFirst = raw.results[0]!.packages[0]!;
+    expect(first.product).toBe('osv-scanner');
+    expect(first.ruleId).toBe(`osv-scanner/${rawFirst.vulnerabilities[0]!.id}`);
+    expect(first.subject).toEqual({ kind: 'package', name: rawFirst.package.name, manifest: raw.results[0]!.source.path });
+    expect(first.blocking).toBe(true);
+    expect(first.severityIsDerived).toBe(true);
+    expect(['critical', 'high', 'medium', 'low']).toContain(first.severity);
+    expect(first.fingerprint?.stability).toBe('stable');
+    expect(first.details.version).toBe(rawFirst.package.version);
+  });
+
+  it('takes severity from the group max_severity that names the advisory', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true);
+    // GHSA-35jh-r3h4-6jhm sits in the group scored 8.1; GHSA-29mw-wpgm-hmr9 in 5.3.
+    const high = out.findings.find((f) => f.ruleId === 'osv-scanner/GHSA-35jh-r3h4-6jhm')!;
+    expect(high.severity).toBe('high');
+    expect(high.details.cvss).toBe(8.1);
+    const medium = out.findings.find((f) => f.ruleId === 'osv-scanner/GHSA-29mw-wpgm-hmr9')!;
+    expect(medium.severity).toBe('medium');
+  });
+
+  it('carries aliases and the fixed version when the advisory names one', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true);
+    const withFix = out.findings.find((f) => f.details.fixedVersion !== undefined);
+    expect(withFix).toBeDefined();
+    expect(out.findings.find((f) => f.ruleId === 'osv-scanner/GHSA-29mw-wpgm-hmr9')?.details.fixedVersion).toBe('4.17.21');
+    expect(Array.isArray(out.findings[0]!.details.aliases)).toBe(true);
+  });
+
+  it('takes the fixed version from the range the installed version is in, not the first fix listed', () => {
+    // The shape of nanoid's GHSA-28wg-ghj8-5hjv in the osv-scanner 2.6.0
+    // capture that could not be committed (tests/fixtures/README.md): one
+    // advisory, two ranges for the same package.
+    const raw = {
+      results: [
+        {
+          source: { path: 'package-lock.json', type: 'lockfile' },
+          packages: [
+            {
+              package: { name: 'nanoid', version: '5.0.9', ecosystem: 'npm' },
+              groups: [{ ids: ['GHSA-28wg-ghj8-5hjv'], max_severity: '8.2' }],
+              vulnerabilities: [
+                {
+                  id: 'GHSA-28wg-ghj8-5hjv',
+                  affected: [
+                    { package: { name: 'nanoid' }, ranges: [{ events: [{ introduced: '0' }, { fixed: '3.3.16' }] }] },
+                    { package: { name: 'nanoid' }, ranges: [{ events: [{ introduced: '4.0.0' }, { fixed: '5.1.16' }] }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(normalizeOsvScanner(raw, '2.6.0', true).findings[0]!.details.fixedVersion).toBe('5.1.16');
+  });
+
+  it('makes an absolute manifest path relative to the scan root it was given', () => {
+    const out = normalizeOsvScanner(blocking, '2.6.0', true, ['/tmp/conductor-osv-fixture']);
+    expect(out.findings[0]!.subject).toEqual({ kind: 'package', name: 'lodash', manifest: 'package-lock.json' });
+    expect(out.findings[0]!.fingerprint?.value).not.toContain('/tmp/');
+  });
+
+  it('gives no findings for an empty results array', () => {
+    expect(normalizeOsvScanner(clean, '2.6.0', false).findings).toEqual([]);
+  });
+
+  it('rejects output without a results array', () => {
+    expect(() => normalizeOsvScanner({ packages: [] }, '2.6.0', false)).toThrow(NormalizeError);
+  });
+
+  it('maps CVSS scores onto the shared ladder', () => {
+    expect(cvssToSeverity(9.8)).toBe('critical');
+    expect(cvssToSeverity(7.5)).toBe('high');
+    expect(cvssToSeverity(5.0)).toBe('medium');
+    expect(cvssToSeverity(2.1)).toBe('low');
+    expect(cvssToSeverity(null)).toBe('medium');
   });
 });
