@@ -153,8 +153,13 @@ required.
    commit at all). A clean commit prints one line:
 
    ```
-   conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 1 note(s). Re-run with --verbose for the full report.
+   conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 0 gate(s) left out by --gate. 0 gate(s) not enforced. 1 note(s). 0 suppressed across all gates. Re-run with --verbose for the full report.
    ```
+
+   The line names every disposition a gate can have on that run, with its
+   count, even when the count is zero: ran, deferred to a later stage, left
+   out by `--gate`, not enforced, and suppressed findings. Which gates appear
+   in each depends on your policy file.
 
    A commit with a staged credential in it prints the full report and exits 1:
 
