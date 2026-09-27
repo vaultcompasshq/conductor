@@ -121,6 +121,7 @@
 import type { Finding, Severity } from './envelope.js';
 import type { GateOutcome } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
+import { INTENT_WARNING } from './normalize.js';
 import { POLICY_FILE_NAME } from './policy.js';
 import type { RunResult } from './run.js';
 
@@ -685,6 +686,39 @@ function skippedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * intent-guard 1.7.0's own advance-notice warnings, as notifications.
+ *
+ * A frozen contract's protected_paths or allowed_paths entry that no git
+ * path can ever match is a statement about that contract's own
+ * configuration, in the same sense skippedNotifications above already
+ * describes: nothing went wrong with this commit, nobody's code is at
+ * fault, and the statement is true of every run against this contract until
+ * it is edited. As a result it belongs beside no-contract and the rest, a
+ * notification rather than a result, so it never gains a severity, a
+ * fingerprint, or a place in the exit code.
+ *
+ * Read off `run.diagnostics` rather than `diagnostics`, deliberately: this
+ * repository's `diagnostics` field is the umbrella's OWN fixed set of ids
+ * (see AGENTS.md), and intent-guard/warning is not one of them. It is the
+ * gate's own statement, carried through unchanged, the same way
+ * dep-guard's online-deadline-exceeded diagnostic already prints under the
+ * gate in the text report; this is the SARIF half of that same channel,
+ * scoped to intent-guard's own warning code so a future run-diagnostic on
+ * another gate does not silently start appearing here too.
+ */
+function intentWarningNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) =>
+    gate.run.diagnostics
+      .filter((diagnostic) => diagnostic.code === INTENT_WARNING)
+      .map((diagnostic) => ({
+        id: diagnostic.code,
+        message: diagnostic.message,
+        details: { role: gate.role, product: gate.product },
+      }))
+  );
+}
+
+/**
  * The control inputs this pull request proposes to change, as notifications.
  *
  * A NOTIFICATION and never a result, decided by the rule at
@@ -997,6 +1031,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...proposalNotifications(result),
     ...trustBaseWithheldNotifications(result),
     ...nodeModulesSkippedNotifications(result),
+    ...intentWarningNotifications(result),
   ];
 
   // Notifications earn the run on their own. Before this, the umbrella run

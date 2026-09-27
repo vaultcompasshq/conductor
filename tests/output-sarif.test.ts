@@ -489,6 +489,121 @@ describe('coverage statements are notifications rather than results', () => {
 });
 
 /**
+ * intent-guard 1.7.0's own advance-notice warnings, relayed as notifications.
+ *
+ * A frozen contract's protected_paths or allowed_paths carrying a shape no
+ * git path can ever match is a statement about the contract's own
+ * configuration, not about this commit's correctness today, so it belongs
+ * beside the no-contract and skipped notes above: a notification, never a
+ * result, at note level, with no effect on the exit code.
+ */
+describe("intent-guard's own 1.7.0 advance-notice warnings", () => {
+  const intentWarnings = normalizeIntentGuard(
+    fixture('intent-guard-1.7.0-check-warnings.json'),
+    '1.7.0'
+  );
+  const WARNED = result([
+    outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      productVersion: '1.7.0',
+      exitCode: 0,
+      findings: intentWarnings.findings,
+      run: intentWarnings.run,
+    }),
+  ]);
+
+  it('moves each warning out of results, keeping the gate own namespace', () => {
+    expect(umbrellaResultIds(sarif(WARNED))).not.toContain('intent-guard/warning');
+    const ids = notificationsOf(sarif(WARNED)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+    expect(ids.filter((id) => id === 'intent-guard/warning')).toHaveLength(2);
+  });
+
+  it('sends each warning at note level, with the message text unchanged', () => {
+    const entries = notificationsOf(sarif(WARNED)).filter(
+      (candidate) => (candidate.descriptor as Record<string, unknown>).id === 'intent-guard/warning'
+    );
+    for (const entry of entries) {
+      expect(entry.level).toBe('note');
+    }
+    const texts = entries.map((entry) => (entry.message as Record<string, unknown>).text);
+    expect(texts).toContain(
+      "Budget protected_paths entry '/etc/widget.conf' is invalid: must not start with '/' " +
+        '(paths are matched git-relative; a leading slash can never match). This will block ' +
+        'check and report starting in 2.0.0; edit the contract and run intent-guard freeze ' +
+        'again before then.'
+    );
+  });
+
+  it('says nothing when the intent gate sent no warnings', () => {
+    const ids = notificationsOf(sarif(THREE_GATES)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+    expect(ids).not.toContain('intent-guard/warning');
+  });
+
+  it('filters run.diagnostics by code, leaving a non-warning diagnostic on the same gate out', () => {
+    // intentWarningNotifications filters gate.run.diagnostics down to the
+    // intent-guard/warning code specifically (src/output-sarif.ts:712);
+    // untested until now, so a mutation that dropped or widened that filter
+    // would have passed every other test above, since none of them puts a
+    // second, differently-coded diagnostic on the same gate.
+    const mixed = result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.7.0',
+        exitCode: 0,
+        findings: [],
+        run: {
+          failOn: null,
+          suppressed: 0,
+          ignored: 0,
+          diagnostics: [
+            {
+              code: 'intent-guard/warning',
+              message: 'Budget protected_paths entry is invalid and will block in 2.0.0.',
+            },
+            {
+              code: 'online-deadline-exceeded',
+              message: 'an unrelated run diagnostic sharing the same gate',
+            },
+          ],
+          details: {},
+        },
+      }),
+    ]);
+
+    const ids = notificationsOf(sarif(mixed)).map(
+      (entry) => (entry.descriptor as Record<string, unknown>).id
+    );
+    expect(ids.filter((id) => id === 'intent-guard/warning')).toHaveLength(1);
+    expect(ids).not.toContain('online-deadline-exceeded');
+  });
+
+  it('keeps a warning out of every run own results, not only the umbrella own', () => {
+    // umbrellaResultIds above already checks the umbrella's run; this checks
+    // the WHOLE log, intent-guard's own driver run included, because a
+    // mutation that pushed the diagnostic into a gate's `findings` as well
+    // as its `run.diagnostics` would still pass every assertion above.
+    const log = sarif(WARNED);
+    const allResults = log.runs.flatMap(
+      (run) => (run.results as Array<Record<string, unknown>> | undefined) ?? []
+    );
+    expect(allResults.some((entry) => entry.ruleId === 'intent-guard/warning')).toBe(false);
+    expect(
+      allResults.some((entry) =>
+        String((entry.message as Record<string, unknown> | undefined)?.text ?? '').includes(
+          'This will block check and report starting in 2.0.0'
+        )
+      )
+    ).toBe(false);
+  });
+});
+
+/**
  * executionSuccessful is a claim, so it has to be made in both directions.
  *
  * It was being written only when there were notifications to hang it on, so

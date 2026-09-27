@@ -570,6 +570,72 @@ describe('intent-guard 1.2.0 normalization', () => {
   });
 });
 
+/**
+ * intent-guard 1.7.0's own advance notice, read from `warnings`.
+ *
+ * A frozen contract's protected_paths or allowed_paths entry can carry a
+ * shape no git path can ever match (a leading slash, an empty path
+ * segment). 1.7.0 warns about it rather than blocking, and says so will
+ * change in 2.0.0. This is reporting, never a finding: it must never gain a
+ * severity, a fingerprint, or a blocking flag, and it must never turn a
+ * shape an older or newer intent-guard did not send correctly into a
+ * could-not-run for the gate.
+ */
+describe('intent-guard 1.7.0 warnings', () => {
+  const INTENT_GUARD_WARNINGS = fixture('intent-guard-1.7.0-check-warnings.json');
+
+  it('turns each warning string into a note on the intent line, never a finding', () => {
+    const result = normalizeIntentGuard(INTENT_GUARD_WARNINGS, '1.7.0');
+    expect(result.findings).toEqual([]);
+    expect(result.run.diagnostics).toEqual([
+      {
+        code: 'intent-guard/warning',
+        message:
+          "Budget protected_paths entry '/etc/widget.conf' is invalid: must not start with " +
+          "'/' (paths are matched git-relative; a leading slash can never match). This will " +
+          'block check and report starting in 2.0.0; edit the contract and run intent-guard ' +
+          'freeze again before then.',
+      },
+      {
+        code: 'intent-guard/warning',
+        message:
+          "Budget allowed_paths entry 'src/widget//export.ts' is invalid: must not contain " +
+          'an empty path segment (consecutive \'/\'). This will block check and report ' +
+          'starting in 2.0.0; edit the contract and run intent-guard freeze again before then.',
+      },
+    ]);
+  });
+
+  it('keeps both warnings out of findings entirely: zero findings, two diagnostics', () => {
+    // A mutation that pushed a warning into `findings` too (blocking or not)
+    // would leave findings.length at 0 under the old assertion here, which
+    // only checked that no PRESENT finding was blocking; it never checked
+    // that a finding could not be present at all. This checks both counts
+    // directly, so either direction of that mutation goes red.
+    const result = normalizeIntentGuard(INTENT_GUARD_WARNINGS, '1.7.0');
+    expect(result.findings).toHaveLength(0);
+    expect(result.run.diagnostics).toHaveLength(2);
+  });
+
+  it('reads as none, not an error, on an intent-guard old enough to have never sent warnings', () => {
+    // 1.2.1 and earlier never sent a `warnings` field at all; absence is the
+    // ordinary case and must stay silent exactly like it always has.
+    const result = normalizeIntentGuard(fixture('intent-guard-1.2.1-check-passing.json'), '1.2.1');
+    expect(result.run.diagnostics).toEqual([]);
+  });
+
+  it('ignores a malformed warnings value rather than treating it as could-not-run', () => {
+    const notAnArray = { ...(INTENT_GUARD_WARNINGS as object), warnings: 'not-an-array' };
+    const notAllStrings = { ...(INTENT_GUARD_WARNINGS as object), warnings: ['fine', 42] };
+
+    expect(() => normalizeIntentGuard(notAnArray, '1.7.0')).not.toThrow();
+    expect(normalizeIntentGuard(notAnArray, '1.7.0').run.diagnostics).toEqual([]);
+
+    expect(() => normalizeIntentGuard(notAllStrings, '1.7.0')).not.toThrow();
+    expect(normalizeIntentGuard(notAllStrings, '1.7.0').run.diagnostics).toEqual([]);
+  });
+});
+
 describe('the umbrella own missing-gate finding', () => {
   const finding = normalizeMissingGate('dependencies', 'dep-guard', ['dep-guard']);
 

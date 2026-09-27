@@ -96,6 +96,24 @@ committed fixtures therefore come from a spec and plan written for the
 purpose, in the same shape and with a budget block; the real-artifact run
 is recorded in the branch's report instead of here.
 
+## intent-guard 1.7.0
+
+Built from the sibling `intent-guard` checkout at `main` (`pnpm build`), run
+against a throwaway one-commit repository with a hand-written frozen
+contract at `.intent-guard/intent-contract.yaml` whose `budget` block
+carries two entries no git path can match: `/etc/widget.conf` in
+`protected_paths` (a leading slash) and `src/widget//export.ts` in
+`allowed_paths` (an empty path segment). Neither entry was written through
+`intent-guard extract` or `import-spec`, which would refuse them; this is
+the hand-edited-after-freeze shape the validator exists to catch.
+
+    node packages/skill/dist/check-cli.js --project <fixture repo> --json
+
+`intent-guard-1.7.0-check-warnings.json` is that run (exit 0, no changed
+paths given so neither `drift` nor `budget` appears). Both invalid entries
+come back as `warnings` strings, intent-guard 1.7.0's new advance notice
+that these two rules will block starting in 2.0.0.
+
 ## gitleaks 8.30.1
 
 Release `v8.30.1`, the `darwin_arm64` tarball from the gitleaks GitHub

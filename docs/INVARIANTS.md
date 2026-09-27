@@ -2824,6 +2824,46 @@ drives the `threshold === null` branch (src/normalize.ts:110-121) by
 deleting `run.failOn`, asserting the emitted code and that nothing is
 left marked blocking.
 
+A sixth notification joined the five above after this section was written,
+and it differs from all five in provenance rather than in kind. intent-guard
+1.7.0 added its own advance notice that a frozen contract's
+`protected_paths` or `allowed_paths` carries an entry no git path can ever
+match, sent as strings on a `warnings` array in its own check JSON, and
+says the shape will become a blocking reason in 2.0.0. The other five
+notifications above are synthesized by conductor itself from a gate-state
+fact it observed (deferred, excluded, skipped, unenforced, legacy state
+dir); this one is a sentence intent-guard sends verbatim, so it is read by
+`readIntentWarnings` (src/normalize.ts:512-517) into a run-level diagnostic
+namespaced `intent-guard/warning` (the constant at src/normalize.ts:494,
+attached to `run.diagnostics` at src/normalize.ts:802) rather than into the
+umbrella's own top-level `diagnostics` field, which stays reserved for
+conductor's five fixed ids and never a gate's own statement. Reading it is
+tolerant on purpose, unlike everything else this normalizer validates:
+absent on intent-guard 1.6.0 and earlier, and ignored rather than thrown on
+a non-array or an array holding a non-string entry, because this is
+reporting and a malformed shape must never turn into a could-not-run for
+the gate.
+
+`intentWarningNotifications` (src/output-sarif.ts:709-719) reads that
+diagnostic back out of each gate's `run.diagnostics`, filtered to the
+`intent-guard/warning` code so a future run-level diagnostic on some other
+gate does not silently start appearing here too, and folds each one into
+the same notifications array the five above already share
+(src/output-sarif.ts:1034). It never gains a severity, a fingerprint, or a
+place in the exit code: `composeExitCode` (src/exit-codes.ts:76-85) reads
+only `couldNotRun`, `exitCode` and `hasBlockingFinding`, none of which this
+diagnostic ever touches, in either direction.
+
+Pinned by tests/normalize.test.ts's "intent-guard 1.7.0 warnings" describe
+block (each warning string becomes a run-level note and never a finding,
+an intent-guard old enough to have never sent `warnings` stays silent, and
+a malformed value is ignored without throwing a could-not-run) and
+tests/output-sarif.test.ts's "intent-guard's own 1.7.0 advance-notice
+warnings" describe block (moved out of results and into notifications
+while keeping the gate's own namespace, sent at note level with the
+message text unchanged, silent when the gate sent no warnings, and the
+exit code left untouched).
+
 ## The clean-run summary line, and what it may not swallow
 
 A fully clean run prints one line rather than a screenful
