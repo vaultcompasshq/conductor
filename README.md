@@ -170,18 +170,26 @@ required.
    conductor 0.6.0
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.2.1  exit 0  251ms  via dep-guard on path
+   dependencies  dep-guard 0.7.0  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
+     mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online-flag not passed
 
-   secrets  vault-guard 1.4.6  exit 1  97ms  via vault-guard on path
-     BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:27:32
+   secrets  vault-guard 1.8.0  exit 1  105ms  via vault-guard on path
+     BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:14:12
          Possible secret of type 'anthropic'
      threshold medium   suppressed 0   ignored not reported
+     filesScanned 1   patternsActive 59
 
      deferred  intent  intent-guard  did not run here; it runs from stage ci onwards
 
    verdict: exit 1, 1 blocking finding(s) across 2 gate(s).
    ```
+
+   The `mode`, `corpusBuiltAt`, `lockfileFormat` and `online-flag` line under
+   `dependencies`, and the `filesScanned`/`patternsActive` line under
+   `secrets`, are each gate's own run facts, one line per gate, added to the
+   full report so a reader can see what a gate actually scanned and with
+   what, not only its verdict.
 
    Both gates there are the ones you installed a moment ago, running with
    their own thresholds and their own baselines. The umbrella found nothing

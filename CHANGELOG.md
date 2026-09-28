@@ -211,6 +211,10 @@ does or installs, not just how it reports it.
   ships the newer gates and the rule will not let a pull request judge itself
   with an older one. The migration is to remove the input, whose default is
   the version this tag ships, or to raise it to `0.9.0` / `1.7.0` or newer.
+  `TAG_CONDUCTOR_MINOR` moved too, with `conductor-version` itself: a
+  workflow pinning `conductor-version: 0.5.0`, the version this README's own
+  examples named before this release, is now refused on a pull request for
+  the same reason and needs the same fix.
 
 ## [0.5.1] - 2026-09-27
 

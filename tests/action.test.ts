@@ -1230,8 +1230,8 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // four TAG constants ends in patch 0 (0.6.0, 0.9.0, 1.8.0, 1.7.0), so no
     // real published pin can reach this arm any more -- a patch below zero
     // does not exist. This test used to pin against TAG_INTENT_GUARD's own
-    // patch of 2 (1.5.2), which this release retired along with the rest of
-    // the old intent-guard default. Driven here instead through a
+    // patch of 2 (1.5.2), which release 0.5.1 retired along with the rest of
+    // that old intent-guard default. Driven here instead through a
     // future-patch copy of the step, the same device scriptWithFutureTag uses
     // to prove the comparison follows the constant rather than a number
     // frozen into this file.
