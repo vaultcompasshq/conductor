@@ -28,6 +28,10 @@ const VAULT_GUARD_BLOCKING = fixture('vault-guard-1.4.2-blocking.json');
 const VAULT_GUARD_CLEAN = fixture('vault-guard-1.4.2-clean.json');
 const INTENT_GUARD_BUDGET = fixture('intent-guard-1.2.0-budget-blocking.json');
 const INTENT_GUARD_DRIFT = fixture('intent-guard-1.2.0-drift.json');
+const INTENT_GUARD_ADVISORY_CAPPED = fixture('intent-guard-1.7.0-check-advisory-capped.json');
+const INTENT_GUARD_UNCAPPED_CONSTRAINT_BLOCKING = fixture(
+  'intent-guard-1.7.0-check-uncapped-constraint-blocking.json'
+);
 
 describe('dep-guard 0.2.0 normalization', () => {
   const result = normalizeDepGuard(DEP_GUARD_BLOCKING, '0.2.0');
@@ -419,6 +423,139 @@ describe('intent-guard 1.2.0 normalization', () => {
       contractFound: true,
       contractFrozen: true,
     });
+  });
+
+  // Issue #34: intent-guard 1.6.0 caps a constraint finding at advisory when
+  // its source is a prose rules file (CLAUDE.md, AGENTS.md, GEMINI.md,
+  // cursor rules). Such a finding never raises constraint_violation,
+  // criticalViolated, or the gate's own exit code, but finding_details
+  // carries no field saying so: `strength` is "strong" for a capped prose
+  // match exactly like an uncapped one. The fixture below is a real capture
+  // (tests/fixtures/README.md) of a run that blocks purely on scope creep
+  // (soft_block, 71/100) while also carrying a strong, prose-sourced
+  // constraint match the gate itself marks advisory with the literal
+  // "advisory " message prefix -- the only surviving signal.
+  describe('intent-guard advisory-capped constraint findings (issue 34)', () => {
+    const result = normalizeIntentGuard(INTENT_GUARD_ADVISORY_CAPPED, '1.7.0');
+    const driftFindings = result.findings.filter((finding) =>
+      finding.ruleId.startsWith('intent-guard/drift.')
+    );
+
+    it('never marks the advisory-capped constraint finding blocking, even though the run blocks', () => {
+      const capped = driftFindings.find(
+        (finding) => finding.ruleId === 'intent-guard/drift.constraint_violation'
+      );
+      expect(capped?.message).toMatch(/^advisory /);
+      expect(capped?.blocking).toBe(false);
+    });
+
+    it('gives the capped finding a lower severity than the run-level action would imply', () => {
+      const capped = driftFindings.find(
+        (finding) => finding.ruleId === 'intent-guard/drift.constraint_violation'
+      );
+      // drift.action is soft_block, which would otherwise map to 'high'
+      // (DRIFT_SEVERITY.soft_block). The cap means this finding never drove
+      // that action, so it must not inherit its severity either.
+      expect(capped?.severity).toBe('low');
+      expect(capped?.severityIsDerived).toBe(true);
+    });
+
+    it('still blocks on the uncapped scope_creep finding that actually drove the soft_block', () => {
+      const scopeCreep = driftFindings.find(
+        (finding) => finding.ruleId === 'intent-guard/drift.scope_creep'
+      );
+      expect(scopeCreep?.message).not.toMatch(/^advisory /);
+      expect(scopeCreep?.blocking).toBe(true);
+      expect(scopeCreep?.severity).toBe('high');
+    });
+  });
+
+  // The gap a reviewer named: every uncapped finding tested above was
+  // scope_creep. A constraint_violation finding specifically needs its own
+  // coverage, because that is the category the cap applies to -- a
+  // regression that made EVERY constraint_violation finding non-blocking,
+  // capped or not, would still pass every test above.
+  it('still blocks on an uncapped constraint_violation finding in a run that blocks (source: user-stated)', () => {
+    const result = normalizeIntentGuard(INTENT_GUARD_UNCAPPED_CONSTRAINT_BLOCKING, '1.7.0');
+    const constraintFinding = result.findings.find(
+      (finding) => finding.ruleId === 'intent-guard/drift.constraint_violation'
+    );
+    expect(constraintFinding?.message).not.toMatch(/^advisory /);
+    expect(constraintFinding?.blocking).toBe(true);
+    expect(constraintFinding?.severity).toBe('high');
+  });
+
+  // The cap detection is a literal, case-sensitive, start-anchored prefix
+  // match, not a substring or case-insensitive one. These two constructed
+  // cases exercise real intent-guard shapes (a genuine finding_details
+  // entry, just with a message intent-guard itself would never produce)
+  // rather than a captured fixture, because the point is to pin the
+  // matcher's own strictness: a message.includes() mutation would pass the
+  // first, and a toLowerCase() mutation would pass the second.
+  describe('the advisory-cap match is case-sensitive and anchored to the start of the message', () => {
+    function constraintFinding(message: string): unknown {
+      return {
+        status: 'blocked',
+        exitCode: 1,
+        reasons: ['Drift soft_block (score 71/100). Resolve drift or log an acknowledged pivot before continuing.'],
+        contractFound: true,
+        contractFrozen: true,
+        drift: {
+          overall: 71,
+          action: 'soft_block',
+          categories: { scope_creep: 0, constraint_violation: 90, ac_divergence: 0, undocumented_pivot: 0 },
+          findings: [message],
+          finding_details: [
+            {
+              fingerprint: 'f'.repeat(64),
+              category: 'constraint_violation',
+              rule_id: 'constraint_violation:test rule',
+              message,
+              matched: ['test'],
+              strength: 'strong',
+            },
+          ],
+        },
+      };
+    }
+
+    it('stays blocking when "advisory " appears mid-message rather than as a prefix', () => {
+      const result = normalizeIntentGuard(
+        constraintFinding('critical constraint at risk, advisory only in spirit: "test rule"'),
+        '1.7.0'
+      );
+      const finding = result.findings.find(
+        (f) => f.ruleId === 'intent-guard/drift.constraint_violation'
+      );
+      expect(finding?.blocking).toBe(true);
+      expect(finding?.severity).toBe('high');
+    });
+
+    it('stays blocking when the message is capitalised "Advisory " rather than lowercase', () => {
+      const result = normalizeIntentGuard(
+        constraintFinding('Advisory critical constraint at risk: "test rule"'),
+        '1.7.0'
+      );
+      const finding = result.findings.find(
+        (f) => f.ruleId === 'intent-guard/drift.constraint_violation'
+      );
+      expect(finding?.blocking).toBe(true);
+      expect(finding?.severity).toBe('high');
+    });
+  });
+
+  it('leaves older intent-guard JSON with no advisory-capped finding unchanged', () => {
+    // INTENT_GUARD_DRIFT predates the advisory cap (intent-guard 1.2.0): its
+    // one drift finding's message never starts with "advisory ", so the new
+    // cap detection must not fire and the existing action-derived severity
+    // and blocking rules keep applying exactly as before.
+    const drift = normalizeIntentGuard(INTENT_GUARD_DRIFT, '1.2.0');
+    const driftFinding = drift.findings.find((finding) =>
+      finding.ruleId.startsWith('intent-guard/drift.')
+    );
+    expect(driftFinding?.message).not.toMatch(/^advisory /);
+    expect(driftFinding?.severity).toBe('info');
+    expect(driftFinding?.blocking).toBe(false);
   });
 
   // intent-guard's checkGate pushes gate-state reasons (no contract, an

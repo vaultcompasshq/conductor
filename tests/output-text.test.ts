@@ -769,6 +769,47 @@ describe('a run that is not fully clean prints the full report', () => {
   });
 });
 
+describe('an advisory-capped constraint finding in the text report (issue #34)', () => {
+  // Same real fixture as the SARIF and normalize tests: a run that blocks on
+  // scope_creep alone (drift.action soft_block, 71/100) while also carrying
+  // a strong, prose-sourced constraint match intent-guard itself marks
+  // advisory. Before the fix, this finding's line printed BLOCKING because
+  // every drift finding inherited the run's own driftAction.
+  const intentGuardAdvisoryCapped = normalizeIntentGuard(
+    fixture('intent-guard-1.7.0-check-advisory-capped.json'),
+    '1.7.0'
+  );
+  const text = renderText(
+    result(
+      [
+        outcome({
+          role: 'intent',
+          product: 'intent-guard',
+          productVersion: '1.7.0',
+          exitCode: 1,
+          findings: intentGuardAdvisoryCapped.findings,
+          run: intentGuardAdvisoryCapped.run,
+        }),
+      ],
+      1
+    )
+  );
+
+  it('marks the capped constraint finding as a report, not BLOCKING', () => {
+    const lines = text.split('\n');
+    const messageLine = lines.findIndex((line) => line.includes('advisory critical constraint at risk'));
+    expect(messageLine).toBeGreaterThan(-1);
+    expect(lines[messageLine - 1]).toMatch(/report\s+low\*/);
+  });
+
+  it('still marks the scope_creep finding that drove the block as BLOCKING', () => {
+    const lines = text.split('\n');
+    const messageLine = lines.findIndex((line) => line.includes('Out-of-scope touched'));
+    expect(messageLine).toBeGreaterThan(-1);
+    expect(lines[messageLine - 1]).toMatch(/BLOCKING\s+high\*/);
+  });
+});
+
 describe('the advisory option maps a blocking verdict to exit 0 in the text report', () => {
   // TextOptions.advisory never touches the RunResult itself: the exit code
   // the gates actually produced stays 1 here, exactly as it does without the

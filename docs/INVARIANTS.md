@@ -3190,6 +3190,86 @@ still says 1), 236 (every budget violation blocks), 273 (a drift finding
 whose overall action is "proceed" does not) and 421 (a blocked gate never
 reports zero blocking findings).
 
+## An advisory-capped constraint finding is never blocking, whatever the run does (issue #34)
+
+The rule above is "a drift finding is blocking exactly when the OVERALL
+action blocks", and intent-guard 1.6.0 broke its premise. A constraint
+whose `source` is a prose rules file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+cursor rules) is capped at advisory by intent-guard itself: a strong match
+is still reported, but it never raises `constraint_violation`,
+`criticalViolated`, or the gate's own exit code. Before this fix, every
+drift finding inherited `driftBlocks` regardless, so a run that blocked for
+an unrelated reason (scope creep, say) rendered the capped finding as
+blocking too, in both the text report and SARIF's `properties.blocking`.
+
+There is no field to key on. `finding_details[]` carries `strength: "strong"`
+for a capped prose match exactly the same as an uncapped one, and the
+constraint's `source` is never carried onto the finding at all
+(confirmed by grepping intent-guard's packages/core/src for `advisory`,
+`source`, and `prose`, and by running the built 1.7.0 `check` command
+against a throwaway repository with a frozen contract; see
+tests/fixtures/README.md, "intent-guard 1.7.0 (advisory-capped constraint
+findings, issue #34)" section). The only surviving signal is the literal
+`"advisory "` prefix intent-guard's own drift.ts puts on the message for
+this one case.
+
+Matched anyway (the `ADVISORY_CONSTRAINT_PREFIX` constant just above
+`normalizeIntentGuard`, src/normalize.ts). A `constraint_violation` finding
+whose message starts with that exact, case-sensitive prefix is never
+blocking and is downgraded to `low` severity regardless of `drift.action`
+(inside `normalizeIntentGuard`'s drift-finding loop, src/normalize.ts);
+every other drift finding, including an uncapped `constraint_violation` in
+the same run, is unaffected. An intent-guard JSON from before 1.6.0 never
+has the prefix, so this never fires against it.
+
+**THIS IS NOT A SAFETY NET, and the earlier version of this entry
+overstated it.** Unlike the gate-state reason prefixes elsewhere in this
+file, which ARE pinned against the literal upstream strings in a test that
+enumerates them, nothing here tests against a live intent-guard binary.
+`tests/fixtures/intent-guard-1.7.0-check-advisory-capped.json` is a static
+capture, taken once; a future intent-guard release that rewords the
+`"advisory "` prefix, or replaces it with a field, changes nothing this
+repository would notice on its own. The cap detection would simply stop
+matching, silently: no test would fail, no CI signal would fire, and a
+capped finding would go back to rendering as blocking exactly as it did
+before this fix, with no warning anywhere in the report. This is the
+reason to prefer an upstream fix over this one: filed as intent-guard #114
+(https://github.com/vaultcompasshq/intent-guard/issues/114), asking for a
+machine-readable per-finding field so conductor can stop keying on message
+text. Until that lands, this repository's only defense against upstream
+drift is a human noticing a capped finding rendering as blocking again and
+re-reading this entry.
+
+This changes only the per-finding `blocking` flag and its severity, in the
+text report and in SARIF's `properties.blocking`. Nothing about the
+composed exit code depends on it, for the same reason as the rule above:
+that comes from intent-guard's own exit code, never recomputed here.
+
+Pinned by tests/normalize.test.ts (describe block "intent-guard
+advisory-capped constraint findings (issue 34)"): the capped finding is
+never blocking and its severity is `low` even though `drift.action` is
+`soft_block`, the uncapped `scope_creep` finding in the same run stays
+blocking at `high`, and an older fixture with no `"advisory "` prefix keeps
+its previous severity and blocking. A second, sibling test (using
+`intent-guard-1.7.0-check-uncapped-constraint-blocking.json`, the same
+reproduction with the constraint's `source` changed to `user-stated`) pins
+that an UNCAPPED `constraint_violation` finding specifically, not only an
+unrelated `scope_creep` finding, stays blocking in a run that blocks -- the
+gap an earlier review round named, since every other uncapped case tested
+here happened to be `scope_creep`. A third describe block
+("the advisory-cap match is case-sensitive and anchored to the start of
+the message") constructs two finding shapes intent-guard itself would never
+produce -- `"advisory "` appearing mid-message rather than as a prefix, and
+a capitalised `"Advisory "` -- and asserts both stay blocking, which is
+what makes the match `startsWith` rather than `includes` or
+case-insensitive a tested fact rather than an unverified claim in a
+comment. Pinned in rendering by tests/output-sarif.test.ts ("an
+advisory-capped constraint finding in SARIF (issue #34)": `properties.blocking`
+false and `note` level for the capped finding, `properties.blocking` true
+and `error` level for the uncapped one) and tests/output-text.test.ts ("an
+advisory-capped constraint finding in the text report (issue #34)": the
+capped finding's line reads `report`, not `BLOCKING`).
+
 ## Nothing invents a position, a fingerprint, or a severity
 
 Severity is carried by identity where the product's ladder is the shared

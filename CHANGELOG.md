@@ -140,6 +140,45 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   all reach a published log the same way, verbatim, even where the text
   report hides or filters them (issue #72).
 
+- **Fixed:** a constraint finding intent-guard 1.6.0 caps at advisory,
+  because its source is a prose rules file (CLAUDE.md, AGENTS.md, GEMINI.md,
+  cursor rules), was rendered as a blocking, high-severity finding whenever
+  the run blocked for any other reason. `normalizeIntentGuard` derived every
+  drift finding's `blocking` flag and severity from the run's own
+  `drift.action`, on the rule that the gate raises one reason for the whole
+  score and none per finding; intent-guard 1.6.0 broke that premise for this
+  one case without adding a field to say so; `finding_details[]` still
+  reports `strength: "strong"` for a capped prose match exactly like an
+  uncapped one, and the constraint's source is never carried onto the
+  finding. The only surviving signal is the literal "advisory " prefix
+  intent-guard's own drift.ts puts on the finding's message, which the
+  normalizer now matches: a `constraint_violation` finding whose message
+  starts with that prefix is never blocking and renders at `low` severity,
+  regardless of `drift.action`, while every other drift finding in the same
+  run, including an uncapped constraint violation, is unaffected. Nothing
+  about the composed exit code changes either way; that already came from
+  intent-guard's own exit code. **This is an interim fix, not a closed
+  loop:** conductor is keyed to intent-guard's message text, and nothing in
+  this repository detects an upstream rewording of that prefix -- the
+  downgrade would silently stop matching and a capped finding would render
+  blocking again with no warning anywhere in the report. Filed upstream as
+  intent-guard #114, asking for a machine-readable per-finding field.
+  Found by independent review of intent-guard PR #93 (issue #34).
+
+- README: the advisory-workflow recipe now says why it carries no `paths:`
+  filter by default. The main reason is not coverage, it is that GitHub
+  treats a `paths:`-skipped required workflow as never having run rather
+  than as passed, so a required check with no matching run sits pending
+  forever and a docs-only pull request cannot merge; GitHub's own docs say
+  so. Coverage is the second reason: gitleaks and vault-guard read the whole
+  changed set because a secret can land in any file, so a filter that skips
+  a docs-only pull request skips secrets scanning on it too. The recipe
+  shows GitHub's own `paths:` syntax as an explicit trade for an adopter who
+  wants it anyway, plus a note that renaming the JOB (not the workflow)
+  means updating branch protection's required-checks list separately, since
+  GitHub matches a required check by the job's context name, never the
+  workflow's name (issue #39).
+
 ## [0.5.1] - 2026-09-27
 
 **An action-only release. The tag moves; the npm package does not.**

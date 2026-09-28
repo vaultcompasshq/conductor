@@ -70,6 +70,10 @@ function result(
 const depGuard = normalizeDepGuard(fixture('dep-guard-0.2.0-blocking.json'), '0.2.0');
 const vaultGuard = normalizeVaultGuard(fixture('vault-guard-1.4.2-blocking.json'), '1.4.2');
 const intentGuard = normalizeIntentGuard(fixture('intent-guard-1.2.0-drift.json'), '1.2.0');
+const intentGuardAdvisoryCapped = normalizeIntentGuard(
+  fixture('intent-guard-1.7.0-check-advisory-capped.json'),
+  '1.7.0'
+);
 
 const THREE_GATES = result([
   outcome({ role: 'dependencies', product: 'dep-guard', findings: depGuard.findings }),
@@ -889,6 +893,42 @@ describe('result mapping', () => {
     );
     const entry = (log2.runs[0].results as Array<Record<string, unknown>>)[0];
     expect(entry).not.toHaveProperty('partialFingerprints');
+  });
+});
+
+describe('an advisory-capped constraint finding in SARIF (issue #34)', () => {
+  // intent-guard 1.6.0 caps a prose-sourced constraint finding at advisory:
+  // it never raises the gate's own exit code, but this run still blocks
+  // (drift.action soft_block, 71/100) because of an unrelated scope_creep
+  // finding. Before the fix both findings inherited driftBlocks and the
+  // capped one rendered as a blocking high-severity error, which is exactly
+  // the false-positive noise the cap exists to remove.
+  const log = sarif(
+    result([
+      outcome({
+        role: 'intent',
+        product: 'intent-guard',
+        productVersion: '1.7.0',
+        findings: intentGuardAdvisoryCapped.findings,
+      }),
+    ])
+  );
+  const results = log.runs[0].results as Array<Record<string, unknown>>;
+  const capped = results.find((entry) => entry.ruleId === 'intent-guard/drift.constraint_violation');
+  const uncapped = results.find((entry) => entry.ruleId === 'intent-guard/drift.scope_creep');
+
+  it('renders the capped finding as non-blocking, unlike the run it belongs to', () => {
+    expect((capped?.properties as Record<string, unknown>).blocking).toBe(false);
+  });
+
+  it('renders it at note level rather than the run action-derived error level', () => {
+    expect(capped?.level).toBe('note');
+    expect((capped?.properties as Record<string, unknown>).severity).toBe('low');
+  });
+
+  it('still renders the uncapped scope_creep finding as blocking, at error level', () => {
+    expect((uncapped?.properties as Record<string, unknown>).blocking).toBe(true);
+    expect(uncapped?.level).toBe('error');
   });
 });
 
