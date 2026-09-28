@@ -167,21 +167,29 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.5.0
+   conductor 0.6.0
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.2.1  exit 0  251ms  via dep-guard on path
+   dependencies  dep-guard 0.7.0  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
+     mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online-flag not passed
 
-   secrets  vault-guard 1.4.6  exit 1  97ms  via vault-guard on path
-     BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:27:32
+   secrets  vault-guard 1.8.0  exit 1  105ms  via vault-guard on path
+     BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:14:12
          Possible secret of type 'anthropic'
      threshold medium   suppressed 0   ignored not reported
+     filesScanned 1   patternsActive 59
 
      deferred  intent  intent-guard  did not run here; it runs from stage ci onwards
 
    verdict: exit 1, 1 blocking finding(s) across 2 gate(s).
    ```
+
+   The `mode`, `corpusBuiltAt`, `lockfileFormat` and `online-flag` line under
+   `dependencies`, and the `filesScanned`/`patternsActive` line under
+   `secrets`, are each gate's own run facts, one line per gate, added to the
+   full report so a reader can see what a gate actually scanned and with
+   what, not only its verdict.
 
    Both gates there are the ones you installed a moment ago, running with
    their own thresholds and their own baselines. The umbrella found nothing
@@ -1096,7 +1104,7 @@ jobs:
         with:
           node-version: '22.11.0'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.5.1
+        uses: vaultcompasshq/conductor@v0.6.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1145,7 +1153,7 @@ jobs:
       # pinned below.
       - run: pnpm install --frozen-lockfile
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.5.1
+        uses: vaultcompasshq/conductor@v0.6.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These four
@@ -1156,10 +1164,10 @@ jobs:
           # request of their own. Forward only on a pull request: the action
           # refuses a pin below what its tag ships, and the four lines can be
           # left out entirely to take that tag's own versions.
-          conductor-version: 0.5.0
-          dep-guard-version: 0.8.0
+          conductor-version: 0.6.0
+          dep-guard-version: 0.9.0
           vault-guard-version: 1.8.0
-          intent-guard-version: 1.6.0
+          intent-guard-version: 1.7.0
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
@@ -1251,7 +1259,7 @@ jobs:
           node-version: '22.11.0'
       - id: conductor
         timeout-minutes: 5
-        uses: vaultcompasshq/conductor@v0.5.1
+        uses: vaultcompasshq/conductor@v0.6.0
         with:
           pr-comment: true
           advisory: true
@@ -1375,7 +1383,7 @@ step and add `pull-requests: write` to the job's `permissions`:
     steps:
       # ... checkout, pnpm, setup-node, install, as in the example above ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.5.1
+        uses: vaultcompasshq/conductor@v0.6.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1427,12 +1435,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.5.1
+        uses: vaultcompasshq/conductor@v0.6.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.5.1
+        uses: vaultcompasshq/conductor@v0.6.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
