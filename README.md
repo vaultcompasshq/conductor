@@ -1284,15 +1284,15 @@ anything in `action.yml`.
 
 **A `paths:` filter on this job is a real trade, not a free speedup, and the
 honest default is to skip it.** The biggest reason is not about coverage, it
-is about merging at all: GitHub does not treat a workflow (or a job inside
-one) that a `paths:` filter skipped as "passed". It treats it as never having
-run, so a required check with no matching run for that pull request sits
-**pending forever**, and a pull request cannot merge while a required check
-is pending, regardless of how trivial the change is. GitHub's own docs state
-this directly for `paths:`-filtered required workflows. Add a `paths:` filter
-to a job that branch protection requires, and a docs-only pull request does
-not go green early, it gets stuck, unless the ruleset also lists that check
-as one GitHub is allowed to skip.
+is about merging at all: `paths:` applies to the workflow's own trigger, and
+a required check whose workflow a `paths:` filter kept from running is
+reported as never having run at all, not as passed. That check then sits
+**pending**, and a pull request cannot merge while a required check is
+pending, regardless of how trivial the change is. GitHub's own documentation
+describes exactly this failure mode for a required, `paths:`-filtered
+workflow, and its usual workaround: a job that always runs, regardless of
+what changed, and reports success or failure on its own rather than relying
+on the whole workflow being skipped or not.
 
 The coverage cost is real too, separately from the merge-blocking one. Every
 gate in the default policy reads the whole changed set, not a slice of it:
@@ -1314,9 +1314,9 @@ If your workflow already has its own required security job and you only
 want this one to skip clean docs-only changes, add GitHub's own `paths:`
 (or `paths-ignore:`) to the `on: pull_request` block, the same syntax GitHub
 documents for any workflow trigger, and account for both traps above before
-you make the job required: whether a skipped run should count as passing in
-your ruleset, and the coverage this recipe would then lose on exactly the
-pull requests it skips. The alternative this README recommends is to leave
+you make the job required: the pull requests it would leave permanently
+pending, and the coverage this recipe would then lose on exactly the pull
+requests it skips. The alternative this README recommends is to leave
 the job triggering on every pull request: a run with nothing to report is
 not a run worth avoiding, and this recipe has no documented time budget to
 promise you here, because that number depends on your repository's size and
