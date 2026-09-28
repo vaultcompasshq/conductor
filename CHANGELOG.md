@@ -14,49 +14,39 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-- **Added:** intent-guard 1.7.0's own advance-notice warnings now appear on
-  the intent line. 1.7.0 warns, rather than blocks, when a frozen contract's
-  `protected_paths` or `allowed_paths` carries an entry no git path can ever
-  match, and says the same shape will become a blocking reason in 2.0.0.
-  conductor reads that gate's optional `warnings` array and relays each
-  string as a note under the intent gate in the full report (`--verbose`, a
-  non-clean run, or the pull-request comment, which always renders with
-  `--verbose`), the same text-report channel dep-guard's own run diagnostics
-  already print under, and counts it, without its text, in the clean
-  one-line summary's note count otherwise. It is also a note-level
-  notification in the SARIF log, a relay this release adds for
-  intent-guard's own warning code only: dep-guard's run diagnostics still
-  have no SARIF path. This is reporting only: no severity, no fingerprint,
-  no finding, and no change to the composed exit code. Absent on an
-  installed intent-guard older than 1.7.0, and ignored rather than treated
-  as a could-not-run when the field is present but malformed.
+## [0.6.0] - 2026-09-27
 
-- **Added:** a `--project <dir>` option on `conductor init` and `conductor
-  run`. dep-guard, vault-guard and intent-guard each take a path or
-  `--project`, so a script can point any of them at a repository; conductor
-  took nothing, so the only way to run it against a directory was to change
-  into it first, which forces a `cd` compound onto every scripted call.
-  Found setting up the public proof repository as a first-time adopter
-  (issue #55). Omitting the flag is untouched on both commands: `run`
-  resolves the root from the current directory exactly as it always has, and
-  `init` and `init --revert` pass the current directory straight through to
-  their own existing repository-root discovery, which already reports a
-  non-repository as a structured conflict rather than throwing. Only an
-  EXPLICIT `--project <dir>` goes through new resolution: the value resolves
-  against the current directory when it is relative, and the repository root
-  is then discovered from the result with the same `git rev-parse
-  --show-toplevel` call `repoRoot` already made for the current directory,
-  so a subdirectory of a repository resolves to that repository's top level.
-  A path that does not exist, is not a directory, or is not inside a git
-  repository is a usage error naming the path and exits 2, never a silent
-  fall back to the current directory. From there on the resolved root is
-  threaded through explicitly exactly as it already was: nothing downstream
-  reads the working directory again, so the trust-base checks, the
-  node_modules/.bin skip on a pull-request run, the program-vetting rules,
-  and every child gate's own working directory are unaffected by where the
-  flag points, only by what the resolved root is.
-  The Action itself gains no new input: it always runs from the checkout it
-  is given, and this flag is for scripted and local use outside it.
+**A minor package release.** `@vaultcompass/conductor` moves to 0.6.0 on npm
+and the action's `conductor-version` default moves to `0.6.0` in lockstep,
+the same number the `v0.6.0` tag names. This is a minor bump rather than a
+patch: two trust-boundary fixes, a reporting legibility pass, a new
+`--project` option and two gate default moves all change what the umbrella
+does or installs, not just how it reports it.
+
+- **Fixed:** a pull request whose net diff is empty (a value committed and
+  then backed out inside the same pull request) built a merge ref whose tree
+  was byte-identical to the base branch's, and the equal-tree refusal in
+  `refuseTrustBaseRef` treated that exactly like a trust base that resolves
+  to the head or the merge commit itself: exit 2, nothing checked, including
+  secrets-history (gitleaks), whose whole job is history rather than the
+  tree and which had something to find. Found in the public proof
+  repository's `proof/secret-in-history` pull request, at commit 21aebe9,
+  before a third commit was added to move the tree and make the ordinary
+  shape run instead. The refusal now makes one exception, and only one: a
+  merge commit whose first parent is the trust base is not refused, because
+  that is precisely the shape GitHub's own merge ref takes on an
+  empty-net-diff pull request, and first-parent identity (never ancestry) is
+  what tells it apart from the pull request's own branch, which is also an
+  ancestor of the merge commit, also carries the same tree, and must keep
+  being refused. Nothing about the ordinary refusals relaxes: the same
+  commit as HEAD, a non-merge HEAD with an equal-tree ancestor, and the
+  trust base resolving to HEAD's second parent are all refused exactly as
+  before. In the one accepted shape, every enabled gate whose input is git
+  history rather than the tree (gitleaks today) still runs, with its
+  ordinary arguments; every other enabled gate is reported as tree-unchanged
+  rather than spawned, with its own line in the report, its own clause on
+  the one-line summary, and its own `conductor/tree-unchanged` SARIF
+  notification, and none of it reaches the exit code (issue #69).
 
 - **Security:** `refuseTrustBaseRef` only refused a `trust-base` ref that
   resolved to HEAD's own commit or to HEAD's own tree, which covers HEAD
@@ -84,31 +74,6 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   here substitutes for it. **The one consumer cost:** a workflow
   that set `trust-base` explicitly on a pull request must remove the input;
   the Action already derives `origin/$GITHUB_BASE_REF` itself on that event.
-
-- **Fixed:** a pull request whose net diff is empty (a value committed and
-  then backed out inside the same pull request) built a merge ref whose tree
-  was byte-identical to the base branch's, and the equal-tree refusal in
-  `refuseTrustBaseRef` treated that exactly like a trust base that resolves
-  to the head or the merge commit itself: exit 2, nothing checked, including
-  secrets-history (gitleaks), whose whole job is history rather than the
-  tree and which had something to find. Found in the public proof
-  repository's `proof/secret-in-history` pull request, at commit 21aebe9,
-  before a third commit was added to move the tree and make the ordinary
-  shape run instead. The refusal now makes one exception, and only one: a
-  merge commit whose first parent is the trust base is not refused, because
-  that is precisely the shape GitHub's own merge ref takes on an
-  empty-net-diff pull request, and first-parent identity (never ancestry) is
-  what tells it apart from the pull request's own branch, which is also an
-  ancestor of the merge commit, also carries the same tree, and must keep
-  being refused. Nothing about the ordinary refusals relaxes: the same
-  commit as HEAD, a non-merge HEAD with an equal-tree ancestor, and the
-  trust base resolving to HEAD's second parent are all refused exactly as
-  before. In the one accepted shape, every enabled gate whose input is git
-  history rather than the tree (gitleaks today) still runs, with its
-  ordinary arguments; every other enabled gate is reported as tree-unchanged
-  rather than spawned, with its own line in the report, its own clause on
-  the one-line summary, and its own `conductor/tree-unchanged` SARIF
-  notification, and none of it reaches the exit code (issue #69).
 
 - **Fixed:** the vulnerabilities and dependencies summary lines could not
   tell a clean run from one that checked nothing. osv-scanner 2.x prints
@@ -139,6 +104,23 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   intent-guard's `reasons` and `driftCategories`, and gitleaks' own entries
   all reach a published log the same way, verbatim, even where the text
   report hides or filters them (issue #72).
+
+- **Added:** intent-guard 1.7.0's own advance-notice warnings now appear on
+  the intent line. 1.7.0 warns, rather than blocks, when a frozen contract's
+  `protected_paths` or `allowed_paths` carries an entry no git path can ever
+  match, and says the same shape will become a blocking reason in 2.0.0.
+  conductor reads that gate's optional `warnings` array and relays each
+  string as a note under the intent gate in the full report (`--verbose`, a
+  non-clean run, or the pull-request comment, which always renders with
+  `--verbose`), the same text-report channel dep-guard's own run diagnostics
+  already print under, and counts it, without its text, in the clean
+  one-line summary's note count otherwise. It is also a note-level
+  notification in the SARIF log, a relay this release adds for
+  intent-guard's own warning code only: dep-guard's run diagnostics still
+  have no SARIF path. This is reporting only: no severity, no fingerprint,
+  no finding, and no change to the composed exit code. Absent on an
+  installed intent-guard older than 1.7.0, and ignored rather than treated
+  as a could-not-run when the field is present but malformed.
 
 - **Fixed:** a constraint finding intent-guard 1.6.0 caps at advisory,
   because its source is a prose rules file (CLAUDE.md, AGENTS.md, GEMINI.md,
@@ -178,6 +160,57 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   means updating branch protection's required-checks list separately, since
   GitHub matches a required check by the job's context name, never the
   workflow's name (issue #39).
+
+- **Added:** a `--project <dir>` option on `conductor init` and `conductor
+  run`. dep-guard, vault-guard and intent-guard each take a path or
+  `--project`, so a script can point any of them at a repository; conductor
+  took nothing, so the only way to run it against a directory was to change
+  into it first, which forces a `cd` compound onto every scripted call.
+  Found setting up the public proof repository as a first-time adopter
+  (issue #55). Omitting the flag is untouched on both commands: `run`
+  resolves the root from the current directory exactly as it always has, and
+  `init` and `init --revert` pass the current directory straight through to
+  their own existing repository-root discovery, which already reports a
+  non-repository as a structured conflict rather than throwing. Only an
+  EXPLICIT `--project <dir>` goes through new resolution: the value resolves
+  against the current directory when it is relative, and the repository root
+  is then discovered from the result with the same `git rev-parse
+  --show-toplevel` call `repoRoot` already made for the current directory,
+  so a subdirectory of a repository resolves to that repository's top level.
+  A path that does not exist, is not a directory, or is not inside a git
+  repository is a usage error naming the path and exits 2, never a silent
+  fall back to the current directory. From there on the resolved root is
+  threaded through explicitly exactly as it already was: nothing downstream
+  reads the working directory again, so the trust-base checks, the
+  node_modules/.bin skip on a pull-request run, the program-vetting rules,
+  and every child gate's own working directory are unaffected by where the
+  flag points, only by what the resolved root is.
+  The Action itself gains no new input: it always runs from the checkout it
+  is given, and this flag is for scripted and local use outside it.
+
+- **The umbrella now installs `dep-guard` 0.9.0 and `intent-guard` 1.7.0 by
+  default, up from 0.8.0 and 1.6.0.** dep-guard 0.9.0 makes all four online
+  checks honour npmrc registry pins and the default registry, adds a
+  configurable online lookup budget whose default is larger on a
+  pull-request run and which the report's own summary now shows, and
+  resolves an alias lookup under the vouched name. intent-guard 1.7.0 warns
+  on a `protected_paths` or `allowed_paths` entry that matches no git path,
+  rather than doing nothing about it, and turns that same shape into a
+  blocking reason starting in 2.0.0; this is the warning the "advance-notice
+  warnings" entry above teaches conductor to relay as a report note. Their
+  own `TAG_DEP_GUARD_*` and `TAG_INTENT_GUARD_*` constants in `action.yml`
+  move in lockstep with the defaults, since those constants are what the
+  pull-request backward-pin rule measures a pin against. `vault-guard-version`
+  stays at `1.8.0`; it does not move in this release.
+
+  **The consumer cost.** On a pull request, the backward-pin rule now refuses
+  `dep-guard-version` below `0.9.0` or `intent-guard-version` below `1.7.0`,
+  the same as it already refused older pins of the other two inputs. A
+  workflow carrying either of those lines pinned explicitly to the old
+  default (`0.8.0` or `1.6.0`) is refused rather than run, because this tag
+  ships the newer gates and the rule will not let a pull request judge itself
+  with an older one. The migration is to remove the input, whose default is
+  the version this tag ships, or to raise it to `0.9.0` / `1.7.0` or newer.
 
 ## [0.5.1] - 2026-09-27
 
