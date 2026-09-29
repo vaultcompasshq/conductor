@@ -168,6 +168,7 @@ required.
 
    ```
    conductor 0.7.0
+   verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
    dependencies  dep-guard 0.7.0  exit 0  153ms  via dep-guard on path
