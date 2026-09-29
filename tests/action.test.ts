@@ -7,7 +7,15 @@
 
 import { afterAll, describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -662,6 +670,7 @@ function runInstall(
   argv: string[];
   githubPath: string;
   githubOutput: string;
+  githubSummary: string;
   prefix: string;
   status: number;
   stderr: string;
@@ -706,6 +715,8 @@ function runInstall(
   writeFileSync(githubPath, '');
   const githubOutputFile = path.join(dir, 'github-output.txt');
   writeFileSync(githubOutputFile, '');
+  const githubSummaryFile = path.join(dir, 'github-summary.txt');
+  writeFileSync(githubSummaryFile, '');
 
   const result = spawnSync('bash', ['-c', installScript], {
     encoding: 'utf8',
@@ -713,6 +724,7 @@ function runInstall(
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
       npm_config_prefix: prefix,
       GITHUB_PATH: githubPath,
+      GITHUB_STEP_SUMMARY: githubSummaryFile,
       // The step writes verification-ok here once the audit has passed, so a
       // run without it would die on the last line under set -u.
       GITHUB_OUTPUT: githubOutputFile,
@@ -730,6 +742,7 @@ function runInstall(
     argv: readFileSync(record, 'utf8').split('\n').filter((line) => line.length > 0),
     githubPath: readFileSync(githubPath, 'utf8'),
     githubOutput: readFileSync(githubOutputFile, 'utf8'),
+    githubSummary: readFileSync(githubSummaryFile, 'utf8'),
     prefix,
   };
 }
@@ -1024,6 +1037,38 @@ describe('action.yml installs the gates outside the tree', () => {
     expect(notice[0]).not.toContain('\r');
     expect(notice[0]).not.toContain('attempt 2');
     expect(lines.filter((l) => l.startsWith('::warning::injected'))).toHaveLength(0);
+  });
+
+  it('strips carriage returns from the raw print of the audit output, so no injected command starts a line (issue #83)', () => {
+    // The shim's failing audit prints "attempt N: ...\r::warning::injected".
+    // The runner's log reader treats a lone CR as a line terminator, so the
+    // split here is on CR as well as LF, which is the reader's own view. A
+    // split on LF alone sees one line beginning "attempt" and passes
+    // whether or not the CR is stripped.
+    for (const failures of [1, 2]) {
+      const run = runInstall({}, '10.9.2', failures);
+      const lines = run.stderr.split(/\r\n|\r|\n/);
+      expect(lines.filter((l) => l.startsWith('::warning::injected'))).toHaveLength(0);
+      expect(run.stderr).not.toContain('\r');
+      // The control: the raw print itself is still there.
+      expect(lines.some((l) => l.startsWith('attempt 1: 1 package has an invalid attestation'))).toBe(true);
+    }
+  });
+
+  it('records a could-not-run verdict and its reason on the summary when verification fails', () => {
+    const run = runInstall({}, '10.9.2', 2);
+    const outputLines = run.githubOutput.split('\n').filter((l) => l.startsWith('verdict='));
+    expect(outputLines).toEqual(['verdict=could-not-run']);
+    expect(run.githubSummary).toMatch(/^conductor verdict: could-not-run \(attempted twice/);
+    expect(run.githubSummary).toContain('attempt 2');
+    expect(run.githubSummary).not.toContain('\r');
+    expect(run.githubSummary.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('writes no verdict when verification passes, leaving the gates step to write it', () => {
+    const run = runInstall();
+    expect(run.githubOutput).not.toContain('verdict=');
+    expect(run.githubSummary).toBe('');
   });
 
   it('fails closed after exactly two failed signature audits', () => {
@@ -1484,5 +1529,363 @@ describe('action.yml refuses a leading zero in any of the four version inputs', 
       ]);
     }
     expect(runValidate({ INTENT_GUARD_VERSION: '10.20.30' }).status).toBe(0);
+  });
+});
+
+/**
+ * The verdict token (issue #85), as the gates step publishes it: one run
+ * writes the SARIF log, the text report and the exit status, and the step
+ * reads the token out of the report that run wrote.
+ *
+ * Driven by RUNNING the step's own script against a conductor shim that
+ * answers `run --help` like a conductor with (or without) --text-report,
+ * writes a canned report to the path it is given, and exits with a canned
+ * status.
+ */
+describe('action.yml: the verdict token from the gates step', () => {
+  interface VerdictRun {
+    status: number;
+    stdout: string;
+    githubOutput: string;
+    summary: string;
+    argv: string[];
+    textReport: string;
+    /** How many times conductor was invoked for a real run, not a help probe. */
+    runs: number;
+  }
+
+  function runGatesForVerdict(options: {
+    /** Does the installed conductor know --text-report? */
+    supportsFlag?: boolean;
+    /**
+     * Other shapes of an old or odd `run --help`: one that mentions
+     * --format <text|sarif> but not --text-report, and one that exits 1
+     * (while printing the flag, so only the exit status can give it away).
+     */
+    help?: 'format-only' | 'exits-1';
+    /** What the run writes to the report path; undefined means it writes nothing. */
+    body?: string;
+    exit: number;
+    /** A report already at the path before the run, which a run must not inherit. */
+    stale?: string;
+    /** Where GITHUB_STEP_SUMMARY points; 'none' leaves it unset. */
+    summaryPath?: string | 'none';
+    advisory?: string;
+  }): VerdictRun {
+    const supportsFlag = options.supportsFlag ?? true;
+    const dir = tempDir();
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvLog = path.join(dir, 'argv.txt');
+    const runsLog = path.join(dir, 'runs.txt');
+    const bodyFile = path.join(dir, 'body.txt');
+    const textReport = path.join(dir, 'conductor-text-report.txt');
+    writeFileSync(argvLog, '');
+    writeFileSync(runsLog, '');
+    if (options.body !== undefined) {
+      writeFileSync(bodyFile, options.body);
+    }
+    if (options.stale !== undefined) {
+      writeFileSync(textReport, options.stale);
+    }
+    const shim = path.join(bin, 'conductor');
+    writeFileSync(
+      shim,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
+        options.help === 'format-only'
+          ? "  printf '  --format <text|sarif>  output format\\n  --output <path>\\n'"
+          : supportsFlag || options.help === 'exits-1'
+            ? "  printf '  --text-report <path>  write the text report too\\n'"
+            : "  printf '  --output <path>\\n'",
+        options.help === 'exits-1' ? '  exit 1' : '  exit 0',
+        'fi',
+        `printf 'run\\n' >> ${JSON.stringify(runsLog)}`,
+        `for arg in "$@"; do printf '%s\\n' "$arg" >> ${JSON.stringify(argvLog)}; done`,
+        'prev=""',
+        'for arg in "$@"; do',
+        '  if [ "$prev" = "--text-report" ]; then',
+        options.body === undefined ? '    :' : `    cat ${JSON.stringify(bodyFile)} > "$arg"`,
+        '  fi',
+        '  prev="$arg"',
+        'done',
+        `exit ${options.exit}`,
+        '',
+      ].join('\n')
+    );
+    chmodSync(shim, 0o755);
+    const githubOutput = path.join(dir, 'github-output.txt');
+    writeFileSync(githubOutput, '');
+    const summary = path.join(dir, 'summary.md');
+    writeFileSync(summary, '');
+
+    const env: Record<string, string> = {
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      CONDUCTOR_BIN: shim,
+      GITHUB_OUTPUT: githubOutput,
+      GITHUB_EVENT_PATH: '',
+      GITHUB_BASE_REF: '',
+      GITHUB_HEAD_REF: '',
+      BASE_REF: '',
+      TRUST_BASE: '',
+      SPEC: '',
+      STAGE: 'ci',
+      OUTPUT: 'conductor.sarif',
+      WORKDIR: '.',
+      ADVISORY: options.advisory ?? 'false',
+      TEXT_REPORT: textReport,
+    };
+    if (options.summaryPath !== 'none') {
+      env.GITHUB_STEP_SUMMARY = options.summaryPath ?? summary;
+    }
+    const result = spawnSync('bash', ['-c', gatesScript], { cwd: dir, encoding: 'utf8', env });
+    const read = (file: string): string => {
+      try {
+        return readFileSync(file, 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    return {
+      status: result.status ?? -1,
+      stdout: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+      githubOutput: read(githubOutput),
+      summary: read(summary),
+      argv: read(argvLog).split('\n').filter((line) => line.length > 0),
+      textReport,
+      runs: read(runsLog).split('\n').filter((line) => line.length > 0).length,
+    };
+  }
+
+  const outputLines = (run: VerdictRun): string[] =>
+    run.githubOutput.split('\n').filter((line) => line.length > 0);
+
+  it('asks for the text report in the same run that writes the SARIF log, and runs once', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: pass\n', exit: 0 });
+    expect(run.runs).toBe(1);
+    expect(run.argv).toContain('--format');
+    expect(run.argv[run.argv.indexOf('--format') + 1]).toBe('sarif');
+    expect(run.argv[run.argv.indexOf('--text-report') + 1]).toBe(run.textReport);
+    expect(run.argv).toContain('--verbose');
+    expect(run.argv).toContain('--compact-on-refusal');
+  });
+
+  it('writes the token to the step summary and to a verdict output for a pass', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: pass\nrest\n', exit: 0 });
+    expect(run.status).toBe(0);
+    expect(run.summary).toBe('conductor verdict: pass\n\n');
+    expect(outputLines(run)).toContain('verdict=pass');
+    expect(outputLines(run)).toContain(`text-report=${run.textReport}`);
+    expect(outputLines(run).some((line) => line.startsWith('sarif='))).toBe(true);
+  });
+
+  it('preserves exit status 1 for a blocked run, and publishes the token', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: blocked (2)\n', exit: 1 });
+    expect(run.status).toBe(1);
+    expect(run.summary).toContain('conductor verdict: blocked (2)');
+    expect(outputLines(run)).toContain('verdict=blocked (2)');
+  });
+
+  it('publishes an advisory-blocked token while the step exits 0', () => {
+    const run = runGatesForVerdict({
+      body: 'conductor 9.9.9\nverdict-token: advisory-blocked (1)\n',
+      exit: 0,
+      advisory: 'true',
+    });
+    expect(run.status).toBe(0);
+    expect(outputLines(run)).toContain('verdict=advisory-blocked (1)');
+    expect(run.argv).toContain('--advisory');
+  });
+
+  it('preserves exit status 2 for a could-not-run, and publishes the token', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: could-not-run\n', exit: 2 });
+    expect(run.status).toBe(2);
+    expect(run.summary).toContain('conductor verdict: could-not-run');
+    expect(outputLines(run)).toContain('verdict=could-not-run');
+  });
+
+  it('keeps conductor\'s exit status even when the summary cannot be written', () => {
+    // errexit is off after the run, so a failed summary write neither turns a
+    // clean exit into a failure nor a blocked one into anything else.
+    // A "pass" token beside exit 1 or 2 is not a consistent pair, so it is
+    // replaced by could-not-run rather than published.
+    const expected: Record<number, string> = { 0: 'pass', 1: 'could-not-run', 2: 'could-not-run' };
+    for (const exit of [0, 1, 2]) {
+      const run = runGatesForVerdict({
+        body: 'conductor 9.9.9\nverdict-token: pass\n',
+        exit,
+        summaryPath: '/nonexistent-dir-for-conductor-test/summary.md',
+      });
+      expect([exit, run.status]).toEqual([exit, exit]);
+      expect(outputLines(run)).toContain(`verdict=${expected[exit]}`);
+    }
+  });
+
+  it('never publishes a token that contradicts the exit status: pass at status 2 is could-not-run, and the report is deleted', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: pass\nclean\n', exit: 2 });
+    expect(run.status).toBe(2);
+    expect(outputLines(run)).toContain('verdict=could-not-run');
+    expect(outputLines(run)).not.toContain('verdict=pass');
+    expect(run.summary).toContain('conductor verdict: could-not-run');
+    expect(run.summary).not.toContain('pass');
+    // Deleted, so the comment step takes its "did not produce a report" branch.
+    expect(existsSync(run.textReport)).toBe(false);
+  });
+
+  it('accepts every consistent pair and keeps the report, and rejects each inconsistent one', () => {
+    const pairs: Array<[number, string, string]> = [
+      [0, 'pass', 'pass'],
+      [0, 'advisory-blocked (3)', 'advisory-blocked (3)'],
+      [0, 'unenforced-findings (1)', 'unenforced-findings (1)'],
+      [1, 'blocked (2)', 'blocked (2)'],
+      [2, 'could-not-run', 'could-not-run'],
+      [0, 'blocked (2)', 'unknown'],
+      [0, 'could-not-run', 'unknown'],
+      [1, 'pass', 'could-not-run'],
+      [1, 'advisory-blocked (1)', 'could-not-run'],
+      [1, 'unenforced-findings (1)', 'could-not-run'],
+      [2, 'blocked (1)', 'could-not-run'],
+      [7, 'pass', 'could-not-run'],
+    ];
+    for (const [exit, token, published] of pairs) {
+      const run = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: ${token}\n`, exit });
+      expect([exit, token, run.status]).toEqual([exit, token, exit]);
+      expect([exit, token, outputLines(run).filter((l) => l.startsWith('verdict='))]).toEqual([
+        exit,
+        token,
+        [`verdict=${published}`],
+      ]);
+      // The report survives exactly when the token was consistent.
+      expect([exit, token, existsSync(run.textReport)]).toEqual([exit, token, published === token]);
+    }
+  });
+
+  it('says unknown at status 0 for a line 2 outside the closed set, and deletes the report', () => {
+    for (const token of ['pass (1)', 'blocked', 'blocked (x)', 'passed', 'pass extra', 'Pass', '']) {
+      const run = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: ${token}\n`, exit: 0 });
+      expect([token, run.status]).toEqual([token, 0]);
+      expect([token, outputLines(run).includes('verdict=unknown')]).toEqual([token, true]);
+      expect([token, existsSync(run.textReport)]).toEqual([token, false]);
+    }
+  });
+
+  it('works with no GITHUB_STEP_SUMMARY at all', () => {
+    const run = runGatesForVerdict({
+      body: 'conductor 9.9.9\nverdict-token: pass\n',
+      exit: 0,
+      summaryPath: 'none',
+    });
+    expect(run.status).toBe(0);
+    expect(outputLines(run)).toContain('verdict=pass');
+  });
+
+  it('reads the token from line 2 only, so a finding\'s own text cannot supply one', () => {
+    const run = runGatesForVerdict({
+      body: 'conductor 9.9.9\nverdict-token: blocked (1)\nBLOCKING x\nverdict-token: pass\n',
+      exit: 1,
+    });
+    expect(outputLines(run).filter((line) => line.startsWith('verdict='))).toEqual([
+      'verdict=blocked (1)',
+    ]);
+    const forged = runGatesForVerdict({
+      body: 'conductor 9.9.9\nsomething else\nverdict-token: pass\n',
+      exit: 1,
+    });
+    expect(outputLines(forged)).toContain('verdict=could-not-run');
+  });
+
+  it('flattens a token carrying CR, tab, LF or a workflow command before it reaches the output or summary', () => {
+    const body =
+      'conductor 9.9.9\nverdict-token: blocked (1)\r::error::injected\t::warning::more\nrest\n';
+    const run = runGatesForVerdict({ body, exit: 1 });
+    expect(run.status).toBe(1);
+    const verdicts = run.githubOutput.split(/\r\n|\r|\n/).filter((line) => line.startsWith('verdict='));
+    expect(verdicts).toHaveLength(1);
+    // Flattened to one line, and then refused: it is outside the closed set.
+    expect(verdicts[0]).toBe('verdict=could-not-run');
+    expect(run.githubOutput).not.toContain('\r');
+    expect(run.githubOutput).not.toContain('\t');
+    // Every line of the output file is one of the three keys this step writes.
+    for (const line of run.githubOutput.split(/\r\n|\r|\n/).filter((l) => l.length > 0)) {
+      expect(line).toMatch(/^(sarif|text-report|verdict)=/);
+    }
+    expect(run.summary).not.toContain('\r');
+    expect(run.summary).not.toContain('\t');
+    expect(run.summary.trimEnd().split(/\r\n|\r|\n/)).toHaveLength(1);
+    // And nothing on the step's own log (where the runner reads commands) starts with one.
+    const logLines = run.stdout.split(/\r\n|\r|\n/);
+    expect(logLines.filter((line) => line.startsWith('::'))).toHaveLength(0);
+  });
+
+  it('says could-not-run when conductor exited non-zero and wrote no report, and never inherits a stale one', () => {
+    const run = runGatesForVerdict({
+      exit: 2,
+      stale: 'conductor 9.9.9\nverdict-token: pass\n',
+    });
+    expect(run.status).toBe(2);
+    expect(outputLines(run)).toContain('verdict=could-not-run');
+    expect(outputLines(run)).not.toContain('verdict=pass');
+  });
+
+  it('says unknown, never pass, when conductor exited 0 and wrote no readable token', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nno token here\n', exit: 0 });
+    expect(run.status).toBe(0);
+    expect(outputLines(run)).toContain('verdict=unknown');
+  });
+
+  it('publishes the report path before the run, so a failed run still has one', () => {
+    expect(gatesScript.indexOf("text-report=%s")).toBeGreaterThan(-1);
+    expect(gatesScript.indexOf('text-report=%s')).toBeLessThan(gatesScript.indexOf('status=0\n'));
+  });
+
+  describe('against an installed conductor that predates --text-report', () => {
+    it('never passes the flag, marks the fallback, and leaves conductor\'s own exit status alone', () => {
+      for (const exit of [0, 1, 2]) {
+        const run = runGatesForVerdict({ supportsFlag: false, exit });
+        expect([exit, run.status]).toEqual([exit, exit]);
+        expect(run.argv).not.toContain('--text-report');
+        expect(run.argv).not.toContain('--verbose');
+        expect(run.argv).not.toContain('--compact-on-refusal');
+        expect(run.runs).toBe(1);
+        expect(outputLines(run)).toContain('report-fallback=true');
+        expect(outputLines(run).some((line) => line.startsWith('verdict='))).toBe(false);
+        expect(outputLines(run).some((line) => line.startsWith('text-report='))).toBe(false);
+        expect(run.summary).toBe('');
+      }
+    });
+
+    it('takes the fallback for a help that mentions --format <text|sarif> but not --text-report, and for a help that exits 1', () => {
+      for (const help of ['format-only', 'exits-1'] as const) {
+        for (const exit of [0, 1, 2]) {
+          const run = runGatesForVerdict({ help, exit });
+          expect([help, exit, run.status]).toEqual([help, exit, exit]);
+          expect(run.argv).not.toContain('--text-report');
+          expect(run.runs).toBe(1);
+          expect(outputLines(run)).toContain('report-fallback=true');
+          expect(outputLines(run).some((line) => line.startsWith('verdict='))).toBe(false);
+        }
+      }
+    });
+
+    it('does not mark the fallback when the flag is supported', () => {
+      const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: pass\n', exit: 0 });
+      expect(outputLines(run)).not.toContain('report-fallback=true');
+    });
+  });
+
+  it('exposes the verdict as an action output, falling back to the install step\'s could-not-run', () => {
+    expect(action.outputs?.verdict).toBeDefined();
+    const value = String(action.outputs?.verdict?.value ?? '');
+    expect(value).toContain('steps.gates.outputs.verdict');
+    expect(value).toContain('steps.install.outputs.verdict');
+    expect(String(action.outputs?.verdict?.description ?? '')).toMatch(/could-not-run/);
+  });
+
+  it('feeds the comment step the report path and the fallback marker from the gates step', () => {
+    const env = stepEnv('pr-comment');
+    expect(env['TEXT_REPORT']).toBe('${{ steps.gates.outputs.text-report }}');
+    expect(env['REPORT_FALLBACK']).toBe('${{ steps.gates.outputs.report-fallback }}');
+    expect(stepEnv('gates')['TEXT_REPORT']).toMatch(/runner\.temp/);
   });
 });

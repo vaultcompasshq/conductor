@@ -469,6 +469,76 @@ export function jobLogSummary(result: RunResult): string {
   return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
 }
 
+/**
+ * How many blocking findings one gate that RAN is carrying, for the token.
+ *
+ * A gate that exited non-zero with nothing on screen marked blocking (the
+ * mismatch shape the verdict sentence already has its own wording for) counts
+ * as one, so a state that is not a pass never prints a count of zero. A gate
+ * that could not run is not counted here at all: its findings list carries
+ * the umbrella's own blocking gate-missing finding, and counting that as well
+ * would report one broken gate as two things.
+ */
+function blockingCount(gate: RunResult['gates'][number]): number {
+  if (gate.couldNotRun !== null) {
+    return 0;
+  }
+  const blocking = gate.findings.filter((finding) => finding.blocking).length;
+  return blocking === 0 && (gate.exitCode ?? 0) !== 0 ? 1 : blocking;
+}
+
+/**
+ * The verdict token: a label for the umbrella's OWN exit decision, in a
+ * closed set, so a person or a script reading a report or a job summary gets
+ * the state without parsing the verdict sentence.
+ *
+ *   pass                     exit 0 and nothing was hidden by it
+ *   advisory-blocked (N)     exit 1 that --advisory turned into exit 0
+ *   unenforced-findings (N)  exit 0, but enforce: false gates blocked or
+ *                            could not run
+ *   blocked (N)              exit 1
+ *   could-not-run            exit 2, a refused trust base included
+ *
+ * PRECEDENCE, when several apply: could-not-run, then blocked or
+ * advisory-blocked, then unenforced-findings, then pass. So an advisory run
+ * whose only blocking findings sit on an unenforced gate is
+ * unenforced-findings and never advisory-blocked: --advisory did nothing
+ * there, and saying it did would be a false statement of what was hidden.
+ *
+ * This decides nothing. Every branch reads the exit code composeExitCode
+ * already produced (result.exitCode) and the enforce flags already on the
+ * gates; the only counting is over what those gates said. It never
+ * overrules a gate. It is also the same `advisory` boolean cli.ts hands to
+ * applyAdvisory, so the label and the process exit code cannot disagree.
+ *
+ * A SKIPPED gate (no contract, or a waived spec) is in result.skipped rather
+ * than result.gates, is neither a blocking finding nor a could-not-run, and
+ * so does not by itself move the token off pass. The verdict sentence is
+ * where "nothing was checked" is said.
+ *
+ * Any exit code outside 0, 1 and 2 is could-not-run: an unknown state is
+ * not a pass.
+ */
+export function verdictToken(result: RunResult, advisory: boolean): string {
+  const refusal = result.trustBase?.refusal;
+  const refused = refusal !== undefined && refusal !== null;
+  if (refused || (result.exitCode !== 0 && result.exitCode !== EXIT_BLOCKED)) {
+    return 'could-not-run';
+  }
+
+  if (result.exitCode === EXIT_BLOCKED) {
+    const count = result.gates
+      .filter((gate) => gate.enforce)
+      .reduce((total, gate) => total + blockingCount(gate), 0);
+    return advisory ? `advisory-blocked (${count})` : `blocked (${count})`;
+  }
+
+  const unenforced = result.gates
+    .filter((gate) => !gate.enforce)
+    .reduce((total, gate) => total + (gate.couldNotRun !== null ? 1 : blockingCount(gate)), 0);
+  return unenforced > 0 ? `unenforced-findings (${unenforced})` : 'pass';
+}
+
 function verdict(result: RunResult, advisory: boolean): string {
   const refusal = result.trustBase?.refusal;
   if (refusal !== undefined && refusal !== null) {
@@ -882,6 +952,19 @@ function versionLine(version: string | undefined): string[] {
   return version === undefined ? [] : [`conductor ${version}`];
 }
 
+/**
+ * The version line, then the verdict-token line directly under it: the first
+ * two lines of every report that carries a token. Without a version the
+ * token is the first line. The closing verdict sentence is a separate thing
+ * and stays where it was.
+ */
+function headerLines(result: RunResult, options: TextOptions): string[] {
+  return [
+    ...versionLine(options.version),
+    `verdict-token: ${verdictToken(result, Boolean(options.advisory))}`,
+  ];
+}
+
 export function renderText(result: RunResult, options: TextOptions = {}): string {
   const refusal = refusalLines(result);
 
@@ -893,7 +976,7 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     // proposal) as part of the same sentence. Nothing here points at a step
     // log: the reason has to be readable on the comment itself.
     const lines: string[] = [
-      ...versionLine(options.version),
+      ...headerLines(result, options),
       verdict(result, Boolean(options.advisory)),
       ...refusal,
     ];
@@ -913,7 +996,7 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // different questions, so two numbers, and the section headers and the
   // "not enforced" lines are what connect them.
   const lines: string[] = [
-    ...versionLine(options.version),
+    ...headerLines(result, options),
     ...refusal,
     ...(refusal.length === 0 ? [] : ['']),
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,

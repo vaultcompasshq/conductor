@@ -14,7 +14,58 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-- The README now documents that the first-pull-request refusal recurs once on every new base branch, and that a `branches:` filter on the workflow trigger must include release and production branches so the promote pull request is still checked (issue #87).
+### Added
+
+- A verdict token: the text report's second line, directly under the version
+  line, now reads `verdict-token: <token>`, and `conductor run` prints the
+  same token on its job-log line. A closed set that labels the umbrella's own
+  exit decision and decides nothing: `pass`, `advisory-blocked (N)`,
+  `unenforced-findings (N)`, `blocked (N)` and `could-not-run`, with that
+  precedence when several apply. `unenforced-findings` is the state a plain
+  exit 0 used to hide: a run whose only blocking findings, or could-not-run,
+  sit on `enforce: false` gates exits 0, and calling that `pass` would repeat
+  the problem the token exists to fix. The closing `verdict:` sentence and
+  the SARIF log are unchanged (issue #85).
+- `conductor run --text-report <path>`. With `--format sarif` it writes the
+  text report to that file from the same run, exactly what `--format text`
+  would have rendered for the result, and runs no gate a second time. With
+  `--format text` it is refused as a usage error (exit 2) before any gate
+  runs (issue #85).
+- The action has a `verdict` output carrying the token of the run that decided
+  the job, and the gates step writes `conductor verdict: <token>` to the job
+  summary. The token is validated against the closed set and against the
+  exit status before it is published: a token that does not match the exit
+  status is replaced by `could-not-run` (non-zero exit) or `unknown` (exit
+  0), and the text report is deleted so the comment says it produced none.
+  When the gate packages could not be verified and no gate ran, both say
+  `could-not-run`, and the summary carries the reason. Both are empty or
+  absent when the installed `conductor-version` predates `--text-report`.
+
+### Changed
+
+- The action no longer runs the gates a second time to render the pull
+  request comment. The gates step now asks its one run for the SARIF log and
+  the text report together, and the comment step posts that file, so the
+  comment, the verdict token and the job's exit code are one run's answer
+  rather than two that could disagree on a time or network dependent gate,
+  and a pull request with the comment on costs one gate run instead of two.
+  The comment step still runs nothing when the packages could not be
+  verified, and now says so plainly when the gates step wrote no report.
+  An installed `conductor-version` that does not know `--text-report` is
+  detected by asking the binary (`run --help`), and keeps the old second-run
+  comment; the gates step exit status is conductor's own in every state.
+- The README now documents that the first-pull-request refusal recurs once
+  on every new base branch, and that a `branches:` filter on the workflow
+  trigger must include release and production branches so the promote pull
+  request is still checked (issue #87).
+
+### Fixed
+
+- The install step's raw print of the `npm audit signatures` output, both
+  attempts, now strips carriage returns, so text after one in that output can
+  no longer start a line the runner's log reader would honour as a workflow
+  command. The flattened `::error::` and `::notice::` arguments already did
+  (issue #83).
 
 ## [0.6.1] - 2026-09-29
 

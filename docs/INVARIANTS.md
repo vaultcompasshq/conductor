@@ -4070,3 +4070,71 @@ function from `run`'s `repoRoot` and is exercised by `init.test.ts`'s
 existing suite on its own terms; this section's claim is only that
 `--project` reaches `init` correctly, which the `init`-specific tests above
 establish, not that it re-proves `repoRootOf` itself.
+
+## The comment and the job verdict come from the same run
+
+New with the verdict token (issue #85). The pull request comment, the
+verdict token printed under it, the job summary line, the `verdict` output
+and the job's exit code are all ONE run's answer. Until this change the
+comment step re-ran conductor purely to render text, because a run has one
+format, so the job's exit code came from the first run and the comment's
+verdict from the second, and the two could disagree whenever a gate's answer
+was time or network dependent (dep-guard's online lookups run under a
+deadline budget). A token copied from that comment would have been a token
+for a run that did not decide the job.
+
+THE RULE. The run that sets the exit code is the run that writes the text
+report: `conductor run --format sarif --text-report PATH`, one invocation,
+each gate spawned once (`--text-report` in src/cli.ts renders the SAME
+`RunResult` a second time and never calls `runAll` again). The gates step in
+action.yml reads the token from line 2 of that file for the summary and the
+`verdict` output, and the comment step posts that file byte for byte and
+invokes conductor ZERO times on that path. The token function
+(`verdictToken`, src/output-text.ts) and the process exit code
+(`applyAdvisory`, src/cli.ts) take the same `advisory` boolean from the same
+call site, so the label and the process exit code agree by construction in
+the CLI. The report is written LAST, after the SARIF log, and is deleted
+again if any write throws, so a run that exits 2 by write failure leaves no
+text report. In the action, a token that does not match the exit status is
+never published: the gates step accepts a token only as one of the pairs
+status 0 with pass, advisory-blocked (N) or unenforced-findings (N), status 1
+with blocked (N), status 2 with could-not-run, and otherwise publishes
+could-not-run (non-zero status) or unknown (status 0) and deletes the report
+file, so the comment step says it produced none.
+
+THE TOKEN DECIDES NOTHING. `verdictToken` reads `result.exitCode`, which
+`composeExitCode` already produced, and the `enforce` flags already on the
+gates. It is a label for the umbrella's own exit decision, never a verdict
+about a gate, so the rule in AGENTS.md (the umbrella never decides a gate's
+verdict for it) is untouched. Precedence: could-not-run, then blocked or
+advisory-blocked, then unenforced-findings, then pass. `unenforced-findings`
+exists because `composeExitCode` ignores `enforce: false` gates, so a run
+whose only blocking findings sit on one exits 0; calling that `pass` would
+hide exactly what the exit code hid.
+
+THE ONE PLACE A SECOND RUN REMAINS, and why. The action installs whatever
+`conductor-version` says, and a version older than the one that added
+`--text-report` exits 2 on the unknown option. The gates step therefore asks
+the installed binary (`run --help` contains `--text-report`) rather than
+comparing version numbers: the backward-pin rule in the validate step only
+guards `pull_request` events and compares against `TAG_CONDUCTOR_*`
+constants that move with a release, so it does not by itself guarantee the
+flag. An older binary gets no token and the comment step's old render run,
+marked by the `report-fallback` step output. That path has no token, so the
+comment/verdict agreement claimed above holds for every installed conductor
+that has the flag and, by construction, says nothing for one that does not.
+
+WHAT IS AND IS NOT CLAIMED. Pinned by execution in tests/action.test.ts
+(the gates step run against a conductor shim: token and exit status for pass,
+blocked, could-not-run and advisory-blocked; the token read from line 2 only;
+CR, LF and tab flattened before GITHUB_OUTPUT and the summary, and the result
+checked against the closed set and the exit status; the exit
+status kept when the summary cannot be written; the fallback for a binary
+without the flag) and tests/action-pr-comment.test.ts (zero conductor
+invocations when the gates step wrote a report). Mutation-checked: making the
+gates step `exit 0` after the summary, and putting a conductor run back on the
+comment step's primary path, each turn a named test red. NOT claimed: that the
+token in a comment matches the job when the gates step wrote no report (the
+comment then says it produced none), or that a clean non-verbose one-line
+summary carries a token (it is one line by design; the action always passes
+`--verbose`).

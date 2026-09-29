@@ -485,6 +485,15 @@ proceeds normally without mentioning them.
   repository root: with `--project` pointing elsewhere, a relative
   `--output` still lands next to where you are, not next to the repository
   being judged.
+- `--text-report <path>`, with `--format sarif`, also writes the text report
+  to that file **from the same run**: exactly what `--format text` would have
+  rendered for this result (`--verbose`, `--compact-on-refusal` and
+  `--advisory` respected), and no gate is run a second time. This is how the
+  Action gets a SARIF log, a comment body and a verdict token that are one
+  run's answer. With `--format text` it is refused as a usage error (exit 2),
+  before any gate runs: the text report is the output already, so a second
+  copy in a file would only duplicate it. A path that cannot be written is
+  exit 2, like `--output`. See "The verdict token" below.
 - `--verbose` prints the full per-gate report even when the run is clean.
   Text output only; the SARIF log never changes shape with it.
 - `--compact-on-refusal` shrinks the report to the version, the verdict and
@@ -549,6 +558,37 @@ osv-scanner older than 2.0 is could-not-run, naming the floor.
 could not run is a different failure from a blocking finding, and advisory
 mode exists to leave that one alone. See "Running the gates as an advisory
 check" below.
+
+### The verdict token
+
+The text report carries one more line: `verdict-token: <token>`, the **second
+line**, directly under the version line (the closing `verdict:` sentence is
+unchanged). It is a label for the umbrella's own exit decision, in a closed
+set, so a person or a script can read the state without parsing a sentence.
+It decides nothing and never overrules a gate: it is derived from the exit
+code and the `enforce` flags the run already had.
+
+- `pass`: exit 0, and no gate, enforced or not, has a blocking finding or
+  could not run.
+- `advisory-blocked (N)`: the run would have exited 1, and `--advisory` made
+  it exit 0. N is the blocking findings on enforced gates.
+- `unenforced-findings (N)`: exit 0, but a gate with `enforce: false` had
+  blocking findings or could not run. N counts those findings plus those
+  gates. Exit 0 here is not a pass, and the token says so.
+- `blocked (N)`: exit 1. N as for `advisory-blocked`.
+- `could-not-run`: exit 2, a refused trust base included.
+
+When several apply the order is `could-not-run`, then `blocked` or
+`advisory-blocked`, then `unenforced-findings`, then `pass`. A run with
+`--advisory` whose only blocking findings sit on an unenforced gate is
+`unenforced-findings`, not `advisory-blocked`, because the flag did nothing
+there. A gate skipped for want of a contract does not by itself move the token
+off `pass`; the verdict sentence is where "nothing was checked" is said. A
+gate that exited non-zero with no finding marked blocking counts as one in N,
+so a state that is not a pass never prints a count of zero. The one-line
+summary of a clean, non-verbose run has no token line, since it is one line by
+design. `conductor run` also prints the token on its job-log line,
+`conductor run: 4 gate(s), 1 finding(s); verdict-token advisory-blocked (1); sarif report written to conductor.sarif`.
 
 ## The pull-request trust boundary
 
@@ -1411,13 +1451,21 @@ step and add `pull-requests: write` to the job's `permissions`:
 
 That posts conductor's own text report, the one the README quotes above
 ("conductor: clean, nothing blocked. 2 gate(s) ran: ..."), as a comment on
-the pull request. It is **sticky**: a hidden marker in the comment body lets
+the pull request. It is **the report of the run that decided the job**: the
+gates step asks that one run for the SARIF log and the text report together
+(`--text-report`), and the comment step posts the file it wrote without
+running the gates again. Before this the comment came from a second run, which
+could disagree with the first whenever a gate's answer was time or network
+dependent, and doubled the gate time on every pull request. An installed
+`conductor-version` too old to have `--text-report` is detected by asking the
+binary, and gets the second-run behaviour it always had, without a token. It is **sticky**: a hidden marker in the comment body lets
 a re-run find and update that same comment, so a push does not pile up a new
 comment every time, the way the manual recipe below does. It runs on a
 `pull_request` or `pull_request_target` event only, and it runs whether the
 gates step passed or failed, since a blocking run is the one an advisory
 check most needs a developer to actually see. The first line of every
-comment carries the version of conductor that produced it, and when the
+comment carries the version of conductor that produced it, the second line
+carries the verdict token (see "The verdict token" above), and when the
 trust base was refused and no gate ran at all, the comment shrinks to the
 version, the verdict, and the refusal reason (with its remedy, when one
 applies) rather than the full per-gate report, so an adopter with no policy
@@ -1435,6 +1483,18 @@ is a different security decision to take on purpose rather than a flag to
 add; nothing here does that for you.
 
 Off by default, so an existing consumer of this action is unaffected.
+
+**The verdict, whether or not the comment is on.** The gates step reads the
+token out of the text report its own run wrote and publishes it twice: as a
+line on the job summary, `conductor verdict: advisory-blocked (1)`, and as the
+Action's `verdict` output, spelled exactly as the report's second line spells
+it (`steps.conductor.outputs.verdict`). It is flattened to one line before it
+goes to either. It is a label for conductor's own exit decision, and the
+step's exit status is conductor's own in every state. When the gate packages
+could not be verified and no gate ran, the summary says
+`conductor verdict: could-not-run (<reason>)` and the output is
+`could-not-run`. The output is empty when the installed `conductor-version`
+predates the token.
 
 **The sticky match only ever adopts conductor's own comment.** On
 `pull_request_target` this step runs with a write token even though the
@@ -1491,9 +1551,12 @@ case, `pr-comment: true` is the built-in answer.
 The SARIF upload produces no alerts on a private repository without GitHub
 Code Security, which is why that step carries `continue-on-error`. A comment
 is free there. Add `pull-requests: write` to the job's `permissions` and this
-step after the gates. It **runs the gates a second time**, because the Action
-writes SARIF and nothing else, so the job costs roughly twice the gate time;
-`--verbose` because a clean run otherwise collapses to one line.
+step after the gates. It **runs the gates a second time**, because a run has
+one format and the recipe below asks for text, so the job costs roughly twice
+the gate time and the comment can in principle disagree with the first run;
+the built-in `pr-comment: true` does not, since it posts the file the first
+run wrote (`--text-report`). `--verbose` because a clean run otherwise
+collapses to one line.
 
 ```yaml
       - name: Comment the report on the pull request

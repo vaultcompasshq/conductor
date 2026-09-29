@@ -8,7 +8,7 @@
 
 import { Command, CommanderError } from 'commander';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +21,7 @@ import {
   revertInit,
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
-import { jobLogSummary, renderText } from './output-text.js';
+import { jobLogSummary, renderText, verdictToken } from './output-text.js';
 import {
   GATE_ROLES,
   GATE_STAGES,
@@ -179,6 +179,7 @@ interface RunCliOptions {
   trustBase?: string;
   spec?: string;
   output?: string;
+  textReport?: string;
   verbose?: boolean;
   compactOnRefusal?: boolean;
   advisory?: boolean;
@@ -549,6 +550,10 @@ export function buildProgram(): Command {
       'write the report to this file instead of to stdout, for a CI step that uploads it'
     )
     .option(
+      '--text-report <path>',
+      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
+    )
+    .option(
       '--spec <path>',
       'the spec the intent gate imports its contract from, outranking a Spec: line in the pull request body and the branch-name convention'
     )
@@ -573,6 +578,7 @@ export function buildProgram(): Command {
     .exitOverride()
     .action((options: RunCliOptions) => {
       const cwd = process.cwd();
+      let textReportPath: string | undefined;
 
       try {
         // Inside the try, because resolveProjectRoot (like repoRoot before
@@ -589,6 +595,16 @@ export function buildProgram(): Command {
         const source = policyForRun(root, options.trustBase, overrides, process.env.GITHUB_BASE_REF);
         const policy = source.kind === 'policy' ? source.policy : source.inventory;
         const format = parseFormat(options.format ?? policy.report.format);
+        // BEFORE ANY GATE RUNS. With --format text the text report already is
+        // the run's output, so a second copy of it in a file is not something
+        // this option can add: refused as a usage error rather than accepted
+        // and ignored, which would leave a caller reading a file that was
+        // never written, or one that duplicates stdout.
+        if (options.textReport !== undefined && format !== 'sarif') {
+          throw new PolicyError(
+            '--text-report is only meaningful with --format sarif: with --format text the text report is the output already.'
+          );
+        }
 
         const result =
           source.kind === 'refused'
@@ -612,15 +628,18 @@ export function buildProgram(): Command {
         // there: each finding's `properties.blocking` is the gate's own
         // decision (see output-sarif.ts) and is unaffected by this flag,
         // exactly as the text report's per-finding BLOCKING marker is.
+        const renderTextReport = (): string =>
+          renderText(result, {
+            verbose: Boolean(options.verbose),
+            version: pkg.version,
+            compact: Boolean(options.compactOnRefusal),
+            advisory,
+          });
         const rendered =
-          format === 'sarif'
-            ? `${renderSarif(result, pkg.version)}\n`
-            : renderText(result, {
-                verbose: Boolean(options.verbose),
-                version: pkg.version,
-                compact: Boolean(options.compactOnRefusal),
-                advisory,
-              });
+          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderTextReport();
+        // The SAME result, rendered a second time, never a second run: the
+        // token in this file is for the run that set the exit code below.
+        const textReport = options.textReport === undefined ? undefined : renderTextReport();
 
         if (options.output === undefined) {
           process.stdout.write(rendered);
@@ -631,6 +650,20 @@ export function buildProgram(): Command {
           // worst of the available answers: the upload step downstream would
           // fail on a missing file with no explanation here.
           writeFileSync(options.output, rendered);
+        }
+
+        // WRITTEN LAST, after the SARIF log or stdout, and removed again in
+        // the catch below if anything after it throws. A run that exits 2
+        // because a write failed must never leave a finished text report on
+        // disk: the action would read a clean report and publish a pass, and
+        // post it as a comment, beside a red job. A text report that cannot
+        // be written takes the could-not-run code, like an unwritable --output.
+        if (options.textReport !== undefined && textReport !== undefined) {
+          textReportPath = options.textReport;
+          writeFileSync(options.textReport, textReport);
+        }
+
+        if (options.output !== undefined) {
           // One line, so a CI job whose only product is an uploaded artifact
           // does not read as a job that did nothing. jobLogSummary carries
           // its own "N gate(s), N finding(s)" on an ordinary run, unchanged,
@@ -640,11 +673,21 @@ export function buildProgram(): Command {
           // "N gate(s), N finding(s)" on a run where nothing ran and nothing
           // was found (issue #46).
           process.stdout.write(
-            `conductor run: ${jobLogSummary(result)}; ${format} report written to ${options.output}\n`
+            `conductor run: ${jobLogSummary(result)}; verdict-token ${verdictToken(result, advisory)}; ` +
+              `${format} report written to ${options.output}\n`
           );
         }
         process.exitCode = applyAdvisory(result.exitCode, advisory);
       } catch (err) {
+        // A text report this run already wrote (or half wrote) is removed:
+        // this run exits 2, and no report may say otherwise.
+        if (textReportPath !== undefined) {
+          try {
+            unlinkSync(textReportPath);
+          } catch {
+            // Nothing to remove, or not removable; the exit code stands.
+          }
+        }
         // One line, never a stack. runGate is total, so nothing from a gate
         // reaches here; anything that does is the umbrella's own problem and
         // still must not put a local filesystem path in front of a user who
