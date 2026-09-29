@@ -646,12 +646,12 @@ runs:
         # RETRIED ONCE, and only once. Twice in a week (2026-09-22 and
         # 2026-09-29) a transient registry attestation failure turned an
         # advisory run red with nothing wrong: both cleared on a plain re-run
-        # and both packages were verified untouched. So a failing audit is run
-        # exactly one more time after a short pause. Fail-closed is unchanged:
-        # if the second attempt also fails, the step fails with the second
-        # attempt's reason and exit status. More than one retry would only
-        # lengthen a real outage and give a bad tree more chances to look
-        # clean. `verification-ok` is still written only after an audit has
+        # and the flagged package was verified untouched both times. So a
+        # failing audit is run exactly one more time after a short pause.
+        # Fail-closed is unchanged: if the second attempt also fails, the step
+        # fails with the second attempt's reason and exit status. More than one
+        # retry would only lengthen a real outage and give a bad tree more
+        # chances to look clean. `verification-ok` is still written only after an audit has
         # actually passed. See issue #81.
         audit_status=0
         audit_out="$( ( cd "$npm_config_prefix/lib" && npm audit signatures ) 2>&1 )" || audit_status=$?

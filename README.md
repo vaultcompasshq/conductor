@@ -1048,9 +1048,8 @@ provenance even though all four packages publish it.
 > install succeeds and this step then fails with `EMISSINGSIGNATUREKEY`. A
 > sigstore outage has the same effect. The audit is retried once after a short
 > pause before the step fails, to absorb a one-off registry hiccup. It fails
-> closed on purpose, so that is a
-> red gate rather than a skipped check; pin to `@v0.4.0`, which does not
-> verify, if it blocks you.
+> closed on purpose, so that is a red gate rather than a skipped check; pin to
+> `@v0.4.0`, which does not verify, if it blocks you.
 
 `--base` is passed only when the `base-ref` input names one; left empty, the
 umbrella reads `GITHUB_BASE_REF` itself and treats an empty value as "not a

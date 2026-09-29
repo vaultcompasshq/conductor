@@ -692,7 +692,11 @@ function runInstall(
       'install) mkdir -p "${npm_config_prefix}/lib" ;; ' +
       `audit) n=$(cat ${JSON.stringify(auditCount)} 2>/dev/null || echo 0); n=$((n+1)); ` +
       `echo "$n" > ${JSON.stringify(auditCount)}; ` +
-      `if [ "$n" -le ${auditFailures} ]; then echo "1 package has an invalid attestation"; exit 1; fi ;; esac\n`,
+      // A failing call names its own attempt number, exits 10+N so a test can
+      // tell WHICH attempt's status the step propagated, and carries a
+      // carriage return plus an injected workflow command so the flattening
+      // control is exercised on every path that reports the output.
+      `if [ "$n" -le ${auditFailures} ]; then printf 'attempt %s: 1 package has an invalid attestation\\r::warning::injected\\n' "$n"; exit $((10+n)); fi ;; esac\n`,
   );
   chmodSync(shim, 0o755);
 
@@ -1011,20 +1015,36 @@ describe('action.yml installs the gates outside the tree', () => {
     expect(run.status).toBe(0);
     expect(run.argv.filter((a) => a === 'audit')).toHaveLength(2);
     expect(run.githubOutput).toContain('verification-ok=true');
-    expect(run.stderr).toMatch(
-      /::notice::conductor: the registry signature audit failed once and passed on retry; the first attempt said: .*1 package has an invalid attestation/
+    const lines = run.stderr.split('\n');
+    const notice = lines.filter((l) => l.startsWith('::notice::'));
+    expect(notice).toHaveLength(1);
+    expect(notice[0]).toMatch(
+      /^::notice::conductor: the registry signature audit failed once and passed on retry; the first attempt said: .*attempt 1: 1 package has an invalid attestation/
     );
+    expect(notice[0]).not.toContain('\r');
+    expect(notice[0]).not.toContain('attempt 2');
+    expect(lines.filter((l) => l.startsWith('::warning::injected'))).toHaveLength(0);
   });
 
   it('fails closed after exactly two failed signature audits', () => {
     const run = runInstall({}, '10.9.2', 2);
-    expect(run.status).not.toBe(0);
+    // The second attempt's status, not the first's.
+    expect(run.status).toBe(12);
     expect(run.argv.filter((a) => a === 'audit')).toHaveLength(2);
     expect(run.githubOutput).toContain('verification-failed=true');
     expect(run.githubOutput).not.toContain('verification-ok=true');
-    expect(run.stderr).toContain('::error::conductor: could not verify');
-    expect(run.githubOutput).toContain('attempted twice');
-    expect(run.stderr).toContain('attempted twice');
+    const lines = run.stderr.split('\n');
+    const errors = lines.filter((l) => l.startsWith('::error::conductor: could not verify'));
+    expect(errors).toHaveLength(1);
+    const reasons = run.githubOutput.split('\n').filter((l) => l.startsWith('verification-reason='));
+    expect(reasons).toHaveLength(1);
+    for (const line of [errors[0], reasons[0]]) {
+      expect(line).toContain('attempted twice');
+      expect(line).toContain('attempt 2');
+      expect(line).not.toContain('attempt 1');
+      expect(line).not.toContain('\r');
+    }
+    expect(lines.filter((l) => l.startsWith('::warning::injected'))).toHaveLength(0);
   });
 
   it('installs under the runner temp, never into the workspace', () => {
