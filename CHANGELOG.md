@@ -14,6 +14,32 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Fixed
+
+- Security: a history gate (gitleaks) in a shallow checkout is now
+  could-not-run with reason `history-shallow`, naming `fetch-depth: 0`, and
+  under a trust base it is enforced (exit 2) whatever `enforce` says. With
+  the default checkout depth of 1, `<base>..HEAD` held one grafted commit and a
+  secret added then removed inside the pull request was never scanned (0 hits
+  shallow against 2 full). conductor does not deepen the checkout itself.
+  The README and INVARIANTS no longer say depth 1 fails closed for this.
+- Security: the action always force-fetches the base ref
+  (`+refs/heads/<base>:refs/remotes/origin/<base>`) instead of skipping the
+  fetch when the ref already resolved, so code from the pull request that ran
+  earlier in the job cannot point `origin/<base>` at a commit of its own. The
+  fetch is depth 1 only when the checkout is already shallow (a depth on a
+  full clone would turn it shallow). If the fetch fails, any existing copy of
+  the ref is deleted and a warning is printed, so conductor fails closed on
+  an unresolvable trust base. The README example now runs the action in a job
+  that runs no code from the pull request, and says that package.json
+  lifecycle scripts bypass "require review on .github/workflows".
+- A run in which no gate ran at all (none enabled, or every one deferred,
+  tree-unchanged or skipped) no longer carries the verdict token `pass`. It
+  carries the new closed-set token `nothing-checked`, so the action's `verdict`
+  output no longer reports a pass for a run that verified nothing. The exit
+  status is unchanged (0). The action accepts `nothing-checked` only beside
+  exit status 0, and its job summary says that nothing was checked.
+
 ## [0.7.0] - 2026-09-29
 
 **A minor package release.** `@vaultcompass/conductor` moves to 0.7.0 on npm

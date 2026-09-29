@@ -94,7 +94,15 @@ export type CouldNotRunReason =
    * verdict to is not there. Only a tool whose output is a report file can
    * land here.
    */
-  | 'report-missing';
+  | 'report-missing'
+  /**
+   * The gate reads git history and the checkout is shallow, so the history it
+   * would read is truncated (at depth 1 the pull request's merge commit is
+   * grafted, and base..HEAD holds one commit: a secret added and removed
+   * inside the pull request is never seen). Never unshallowed automatically:
+   * the remedy is a checkout setting, fetch-depth: 0.
+   */
+  | 'history-shallow';
 
 export interface CouldNotRun {
   reason: CouldNotRunReason;
@@ -834,6 +842,19 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
   }
 }
 
+/**
+ * Whether git says the repository at `repoRoot` is shallow. Anything other
+ * than a clear "true" (no git, an old git that does not know the flag) is
+ * not shallow: those runs have their own failure paths.
+ */
+function isShallowRepository(repoRoot: string): boolean {
+  const probe = spawnSync('git', ['rev-parse', '--is-shallow-repository'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  return probe.status === 0 && typeof probe.stdout === 'string' && probe.stdout.trim() === 'true';
+}
+
 function runGateInner(
   gate: GatePolicy,
   options: RunGateOptions,
@@ -925,6 +946,29 @@ function runGateInner(
         durationMs: Date.now() - started,
       };
     }
+  }
+
+  // A history gate cannot vouch for history it was not given. Checked before
+  // the version probe so nothing is executed for a run that cannot be honest.
+  if (profileFor(gate.product).readsHistory && isShallowRepository(options.repoRoot)) {
+    const detail =
+      `this checkout is shallow, so the git history ${gate.product} reads is truncated: ` +
+      'with the default actions/checkout depth of 1 the range from the base to HEAD holds a ' +
+      'single grafted commit, and a secret added and then removed inside the pull request ' +
+      'would never be seen. Check out with fetch-depth: 0 (actions/checkout) or run ' +
+      'git fetch --unshallow, then run again. conductor does not deepen the checkout itself.';
+    return {
+      ...base,
+      // Under a trust base this is enforced whatever the policy says: the
+      // gate produced nothing for `enforce: false` to be a decision about.
+      // A local run keeps the policy's own value.
+      enforce: options.trustBase !== undefined ? true : gate.enforce,
+      durationMs: Date.now() - started,
+      couldNotRun: { reason: 'history-shallow', detail },
+      findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
   }
 
   const version = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);

@@ -730,8 +730,11 @@ through: the text verdict printed "exit 0, no gate ran because none is
 enabled. Set enabled: true", and SARIF emitted `{"runs": []}` with
 `executionSuccessful` absent, while the process exited 2 and nothing had
 been checked. An empty log uploads cleanly and is indistinguishable from a
-scan of a repository nobody gated. Reachable on the DEFAULT
-actions/checkout, which fetches depth 1 and so carries no base ref.
+scan of a repository nobody gated. Reachable through the CLI on the DEFAULT
+actions/checkout, which fetches depth 1 and so carries no base ref. (The
+Action now fetches the base ref itself, so on the Action a depth-1 checkout
+reaches the shallow-history could-not-run for gitleaks instead; see the
+history-gate paragraph in the trust-base ref section.)
 
 So a refusal is its own outcome in both formats: the first line, the reason,
 the fetch-depth remedy and its own verdict sentence in text
@@ -789,7 +792,10 @@ approval is what it is:
 The rule (`refuseHeadControlledProgram`, src/trust-base.ts:343-429, called
 from src/gate-runner.ts:720-733 and, for the intent gate's preparation, from
 src/run.ts:409-423): a program OUTSIDE the working tree is
-accepted, since a pull request cannot write it. A program inside is accepted
+accepted, since a pull request cannot write it, UNDER THE PRECONDITION that no
+code from the pull request ran earlier in the same job (a lifecycle script
+from an earlier install can write the runner's temp directory or PATH; see
+the install entry). A program inside is accepted
 only when BOTH hold: it is a tracked regular file whose blob is identical at
 the trust base and at HEAD, AND the tree object id of its CONTAINING
 DIRECTORY is identical at those two refs. Both sides come from `git ls-tree`
@@ -1007,9 +1013,21 @@ So the action installs, rather than checking that somebody else did
 versions, `conductor-version`, `dep-guard-version`, `vault-guard-version`
 and `intent-guard-version`. `npm install -g` puts all four under the runner
 temp, outside the workspace, and that directory's `bin` goes on `PATH`
-through `GITHUB_PATH`; the run step then invokes `conductor` by name. The
-pull request can rewrite its own lockfile, manifest and `node_modules`, and
-none of them now decide which programs judge it.
+through `GITHUB_PATH`; the run step then invokes `conductor` by absolute path
+(`CONDUCTOR_BIN`, see the entry near the end of this file) and the umbrella
+resolves each GATE by name from that PATH. The pull request can rewrite its
+own lockfile, manifest and `node_modules`, and none of them now decide which
+programs judge it, PROVIDED NO CODE FROM THE PULL REQUEST HAS RUN EARLIER IN
+THE SAME JOB. That is a precondition, not a property the action enforces:
+code the head runs before the action (an install whose lifecycle script, such
+as a root `postinstall`, runs) can append to `GITHUB_PATH`, write files under
+the runner temp where the install prefix lives, or move
+`refs/remotes/origin/<base>`, and package.json lifecycle scripts run by an
+install are not stopped by branch protection on `.github/workflows`. The
+action closes the last of those itself (it always force-fetches the base ref),
+but the PATH and install-prefix halves are closed only by the workflow shape:
+the gates run in a job, or before any step, that executes no code from the
+pull request.
 
 WHAT THE PIN DOES NOT PROTECT, stated here because an earlier revision of
 this entry claimed it did. That revision said the workflow file is read from
@@ -1333,11 +1351,33 @@ sentence that says GITHUB_BASE_REF and the base branch, rather than
 surfacing as the same-commit or equal-tree message a reader would have to
 already know implies a pull-request problem. FAILS CLOSED when
 `origin/<githubBaseRef>` itself does not resolve, naming it: reachable on the
-default `actions/checkout` (fetch-depth: 1), which does not carry the base
-branch at all, and the remedy is the same fetch-depth: 0 the rest of this
-section already asks for. When the GIVEN ref does not resolve at all, this
-returns null rather than refusing a second time under a different message:
-`refuseTrustBaseRef` is the function with its own sentence for that shape.
+default `actions/checkout` (fetch-depth: 1) when the base branch was not
+fetched. The ACTION fetches it itself (depth 1 on a shallow checkout, always
+with a forcing refspec, and it deletes a stale copy if the fetch fails), so on
+the action a depth-1 checkout does NOT fail closed here any more: the base
+ref resolves. What a depth-1 checkout now fails closed on is the history gate
+(gitleaks), described in the next paragraph. When the GIVEN ref does not
+resolve at all, this returns null rather than refusing a second time under a
+different message: `refuseTrustBaseRef` is the function with its own sentence
+for that shape.
+
+A HISTORY GATE IN A SHALLOW CHECKOUT IS COULD-NOT-RUN, AND ENFORCED UNDER A
+TRUST BASE. With the default depth 1 the action's own depth-1 fetch of the base
+makes the trust base resolve while HEAD is a grafted shallow merge commit, so
+`<base>..HEAD` holds ONE commit and gitleaks, which reads history and not the
+tree (`readsHistory` in src/products.ts), never sees a secret added and then
+removed inside the pull request. Measured: 0 hits shallow against 2 full for
+the same pull request. `runGateInner` (src/gate-runner.ts, before the version
+probe) therefore asks `git rev-parse --is-shallow-repository` for every gate
+whose profile says `readsHistory` and, when it says true, returns
+could-not-run with reason `history-shallow` and a remedy naming
+`fetch-depth: 0`. Under a trust base `enforce` is forced true whatever the
+policy says (exit 2); on a local run the policy's own `enforce` stands.
+conductor NEVER deepens the checkout itself. An earlier revision of this file
+said depth 1 fails closed for the base ref only, and that the history gate
+was covered by the same remedy; it was not covered, it silently passed.
+Pinned by "a gate that reads history, in a shallow checkout" in
+tests/gate-runner.test.ts, against a real depth-1 clone.
 
 WHAT NEITHER LAYER CLOSES, stated because the obvious summary is wider than
 either rule, the same discipline the backward-pin section above holds itself
@@ -4097,7 +4137,8 @@ the CLI. The report is written LAST, after the SARIF log, and is deleted
 again if any write throws, so a run that exits 2 by write failure leaves no
 text report. In the action, a token that does not match the exit status is
 never published: the gates step accepts a token only as one of the pairs
-status 0 with pass, advisory-blocked (N) or unenforced-findings (N), status 1
+status 0 with pass, nothing-checked, advisory-blocked (N) or
+unenforced-findings (N), status 1
 with blocked (N), status 2 with could-not-run, and otherwise publishes
 could-not-run (non-zero status) or unknown (status 0) and deletes the report
 file, so the comment step says it produced none.
@@ -4107,10 +4148,16 @@ THE TOKEN DECIDES NOTHING. `verdictToken` reads `result.exitCode`, which
 gates. It is a label for the umbrella's own exit decision, never a verdict
 about a gate, so the rule in AGENTS.md (the umbrella never decides a gate's
 verdict for it) is untouched. Precedence: could-not-run, then blocked or
-advisory-blocked, then unenforced-findings, then pass. `unenforced-findings`
-exists because `composeExitCode` ignores `enforce: false` gates, so a run
-whose only blocking findings sit on one exits 0; calling that `pass` would
-hide exactly what the exit code hid.
+advisory-blocked, then unenforced-findings, then nothing-checked, then pass.
+`unenforced-findings` exists because `composeExitCode` ignores `enforce: false`
+gates, so a run whose only blocking findings sit on one exits 0; calling that
+`pass` would hide exactly what the exit code hid. `nothing-checked` is the same
+rule for the other silent exit 0: a run where no gate ran at all (none enabled,
+or every one deferred, tree-unchanged or skipped) keeps its exit status of 0 but
+is labelled `nothing-checked`, never `pass`, because a run where no gate ran at
+all is not clean whatever the exit code says. Pinned by tests/verdict-token.test.ts
+("is nothing-checked, never pass") and tests/action.test.ts (the closed-set pair
+check).
 
 THE ONE PLACE A SECOND RUN REMAINS, and why. The action installs whatever
 `conductor-version` says, and a version older than the one that added

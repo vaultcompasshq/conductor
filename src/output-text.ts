@@ -493,6 +493,8 @@ function blockingCount(gate: RunResult['gates'][number]): number {
  * the state without parsing the verdict sentence.
  *
  *   pass                     exit 0 and nothing was hidden by it
+ *   nothing-checked          exit 0, but no gate ran at all (none enabled,
+ *                            or every one deferred, tree-unchanged or skipped)
  *   advisory-blocked (N)     exit 1 that --advisory turned into exit 0
  *   unenforced-findings (N)  exit 0, but enforce: false gates blocked or
  *                            could not run
@@ -513,8 +515,8 @@ function blockingCount(gate: RunResult['gates'][number]): number {
  *
  * A SKIPPED gate (no contract, or a waived spec) is in result.skipped rather
  * than result.gates, is neither a blocking finding nor a could-not-run, and
- * so does not by itself move the token off pass. The verdict sentence is
- * where "nothing was checked" is said.
+ * so does not by itself move the token off pass when another gate ran. When
+ * NO gate ran, the token is nothing-checked, matching the verdict sentence.
  *
  * Any exit code outside 0, 1 and 2 is could-not-run: an unknown state is
  * not a pass.
@@ -531,6 +533,14 @@ export function verdictToken(result: RunResult, advisory: boolean): string {
       .filter((gate) => gate.enforce)
       .reduce((total, gate) => total + blockingCount(gate), 0);
     return advisory ? `advisory-blocked (${count})` : `blocked (${count})`;
+  }
+
+  // Exit 0 with no gate having run at all (none enabled, every one deferred,
+  // tree-unchanged or skipped): the exit code stays 0, since nothing failed,
+  // but the label must not say pass. It is the same condition the verdict
+  // sentence words as "nothing was checked".
+  if (result.gates.length === 0) {
+    return 'nothing-checked';
   }
 
   const unenforced = result.gates

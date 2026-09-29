@@ -453,7 +453,10 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
 
     const workdir = tempDir();
     git(
-      ['clone', '--quiet', '--depth', '1', '--branch', 'feature', '--no-tags', origin, workdir],
+      // file:// on purpose: git ignores --depth for a plain-path local clone,
+      // which made this fixture a full clone with the base branch merely
+      // not fetched, not the shallow shape actions/checkout produces.
+      ['clone', '--quiet', '--depth', '1', '--branch', 'feature', '--no-tags', `file://${origin}`, workdir],
       os.tmpdir()
     );
     git(['config', 'user.email', 'test@example.com'], workdir);
@@ -540,22 +543,54 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     expect(resolves('origin/main', workdir)).toBe(true);
   });
 
-  it('does not fetch when origin/<base> already resolves in the checkout', () => {
-    const { workdir, origin } = makeShallowCheckout();
-    // What a deeper fetch-depth, or a prior step, leaves behind: the base
-    // branch already in the checkout before this step ever runs. The
-    // explicit src:dst refspec is required here for the same reason the
-    // step's own fetch needs one: this is a single-branch checkout, so a
-    // bare `git fetch origin main` only updates FETCH_HEAD and never
-    // creates the origin/main tracking ref this precondition needs.
+  it('fetches even when origin/<base> already resolves, and replaces a ref that earlier code in the job moved (C1)', () => {
+    const { workdir } = makeShallowCheckout();
+    // Code from the pull request that ran earlier in the same job (a root
+    // postinstall) can point refs/remotes/origin/main at a commit of its own
+    // choosing, one whose .guardrails.yaml disables every gate. A guard that
+    // skipped the fetch when the ref resolved would trust that ref.
     git(['fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main'], workdir);
-    expect(resolves('origin/main', workdir)).toBe(true);
-    void origin;
+    const realBase = git(['rev-parse', 'origin/main'], workdir).trim();
+    const crafted = git(['rev-parse', 'HEAD'], workdir).trim();
+    expect(crafted).not.toBe(realBase);
+    git(['update-ref', 'refs/remotes/origin/main', crafted], workdir);
+    expect(git(['rev-parse', 'origin/main'], workdir).trim()).toBe(crafted);
 
     const run = runGatesScript(workdir);
 
     expect(run.status).toBe(0);
-    expect(run.fetchLog).toEqual([]);
+    expect(run.fetchLog.length).toBe(1);
+    expect(run.fetchLog[0]).toMatch(/\+refs\/heads\/main:refs\/remotes\/origin\/main/);
+    expect(git(['rev-parse', 'origin/main'], workdir).trim()).toBe(realBase);
+  });
+
+  it('does not leave a pre-existing origin/<base> standing when the fetch fails, so conductor fails closed (C1)', () => {
+    const { workdir } = makeShallowCheckout();
+    git(['fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main'], workdir);
+    git(['update-ref', 'refs/remotes/origin/main', git(['rev-parse', 'HEAD'], workdir).trim()], workdir);
+    git(['remote', 'set-url', 'origin', path.join(workdir, 'no-such-remote')], workdir);
+
+    const run = runGatesScript(workdir);
+
+    expect(run.output).toMatch(/::warning::/);
+    expect(run.output).toMatch(/could not be fetched/);
+    // The unverifiable ref is gone, so the --trust-base the step passes names
+    // a ref that does not resolve and the umbrella refuses it (exit 2).
+    expect(resolves('origin/main', workdir)).toBe(false);
+  });
+
+  it('keeps a full clone full: no --depth when the checkout is not shallow (C2 interplay)', () => {
+    const { workdir } = makeShallowCheckout();
+    git(['fetch', '--quiet', '--unshallow', 'origin'], workdir);
+    expect(git(['rev-parse', '--is-shallow-repository'], workdir).trim()).toBe('false');
+
+    const run = runGatesScript(workdir);
+
+    expect(run.status).toBe(0);
+    expect(run.fetchLog.length).toBe(1);
+    expect(run.fetchLog[0]).not.toMatch(/--depth/);
+    expect(git(['rev-parse', '--is-shallow-repository'], workdir).trim()).toBe('false');
+    expect(resolves('origin/main', workdir)).toBe(true);
   });
 
   it('warns with the exact remedy command rather than hard-failing when the fetch cannot succeed', () => {
@@ -570,7 +605,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     // Never a hard failure: the stub conductor still ran and exited 0.
     expect(run.status).toBe(0);
     expect(run.output).toMatch(/::warning::/);
-    expect(run.output).toMatch(/git fetch --depth=1 origin main/);
+    expect(run.output).toMatch(/git fetch --depth=1 origin \+refs\/heads\/main:refs\/remotes\/origin\/main/);
   });
 });
 
@@ -1680,6 +1715,16 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(outputLines(run).some((line) => line.startsWith('sarif='))).toBe(true);
   });
 
+  it('publishes nothing-checked at exit 0 and says on the summary that nothing was checked, never pass', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: nothing-checked\nrest\n', exit: 0 });
+    expect(run.status).toBe(0);
+    expect(outputLines(run)).toContain('verdict=nothing-checked');
+    expect(outputLines(run)).not.toContain('verdict=pass');
+    expect(run.summary).toContain('conductor verdict: nothing-checked');
+    expect(run.summary).toContain('Nothing was checked.');
+    expect(existsSync(run.textReport)).toBe(true);
+  });
+
   it('preserves exit status 1 for a blocked run, and publishes the token', () => {
     const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: blocked (2)\n', exit: 1 });
     expect(run.status).toBe(1);
@@ -1736,6 +1781,10 @@ describe('action.yml: the verdict token from the gates step', () => {
   it('accepts every consistent pair and keeps the report, and rejects each inconsistent one', () => {
     const pairs: Array<[number, string, string]> = [
       [0, 'pass', 'pass'],
+      [0, 'nothing-checked', 'nothing-checked'],
+      [1, 'nothing-checked', 'could-not-run'],
+      [2, 'nothing-checked', 'could-not-run'],
+      [0, 'nothing-checked (1)', 'unknown'],
       [0, 'advisory-blocked (3)', 'advisory-blocked (3)'],
       [0, 'unenforced-findings (1)', 'unenforced-findings (1)'],
       [1, 'blocked (2)', 'blocked (2)'],

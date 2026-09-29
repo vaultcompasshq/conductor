@@ -124,7 +124,8 @@ outputs:
   verdict:
     description: >-
       The verdict token of the run that decided this job's exit code: one of
-      pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or
+      pass, nothing-checked (exit 0 but no gate ran at all), advisory-blocked
+      (N), unenforced-findings (N), blocked (N) or
       could-not-run, spelled exactly as the second line of the text report
       carries it. It is a label for conductor's own exit decision and decides
       nothing itself. The token is validated against the exit status before
@@ -877,11 +878,9 @@ runs:
           # their own fetch step; this closes the gap here instead, so every
           # consumer does not have to discover the same workaround.
           #
-          # GUARDED SO IT IS A NO-OP WHEN THE REF ALREADY RESOLVES: a
-          # consumer whose checkout already carries the base ref (a deeper
-          # fetch-depth, or a previous step that fetched it) pays nothing
-          # extra, and this never fetches more than once regardless of how
-          # many gates run.
+          # NOT A NO-OP WHEN THE REF ALREADY RESOLVES (changed in the C1
+          # fix): see ALWAYS FETCHED below. It still fetches once per step,
+          # however many gates run.
           #
           # DEPTH 1 IS DELIBERATE AND IS NOT THE SAME FETCH THE INTENT GATE
           # MAY WANT. conductor's own reads of a trust base (git show
@@ -912,11 +911,32 @@ runs:
           # step exists to fix. The explicit src:dst refspec is what actually
           # creates the remote-tracking ref conductor is about to be asked
           # to read.
-          if ! git rev-parse --verify --quiet "origin/$GITHUB_BASE_REF" >/dev/null 2>&1; then
-            if ! git fetch --depth=1 origin "$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF" >/dev/null 2>&1; then
-              printf '::warning::conductor: origin/%s is not in this checkout and could not be fetched. Add a step before this action that runs: git fetch --depth=1 origin %s:refs/remotes/origin/%s\n' \
-                "$GITHUB_BASE_REF" "$GITHUB_BASE_REF" "$GITHUB_BASE_REF"
-            fi
+          # ALWAYS FETCHED, WITH A FORCING (+) REFSPEC, whether or not the ref
+          # already resolves. A ref that resolves proves nothing about where it
+          # points: code from the pull request that ran earlier in this job
+          # (an install whose lifecycle script runs) can move
+          # refs/remotes/origin/<base> to a commit of its own with every gate
+          # switched off. The + lets the fetch overwrite a ref that is not an
+          # ancestor of the real tip. DEPTH follows the checkout: --depth=1
+          # only when the repository is already shallow; on a full clone a
+          # depth here would turn it shallow and blind the history gate.
+          #
+          # A FETCH THAT FAILS DELETES ANY EXISTING origin/<base> and warns:
+          # a ref that could not be re-verified is not a base to judge
+          # against, so conductor is handed a ref that does not resolve and
+          # fails closed (exit 2) with its own explanation. The step itself
+          # still does not hard-fail.
+          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+            DEPTH_ARGS=(--depth=1)
+            REMEDY_DEPTH='--depth=1 '
+          else
+            DEPTH_ARGS=()
+            REMEDY_DEPTH=''
+          fi
+          if ! git fetch ${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"} origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF" >/dev/null 2>&1; then
+            git update-ref -d "refs/remotes/origin/$GITHUB_BASE_REF" >/dev/null 2>&1 || true
+            printf '::warning::conductor: origin/%s could not be fetched, so it cannot be trusted, and any copy already in this checkout was removed. Add a step before this action that runs: git fetch %sorigin +refs/heads/%s:refs/remotes/origin/%s\n' \
+              "$GITHUB_BASE_REF" "$REMEDY_DEPTH" "$GITHUB_BASE_REF" "$GITHUB_BASE_REF"
           fi
           ARGS+=(--trust-base "origin/$GITHUB_BASE_REF")
         fi
@@ -979,8 +999,8 @@ runs:
           # only a token that passes both is published. The report is a file
           # this step did not write; the exit status is the one thing here
           # that is conductor's own. So a token is accepted only as one of
-          # these pairs: status 0 with pass, advisory-blocked (N) or
-          # unenforced-findings (N); status 1 with blocked (N); status 2 with
+          # these pairs: status 0 with pass, nothing-checked, advisory-blocked
+          # (N) or unenforced-findings (N); status 1 with blocked (N); status 2 with
           # could-not-run. Anything else (no readable token, a token outside
           # the set, a stale or partial report, a clean report beside a
           # failed run) is replaced: could-not-run when the status is
@@ -989,11 +1009,11 @@ runs:
           # to be replaced the report is deleted too, so the comment step
           # takes its "did not produce a report" branch rather than post a
           # report that contradicts the verdict published beside it.
-          token_shape='^(pass|could-not-run|(advisory-blocked|unenforced-findings|blocked) \([0-9]+\))$'
+          token_shape='^(pass|nothing-checked|could-not-run|(advisory-blocked|unenforced-findings|blocked) \([0-9]+\))$'
           token_valid=0
           if [[ "$verdict_token" =~ $token_shape ]]; then
             case "$status:${verdict_token%% (*}" in
-              0:pass|0:advisory-blocked|0:unenforced-findings|1:blocked|2:could-not-run)
+              0:pass|0:nothing-checked|0:advisory-blocked|0:unenforced-findings|1:blocked|2:could-not-run)
                 token_valid=1
                 ;;
             esac
@@ -1009,6 +1029,9 @@ runs:
           printf 'verdict=%s\n' "$verdict_token" >> "$GITHUB_OUTPUT"
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             printf 'conductor verdict: %s\n\n' "$verdict_token" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$verdict_token" = "nothing-checked" ]; then
+              printf 'No gate ran, so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
         fi
         exit "$status"

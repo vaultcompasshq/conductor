@@ -102,15 +102,23 @@ describe('verdictToken', () => {
     expect(verdictToken(run([gate({ findings: [reportFinding] })], 0), false)).toBe('pass');
   });
 
-  it('is pass for a run with no gate at all, since nothing failed and nothing was hidden', () => {
-    expect(verdictToken(run([], 0), false)).toBe('pass');
+  it('is nothing-checked, never pass, for a run with no gate at all (exit stays 0)', () => {
+    // INVARIANTS: a run where no gate ran at all is not clean whatever the
+    // exit code says. The token used to say pass here, beside the verdict
+    // sentence "Nothing was checked".
+    const result = run([], 0);
+    expect(verdictToken(result, false)).toBe('nothing-checked');
+    expect(verdictToken(result, true)).toBe('nothing-checked');
+    expect(result.exitCode).toBe(0);
+    const text = renderText(result, { version: '9.9.9' });
+    expect(text.split('\n')[1]).toBe('verdict-token: nothing-checked');
+    expect(text).toContain('Nothing was checked.');
   });
 
-  it('is pass when an intent gate was skipped for want of a contract', () => {
-    // A skipped gate is in result.skipped and not in result.gates, and the
-    // verdict sentence already says "nothing was checked" for it. It is not
-    // a blocking finding and not a could-not-run, so it does not by itself
-    // move the token off pass.
+  it('is pass when an intent gate was skipped for want of a contract but another gate ran', () => {
+    // A skipped gate is in result.skipped and not in result.gates. It is not
+    // a blocking finding and not a could-not-run, so with another gate that
+    // really ran it does not by itself move the token off pass.
     const skipped = run([gate({})], 0, {
       skipped: [
         { role: 'intent', product: 'intent-guard', reason: 'no-contract', detail: 'no contract' },
@@ -122,7 +130,13 @@ describe('verdictToken', () => {
         { role: 'intent', product: 'intent-guard', reason: 'no-contract', detail: 'no contract' },
       ],
     });
-    expect(verdictToken(onlySkipped, false)).toBe('pass');
+    // Nothing ran at all: the verdict sentence says "nothing was checked",
+    // so the token does too.
+    expect(verdictToken(onlySkipped, false)).toBe('nothing-checked');
+    const onlyDeferred = run([], 0, {
+      deferred: [{ role: 'dependencies', product: 'dep-guard', stage: 'ci' }],
+    });
+    expect(verdictToken(onlyDeferred, false)).toBe('nothing-checked');
   });
 
   it('is blocked (N) at exit 1, counting blocking findings on enforced gates only', () => {

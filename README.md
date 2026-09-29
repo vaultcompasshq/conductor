@@ -571,6 +571,11 @@ code and the `enforce` flags the run already had.
 
 - `pass`: exit 0, and no gate, enforced or not, has a blocking finding or
   could not run.
+- `nothing-checked`: exit 0, but no gate ran at all (none is enabled, or
+  every enabled one was deferred to a later stage, had nothing to judge, or
+  was skipped). The exit status is unchanged, since nothing failed, but this
+  is not a pass: nothing was verified. In the Action the `verdict` output
+  carries this token, so a workflow can tell it apart from `pass`.
 - `advisory-blocked (N)`: the run would have exited 1, and `--advisory` made
   it exit 0. N is the blocking findings on enforced gates.
 - `unenforced-findings (N)`: exit 0, but a gate with `enforce: false` had
@@ -580,11 +585,13 @@ code and the `enforce` flags the run already had.
 - `could-not-run`: exit 2, a refused trust base included.
 
 When several apply the order is `could-not-run`, then `blocked` or
-`advisory-blocked`, then `unenforced-findings`, then `pass`. A run with
+`advisory-blocked`, then `unenforced-findings`, then `nothing-checked` (no gate
+ran) or `pass`. A run with
 `--advisory` whose only blocking findings sit on an unenforced gate is
 `unenforced-findings`, not `advisory-blocked`, because the flag did nothing
 there. A gate skipped for want of a contract does not by itself move the token
-off `pass`; the verdict sentence is where "nothing was checked" is said. A
+off `pass` when another gate ran; when no gate ran, the token is
+`nothing-checked` and the verdict sentence says "nothing was checked". A
 gate that exited non-zero with no finding marked blocking counts as one in N,
 so a state that is not a pass never prints a count of zero. The one-line
 summary of a clean, non-verbose run has no token line, since it is one line by
@@ -1191,7 +1198,6 @@ jobs:
           # clone, because on a pull request the rules are read from it: a
           # base ref that will not resolve is exit 2 for every enabled gate.
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
           # Not a bare major: Node 22.0.0 ships npm 10.5.1, which the action
@@ -1199,11 +1205,14 @@ jobs:
           # with. 22.1.0 or later, or 20.13.0 or later, carries an npm that
           # can verify.
           node-version: '22.11.0'
-          cache: pnpm
-      # Your own dependencies. The gates are NOT among the things this has to
-      # install: the action installs those itself, globally, at the versions
-      # pinned below.
-      - run: pnpm install --frozen-lockfile
+      # NOTHING FROM THE PULL REQUEST RUNS BEFORE THE ACTION IN THIS JOB.
+      # No `pnpm install`, `npm ci`, build or test step: an install runs the
+      # repository's own lifecycle scripts (a root postinstall), and that code
+      # could write the PATH the gates are resolved from, or the refs the
+      # policy is read from, before the gates ever start. Your own
+      # dependencies, build and tests belong in a separate job (see below).
+      # The gates are not among the things that job has to install: the action
+      # installs those itself, globally, at the versions pinned below.
       - id: conductor
         uses: vaultcompasshq/conductor@v0.7.0
         with:
@@ -1233,7 +1242,43 @@ jobs:
         continue-on-error: true
         with:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
+
+  # Your own dependencies, build and tests: a different job, so the code they
+  # run shares no runner, PATH or workspace with the gates.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.11.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
 ```
+
+**Run the gates in a job that runs no code from the pull request.** Do not
+run `pnpm install`, `npm ci`, a build or a test step before the conductor
+action in the same job, and do not put the action in a job whose earlier steps
+run the repository's own scripts. Anything that runs first shares the runner
+with the gates: it can write to `GITHUB_PATH`, to the runner's temp directory
+where the action installs the gates, or to the git refs the base policy is
+read from, and then it is the pull request choosing the program that judges
+it. The action force-fetches the base ref itself, which closes the last of
+those, but it cannot close the other two from inside the job. Say it plainly:
+package.json lifecycle scripts (`preinstall`, `install`, `postinstall`,
+`prepare`) run by an install bypass "require review on `.github/workflows`",
+because the pull request supplies them, not the workflow file. Branch
+protection on the workflow directory does not stop them, so the gates must
+not share a job with head code that runs first.
+
+**With gitleaks enabled the checkout must be `fetch-depth: 0`.** At the default
+depth of 1 the checkout is shallow, the range from the base to HEAD holds one
+grafted commit, and a secret added and then removed inside the pull request
+would never be seen. conductor detects a shallow checkout and reports the
+history gate as could-not-run, naming `fetch-depth: 0` (exit 2 on a pull
+request, whatever `enforce` says). It does not deepen the checkout for you.
 
 **The two external gates are installed by your workflow, not by the
 Action.** The Action still installs exactly its four npm packages and has no
@@ -1259,12 +1304,15 @@ checksum, the same way you would for a standalone security job:
           echo "$bin" >> "$GITHUB_PATH"
 ```
 
-`fetch-depth: 0` on the checkout matters more with gitleaks enabled: on a
-pull request conductor scans `<base>..HEAD`, and a base that was never
-fetched is a git error gitleaks itself would report as a clean scan of
-nothing. conductor reads that error off gitleaks' log and reports the gate
-as could-not-run instead. A missing tool is could-not-run as well, with the
-install step named in the report.
+`fetch-depth: 0` on the checkout is required with gitleaks enabled: on a
+pull request conductor scans `<base>..HEAD`. At depth 1 the checkout is
+shallow and that range holds a single commit, so a secret added and removed
+inside the pull request would go unseen; conductor detects the shallow
+checkout and reports the gate as could-not-run instead of scanning it. (A
+base that was never fetched at all is a git error gitleaks itself would
+report as a clean scan of nothing; conductor reads that error off gitleaks'
+log and reports the gate as could-not-run too.) A missing tool is
+could-not-run as well, with the install step named in the report.
 
 The `@v4` pins there are readable, not safe: a tag moves, so pinning by one
 runs whatever its author pushes to it next. Pin every third-party action by
