@@ -374,6 +374,18 @@ describe('action.yml: the pr-comment step', () => {
     expect(run.nodeArgv).toContain('--report');
   });
 
+  it('says so, and runs nothing, when the gates step deleted the report because its token contradicted the exit status', () => {
+    // TEXT_REPORT still names the path (it is published before the run), but
+    // the file is gone: no clean report may be posted on a red job.
+    const run = runPrCommentScript({
+      VERIFICATION_OK: 'true',
+      TEXT_REPORT: '/nonexistent-dir-for-conductor-test/report.txt',
+    });
+    expect(run.conductorRan).toBe(false);
+    expect(run.reportBody).toContain('Conductor did not produce a report');
+    expect(run.reportBody).not.toContain('verdict-token');
+  });
+
   it('says so, and runs nothing, when the gates step never ran and there is no fallback marker', () => {
     const run = runPrCommentScript({ VERIFICATION_OK: 'true' });
     expect(run.conductorRan).toBe(false);

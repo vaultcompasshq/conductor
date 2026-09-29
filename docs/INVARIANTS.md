@@ -4092,7 +4092,15 @@ action.yml reads the token from line 2 of that file for the summary and the
 invokes conductor ZERO times on that path. The token function
 (`verdictToken`, src/output-text.ts) and the process exit code
 (`applyAdvisory`, src/cli.ts) take the same `advisory` boolean from the same
-call site, so the label and the exit code cannot disagree either.
+call site, so the label and the process exit code agree by construction in
+the CLI. The report is written LAST, after the SARIF log, and is deleted
+again if any write throws, so a run that exits 2 by write failure leaves no
+text report. In the action, a token that does not match the exit status is
+never published: the gates step accepts a token only as one of the pairs
+status 0 with pass, advisory-blocked (N) or unenforced-findings (N), status 1
+with blocked (N), status 2 with could-not-run, and otherwise publishes
+could-not-run (non-zero status) or unknown (status 0) and deletes the report
+file, so the comment step says it produced none.
 
 THE TOKEN DECIDES NOTHING. `verdictToken` reads `result.exitCode`, which
 `composeExitCode` already produced, and the `enforce` flags already on the
@@ -4119,7 +4127,8 @@ that has the flag and, by construction, says nothing for one that does not.
 WHAT IS AND IS NOT CLAIMED. Pinned by execution in tests/action.test.ts
 (the gates step run against a conductor shim: token and exit status for pass,
 blocked, could-not-run and advisory-blocked; the token read from line 2 only;
-CR, tab and `::` flattened before GITHUB_OUTPUT and the summary; the exit
+CR, LF and tab flattened before GITHUB_OUTPUT and the summary, and the result
+checked against the closed set and the exit status; the exit
 status kept when the summary cannot be written; the fallback for a binary
 without the flag) and tests/action-pr-comment.test.ts (zero conductor
 invocations when the gates step wrote a report). Mutation-checked: making the

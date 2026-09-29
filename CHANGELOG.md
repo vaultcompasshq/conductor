@@ -33,9 +33,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   runs (issue #85).
 - The action has a `verdict` output carrying the token of the run that decided
   the job, and the gates step writes `conductor verdict: <token>` to the job
-  summary. When the gate packages could not be verified and no gate ran, both
-  say `could-not-run`, and the summary carries the reason. Both are empty
-  or absent when the installed `conductor-version` predates `--text-report`.
+  summary. The token is validated against the closed set and against the
+  exit status before it is published: a token that does not match the exit
+  status is replaced by `could-not-run` (non-zero exit) or `unknown` (exit
+  0), and the text report is deleted so the comment says it produced none.
+  When the gate packages could not be verified and no gate ran, both say
+  `could-not-run`, and the summary carries the reason. Both are empty or
+  absent when the installed `conductor-version` predates `--text-report`.
 
 ### Changed
 

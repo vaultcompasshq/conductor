@@ -127,8 +127,11 @@ outputs:
       pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or
       could-not-run, spelled exactly as the second line of the text report
       carries it. It is a label for conductor's own exit decision and decides
-      nothing itself. could-not-run also when the gate packages could not be
-      verified and so no gate ran. Empty when the installed conductor-version
+      nothing itself. The token is validated against the exit status before
+      it is published: a token that does not match it is replaced by
+      could-not-run (non-zero exit) or unknown (exit 0, with no readable
+      token or none consistent with the exit status). could-not-run also when
+      the gate packages could not be verified and so no gate ran. Empty when the installed conductor-version
       predates the token (it has no --text-report), and when the run stopped
       before the install step got as far as the audit.
     value: ${{ steps.gates.outputs.verdict || steps.install.outputs.verdict }}
@@ -805,14 +808,16 @@ runs:
         # the comment step renders its report the way it always did, with a
         # second run.
         #
-        # `|| true` because a help request that fails means "cannot tell", and
-        # cannot tell takes the fallback, which is the behaviour this action
-        # had before the flag existed.
+        # The help request has to SUCCEED as well as mention the flag: one that
+        # exits non-zero means "cannot tell", and cannot tell takes the
+        # fallback, which is the behaviour this action had before the flag
+        # existed.
         text_report_supported=0
-        conductor_help="$("$CONDUCTOR_BIN" run --help 2>/dev/null || true)"
-        case "$conductor_help" in
-          *--text-report*) text_report_supported=1 ;;
-        esac
+        if conductor_help="$("$CONDUCTOR_BIN" run --help 2>/dev/null)"; then
+          case "$conductor_help" in
+            *--text-report*) text_report_supported=1 ;;
+          esac
+        fi
         if [ "$text_report_supported" -eq 1 ]; then
           # Removed first, so that a run that dies before writing one cannot
           # leave a previous invocation's report (the same runner temp serves a
@@ -970,15 +975,36 @@ runs:
             esac
           fi
           verdict_token="$(printf '%s' "$verdict_token" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
-          if [ -z "$verdict_token" ]; then
-            # No readable token. A non-zero exit with no report is a run that
-            # could not produce a verdict; a zero exit with none is not
-            # something the closed set has a word for.
+          # VALIDATED, against the closed set AND against the exit status, and
+          # only a token that passes both is published. The report is a file
+          # this step did not write; the exit status is the one thing here
+          # that is conductor's own. So a token is accepted only as one of
+          # these pairs: status 0 with pass, advisory-blocked (N) or
+          # unenforced-findings (N); status 1 with blocked (N); status 2 with
+          # could-not-run. Anything else (no readable token, a token outside
+          # the set, a stale or partial report, a clean report beside a
+          # failed run) is replaced: could-not-run when the status is
+          # non-zero, unknown when it is 0, which is a word the closed set
+          # does not have and is deliberately not a pass. When the token had
+          # to be replaced the report is deleted too, so the comment step
+          # takes its "did not produce a report" branch rather than post a
+          # report that contradicts the verdict published beside it.
+          token_shape='^(pass|could-not-run|(advisory-blocked|unenforced-findings|blocked) \([0-9]+\))$'
+          token_valid=0
+          if [[ "$verdict_token" =~ $token_shape ]]; then
+            case "$status:${verdict_token%% (*}" in
+              0:pass|0:advisory-blocked|0:unenforced-findings|1:blocked|2:could-not-run)
+                token_valid=1
+                ;;
+            esac
+          fi
+          if [ "$token_valid" -ne 1 ]; then
             if [ "$status" -ne 0 ]; then
               verdict_token="could-not-run"
             else
               verdict_token="unknown"
             fi
+            rm -f "$TEXT_REPORT"
           fi
           printf 'verdict=%s\n' "$verdict_token" >> "$GITHUB_OUTPUT"
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then

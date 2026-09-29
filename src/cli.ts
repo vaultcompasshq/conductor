@@ -8,7 +8,7 @@
 
 import { Command, CommanderError } from 'commander';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -551,7 +551,7 @@ export function buildProgram(): Command {
     )
     .option(
       '--text-report <path>',
-      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. The report\'s second line is "verdict-token: <token>", a label for this run\'s own exit decision: pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
+      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
     )
     .option(
       '--spec <path>',
@@ -578,6 +578,7 @@ export function buildProgram(): Command {
     .exitOverride()
     .action((options: RunCliOptions) => {
       const cwd = process.cwd();
+      let textReportPath: string | undefined;
 
       try {
         // Inside the try, because resolveProjectRoot (like repoRoot before
@@ -640,12 +641,6 @@ export function buildProgram(): Command {
         // token in this file is for the run that set the exit code below.
         const textReport = options.textReport === undefined ? undefined : renderTextReport();
 
-        // Written first: a text report that cannot be written takes the
-        // could-not-run code below, the same as an unwritable --output.
-        if (options.textReport !== undefined && textReport !== undefined) {
-          writeFileSync(options.textReport, textReport);
-        }
-
         if (options.output === undefined) {
           process.stdout.write(rendered);
         } else {
@@ -655,6 +650,20 @@ export function buildProgram(): Command {
           // worst of the available answers: the upload step downstream would
           // fail on a missing file with no explanation here.
           writeFileSync(options.output, rendered);
+        }
+
+        // WRITTEN LAST, after the SARIF log or stdout, and removed again in
+        // the catch below if anything after it throws. A run that exits 2
+        // because a write failed must never leave a finished text report on
+        // disk: the action would read a clean report and publish a pass, and
+        // post it as a comment, beside a red job. A text report that cannot
+        // be written takes the could-not-run code, like an unwritable --output.
+        if (options.textReport !== undefined && textReport !== undefined) {
+          textReportPath = options.textReport;
+          writeFileSync(options.textReport, textReport);
+        }
+
+        if (options.output !== undefined) {
           // One line, so a CI job whose only product is an uploaded artifact
           // does not read as a job that did nothing. jobLogSummary carries
           // its own "N gate(s), N finding(s)" on an ordinary run, unchanged,
@@ -670,6 +679,15 @@ export function buildProgram(): Command {
         }
         process.exitCode = applyAdvisory(result.exitCode, advisory);
       } catch (err) {
+        // A text report this run already wrote (or half wrote) is removed:
+        // this run exits 2, and no report may say otherwise.
+        if (textReportPath !== undefined) {
+          try {
+            unlinkSync(textReportPath);
+          } catch {
+            // Nothing to remove, or not removable; the exit code stands.
+          }
+        }
         // One line, never a stack. runGate is total, so nothing from a gate
         // reaches here; anything that does is the umbrella's own problem and
         // still must not put a local filesystem path in front of a user who

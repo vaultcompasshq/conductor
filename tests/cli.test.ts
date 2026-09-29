@@ -1255,6 +1255,29 @@ describe('conductor run --text-report (issue #85)', () => {
     expect(result.stderr).toMatch(/--text-report is only meaningful with --format sarif/);
   });
 
+  it('leaves no text report behind when the SARIF write fails, so a red run never has a clean report on disk', () => {
+    const repo = repoWithPolicy();
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    const out = tempDir();
+    const text = path.join(out, 'report.txt');
+
+    const result = runCli(
+      repo,
+      [
+        'run', '--staged', '--format', 'sarif', '--verbose',
+        '--output', path.join(out, 'no-such-directory', 'conductor.sarif'),
+        '--text-report', text,
+      ],
+      bin
+    );
+
+    expect(result.status).toBe(2);
+    expect(existsSync(text)).toBe(false);
+  });
+
   it('reports an unwritable text-report path as a run that could not be carried out', () => {
     const repo = repoWithPolicy();
     const bin = tempDir();

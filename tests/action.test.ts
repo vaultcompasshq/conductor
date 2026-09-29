@@ -7,7 +7,15 @@
 
 import { afterAll, describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1549,6 +1557,12 @@ describe('action.yml: the verdict token from the gates step', () => {
   function runGatesForVerdict(options: {
     /** Does the installed conductor know --text-report? */
     supportsFlag?: boolean;
+    /**
+     * Other shapes of an old or odd `run --help`: one that mentions
+     * --format <text|sarif> but not --text-report, and one that exits 1
+     * (while printing the flag, so only the exit status can give it away).
+     */
+    help?: 'format-only' | 'exits-1';
     /** What the run writes to the report path; undefined means it writes nothing. */
     body?: string;
     exit: number;
@@ -1580,8 +1594,12 @@ describe('action.yml: the verdict token from the gates step', () => {
       [
         '#!/bin/sh',
         'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
-        supportsFlag ? "  printf '  --text-report <path>  write the text report too\\n'" : "  printf '  --output <path>\\n'",
-        '  exit 0',
+        options.help === 'format-only'
+          ? "  printf '  --format <text|sarif>  output format\\n  --output <path>\\n'"
+          : supportsFlag || options.help === 'exits-1'
+            ? "  printf '  --text-report <path>  write the text report too\\n'"
+            : "  printf '  --output <path>\\n'",
+        options.help === 'exits-1' ? '  exit 1' : '  exit 0',
         'fi',
         `printf 'run\\n' >> ${JSON.stringify(runsLog)}`,
         `for arg in "$@"; do printf '%s\\n' "$arg" >> ${JSON.stringify(argvLog)}; done`,
@@ -1690,6 +1708,9 @@ describe('action.yml: the verdict token from the gates step', () => {
   it('keeps conductor\'s exit status even when the summary cannot be written', () => {
     // errexit is off after the run, so a failed summary write neither turns a
     // clean exit into a failure nor a blocked one into anything else.
+    // A "pass" token beside exit 1 or 2 is not a consistent pair, so it is
+    // replaced by could-not-run rather than published.
+    const expected: Record<number, string> = { 0: 'pass', 1: 'could-not-run', 2: 'could-not-run' };
     for (const exit of [0, 1, 2]) {
       const run = runGatesForVerdict({
         body: 'conductor 9.9.9\nverdict-token: pass\n',
@@ -1697,7 +1718,55 @@ describe('action.yml: the verdict token from the gates step', () => {
         summaryPath: '/nonexistent-dir-for-conductor-test/summary.md',
       });
       expect([exit, run.status]).toEqual([exit, exit]);
-      expect(outputLines(run)).toContain('verdict=pass');
+      expect(outputLines(run)).toContain(`verdict=${expected[exit]}`);
+    }
+  });
+
+  it('never publishes a token that contradicts the exit status: pass at status 2 is could-not-run, and the report is deleted', () => {
+    const run = runGatesForVerdict({ body: 'conductor 9.9.9\nverdict-token: pass\nclean\n', exit: 2 });
+    expect(run.status).toBe(2);
+    expect(outputLines(run)).toContain('verdict=could-not-run');
+    expect(outputLines(run)).not.toContain('verdict=pass');
+    expect(run.summary).toContain('conductor verdict: could-not-run');
+    expect(run.summary).not.toContain('pass');
+    // Deleted, so the comment step takes its "did not produce a report" branch.
+    expect(existsSync(run.textReport)).toBe(false);
+  });
+
+  it('accepts every consistent pair and keeps the report, and rejects each inconsistent one', () => {
+    const pairs: Array<[number, string, string]> = [
+      [0, 'pass', 'pass'],
+      [0, 'advisory-blocked (3)', 'advisory-blocked (3)'],
+      [0, 'unenforced-findings (1)', 'unenforced-findings (1)'],
+      [1, 'blocked (2)', 'blocked (2)'],
+      [2, 'could-not-run', 'could-not-run'],
+      [0, 'blocked (2)', 'unknown'],
+      [0, 'could-not-run', 'unknown'],
+      [1, 'pass', 'could-not-run'],
+      [1, 'advisory-blocked (1)', 'could-not-run'],
+      [1, 'unenforced-findings (1)', 'could-not-run'],
+      [2, 'blocked (1)', 'could-not-run'],
+      [7, 'pass', 'could-not-run'],
+    ];
+    for (const [exit, token, published] of pairs) {
+      const run = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: ${token}\n`, exit });
+      expect([exit, token, run.status]).toEqual([exit, token, exit]);
+      expect([exit, token, outputLines(run).filter((l) => l.startsWith('verdict='))]).toEqual([
+        exit,
+        token,
+        [`verdict=${published}`],
+      ]);
+      // The report survives exactly when the token was consistent.
+      expect([exit, token, existsSync(run.textReport)]).toEqual([exit, token, published === token]);
+    }
+  });
+
+  it('says unknown at status 0 for a line 2 outside the closed set, and deletes the report', () => {
+    for (const token of ['pass (1)', 'blocked', 'blocked (x)', 'passed', 'pass extra', 'Pass', '']) {
+      const run = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: ${token}\n`, exit: 0 });
+      expect([token, run.status]).toEqual([token, 0]);
+      expect([token, outputLines(run).includes('verdict=unknown')]).toEqual([token, true]);
+      expect([token, existsSync(run.textReport)]).toEqual([token, false]);
     }
   });
 
@@ -1733,7 +1802,8 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(run.status).toBe(1);
     const verdicts = run.githubOutput.split(/\r\n|\r|\n/).filter((line) => line.startsWith('verdict='));
     expect(verdicts).toHaveLength(1);
-    expect(verdicts[0]).toBe('verdict=blocked (1) ::error::injected ::warning::more');
+    // Flattened to one line, and then refused: it is outside the closed set.
+    expect(verdicts[0]).toBe('verdict=could-not-run');
     expect(run.githubOutput).not.toContain('\r');
     expect(run.githubOutput).not.toContain('\t');
     // Every line of the output file is one of the three keys this step writes.
@@ -1782,6 +1852,19 @@ describe('action.yml: the verdict token from the gates step', () => {
         expect(outputLines(run).some((line) => line.startsWith('verdict='))).toBe(false);
         expect(outputLines(run).some((line) => line.startsWith('text-report='))).toBe(false);
         expect(run.summary).toBe('');
+      }
+    });
+
+    it('takes the fallback for a help that mentions --format <text|sarif> but not --text-report, and for a help that exits 1', () => {
+      for (const help of ['format-only', 'exits-1'] as const) {
+        for (const exit of [0, 1, 2]) {
+          const run = runGatesForVerdict({ help, exit });
+          expect([help, exit, run.status]).toEqual([help, exit, exit]);
+          expect(run.argv).not.toContain('--text-report');
+          expect(run.runs).toBe(1);
+          expect(outputLines(run)).toContain('report-fallback=true');
+          expect(outputLines(run).some((line) => line.startsWith('verdict='))).toBe(false);
+        }
       }
     });
 
