@@ -14,6 +14,8 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- The README now documents that the first-pull-request refusal recurs once on every new base branch, and that a `branches:` filter on the workflow trigger must include release and production branches so the promote pull request is still checked (issue #87).
+
 ## [0.6.1] - 2026-09-29
 
 **An action-only release. The tag moves; the npm package does not.**
