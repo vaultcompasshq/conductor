@@ -14,6 +14,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-28
+
+**An action-only release. The tag moves; the npm package does not.**
+`@vaultcompass/conductor` stays at 0.6.0 on npm and the action's
+`conductor-version` default stays `0.6.0`.
+
+### Fixed
+
 - **Fixed:** the action's install step failed an advisory run on a single
   transient registry attestation failure. `npm audit signatures` is now run
   once more after a short pause (`AUDIT_RETRY_DELAY_SECONDS`, 5 seconds) when
