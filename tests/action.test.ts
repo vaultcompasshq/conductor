@@ -655,11 +655,22 @@ function runValidate(
 function runInstall(
   overrides: Record<string, string> = {},
   npmVersion = '10.9.2',
-): { argv: string[]; githubPath: string; prefix: string; status: number; stderr: string } {
+  // How many `audit` calls fail before one passes. A counter file under the
+  // temp dir carries the count across the shim's separate invocations.
+  auditFailures = 0,
+): {
+  argv: string[];
+  githubPath: string;
+  githubOutput: string;
+  prefix: string;
+  status: number;
+  stderr: string;
+} {
   const dir = tempDir();
   const bin = path.join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
   const record = path.join(dir, 'npm-argv.txt');
+  const auditCount = path.join(dir, 'audit-count.txt');
   const shim = path.join(bin, 'npm');
   // The shim also creates `<prefix>/lib` on an install, because a real global
   // install does and the step writes a manifest there and verifies from
@@ -678,7 +689,14 @@ function runInstall(
       // and reproduce a client that prints an upgrade notice above its
       // version. That shape defeated two earlier versions of the floor.
       `case "$1" in --version) printf '%b\\n' "${npmVersion}" ;; ` +
-      'install) mkdir -p "${npm_config_prefix}/lib" ;; esac\n',
+      'install) mkdir -p "${npm_config_prefix}/lib" ;; ' +
+      `audit) n=$(cat ${JSON.stringify(auditCount)} 2>/dev/null || echo 0); n=$((n+1)); ` +
+      `echo "$n" > ${JSON.stringify(auditCount)}; ` +
+      // A failing call names its own attempt number, exits 10+N so a test can
+      // tell WHICH attempt's status the step propagated, and carries a
+      // carriage return plus an injected workflow command so the flattening
+      // control is exercised on every path that reports the output.
+      `if [ "$n" -le ${auditFailures} ]; then printf 'attempt %s: 1 package has an invalid attestation\\r::warning::injected\\n' "$n"; exit $((10+n)); fi ;; esac\n`,
   );
   chmodSync(shim, 0o755);
 
@@ -698,6 +716,8 @@ function runInstall(
       // The step writes verification-ok here once the audit has passed, so a
       // run without it would die on the last line under set -u.
       GITHUB_OUTPUT: githubOutputFile,
+      // No pause before the single retry of the signature audit.
+      AUDIT_RETRY_DELAY_SECONDS: '0',
       ...defaultVersionEnv(overrides),
     },
   });
@@ -709,6 +729,7 @@ function runInstall(
     stderr: `${result.stdout ?? ''}${result.stderr ?? ''}`,
     argv: readFileSync(record, 'utf8').split('\n').filter((line) => line.length > 0),
     githubPath: readFileSync(githubPath, 'utf8'),
+    githubOutput: readFileSync(githubOutputFile, 'utf8'),
     prefix,
   };
 }
@@ -969,10 +990,61 @@ describe('action.yml installs the gates outside the tree', () => {
     expect(has('verification-reason=%s')).toBe(true);
     expect(has('::error::conductor: could not verify')).toBe(true);
     expect(has('exit "$audit_status"')).toBe(true);
+    // The single retry is real code, not only prose about it.
+    expect(has('sleep "$AUDIT_RETRY_DELAY_SECONDS"')).toBe(true);
     // Accept only if provably ok. Later steps branch on THIS, so it must be
     // written after the audit has actually passed, never inferred from the
     // absence of a failure flag.
     expect(has('verification-ok=true')).toBe(true);
+  });
+
+  it('sets the pause before the single audit retry to five seconds', () => {
+    expect(stepEnv('install')['AUDIT_RETRY_DELAY_SECONDS']).toBe('5');
+  });
+
+  it('runs the signature audit once when it passes, with no notice', () => {
+    const run = runInstall();
+    expect(run.status).toBe(0);
+    expect(run.argv.filter((a) => a === 'audit')).toHaveLength(1);
+    expect(run.githubOutput).toContain('verification-ok=true');
+    expect(run.stderr).not.toContain('::notice::conductor: the registry signature audit');
+  });
+
+  it('retries a failed signature audit once and continues when the retry passes', () => {
+    const run = runInstall({}, '10.9.2', 1);
+    expect(run.status).toBe(0);
+    expect(run.argv.filter((a) => a === 'audit')).toHaveLength(2);
+    expect(run.githubOutput).toContain('verification-ok=true');
+    const lines = run.stderr.split('\n');
+    const notice = lines.filter((l) => l.startsWith('::notice::'));
+    expect(notice).toHaveLength(1);
+    expect(notice[0]).toMatch(
+      /^::notice::conductor: the registry signature audit failed once and passed on retry; the first attempt said: .*attempt 1: 1 package has an invalid attestation/
+    );
+    expect(notice[0]).not.toContain('\r');
+    expect(notice[0]).not.toContain('attempt 2');
+    expect(lines.filter((l) => l.startsWith('::warning::injected'))).toHaveLength(0);
+  });
+
+  it('fails closed after exactly two failed signature audits', () => {
+    const run = runInstall({}, '10.9.2', 2);
+    // The second attempt's status, not the first's.
+    expect(run.status).toBe(12);
+    expect(run.argv.filter((a) => a === 'audit')).toHaveLength(2);
+    expect(run.githubOutput).toContain('verification-failed=true');
+    expect(run.githubOutput).not.toContain('verification-ok=true');
+    const lines = run.stderr.split('\n');
+    const errors = lines.filter((l) => l.startsWith('::error::conductor: could not verify'));
+    expect(errors).toHaveLength(1);
+    const reasons = run.githubOutput.split('\n').filter((l) => l.startsWith('verification-reason='));
+    expect(reasons).toHaveLength(1);
+    for (const line of [errors[0], reasons[0]]) {
+      expect(line).toContain('attempted twice');
+      expect(line).toContain('attempt 2');
+      expect(line).not.toContain('attempt 1');
+      expect(line).not.toContain('\r');
+    }
+    expect(lines.filter((l) => l.startsWith('::warning::injected'))).toHaveLength(0);
   });
 
   it('installs under the runner temp, never into the workspace', () => {

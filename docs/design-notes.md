@@ -577,6 +577,16 @@ own binaries by absolute path and document it as resistance to a workflow that
 prepends its own `node_modules/.bin`. Conductor resolving *itself* by name was
 an inconsistency with a rationale already written down elsewhere in the family.
 
+**The audit is retried once, not more.** The same transient attestation
+failure recurred on 2026-09-29 (issue #81) and again cleared on a re-run with
+nothing wrong, so a failing audit is now run exactly one more time after a
+five second pause. One retry is enough to absorb a one-off endpoint hiccup. A
+second and third would only stretch a real outage and give a bad tree more
+draws at looking clean. Fail-closed is unchanged: a second failure exits
+non-zero with the second attempt's reason, and `verification-ok` is written
+only after an audit has passed. A pass on the retry says so in a workflow
+notice, so the flake is visible rather than silently absorbed.
+
 **A gate that could not run says so on the pull request.** The comment step
 runs the umbrella only when the install step positively recorded that
 verification passed, because otherwise the tool is precisely the thing that
