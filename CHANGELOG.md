@@ -16,6 +16,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Fixed
 
+- A base branch that advances between checkout and the action's fetch no
+  longer makes a pull-request run exit 2. The private `refs/conductor/trust-base`
+  is the authority and is no longer compared with `refs/remotes/origin/<base>`
+  (fixed at checkout time, and the side pull-request code can move); the
+  comparison is kept only for an explicit trust base, and the intent gate's
+  base follows the same rule.
+- The intent gate is now handed changed paths NUL-separated from git
+  (`--name-only -z`), so a file name with a quote, backslash, tab or newline
+  arrives intact. Before, git C-quoted it (`"secrets/a\"b.txt"`) and
+  intent-guard, which refuses a backslash in a path, left every pull request
+  touching such a name permanently could-not-run. A comma in a path is still
+  could-not-run, naming the file.
 - Security: the intent gate's base is now spelled in full as well. A tag named
   `origin/<base>` at an earlier commit used to make the gate judge only the
   last commit. On a pull request it now uses `refs/conductor/trust-base` if

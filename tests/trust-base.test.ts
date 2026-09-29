@@ -426,29 +426,30 @@ describe('a tag cannot shadow the trust base (B1)', () => {
   });
 
   it('compares origin/<base> spelled in full, so a tag of that name cannot stand in for it', () => {
-    // The private ref points at the tag's commit; the real remote-tracking
-    // ref disagrees. Before the fix the expected side resolved through the
-    // tag, matched, and the run trusted the permissive commit.
+    // An EXPLICIT trust base (private ref absent) is compared against the
+    // fully spelled remote-tracking ref, which is the only reference there is.
+    // Before the fix the expected side resolved through the tag, matched, and
+    // the run trusted the permissive commit.
     const { repo, permissive } = shadowedRepo();
-    git(repo, ['update-ref', PRIVATE, permissive]);
-    const refusal = refuseTrustBaseForPullRequest(repo, PRIVATE, 'main');
+    const refusal = refuseTrustBaseForPullRequest(repo, 'refs/heads/permissive', 'main');
     expect(refusal).toMatch(/refs\/remotes\/origin\/main/);
-    expect(refusal).toMatch(PRIVATE);
     expect(refusal).toMatch(permissive.slice(0, 12));
+    expect(refusal).toMatch(/something moved one of them/);
   });
 
-  it('refuses when refs/remotes/origin/<base> was moved to a crafted commit after the private fetch', () => {
+  it('accepts the private ref when the base branch advanced between checkout and the private fetch (N2)', () => {
+    // refs/remotes/origin/<base> is fixed at checkout time, the private ref is
+    // fetched later; a merge in that window is benign. The private ref is the
+    // authority and nothing reads refs/remotes/origin/<base> for trust, so no
+    // comparison (and no false refusal).
     const repo = emptyRepo();
-    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
-    git(repo, ['update-ref', PRIVATE, base]);
-    const crafted = commit(repo, { 'x.txt': 'crafted\n' }, 'crafted');
-    git(repo, ['update-ref', 'refs/remotes/origin/main', crafted]);
+    const checkoutTime = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base at checkout');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', checkoutTime]);
+    const advanced = commit(repo, { 'later.txt': 'merged meanwhile\n' }, 'base advanced');
+    git(repo, ['update-ref', PRIVATE, advanced]);
     commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
 
-    const refusal = refuseTrustBaseForPullRequest(repo, PRIVATE, 'main');
-    expect(refusal).toMatch(base.slice(0, 12));
-    expect(refusal).toMatch(crafted.slice(0, 12));
-    expect(refusal).toMatch(/something moved one of them/);
+    expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).toBeNull();
   });
 
   it('accepts the private ref when the same commit is in refs/remotes/origin/<base>', () => {

@@ -473,7 +473,8 @@ proceeds normally without mentioning them.
   pull-request run passes both: `--base` decides which paths are judged,
   `--trust-base` decides what they are judged by. When `GITHUB_BASE_REF` is
   set, an explicit `--trust-base` is accepted only when it resolves to the
-  same commit as `origin/$GITHUB_BASE_REF` (issue #58); anyone invoking the
+  same commit as `refs/remotes/origin/$GITHUB_BASE_REF`, or is the Action's
+  private `refs/conductor/trust-base` (issue #58); anyone invoking the
   CLI directly on a pull request, rather than through the Action, gets this
   as its own refusal, named below.
 - `--spec <path>` names the spec the intent gate imports its contract from.
@@ -744,15 +745,19 @@ to remove the input; see "The Action" below.
 
 **The CLI check catches a misconfigured or innocent-looking redirect when
 `GITHUB_BASE_REF` is set**, for anyone invoking the CLI directly in CI. When
-that variable is set, an explicit `--trust-base` is accepted only when it
-resolves to the same commit as `origin/$GITHUB_BASE_REF`, which is exactly
-what the Action itself always passes, so an ordinary pull-request run is
+that variable is set, an explicit `--trust-base` is accepted only when it is
+`refs/conductor/trust-base`, the private ref the Action fetches the base
+branch into and always passes (that ref is the authority and is not compared
+with anything), or resolves to the same commit as
+`refs/remotes/origin/$GITHUB_BASE_REF`. So an ordinary pull-request run is
 unaffected. A ref naming the pull request's own branch, or anything else that
 disagrees, is refused with both refs and both commits named, through the same
 could-not-run path as every other trust-base refusal: exit 2, the report
-leads with the reason, and nothing is checked. When `origin/$GITHUB_BASE_REF`
-itself does not resolve, this fails closed too, naming it, for the same
-reason the fetch-depth remedy below exists.
+leads with the reason, and nothing is checked. A short name that matches both
+a tag and a branch or remote-tracking ref (a tag named `origin/main`) is
+refused as ambiguous: spell the ref in full. When neither resolves, this fails
+closed too, naming it, for the same reason the fetch-depth remedy below
+exists.
 
 **Neither layer closes anything against a pull request that edits its own
 workflow file.** A CLI invocation on a pull request can simply omit
@@ -906,8 +911,11 @@ human step. That step is exactly what a pull request cannot carry, so at the
 branch changed since it forked, from
 `git diff --name-only --no-renames <base>...HEAD` in the repository root.
 
-With no `--base`, `GITHUB_BASE_REF` is used as `origin/<value>` when it is
-set, and the text report says so. With neither, the intent gate runs the way
+With no `--base`, `GITHUB_BASE_REF` is used when it is set, spelled in full:
+`refs/conductor/trust-base` (the Action's private fetch of the base) if that
+exists, else `refs/remotes/origin/<value>`, so a tag of that name cannot
+shadow it. The text report says which. An explicit `--base` that matches both
+a tag and a branch is refused as ambiguous. With neither, the intent gate runs the way
 it does at a commit: against the staged index, or the paths you name.
 
 **This is why a local preview and a pull-request run can disagree about a
@@ -1105,8 +1113,9 @@ provenance even though all four packages publish it.
 umbrella reads `GITHUB_BASE_REF` itself and treats an empty value as "not a
 pull request", which is what a push build wants.
 
-On a `pull_request` event the action passes
-**`--trust-base origin/$GITHUB_BASE_REF`** of its own accord, so the run takes
+On a `pull_request` event the action fetches the base branch into a private
+ref and passes **`--trust-base refs/conductor/trust-base`** of its own accord
+(it needs `contents: read`), so the run takes
 its configuration from the base branch and the pull request cannot change the
 rules it is judged by; a change to the rules shows as a proposal line and
 takes effect after merge. See "The pull-request trust boundary" above. On any
@@ -1120,7 +1129,8 @@ workflow file is the *base* branch's own instead, but the input is refused
 there too, because pull-request mode already derives the trust base on both
 events and an explicit redirect has no legitimate use on either. The refusal
 names the value that was given and the fix, which is to remove the input: the
-action already derives `origin/$GITHUB_BASE_REF` itself on that event.
+action already derives the private `refs/conductor/trust-base` itself on that
+event.
 
 There is deliberately **no input that turns pull-request mode off**.
 Base-ref judging is the floor rather than a knob, and on a `pull_request`
@@ -1370,9 +1380,10 @@ jobs:
           advisory: true
 ```
 
-`action.yml` already shallow-fetches the trust base itself as of 0.4.5 when
-the checkout does not already carry it (see the changelog entry for that
-version), so this recipe needs no separate "fetch the base ref" step. None of
+`action.yml` fetches the trust base itself on every pull-request run, into its
+own private ref (depth 1 only when the checkout is already shallow, and always,
+whether or not the checkout carries the base), so this recipe needs no separate
+"fetch the base ref" step. None of
 the three steps above swallows its own exit code: a checkout or setup-node
 failure is an infrastructure problem this recipe should still surface, and
 the `conductor` step's own advisory behaviour comes from `advisory: true`
@@ -1495,7 +1506,9 @@ step and add `pull-requests: write` to the job's `permissions`:
       security-events: write
       pull-requests: write
     steps:
-      # ... checkout, pnpm, setup-node, install, as in the example above ...
+      # ... checkout and setup-node, as in the example above. Nothing from
+      # the pull request runs before the action in this job: no install, build
+      # or test step here; those belong in a separate job. ...
       - id: conductor
         uses: vaultcompasshq/conductor@v0.7.0
         with:

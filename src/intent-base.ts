@@ -65,8 +65,8 @@ export type ResolvedBase =
  *    more than one kind of ref is refused (refuseAmbiguousRef).
  *  - Otherwise, on a pull request: refs/conductor/trust-base (the composite
  *    action's private fetch) when it exists, else refs/remotes/origin/<base>,
- *    both in full. If both exist they must name the same commit, or the run
- *    is refused. If neither exists the spelled remote ref is returned and the
+ *    both in full. The private ref wins and is not compared against the
+ *    remote-tracking ref. If neither exists the spelled remote ref is returned and the
  *    diff fails closed, naming fetch-depth: 0.
  *  - Null outside a pull request.
  *
@@ -78,7 +78,7 @@ export function resolveBaseRefInRepo(
   options: { base?: string; env: NodeJS.ProcessEnv }
 ): ResolvedBase {
   if (options.base !== undefined && options.base !== '') {
-    const ambiguous = refuseAmbiguousRef(repoRoot, options.base);
+    const ambiguous = refuseAmbiguousRef(repoRoot, options.base, 'the intent gate base');
     if (ambiguous !== null) {
       return { ok: false, detail: ambiguous };
     }
@@ -89,18 +89,11 @@ export function resolveBaseRefInRepo(
     return { ok: true, base: null };
   }
   const remoteRef = `refs/remotes/origin/${fromGithub}`;
-  const remote = resolveRev(repoRoot, remoteRef, 'commit');
+  // The private ref is the authority when it exists; refs/remotes/origin/<base>
+  // is fixed at checkout time, is the side pull-request code can move, and is
+  // not compared against it (a merge to the base in between would be a false
+  // refusal). It is the base only when the private ref is absent.
   const priv = resolveRev(repoRoot, PRIVATE_TRUST_BASE_REF, 'commit');
-  if (remote !== null && priv !== null && remote !== priv) {
-    return {
-      ok: false,
-      detail:
-        `refusing to measure the intent gate against a base that two refs disagree about: ` +
-        `"${PRIVATE_TRUST_BASE_REF}" resolves to ${priv}, and "${remoteRef}" resolves to ${remote}, ` +
-        'a different commit: something moved one of them, so neither can be trusted. ' +
-        'Nothing was checked. If the checkout is shallow, use fetch-depth: 0.',
-    };
-  }
   return {
     ok: true,
     base: { ref: priv !== null ? PRIVATE_TRUST_BASE_REF : remoteRef, source: 'github' },
@@ -158,6 +151,10 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
       'core.quotePath=false',
       'diff',
       '--name-only',
+      // NUL-terminated, so a name with a quote, a backslash, a tab or a
+      // newline arrives byte for byte instead of C-quoted ("a\"b.txt"), which
+      // names no file and which intent-guard refuses outright (backslash).
+      '-z',
       '--no-renames',
       `${base}...HEAD`,
     ],
@@ -182,11 +179,11 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
     };
   }
 
-  // Split on newlines and NOTHING else. Trimming each line was corrupting a
+  // Split on NUL and NOTHING else. Trimming each entry was corrupting a
   // filename with leading or trailing whitespace into a different filename,
   // which is worse than refusing it: the gate would then check a path that
   // does not exist and never check the one that changed.
-  const paths = (child.stdout ?? '').split('\n').filter((line) => line.length > 0);
+  const paths = (child.stdout ?? '').split('\0').filter((line) => line.length > 0);
 
   for (const entry of paths) {
     // Fail closed rather than hand over a path the encoding cannot carry.

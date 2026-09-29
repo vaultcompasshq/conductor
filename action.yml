@@ -16,7 +16,8 @@ inputs:
   base-ref:
     description: >-
       The ref the intent gate measures the branch against. Leave it empty on a
-      pull request and conductor uses origin/$GITHUB_BASE_REF itself; set it to
+      pull request and conductor uses the base branch itself (the private
+      refs/conductor/trust-base, else refs/remotes/origin/$GITHUB_BASE_REF); set it to
       run the pull-request flow somewhere that variable is not set.
     default: ''
   trust-base:
@@ -24,7 +25,8 @@ inputs:
       Pull-request mode. The ref every rule is read from: the umbrella's own
       .guardrails.yaml and every control input of the gates that support it.
       Leave it empty and, on a pull_request event, the action passes
-      origin/$GITHUB_BASE_REF itself; on any other event it passes nothing and
+      refs/conductor/trust-base itself (a private ref it fetches the base
+      branch into; the job needs contents: read); on any other event it passes nothing and
       behaviour is unchanged. Set it to name the ref explicitly, for a
       platform where GITHUB_BASE_REF is not set. On a pull_request or
       pull_request_target event this input is refused outright, in the

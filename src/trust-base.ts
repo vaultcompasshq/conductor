@@ -99,7 +99,12 @@ function refExists(repoRoot: string, fullRef: string): boolean {
  * from refs/ is unambiguous, and revision expressions (HEAD, HEAD~1, a sha) are
  * not names and are left to the callers' own checks.
  */
-export function refuseAmbiguousRef(repoRoot: string, ref: string): string | null {
+export function refuseAmbiguousRef(
+  repoRoot: string,
+  ref: string,
+  /** What the ref is used as, for the message: "the trust base", "the intent base". */
+  noun = 'the trust base'
+): string | null {
   if (ref.startsWith('refs/') || /[\s^~:@{}\\]/.test(ref) || ref === 'HEAD') {
     return null;
   }
@@ -110,7 +115,7 @@ export function refuseAmbiguousRef(repoRoot: string, ref: string): string | null
     return null;
   }
   return (
-    `refusing "${ref}" as the trust base: the name is ambiguous, it matches ${matches.join(' and ')}, ` +
+    `refusing "${ref}" as ${noun}: the name is ambiguous, it matches ${matches.join(' and ')}, ` +
     'and git would pick one of them by its own precedence (tags first). Whoever can push a tag ' +
     'could choose the base this way. Pass the ref spelled in full, for example ' +
     'refs/remotes/origin/main. Nothing was checked.'
@@ -319,17 +324,21 @@ export function refuseTrustBaseForPullRequest(
     return ambiguous;
   }
 
+  // THE PRIVATE REF IS THE AUTHORITY, and nothing reads
+  // refs/remotes/origin/<base> for trust. That ref is fixed at checkout time
+  // and is the side pull-request code can move, while the private ref is
+  // fetched later by the action: comparing them adds a false refusal whenever
+  // the base branch advances in between, and no protection. Only an explicit
+  // trust base (below) has the remote-tracking ref as its one reference.
+  if (ref === PRIVATE_TRUST_BASE_REF && resolveRev(repoRoot, ref, 'commit') !== null) {
+    return null;
+  }
+
   // SPELLED IN FULL. A short origin/<base> would resolve through
   // refs/tags/origin/<base> first.
   const expectedRef = `refs/remotes/origin/${githubBaseRef}`;
   const expectedCommit = resolveRev(repoRoot, expectedRef, 'commit');
   if (expectedCommit === null) {
-    // A depth-1 checkout has no remote-tracking ref for the base. The action
-    // fetches the base into its own private ref, and only that ref is
-    // accepted in its place, with nothing to compare it against.
-    if (ref === PRIVATE_TRUST_BASE_REF && resolveRev(repoRoot, ref, 'commit') !== null) {
-      return null;
-    }
     return (
       `cannot verify "${ref}" as the trust base: "${expectedRef}" does not resolve to a commit ` +
       `in this repository, so there is nothing to compare it against, and only ` +

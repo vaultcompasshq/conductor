@@ -535,9 +535,10 @@ export function gateArgs(
       // with cwd at the repository root anyway. Passing one would also risk
       // a passthrough value being read as the positional.
       //
-      // `scan` takes --trust-base from 1.7.0, and on exit 2 it prints one
-      // line on stderr and NO document at all, which the could-not-run path
-      // above already handles before JSON.parse is reached.
+      // `scan` takes --trust-base from 1.7.0. On exit 2 it prints a line on
+      // stderr and may also write a JSON document (it can on a staged run);
+      // conductor never parses stdout on exit 2, so the could-not-run path
+      // above handles both before JSON.parse is reached.
       return [...(staged ? ['--staged'] : []), '-f', 'json', ...trust, ...passthrough];
     case 'intent-guard': {
       if (intent === undefined) {

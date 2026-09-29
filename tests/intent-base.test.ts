@@ -134,17 +134,13 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
     });
   });
 
-  it('refuses when both exist and name different commits, naming both', () => {
-    const { root, base, headMinusOne } = twoCommitBranch();
+  it('uses the private ref, without a refusal, when both exist and differ: the base advanced after checkout (N2)', () => {
+    const { root, headMinusOne } = twoCommitBranch();
     git(root, ['update-ref', PRIVATE, headMinusOne]);
-    const resolved = resolveBaseRefInRepo(root, { env });
-    expect(resolved.ok).toBe(false);
-    if (resolved.ok) throw new Error('unreachable');
-    expect(resolved.detail).toContain(PRIVATE);
-    expect(resolved.detail).toContain('refs/remotes/origin/main');
-    expect(resolved.detail).toContain(base.slice(0, 12));
-    expect(resolved.detail).toContain(headMinusOne.slice(0, 12));
-    expect(resolved.detail).toMatch(/something moved one of them/);
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: PRIVATE, source: 'github' },
+    });
   });
 
   it('accepts both when they name the same commit', () => {
@@ -175,6 +171,7 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
     expect(refused.ok).toBe(false);
     if (refused.ok) throw new Error('unreachable');
     expect(refused.detail).toMatch(/ambiguous/);
+    expect(refused.detail).toContain('as the intent gate base');
     expect(resolveBaseRefInRepo(root, { base: 'refs/remotes/origin/main', env })).toEqual({
       ok: true,
       base: { ref: 'refs/remotes/origin/main', source: 'flag' },
@@ -243,6 +240,27 @@ describe('changedPathsSince', () => {
     commit(root, 'spaced');
 
     expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: ['src/my widget.ts'] });
+  });
+
+  it('hands over names with a quote, a backslash, a tab and a newline byte for byte, never C-quoted (N3)', () => {
+    // Without -z git prints "secrets/a\"b.txt" with quotes and backslash
+    // escapes; the gate was then handed a path that names no file, and
+    // intent-guard refuses any explicit path with a backslash, so every pull
+    // request touching such a name was permanently could-not-run.
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/odd-names']);
+    const names = [
+      'secrets/a"b.txt',
+      'src/back\\slash.ts',
+      'src/tab\there.ts',
+      'src/new\nline.ts',
+    ];
+    for (const name of names) {
+      write(root, name, 'export const x = 1;\n');
+    }
+    commit(root, 'odd names');
+
+    expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: [...names].sort() });
   });
 
   it('fails closed on a path containing a comma, naming the path', () => {
