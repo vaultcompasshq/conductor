@@ -21,9 +21,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   nothing wrong: on 2026-09-22, and again on 2026-09-29 in run 36522330217,
   where the same pins had verified cleanly two hours earlier in run
   36514871399. Each cleared on a plain re-run, and the flagged package was
-  verified untouched both times. A pass on the retry continues and prints a `::notice::` naming
-  what the first attempt said; a second failure fails closed exactly as
-  before, with the second attempt's reason prefixed by "attempted twice".
+  verified untouched both times. A pass on the retry continues and prints a
+  `::notice::` naming what the first attempt said; a second failure fails
+  closed exactly as before, with the second attempt's reason prefixed by
+  "attempted twice".
   One retry and no more, and `verification-ok` is still written only after an
   audit has passed (issue #81).
 
