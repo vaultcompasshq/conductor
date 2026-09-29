@@ -203,6 +203,25 @@ describe('running one gate', () => {
     expect(outcome.findings[0].blocking).toBe(true);
   });
 
+  it('names the scoped @vaultcompass package for every managed gate on a LOCAL run too, never the bare name (C4)', () => {
+    // The unscoped dep-guard and intent-guard names are unclaimed on npm, so
+    // an agent told to "install dep-guard" could install a squatted package.
+    for (const product of ['dep-guard', 'vault-guard', 'intent-guard'] as const) {
+      const outcome = runGate(gate({ product }), {
+        repoRoot: tempDir(),
+        staged: true,
+        pathValue: tempDir(),
+      });
+      const texts = [outcome.couldNotRun?.detail ?? '', outcome.findings[0].message];
+      for (const text of texts) {
+        expect(text).toContain(`@vaultcompass/${product}`);
+        // Every mention of the package on an install line is the scoped one.
+        expect(text).not.toMatch(new RegExp(`(?<![/@\\w-])${product}(?![\\w-]) package`));
+        expect(text).not.toMatch(/Install it[.,]/);
+      }
+    }
+  });
+
   it('names the two places it looked in the order it looked in them', () => {
     // The line a user reads when a gate is missing tells them where to
     // install it. Naming PATH first, after resolution was flipped to try
@@ -214,8 +233,8 @@ describe('running one gate', () => {
       pathValue: tempDir(),
     });
 
-    expect(outcome.couldNotRun?.detail).toBe(
-      'no dep-guard binary in node_modules/.bin or on PATH'
+    expect(outcome.couldNotRun?.detail).toMatch(
+      /^no dep-guard binary in node_modules\/\.bin or on PATH\. /
     );
   });
 

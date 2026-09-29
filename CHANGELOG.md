@@ -16,6 +16,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Fixed
 
+- Every missing-gate remedy now names the scoped package
+  `@vaultcompass/<product>` for dep-guard, vault-guard and intent-guard: the
+  missing-gate finding, the could-not-run detail on a local run (which used to
+  print no install remedy at all), and the comment `conductor init` writes
+  for a gate it did not find. The unscoped dep-guard and intent-guard names
+  are unclaimed on npm, so a bare "install dep-guard" could lead to a
+  squatted package.
 - Security: a history gate (gitleaks) in a shallow checkout is now
   could-not-run with reason `history-shallow`, naming `fetch-depth: 0`, and
   under a trust base it is enforced (exit 2) whatever `enforce` says. With

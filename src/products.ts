@@ -131,7 +131,7 @@ function managedRemedy(product: Product): (skipNodeModules: boolean) => string {
       ? `Install the gate outside the tree with npm install -g @vaultcompass/${product}. The ` +
         `conductor Action does exactly that, at the version its ${product}-version input pins, and ` +
         'that pin lives in the workflow file on the base branch.'
-      : `Install it with npm install -g @vaultcompass/${product}, or add it to the repository's devDependencies.`;
+      : `The package is @vaultcompass/${product}, never the unscoped name: install it with npm install -g @vaultcompass/${product}, or add @vaultcompass/${product} to the repository's devDependencies.`;
 }
 
 function managedProfile(product: Product): ProductProfile {

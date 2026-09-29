@@ -763,7 +763,10 @@ function missingGateRemedy(
     return ` ${profile.remedy(skipNodeModules)}`;
   }
   if (!skipNodeModules) {
-    return '';
+    // Named on a local run too: the scoped package is the only correct
+    // install target, and the finding's own sentence must not be the only
+    // place a reader could take a bare name from.
+    return ` ${profile.remedy(false)}`;
   }
   return (
     ' On a pull-request run node_modules/.bin is not consulted at all: what is installed there ' +
@@ -915,7 +918,9 @@ function runGateInner(
         detail:
           (skipNodeModules
             ? `no ${gate.product} binary on PATH`
-            : `no ${gate.product} binary in node_modules/.bin or on PATH`) + remedy,
+            : `no ${gate.product} binary in node_modules/.bin or on PATH`) +
+          (remedy === '' ? '' : '.') +
+          remedy,
       },
       // A missing enabled gate is a finding of the umbrella's own, never a
       // silent skip. Skipping is how a gate ends up switched on in the

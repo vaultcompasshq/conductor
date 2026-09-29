@@ -24,6 +24,7 @@ import {
   atOrAboveThreshold,
 } from './envelope.js';
 import type { GateRole, Product } from './policy.js';
+import { profileFor } from './products.js';
 
 const BLOCKING_MISMATCH = 'conductor/blocking-count-mismatch';
 const THRESHOLD_UNKNOWN = 'conductor/blocking-threshold-unknown';
@@ -1234,6 +1235,18 @@ function gateProblem(
 }
 
 /**
+ * What to install for a product, spelled so it cannot be mistaken for
+ * another package. The three npm gates are published under the
+ * @vaultcompass scope only: the unscoped dep-guard and intent-guard names are
+ * unclaimed on npm, so a reader (or an agent) told to install the bare name
+ * could install a squatted package. The external tools are not npm packages
+ * of this family and keep their own names.
+ */
+export function installName(product: Product): string {
+  return profileFor(product).managed ? `@vaultcompass/${product}` : product;
+}
+
+/**
  * The finding raised when an ENABLED gate's binary cannot be found.
  *
  * A gate that is switched on and silently does not run is the failure this
@@ -1262,7 +1275,7 @@ export function normalizeMissingGate(
     role,
     product,
     `The "${role}" gate is enabled but no ${product} binary was found. ` +
-      `Looked for: ${candidates.join(', ')}. Install it, point the gate at a build with an ` +
+      `Looked for: ${candidates.join(', ')}. Install ${installName(product)}, point the gate at a build with an ` +
       `absolute "command:", or set enabled: false to switch the gate off on purpose.${remedy}`,
     { candidates }
   );

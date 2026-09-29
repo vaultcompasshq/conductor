@@ -286,6 +286,14 @@ describe('what init writes', () => {
     expect(policy).toMatch(/secrets:\n\s+product: vault-guard\n\s+enabled: true/);
     expect(policy).toMatch(/dependencies:\n\s+product: dep-guard\n\s+enabled: false/);
     expect(policy).toMatch(/intent:\n\s+product: intent-guard\n\s+enabled: false/);
+    // The npm gates name the scoped package, never the bare name (C4).
+    expect(policy).toMatch(
+      /Install @vaultcompass\/dep-guard, then set enabled: true\.\n\s+dependencies:/
+    );
+    expect(policy).toMatch(
+      /Install @vaultcompass\/intent-guard, then set enabled: true\.\n\s+intent:/
+    );
+    expect(policy).not.toMatch(/Install (dep-guard|intent-guard|vault-guard),/);
     // The two external roles are listed too, off, with the line saying why.
     expect(policy).toMatch(
       /# not found in node_modules\/\.bin or on PATH\. Install gitleaks, then set enabled: true\.\n\s+secrets-history:\n\s+product: gitleaks\n\s+enabled: false\n\s+stage: ci/
