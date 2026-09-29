@@ -222,7 +222,9 @@ required.
    exit code, only a blocking finding's. Leaving the check out of branch
    protection is what keeps that expected exit 2 from blocking the merge;
    the step posts a comment saying so with the remedy on it, which is the
-   honest report of an unfinished adoption, not a broken tool.
+   honest report of an unfinished adoption, not a broken tool. The same
+   refusal recurs once on every new base branch; see "Why the first pull
+   request still exits 2 under `advisory: true`" below.
 
 3. **Merge.** Every pull request after that is judged by the policy on the
    base branch, and a change to that policy shows up as a proposal line and
@@ -1115,6 +1117,14 @@ jobs:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
 ```
 
+The examples leave the trigger unnarrowed on purpose, so the job runs for a
+pull request into any branch. If you narrow it with a `branches:` filter,
+include every branch whose merges reach users, release branches and the
+production branch included, for instance `branches: [main, 'release/**',
+production]`. The pull request that promotes a release is where a bad
+dependency or a leaked secret actually ships, and a job that is not triggered
+leaves no red check and no report to notice.
+
 No version inputs there at all: left out, the four gates run at the versions
 this tag ships, which is the intended default. The fully spelled-out example
 below adds explicit version pins and comments explaining each one, for a
@@ -1357,6 +1367,15 @@ none yet, so the run is refused outright before any gate produces a finding
 for `advisory` to act on. Leaving the check out of branch protection for
 that one pull request is what keeps the expected exit 2 from blocking the
 merge; the step posts a comment naming the ref and the remedy.
+
+The same refusal happens once on every new base branch, not only on the
+default branch, because rules are read from whatever branch the pull request
+targets. A release or release-candidate branch cut before the policy existed,
+or any long-lived branch that has never received `.guardrails.yaml`, refuses
+its first pull request the same way. There are two remedies. Carry the policy
+onto the branch before opening a pull request against it; a sync from the
+default branch does this. Or expect exactly one could-not-run run there, and
+leave the check out of that branch's protection for that one pull request.
 
 **Why "go required" means the job's own context, never the SARIF-upload
 row.** The recipes above upload conductor's SARIF log with
