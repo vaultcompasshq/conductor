@@ -16,6 +16,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Fixed
 
+- The pull request comment no longer blames the registry for every
+  did-not-verify state. It branches on what happened: a refusal by the
+  action's own validate step (a backward pin, a trust-base input on a pull
+  request) says the inputs were refused and nothing was installed; an install
+  failure before the audit (npm too old to verify, npm install failing) says
+  so; only a signature audit that actually failed carries the reason and the
+  registry-or-sigstore-outage sentence. In every case conductor is not run.
 - Every missing-gate remedy now names the scoped package
   `@vaultcompass/<product>` for dep-guard, vault-guard and intent-guard: the
   missing-gate finding, the could-not-run detail on a local run (which used to

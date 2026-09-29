@@ -313,7 +313,12 @@ describe('action.yml: the pr-comment step', () => {
     // verification-ok, so the ABSENT flag is the unsafe-by-default case: an
     // install step that died before the audit, or after it but before the ok
     // was written, leaves this empty and must not execute the umbrella.
-    const unverified = runPrCommentScript({ VERIFICATION_REASON: 'one bad sig' });
+    const unverified = runPrCommentScript({
+      VERIFICATION_REASON: 'one bad sig',
+      VERIFICATION_FAILED: 'true',
+      INSTALL_OUTCOME: 'failure',
+      VALIDATE_OUTCOME: 'success',
+    });
     expect(unverified.conductorRan).toBe(false);
     // And it says so, carrying the reason. Without this the note could be
     // empty and the whole branch would still look correct.
@@ -328,6 +333,56 @@ describe('action.yml: the pr-comment step', () => {
     // than a stub that never runs in either case.
     const verified = runPrCommentScript({ VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' });
     expect(verified.conductorRan).toBe(true);
+  });
+
+  describe('says what actually happened when the install did not verify (C5)', () => {
+    const outage = /registry or sigstore outage/i;
+
+    it('a validate-step refusal is a configuration problem, with no outage claim and no claim that packages were unverified', () => {
+      const run = runPrCommentScript({
+        VALIDATE_OUTCOME: 'failure',
+        INSTALL_OUTCOME: 'skipped',
+        VERIFICATION_REASON: '',
+      });
+      expect(run.conductorRan).toBe(false);
+      expect(run.reportBody).toContain('Conductor could not run.');
+      expect(run.reportBody).toContain('nothing was checked');
+      expect(run.reportBody).toMatch(/refused .*before installing anything/i);
+      expect(run.reportBody).not.toMatch(outage);
+      expect(run.reportBody).not.toMatch(/were not verified/i);
+    });
+
+    it('an install-step failure before the audit (npm floor, npm install) makes no outage claim either', () => {
+      const run = runPrCommentScript({
+        VALIDATE_OUTCOME: 'success',
+        INSTALL_OUTCOME: 'failure',
+        VERIFICATION_REASON: '',
+      });
+      expect(run.conductorRan).toBe(false);
+      expect(run.reportBody).toContain('Conductor could not run.');
+      expect(run.reportBody).toMatch(/install step failed before/i);
+      expect(run.reportBody).toContain('nothing was checked');
+      expect(run.reportBody).not.toMatch(outage);
+    });
+
+    it('only an audit that actually failed carries the reason and the outage sentence', () => {
+      const run = runPrCommentScript({
+        VALIDATE_OUTCOME: 'success',
+        INSTALL_OUTCOME: 'failure',
+        VERIFICATION_FAILED: 'true',
+        VERIFICATION_REASON: 'attempted twice. bad sig',
+      });
+      expect(run.reportBody).toContain('attempted twice. bad sig');
+      expect(run.reportBody).toMatch(outage);
+    });
+
+    it('an unknown state still runs nothing and does not blame the registry', () => {
+      const run = runPrCommentScript({});
+      expect(run.conductorRan).toBe(false);
+      expect(run.reportBody).toContain('Conductor could not run.');
+      expect(run.reportBody).toContain('nothing was checked');
+      expect(run.reportBody).not.toMatch(outage);
+    });
   });
 
   it('does not run conductor at all when the gates step wrote the report, and posts that file (issue #85)', () => {
@@ -356,7 +411,7 @@ describe('action.yml: the pr-comment step', () => {
 
   it('still posts the could-not-run note, and runs nothing, when unverified even if a report file exists', () => {
     const run = runPrCommentScript(
-      { VERIFICATION_REASON: 'one bad sig' },
+      { VERIFICATION_REASON: 'one bad sig', VERIFICATION_FAILED: 'true' },
       { textReportBody: 'conductor 9.9.9\nverdict-token: pass\n' }
     );
     expect(run.conductorRan).toBe(false);

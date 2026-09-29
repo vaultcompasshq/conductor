@@ -1071,6 +1071,14 @@ runs:
         # after the audit has actually passed. REASON is for the message.
         VERIFICATION_OK: ${{ steps.install.outputs.verification-ok }}
         VERIFICATION_REASON: ${{ steps.install.outputs.verification-reason }}
+        # What the note SAYS branches on what actually happened, not on the
+        # one flag above: verification-failed is written only when the
+        # signature audit itself failed; the outcomes say whether the
+        # validate step refused the inputs or the install step died some
+        # other way (an npm too old to verify, an npm install failure).
+        VERIFICATION_FAILED: ${{ steps.install.outputs.verification-failed }}
+        VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        INSTALL_OUTCOME: ${{ steps.install.outcome }}
         # From the gates step: the text report its own run wrote (empty when
         # the step never got that far), and report-fallback when the installed
         # conductor is too old to write one. See the note in the script.
@@ -1190,11 +1198,28 @@ runs:
         #      far as writing one, or conductor died before it did. Say that,
         #      rather than post an empty comment or a stale one; the gates
         #      step removes any previous file before it runs.
+        #
+        # THE WORDING FOLLOWS WHAT HAPPENED (C5). The registry-outage sentence
+        # is true only of a failed signature audit, so it is printed only
+        # then; a validate-step refusal or an install failure before the audit
+        # gets its own truthful sentence, and an unknown state says only that
+        # verification did not complete.
         if [ "${VERIFICATION_OK:-}" != "true" ]; then
           {
-            printf '%s\n\n' 'Conductor could not run. The gate packages were not verified, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
-            printf '%s\n\n' "${VERIFICATION_REASON:-No reason was recorded. The job log has the failing step.}"
-            printf '%s\n' 'Conductor verifies its tools against the registry before running, and refuses to trust one it could not verify. A registry or sigstore outage produces this too.'
+            if [ "${VALIDATE_OUTCOME:-}" = "failure" ]; then
+              printf '%s\n\n' 'Conductor could not run. The action refused its own inputs before installing anything (for example a pinned version below what this action tag ships, or a trust-base input on a pull request), so no gate ran and nothing was checked on this pull request. This is a workflow configuration problem, not a finding about this repository.'
+              printf '%s\n' 'The step error in the job log names the input that was refused.'
+            elif [ "${VERIFICATION_FAILED:-}" = "true" ]; then
+              printf '%s\n\n' 'Conductor could not run. The gate packages were not verified, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
+              printf '%s\n\n' "${VERIFICATION_REASON:-No reason was recorded. The job log has the failing step.}"
+              printf '%s\n' 'Conductor verifies its tools against the registry before running, and refuses to trust one it could not verify. A registry or sigstore outage produces this too.'
+            elif [ "${INSTALL_OUTCOME:-}" = "failure" ]; then
+              printf '%s\n\n' 'Conductor could not run. The install step failed before the gate packages could be verified (for example an npm too old to verify signatures, or the npm install itself failing), so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
+              printf '%s\n' 'The step error in the job log says which.'
+            else
+              printf '%s\n\n' 'Conductor could not run. Verification of the gate packages did not complete, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
+              printf '%s\n' 'The job log has the failing step.'
+            fi
           } > "$REPORT_FILE"
         elif [ -n "${TEXT_REPORT:-}" ] && [ -s "$TEXT_REPORT" ]; then
           REPORT_FILE="$TEXT_REPORT"
