@@ -754,6 +754,8 @@ runs:
         # bash runners), so this is the guard against the one hang path.
         GIT_TERMINAL_PROMPT: '0'
         TRUST_BASE: ${{ inputs.trust-base }}
+        # Read only by the base-branch fetch, which unsets it straight after.
+        TRUST_BASE_TOKEN: ${{ github.token }}
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         OUTPUT: ${{ inputs.output }}
@@ -894,51 +896,65 @@ runs:
           # to unblock conductor's OWN policy read, not to substitute for
           # full history.
           #
-          # NEVER HARD-FAILS. Both branches below are guarded by `if`, which
-          # `set -eu` does not trip on: a fetch that cannot succeed (no
-          # credentials persisted from checkout, no network reachable to
-          # origin, a fork pull_request's read-only token, or any other
-          # reason) is reported as a clear warning naming the exact command
-          # to add, and the run continues into conductor's own trust-base
-          # handling, which already fails closed with its own explanation.
-          # THE REFSPEC IS DELIBERATE, not just the ref name. `git fetch
-          # origin <ref>` alone only updates FETCH_HEAD -- it never creates
-          # or moves refs/remotes/origin/<ref> unless the remote's configured
-          # fetch refspec already covers that branch, which a single-branch
-          # shallow checkout's does not. Handing conductor
-          # --trust-base "origin/$GITHUB_BASE_REF" after a fetch that only
-          # touched FETCH_HEAD leaves the exact same unresolvable ref this
-          # step exists to fix. The explicit src:dst refspec is what actually
-          # creates the remote-tracking ref conductor is about to be asked
-          # to read.
-          # ALWAYS FETCHED, WITH A FORCING (+) REFSPEC, whether or not the ref
-          # already resolves. A ref that resolves proves nothing about where it
-          # points: code from the pull request that ran earlier in this job
-          # (an install whose lifecycle script runs) can move
-          # refs/remotes/origin/<base> to a commit of its own with every gate
-          # switched off. The + lets the fetch overwrite a ref that is not an
-          # ancestor of the real tip. DEPTH follows the checkout: --depth=1
-          # only when the repository is already shallow; on a full clone a
-          # depth here would turn it shallow and blind the history gate.
+          # NEVER HARD-FAILS: a fetch that cannot succeed is reported as a
+          # warning (below), and the run continues into conductor's own
+          # trust-base handling, which fails closed with its own explanation.
+          # The explicit src:dst refspec is what creates the ref conductor
+          # is about to be asked to read; `git fetch <url> <ref>` alone would
+          # only update FETCH_HEAD.
+          # THE BASE GOES INTO A PRIVATE, FULLY SPELLED REF, refs/conductor/
+          # trust-base, and that full ref is what conductor is handed. Never
+          # origin/<base>: git resolves a short name through refs/tags/ BEFORE
+          # refs/remotes/, so anyone who can push a tag named origin/<base>
+          # (no merge rights needed) would choose the commit the rules are
+          # read from, and with fetch-depth: 0 the tag is already in the
+          # checkout. refs/remotes/origin/* is neither read for the decision
+          # here nor written or deleted by this step; conductor compares it
+          # against the private ref when it exists and refuses a mismatch.
           #
-          # A FETCH THAT FAILS DELETES ANY EXISTING origin/<base> and warns:
-          # a ref that could not be re-verified is not a base to judge
-          # against, so conductor is handed a ref that does not resolve and
+          # ALWAYS FETCHED, WITH A FORCING (+) REFSPEC, from the EXPLICIT
+          # server URL rather than the remote named origin: a remote URL
+          # rewritten by earlier code in the job (or by url.insteadOf) cannot
+          # redirect it. DEPTH follows the checkout: --depth=1 only when the
+          # repository is already shallow; on a full clone a depth here would
+          # turn it shallow and blind the history gate.
+          #
+          # AUTHENTICATED WITH github.token through an http extraheader in
+          # GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, never on
+          # the command line, so the token is not in argv. The value is the
+          # one actions/checkout writes (basic auth, user x-access-token).
+          # Entry 0 resets any extraheader checkout persisted for this
+          # server, so two Authorization headers are not sent. The variables
+          # and the token are unset straight after the fetch, so conductor and
+          # the gates never inherit them. This needs the job to grant
+          # permissions: contents: read.
+          #
+          # A FETCH THAT FAILS DELETES ONLY refs/conductor/trust-base (so a
+          # stale one from an earlier step never stands in for the base) and
+          # warns; conductor is then handed a ref that does not resolve and
           # fails closed (exit 2) with its own explanation. The step itself
-          # still does not hard-fail.
+          # still does not hard-fail, and nothing under refs/remotes is
+          # touched.
           if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
             DEPTH_ARGS=(--depth=1)
-            REMEDY_DEPTH='--depth=1 '
           else
             DEPTH_ARGS=()
-            REMEDY_DEPTH=''
           fi
-          if ! git fetch ${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"} origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF" >/dev/null 2>&1; then
-            git update-ref -d "refs/remotes/origin/$GITHUB_BASE_REF" >/dev/null 2>&1 || true
-            printf '::warning::conductor: origin/%s could not be fetched, so it cannot be trusted, and any copy already in this checkout was removed. Add a step before this action that runs: git fetch %sorigin +refs/heads/%s:refs/remotes/origin/%s\n' \
-              "$GITHUB_BASE_REF" "$REMEDY_DEPTH" "$GITHUB_BASE_REF" "$GITHUB_BASE_REF"
+          SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+          if [ -n "${TRUST_BASE_TOKEN:-}" ]; then
+            AUTH_KEY="http.${SERVER_URL}/.extraheader"
+            AUTH_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TRUST_BASE_TOKEN" | base64 | tr -d '\n')"
+            export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0="$AUTH_KEY" GIT_CONFIG_VALUE_0="" GIT_CONFIG_KEY_1="$AUTH_KEY" GIT_CONFIG_VALUE_1="$AUTH_VALUE"
           fi
-          ARGS+=(--trust-base "origin/$GITHUB_BASE_REF")
+          fetch_ok=1
+          git fetch ${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"} "$SERVER_URL/$GITHUB_REPOSITORY.git" "+refs/heads/$GITHUB_BASE_REF:refs/conductor/trust-base" >/dev/null 2>&1 || fetch_ok=0
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 TRUST_BASE_TOKEN AUTH_KEY AUTH_VALUE
+          if [ "$fetch_ok" -ne 1 ]; then
+            git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+            printf '::warning::conductor: the base branch %s could not be fetched into refs/conductor/trust-base, so there is no trust base and conductor will refuse the run (exit 2), and any earlier copy of that ref was removed. The job needs permissions: contents: read so github.token can read this repository; a network failure or a base branch that no longer exists gives the same result. Nothing under refs/remotes was changed.\n' \
+              "$GITHUB_BASE_REF"
+          fi
+          ARGS+=(--trust-base "refs/conductor/trust-base")
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")
@@ -1161,7 +1177,8 @@ runs:
         if [ -n "$TRUST_BASE" ]; then
           ARGS+=(--trust-base "$TRUST_BASE")
         elif [ -n "${GITHUB_BASE_REF:-}" ]; then
-          ARGS+=(--trust-base "origin/$GITHUB_BASE_REF")
+          # The private ref the gates step fetched, by its full name.
+          ARGS+=(--trust-base "refs/conductor/trust-base")
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")

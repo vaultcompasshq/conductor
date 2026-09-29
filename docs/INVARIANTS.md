@@ -1023,11 +1023,23 @@ code the head runs before the action (an install whose lifecycle script, such
 as a root `postinstall`, runs) can append to `GITHUB_PATH`, write files under
 the runner temp where the install prefix lives, or move
 `refs/remotes/origin/<base>`, and package.json lifecycle scripts run by an
-install are not stopped by branch protection on `.github/workflows`. The
-action closes the last of those itself (it always force-fetches the base ref),
-but the PATH and install-prefix halves are closed only by the workflow shape:
-the gates run in a job, or before any step, that executes no code from the
-pull request.
+install are not stopped by branch protection on `.github/workflows`.
+
+WHAT THE PRIVATE REF CLOSES, AND ONLY THAT. The action fetches the base into
+`refs/conductor/trust-base` (forced, from the explicit server URL, with the
+token in GIT_CONFIG_* environment variables) and hands conductor that full
+ref; conductor also refuses a short name that a tag shadows and refuses a
+`refs/remotes/origin/<base>` that disagrees with the private ref (src/trust-base.ts,
+`refuseAmbiguousRef` and `refuseTrustBaseForPullRequest`). That closes a MOVED
+or SHADOWED base ref and nothing else. It does not cover, and only the
+precondition (no pull-request code before the action in the job) covers: the
+files behind `GITHUB_ENV` (`NODE_OPTIONS=--require`, `GIT_CONFIG_*`,
+`GIT_DIR`), `GITHUB_PATH`, `.git/config` changes (a remote URL,
+`url.insteadOf`, `core.fsmonitor`, credential helpers, `core.sshCommand`), git
+hooks such as `reference-transaction`, and replace refs or grafts. (The
+gitleaks spawn sets `GIT_NO_REPLACE_OBJECTS=1`, which narrows the last one for
+that gate only.) KNOWN OPEN: the intent gate's `--base` default is still the
+short `origin/<GITHUB_BASE_REF>` (src/intent-base.ts), which a tag can shadow.
 
 WHAT THE PIN DOES NOT PROTECT, stated here because an earlier revision of
 this entry claimed it did. That revision said the workflow file is read from
@@ -1349,13 +1361,19 @@ that both checks would refuse: checking `refuseTrustBaseForPullRequest`
 first means a pull-request-scoped redirect is named as exactly that, in a
 sentence that says GITHUB_BASE_REF and the base branch, rather than
 surfacing as the same-commit or equal-tree message a reader would have to
-already know implies a pull-request problem. FAILS CLOSED when
-`origin/<githubBaseRef>` itself does not resolve, naming it: reachable on the
-default `actions/checkout` (fetch-depth: 1) when the base branch was not
-fetched. The ACTION fetches it itself (depth 1 on a shallow checkout, always
-with a forcing refspec, and it deletes a stale copy if the fetch fails), so on
-the action a depth-1 checkout does NOT fail closed here any more: the base
-ref resolves. What a depth-1 checkout now fails closed on is the history gate
+already know implies a pull-request problem. Every ref is spelled in full
+(`refs/remotes/origin/<githubBaseRef>`), because a short name resolves through
+`refs/tags/` first, and a short given ref that matches more than one kind of
+ref is refused (`refuseAmbiguousRef`). When `refs/remotes/origin/<githubBaseRef>`
+exists the given ref must resolve to the same commit, and a mismatch is a
+refusal naming both. FAILS CLOSED when it does not exist, naming it, unless the
+given ref is the action's private `refs/conductor/trust-base`, which is then
+accepted without a comparison: reachable on the default `actions/checkout`
+(fetch-depth: 1) when the base branch was not fetched. The ACTION fetches the
+base into that private ref itself (depth 1 on a shallow checkout, always
+forced, from the explicit server URL, and it deletes only a stale private ref
+if the fetch fails), so on the action a depth-1 checkout does NOT fail closed
+here any more: the private ref resolves. What a depth-1 checkout now fails closed on is the history gate
 (gitleaks), described in the next paragraph. When the GIVEN ref does not
 resolve at all, this returns null rather than refusing a second time under a
 different message: `refuseTrustBaseRef` is the function with its own sentence

@@ -73,6 +73,51 @@ import { parse as parseYaml } from 'yaml';
 import { POLICY_FILE_NAME } from './policy.js';
 
 /**
+ * The private, fully spelled ref the composite action fetches the base branch
+ * into (action.yml, gates step). Nothing else writes it and no short name can
+ * shadow it: git resolves a short name like origin/main through refs/tags/
+ * BEFORE refs/remotes/, so a tag pushed by anyone able to push tags would
+ * otherwise choose the commit the rules are read from.
+ */
+export const PRIVATE_TRUST_BASE_REF = 'refs/conductor/trust-base';
+
+function refExists(repoRoot: string, fullRef: string): boolean {
+  const child = spawnSync('git', ['show-ref', '--verify', '--quiet', fullRef], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  return child.error === undefined && child.status === 0;
+}
+
+/**
+ * Why a SHORT ref name cannot be trusted as spelled, or null.
+ *
+ * A name that matches more than one kind of ref (a tag and a remote-tracking
+ * ref or a branch) is resolved by git in its own precedence order, tags
+ * first, with no warning under --quiet. That is a choice made by whoever can
+ * create the tag, so it is refused rather than resolved. A ref already spelled
+ * from refs/ is unambiguous, and revision expressions (HEAD, HEAD~1, a sha) are
+ * not names and are left to the callers' own checks.
+ */
+export function refuseAmbiguousRef(repoRoot: string, ref: string): string | null {
+  if (ref.startsWith('refs/') || /[\s^~:@{}\\]/.test(ref) || ref === 'HEAD') {
+    return null;
+  }
+  const matches = [`refs/tags/${ref}`, `refs/heads/${ref}`, `refs/remotes/${ref}`].filter((full) =>
+    refExists(repoRoot, full)
+  );
+  if (matches.length <= 1) {
+    return null;
+  }
+  return (
+    `refusing "${ref}" as the trust base: the name is ambiguous, it matches ${matches.join(' and ')}, ` +
+    'and git would pick one of them by its own precedence (tags first). Whoever can push a tag ' +
+    'could choose the base this way. Pass the ref spelled in full, for example ' +
+    'refs/remotes/origin/main. Nothing was checked.'
+  );
+}
+
+/**
  * What a rev resolves to at this repository, or null when it does not.
  *
  * `--quiet` suppresses git's own explanation, so there is nothing worth
@@ -156,6 +201,10 @@ export function headTreeEqualsBase(repoRoot: string, ref: string): boolean {
  * learns the trees matched even on this accepted path.
  */
 export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null {
+  const ambiguous = refuseAmbiguousRef(repoRoot, ref);
+  if (ambiguous !== null) {
+    return ambiguous;
+  }
   const base = resolveRev(repoRoot, ref, 'commit');
   if (base === null) {
     return (
@@ -265,13 +314,28 @@ export function refuseTrustBaseForPullRequest(
     return null;
   }
 
-  const expectedRef = `origin/${githubBaseRef}`;
+  const ambiguous = refuseAmbiguousRef(repoRoot, ref);
+  if (ambiguous !== null) {
+    return ambiguous;
+  }
+
+  // SPELLED IN FULL. A short origin/<base> would resolve through
+  // refs/tags/origin/<base> first.
+  const expectedRef = `refs/remotes/origin/${githubBaseRef}`;
   const expectedCommit = resolveRev(repoRoot, expectedRef, 'commit');
   if (expectedCommit === null) {
+    // A depth-1 checkout has no remote-tracking ref for the base. The action
+    // fetches the base into its own private ref, and only that ref is
+    // accepted in its place, with nothing to compare it against.
+    if (ref === PRIVATE_TRUST_BASE_REF && resolveRev(repoRoot, ref, 'commit') !== null) {
+      return null;
+    }
     return (
       `cannot verify "${ref}" as the trust base: "${expectedRef}" does not resolve to a commit ` +
-      'in this repository, so there is nothing to compare it against. Nothing was checked. In ' +
-      'CI, fetch the base branch (actions/checkout with fetch-depth: 0) before running the gates.'
+      `in this repository, so there is nothing to compare it against, and only ` +
+      `${PRIVATE_TRUST_BASE_REF} (fetched by the composite action) is accepted without it. ` +
+      'Nothing was checked. In CI, fetch the base branch (actions/checkout with ' +
+      'fetch-depth: 0) before running the gates.'
     );
   }
 
@@ -288,7 +352,8 @@ export function refuseTrustBaseForPullRequest(
     `refusing "${ref}" as the trust base: GITHUB_BASE_REF is set to "${githubBaseRef}", so this ` +
     'run is a pull request, and on a pull request the trust base must be the base branch and ' +
     `nothing else. "${ref}" resolves to ${givenCommit}, and "${expectedRef}" resolves to ` +
-    `${expectedCommit}, a different commit. Pass ${expectedRef} instead. Nothing was checked.`
+    `${expectedCommit}, a different commit: something moved one of them, so neither can be ` +
+    `trusted. Pass ${expectedRef} or ${PRIVATE_TRUST_BASE_REF} instead. Nothing was checked.`
   );
 }
 

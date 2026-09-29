@@ -35,6 +35,8 @@ export interface StubOptions {
   reportBody?: string;
   /** File to append each non-version invocation's working directory to. */
   cwdLog?: string;
+  /** File to append GIT_NO_REPLACE_OBJECTS=<value> to for each non-version invocation. */
+  envLog?: string;
 }
 
 export function stubGate(binDir: string, name: string, options: StubOptions = {}): string {
@@ -56,6 +58,11 @@ export function stubGate(binDir: string, name: string, options: StubOptions = {}
   }
   if (options.cwdLog !== undefined) {
     lines.push(`if ! { ${versionTest}; }; then pwd -P >> ${JSON.stringify(options.cwdLog)}; fi`);
+  }
+  if (options.envLog !== undefined) {
+    lines.push(
+      `if ! { ${versionTest}; }; then printf 'GIT_NO_REPLACE_OBJECTS=%s\\n' "$GIT_NO_REPLACE_OBJECTS" >> ${JSON.stringify(options.envLog)}; fi`
+    );
   }
   const versionLine = options.versionLine ?? options.version ?? '9.9.9';
   lines.push(`if ${versionTest}; then echo ${JSON.stringify(versionLine)}; exit 0; fi`);

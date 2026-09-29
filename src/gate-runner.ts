@@ -1264,6 +1264,11 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    // A history gate reads git history, and replace refs or grafts can cut
+    // that history without making the repository shallow. Ignoring replace
+    // objects makes it read the real commits. Other gates keep the
+    // inherited environment untouched.
+    ...(profile.readsHistory ? { env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } } : {}),
   });
 
   const withRun = {

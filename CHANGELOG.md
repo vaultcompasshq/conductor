@@ -40,27 +40,44 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   for a gate it did not find. The unscoped dep-guard and intent-guard names
   are unclaimed on npm, so a bare "install dep-guard" could lead to a
   squatted package.
-- Security: a history gate (gitleaks) in a shallow checkout is now
-  could-not-run with reason `history-shallow`, naming `fetch-depth: 0`, and
-  under a trust base it is enforced (exit 2) whatever `enforce` says. With
-  the default checkout depth of 1, `<base>..HEAD` held one grafted commit and a
-  secret added then removed inside the pull request was never scanned (0 hits
+- Security: a history gate (gitleaks) in ANY shallow checkout is now
+  could-not-run with reason `history-shallow`, naming `fetch-depth: 0`. This
+  applies on any event (push, merge_group, a pull request, `fetch-depth: 50`),
+  not only trust-base runs; under a trust base it is also enforced (exit 2)
+  whatever `enforce` says, and on other runs the policy's own `enforce`
+  stands. Workflows that ran gitleaks on a shallow checkout and passed will
+  now report could-not-run until the checkout uses `fetch-depth: 0`. With the
+  default depth of 1, `<base>..HEAD` held one grafted commit and a secret
+  added then removed inside the pull request was never scanned (0 hits
   shallow against 2 full). conductor does not deepen the checkout itself.
   The README and INVARIANTS no longer say depth 1 fails closed for this.
-- Security: the action always force-fetches the base ref
-  (`+refs/heads/<base>:refs/remotes/origin/<base>`) instead of skipping the
-  fetch when the ref already resolved, so code from the pull request that ran
-  earlier in the job cannot point `origin/<base>` at a commit of its own. The
-  fetch is depth 1 only when the checkout is already shallow (a depth on a
-  full clone would turn it shallow). If the fetch fails, any existing copy of
-  the ref is deleted and a warning is printed, so conductor fails closed on
-  an unresolvable trust base. The README example now runs the action in a job
-  that runs no code from the pull request, and says that package.json
+  The gitleaks spawn also sets `GIT_NO_REPLACE_OBJECTS=1`.
+- Security: the action no longer trusts `origin/<base>` as the trust base.
+  It fetches the base branch (forced, from the explicit server URL, with
+  `github.token` in GIT_CONFIG_* environment variables and never in argv)
+  into the private ref `refs/conductor/trust-base` and passes that full ref.
+  Two holes closed: code from the pull request that ran earlier in the job
+  could move `origin/<base>`, and a tag named `origin/<base>`, which anyone
+  who can push tags can create, is resolved by git before the remote-tracking
+  ref, so it chose the commit the rules came from. conductor now spells every
+  ref it resolves in full, refuses a short ref name that matches more than
+  one kind of ref, and refuses a `refs/remotes/origin/<base>` that
+  disagrees with the private ref. The fetch is depth 1 only when the checkout
+  is already shallow. If the fetch fails only the private ref is removed and a
+  warning naming the cause (the job needs `permissions: contents: read`) is
+  printed, so conductor fails closed; `refs/remotes/origin/*` is never touched.
+  The job now needs `contents: read`. The README example runs the action in a
+  job that runs no code from the pull request, and says that package.json
   lifecycle scripts bypass "require review on .github/workflows".
 - A run in which no gate ran at all (none enabled, or every one deferred,
   tree-unchanged or skipped) no longer carries the verdict token `pass`. It
-  carries the new closed-set token `nothing-checked`, so the action's `verdict`
-  output no longer reports a pass for a run that verified nothing. The exit
+  carries the new closed-set token `nothing-checked`, a SIXTH token that
+  consumers will now see (docs-only pull requests, equal-tree pull requests,
+  all-deferred runs). A workflow that tests the `verdict` output for `== 'pass'`
+  to mean "clean", or that lists the five earlier tokens, must add
+  `nothing-checked`. The
+  action's `verdict` output no longer reports a pass for a run that verified
+  nothing. The exit
   status is unchanged (0). The action accepts `nothing-checked` only beside
   exit status 0, and its job summary says that nothing was checked.
 

@@ -1241,6 +1241,14 @@ describe('a gate that reads history, in a shallow checkout (C2)', () => {
     expect(out.enforce).toBe(false);
   });
 
+  it('spawns gitleaks with GIT_NO_REPLACE_OBJECTS=1, so replace refs and grafts cannot cut the history it reads', () => {
+    const bin = tempDir();
+    const envLog = path.join(tempDir(), 'env.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', envLog });
+    runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(readFileSync(envLog, 'utf8')).toContain('GIT_NO_REPLACE_OBJECTS=1');
+  });
+
   it('does not touch a gate that reads the tree, or a full clone', () => {
     const bin = tempDir();
     stubGate(bin, 'dep-guard', { exit: 0, stdout: '{"findings":[]}' });

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1340,6 +1341,9 @@ describe('conductor run --text-report (issue #85)', () => {
       expect(result.status).toBe(2);
       expect(result.stderr).toMatch(/symbolic link/);
       expect(readFileSync(victim, 'utf8')).toBe('precious\n');
+      // The refusal must not arm the cleanup path: the committed link itself
+      // is still there, not unlinked by the catch block (N4).
+      expect(lstatSync(text).isSymbolicLink()).toBe(true);
     });
 
     it('still overwrites an ordinary existing file', () => {

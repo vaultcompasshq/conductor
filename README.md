@@ -1265,8 +1265,13 @@ run the repository's own scripts. Anything that runs first shares the runner
 with the gates: it can write to `GITHUB_PATH`, to the runner's temp directory
 where the action installs the gates, or to the git refs the base policy is
 read from, and then it is the pull request choosing the program that judges
-it. The action force-fetches the base ref itself, which closes the last of
-those, but it cannot close the other two from inside the job. Say it plainly:
+it. The action fetches the base branch into its own private ref and judges by
+that, which closes a moved or tag-shadowed base ref and nothing else. Only
+keeping pull-request code out of the job covers the rest: `GITHUB_ENV`
+(`NODE_OPTIONS=--require`, `GIT_CONFIG_*`, `GIT_DIR`), `GITHUB_PATH`,
+`.git/config` changes (a remote URL, `url.insteadOf`, `core.fsmonitor`,
+credential helpers, `core.sshCommand`), git hooks such as
+`reference-transaction`, and replace refs or grafts. Say it plainly:
 package.json lifecycle scripts (`preinstall`, `install`, `postinstall`,
 `prepare`) run by an install bypass "require review on `.github/workflows`",
 because the pull request supplies them, not the workflow file. Branch
