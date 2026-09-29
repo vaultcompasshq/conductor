@@ -16,6 +16,12 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Fixed
 
+- Security: `--output` (default `conductor.sarif` in the checkout) and
+  `--text-report` are no longer written through a symbolic link. A pull
+  request could commit a symlink by that name and have the run overwrite its
+  target (a hook, `.git/config`, a runner file). A link at the final path,
+  dangling or not, is refused with exit 2, and the file is opened with
+  O_NOFOLLOW where the platform has it. The write order is unchanged.
 - The pull request comment no longer blames the registry for every
   did-not-verify state. It branches on what happened: a refusal by the
   action's own validate step (a backward pin, a trust-base input on a pull

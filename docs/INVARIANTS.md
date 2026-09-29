@@ -4143,6 +4143,18 @@ with blocked (N), status 2 with could-not-run, and otherwise publishes
 could-not-run (non-zero status) or unknown (status 0) and deletes the report
 file, so the comment step says it produced none.
 
+REPORT FILES ARE NEVER WRITTEN THROUGH A SYMBOLIC LINK. `--output` defaults to
+`conductor.sarif` in the checkout, and a pull request can commit a symlink of
+that name pointing at a hook, `.git/config` or a runner file. `writeReportFile`
+(src/cli.ts) lstats the final path and refuses a link, dangling or not, with a
+could-not-run exit (2), and opens with O_NOFOLLOW where the platform has it so
+a link swapped in after the check is refused by the kernel. Applies to
+`--output` and `--text-report` alike; the refusal for the text report happens
+before its cleanup path is armed, so a refused link is never unlinked. Only the
+FINAL path component is covered: a symlinked parent directory is not, which is
+a known limit. Pinned by "never writes through a symbolic link the pull request
+committed" in tests/cli.test.ts.
+
 THE TOKEN DECIDES NOTHING. `verdictToken` reads `result.exitCode`, which
 `composeExitCode` already produced, and the `enforce` flags already on the
 gates. It is a label for the umbrella's own exit decision, never a verdict
