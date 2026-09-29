@@ -18,6 +18,8 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { PRIVATE_TRUST_BASE_REF, refuseAmbiguousRef, resolveRev } from './trust-base.js';
+
 export interface BaseResolution {
   ref: string;
   /** Which input named it, so the report can say. */
@@ -47,6 +49,62 @@ export function resolveBaseRef(options: {
     return { ref: `origin/${fromGithub}`, source: 'github' };
   }
   return null;
+}
+
+export type ResolvedBase =
+  | { ok: true; base: BaseResolution | null }
+  | { ok: false; detail: string };
+
+/**
+ * The base to diff against, resolved against the repository and always
+ * spelled so a tag cannot shadow it (the same class as the trust base: git
+ * resolves a short origin/<base> through refs/tags/ first, so a tag at
+ * HEAD~1 would narrow the change set to the last commit).
+ *
+ *  - An explicit --base keeps its meaning, but a short name that matches
+ *    more than one kind of ref is refused (refuseAmbiguousRef).
+ *  - Otherwise, on a pull request: refs/conductor/trust-base (the composite
+ *    action's private fetch) when it exists, else refs/remotes/origin/<base>,
+ *    both in full. If both exist they must name the same commit, or the run
+ *    is refused. If neither exists the spelled remote ref is returned and the
+ *    diff fails closed, naming fetch-depth: 0.
+ *  - Null outside a pull request.
+ *
+ * Nothing is deepened here: a depth-1 private ref has no merge base and the
+ * diff fails closed, the same outcome as a depth-1 origin/<base> always had.
+ */
+export function resolveBaseRefInRepo(
+  repoRoot: string,
+  options: { base?: string; env: NodeJS.ProcessEnv }
+): ResolvedBase {
+  if (options.base !== undefined && options.base !== '') {
+    const ambiguous = refuseAmbiguousRef(repoRoot, options.base);
+    if (ambiguous !== null) {
+      return { ok: false, detail: ambiguous };
+    }
+    return { ok: true, base: { ref: options.base, source: 'flag' } };
+  }
+  const fromGithub = options.env.GITHUB_BASE_REF;
+  if (fromGithub === undefined || fromGithub === '') {
+    return { ok: true, base: null };
+  }
+  const remoteRef = `refs/remotes/origin/${fromGithub}`;
+  const remote = resolveRev(repoRoot, remoteRef, 'commit');
+  const priv = resolveRev(repoRoot, PRIVATE_TRUST_BASE_REF, 'commit');
+  if (remote !== null && priv !== null && remote !== priv) {
+    return {
+      ok: false,
+      detail:
+        `refusing to measure the intent gate against a base that two refs disagree about: ` +
+        `"${PRIVATE_TRUST_BASE_REF}" resolves to ${priv}, and "${remoteRef}" resolves to ${remote}, ` +
+        'a different commit: something moved one of them, so neither can be trusted. ' +
+        'Nothing was checked. If the checkout is shallow, use fetch-depth: 0.',
+    };
+  }
+  return {
+    ok: true,
+    base: { ref: priv !== null ? PRIVATE_TRUST_BASE_REF : remoteRef, source: 'github' },
+  };
 }
 
 /**

@@ -124,7 +124,7 @@ export function refuseAmbiguousRef(repoRoot: string, ref: string): string | null
  * forwarding on failure: the caller writes a sentence a reader can act on
  * rather than repeating the command line that failed.
  */
-function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): string | null {
+export function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): string | null {
   const child = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${rev}^{${kind}}`], {
     cwd: repoRoot,
     encoding: 'utf8',

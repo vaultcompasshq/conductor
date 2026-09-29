@@ -16,6 +16,12 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Fixed
 
+- Security: the intent gate's base is now spelled in full as well. A tag named
+  `origin/<base>` at an earlier commit used to make the gate judge only the
+  last commit. On a pull request it now uses `refs/conductor/trust-base` if
+  present, else `refs/remotes/origin/<base>`, refuses (exit 2) when both exist
+  and disagree, and an explicit `--base` that a tag shadows is refused. A
+  depth-1 checkout still fails closed, naming `fetch-depth: 0`.
 - The public-hygiene guard's allowlist (CONTRIBUTING.md and the guard script)
   now exempts the two path checks only. The hashed-token scan runs on every
   tracked file, allowlisted ones included; before, a blocked name could sit in

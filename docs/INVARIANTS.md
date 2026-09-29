@@ -1038,8 +1038,20 @@ files behind `GITHUB_ENV` (`NODE_OPTIONS=--require`, `GIT_CONFIG_*`,
 `url.insteadOf`, `core.fsmonitor`, credential helpers, `core.sshCommand`), git
 hooks such as `reference-transaction`, and replace refs or grafts. (The
 gitleaks spawn sets `GIT_NO_REPLACE_OBJECTS=1`, which narrows the last one for
-that gate only.) KNOWN OPEN: the intent gate's `--base` default is still the
-short `origin/<GITHUB_BASE_REF>` (src/intent-base.ts), which a tag can shadow.
+that gate only.)
+
+THE INTENT GATE'S BASE IS SPELLED IN FULL TOO (`resolveBaseRefInRepo`,
+src/intent-base.ts). On a pull request with no explicit `--base` it is
+`refs/conductor/trust-base` when that exists, else
+`refs/remotes/origin/<GITHUB_BASE_REF>`; if both exist they must name the same
+commit or the intent gate is could-not-run (exit 2) with a message naming both.
+An explicit `--base` keeps its meaning but goes through `refuseAmbiguousRef`, so
+a shadowed short name is refused. Nothing is deepened: a depth-1 private ref
+has no merge base and the diff fails closed naming `fetch-depth: 0`, as a
+depth-1 `origin/<base>` always did. Pinned by "resolveBaseRefInRepo: fully
+spelled, never shadowable" in tests/intent-base.test.ts (a tag `origin/main` at
+HEAD~1 does not narrow the change set; private ref alone is used; disagreement
+refused; ambiguous explicit `--base` refused).
 
 WHAT THE PIN DOES NOT PROTECT, stated here because an earlier revision of
 this entry claimed it did. That revision said the workflow file is read from

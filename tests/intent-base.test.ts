@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:
 import os from 'node:os';
 import path from 'node:path';
 
-import { changedPathsSince, resolveBaseRef } from '../src/intent-base.js';
+import { changedPathsSince, resolveBaseRef, resolveBaseRefInRepo } from '../src/intent-base.js';
 
 const temps: string[] = [];
 
@@ -84,6 +84,110 @@ describe('resolveBaseRef', () => {
     // request. "origin/" is not a ref, and it would fail the run closed on
     // every push build.
     expect(resolveBaseRef({ env: { GITHUB_BASE_REF: '' } })).toBeNull();
+  });
+});
+
+/**
+ * The tag-shadow class (B1) for the intent gate's own base: a short
+ * origin/<base> resolves through refs/tags/ first, so a tag of that name at
+ * HEAD~1 would narrow the change set to the last commit.
+ */
+describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
+  const PRIVATE = 'refs/conductor/trust-base';
+
+  /** main is the base (also refs/remotes/origin/main); feat has two commits. */
+  function twoCommitBranch(): { root: string; base: string; headMinusOne: string } {
+    const root = repoWithMain();
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['update-ref', 'refs/remotes/origin/main', base]);
+    git(root, ['checkout', '--quiet', '-b', 'feat/x']);
+    write(root, 'src/one.ts', 'export const one = 1;\n');
+    commit(root, 'first');
+    const headMinusOne = git(root, ['rev-parse', 'HEAD']).trim();
+    write(root, 'src/two.ts', 'export const two = 2;\n');
+    commit(root, 'second');
+    return { root, base, headMinusOne };
+  }
+  const env = { GITHUB_BASE_REF: 'main' };
+
+  it('a tag origin/main at HEAD~1 no longer narrows the change set', () => {
+    const { root, headMinusOne } = twoCommitBranch();
+    git(root, ['tag', 'origin/main', headMinusOne]);
+
+    const resolved = resolveBaseRefInRepo(root, { env });
+
+    expect(resolved).toEqual({ ok: true, base: { ref: 'refs/remotes/origin/main', source: 'github' } });
+    if (!resolved.ok || resolved.base === null) throw new Error('unreachable');
+    expect(changedPathsSince(root, resolved.base.ref)).toEqual({
+      ok: true,
+      paths: ['src/one.ts', 'src/two.ts'],
+    });
+  });
+
+  it('uses refs/conductor/trust-base when it is the only one present', () => {
+    const { root, base } = twoCommitBranch();
+    git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    git(root, ['update-ref', PRIVATE, base]);
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: PRIVATE, source: 'github' },
+    });
+  });
+
+  it('refuses when both exist and name different commits, naming both', () => {
+    const { root, base, headMinusOne } = twoCommitBranch();
+    git(root, ['update-ref', PRIVATE, headMinusOne]);
+    const resolved = resolveBaseRefInRepo(root, { env });
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) throw new Error('unreachable');
+    expect(resolved.detail).toContain(PRIVATE);
+    expect(resolved.detail).toContain('refs/remotes/origin/main');
+    expect(resolved.detail).toContain(base.slice(0, 12));
+    expect(resolved.detail).toContain(headMinusOne.slice(0, 12));
+    expect(resolved.detail).toMatch(/something moved one of them/);
+  });
+
+  it('accepts both when they name the same commit', () => {
+    const { root, base } = twoCommitBranch();
+    git(root, ['update-ref', PRIVATE, base]);
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: PRIVATE, source: 'github' },
+    });
+  });
+
+  it('with neither present, hands back the spelled remote ref so the diff fails closed naming fetch-depth: 0', () => {
+    const { root } = twoCommitBranch();
+    git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    const resolved = resolveBaseRefInRepo(root, { env });
+    expect(resolved).toEqual({ ok: true, base: { ref: 'refs/remotes/origin/main', source: 'github' } });
+    if (!resolved.ok || resolved.base === null) throw new Error('unreachable');
+    const changed = changedPathsSince(root, resolved.base.ref);
+    expect(changed.ok).toBe(false);
+    if (changed.ok) throw new Error('unreachable');
+    expect(changed.detail).toMatch(/fetch-depth: 0/);
+  });
+
+  it('refuses an explicit --base that a tag shadows, and keeps an unambiguous explicit one', () => {
+    const { root, headMinusOne } = twoCommitBranch();
+    git(root, ['tag', 'origin/main', headMinusOne]);
+    const refused = resolveBaseRefInRepo(root, { base: 'origin/main', env });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    expect(refused.detail).toMatch(/ambiguous/);
+    expect(resolveBaseRefInRepo(root, { base: 'refs/remotes/origin/main', env })).toEqual({
+      ok: true,
+      base: { ref: 'refs/remotes/origin/main', source: 'flag' },
+    });
+    expect(resolveBaseRefInRepo(root, { base: 'HEAD~1', env })).toEqual({
+      ok: true,
+      base: { ref: 'HEAD~1', source: 'flag' },
+    });
+  });
+
+  it('is null outside a pull request', () => {
+    const { root } = twoCommitBranch();
+    expect(resolveBaseRefInRepo(root, { env: {} })).toEqual({ ok: true, base: null });
   });
 });
 
