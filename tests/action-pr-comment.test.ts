@@ -65,7 +65,17 @@ function stepEnv(id: string): Record<string, string> {
  */
 function runPrCommentScript(
   extraEnv: Record<string, string>,
-  { mktempFails = false }: { mktempFails?: boolean } = {},
+  {
+    mktempFails = false,
+    textReportBody,
+    emptyTextReport = false,
+  }: {
+    mktempFails?: boolean;
+    /** Body of the report the gates step is said to have written; sets TEXT_REPORT to it. */
+    textReportBody?: string;
+    /** TEXT_REPORT names a file, but conductor died before writing anything to it. */
+    emptyTextReport?: boolean;
+  } = {},
 ): {
   status: number | null;
   stdout: string;
@@ -123,9 +133,19 @@ function runPrCommentScript(
       chmodSync(mktempShim, 0o755);
     }
 
+    const textReportPath = path.join(dir, 'conductor-text-report.txt');
+    if (textReportBody !== undefined) {
+      writeFileSync(textReportPath, textReportBody);
+    } else if (emptyTextReport) {
+      writeFileSync(textReportPath, '');
+    }
+    const textReportEnv =
+      textReportBody !== undefined || emptyTextReport ? { TEXT_REPORT: textReportPath } : {};
+
     const result = spawnSync('bash', ['-c', prCommentScript], {
       encoding: 'utf8',
       env: {
+        ...textReportEnv,
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
         // The step invokes the umbrella by absolute path now, so the stub has
         // to be reachable that way rather than only through PATH.
@@ -258,12 +278,16 @@ describe('action.yml: the pr-comment step', () => {
     expect(prCommentScript).not.toMatch(/--compact-on-refresh\b/);
     expect(prCommentScript).toMatch(/--compact-on-refusal\b/);
 
-    // The gates step still gets the FULL report: its own text or SARIF
-    // output is what a developer without pr-comment enabled reads, and
-    // shrinking that would swallow the only report of a refusal some
-    // adopters ever see.
+    // The gates step passes it too, now that its run writes the comment's
+    // text report (--text-report), and ONLY together with that flag: it is a
+    // text-only option, so the SARIF log a developer without pr-comment
+    // reads is unaffected, and an installed conductor without --text-report
+    // is never handed a flag it might not know either.
     const gatesScript = steps.find((step) => step.id === 'gates')?.run ?? '';
-    expect(gatesScript).not.toMatch(/--compact-on-refusal\b/);
+    expect(gatesScript).toMatch(
+      /ARGS\+=\(--verbose --compact-on-refusal --text-report "\$TEXT_REPORT"\)/
+    );
+    expect(gatesScript).not.toMatch(/--compact-on-refresh\b/);
   });
 
   it('posts a could-not-run note instead of rendering with an unverified binary', () => {
@@ -298,11 +322,62 @@ describe('action.yml: the pr-comment step', () => {
     expect(unverified.reportBody).toContain('one bad sig');
     expect(unverified.reportBody).toMatch(/registry or sigstore outage/i);
 
-    // The control. With the positive flag the render run does happen, so the
-    // assertion above is measuring the branch rather than a stub that never
-    // runs in either case.
-    const verified = runPrCommentScript({ VERIFICATION_OK: 'true' });
+    // The control. With the positive flag AND the fallback marker (an
+    // installed conductor too old to write the report itself) the render run
+    // does happen, so the assertion above is measuring the branch rather
+    // than a stub that never runs in either case.
+    const verified = runPrCommentScript({ VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' });
     expect(verified.conductorRan).toBe(true);
+  });
+
+  it('does not run conductor at all when the gates step wrote the report, and posts that file (issue #85)', () => {
+    // The comment is the same run's answer as the job's exit code and the
+    // verdict token, because it IS the file that run wrote. Zero invocations
+    // is the property: a second run is exactly what could disagree.
+    const body = 'conductor 9.9.9\nverdict-token: advisory-blocked (1)\nconductor run: 3 gate(s), 1 finding(s)\n';
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true' }, { textReportBody: body });
+
+    expect(run.status).toBe(0);
+    expect(run.conductorRan).toBe(false);
+    expect(run.conductorArgv).toEqual([]);
+    expect(run.reportBody).toBe(body);
+    expect(run.nodeArgv).toContain('--report');
+  });
+
+  it('prefers the written report over the fallback marker, so the fallback cannot shadow a real report', () => {
+    const body = 'conductor 9.9.9\nverdict-token: pass\n';
+    const run = runPrCommentScript(
+      { VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' },
+      { textReportBody: body }
+    );
+    expect(run.conductorRan).toBe(false);
+    expect(run.reportBody).toBe(body);
+  });
+
+  it('still posts the could-not-run note, and runs nothing, when unverified even if a report file exists', () => {
+    const run = runPrCommentScript(
+      { VERIFICATION_REASON: 'one bad sig' },
+      { textReportBody: 'conductor 9.9.9\nverdict-token: pass\n' }
+    );
+    expect(run.conductorRan).toBe(false);
+    expect(run.reportBody).toContain('Conductor could not run.');
+    expect(run.reportBody).toContain('one bad sig');
+    expect(run.reportBody).not.toContain('verdict-token: pass');
+  });
+
+  it('says so, and runs nothing, when the gates step left an empty report behind', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true' }, { emptyTextReport: true });
+    expect(run.status).toBe(0);
+    expect(run.conductorRan).toBe(false);
+    expect(run.reportBody).toContain('Conductor did not produce a report');
+    expect(run.reportBody).toContain('not a finding about this repository');
+    expect(run.nodeArgv).toContain('--report');
+  });
+
+  it('says so, and runs nothing, when the gates step never ran and there is no fallback marker', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true' });
+    expect(run.conductorRan).toBe(false);
+    expect(run.reportBody).toContain('Conductor did not produce a report');
   });
 
   it('never fails the job on a blocking verdict: the gates step alone owns that exit code', () => {
@@ -373,12 +448,23 @@ describe('action.yml: the pr-comment step mirrors --advisory', () => {
       // VERIFICATION_OK is set so the render run actually happens; see the
       // verification-branch tests above, which prove the render is skipped
       // otherwise.
-      const on = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: 'true' });
+      // REPORT_FALLBACK: this is the render run an old conductor still gets;
+      // when the gates step wrote the report there is no render run to pass
+      // --advisory to (the gates step's own copy of the flag decided it).
+      const on = runPrCommentScript({
+        VERIFICATION_OK: 'true',
+        REPORT_FALLBACK: 'true',
+        ADVISORY: 'true',
+      });
       expect(on.status).toBe(0);
       expect(on.conductorRan).toBe(true);
       expect(on.conductorArgv).toContain('--advisory');
 
-      const off = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: 'false' });
+      const off = runPrCommentScript({
+        VERIFICATION_OK: 'true',
+        REPORT_FALLBACK: 'true',
+        ADVISORY: 'false',
+      });
       expect(off.status).toBe(0);
       expect(off.conductorRan).toBe(true);
       expect(off.conductorArgv).not.toContain('--advisory');
@@ -394,7 +480,11 @@ describe('action.yml: the pr-comment step mirrors --advisory', () => {
       // the test above fully green, because it only ever drove 'true' and
       // 'false'.
       for (const value of ['TRUE', 'yes', '1', '']) {
-        const result = runPrCommentScript({ VERIFICATION_OK: 'true', ADVISORY: value });
+        const result = runPrCommentScript({
+          VERIFICATION_OK: 'true',
+          REPORT_FALLBACK: 'true',
+          ADVISORY: value,
+        });
         expect([value, result.status]).toEqual([value, 0]);
         expect([value, result.conductorRan]).toEqual([value, true]);
         expect([value, result.conductorArgv.includes('--advisory')]).toEqual([value, false]);

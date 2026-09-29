@@ -108,11 +108,11 @@ inputs:
       unaffected and still fails the run: this input changes what a FINDING
       does, never what a broken gate does, so a crashed install or a missing
       policy on the base ref still shows red rather than a silent green.
-      Passed straight through as conductor run's own --advisory flag, to both
-      the gates step and, when pr-comment is on, the step that renders the
-      pull request comment, so the comment's own verdict line matches the
-      job's actual exit code. Off by default, so an existing consumer is
-      unaffected.
+      Passed straight through as conductor run's own --advisory flag. The one
+      run that decides the job's exit code also renders the pull request
+      comment's text report (see --text-report), so the comment's verdict
+      line and its verdict token match the job's actual exit code. Off by
+      default, so an existing consumer is unaffected.
     default: 'false'
 
 outputs:
@@ -121,6 +121,17 @@ outputs:
       The SARIF log this action wrote, relative to the workspace rather than to
       working-directory, since that is where the caller's upload step runs.
     value: ${{ steps.gates.outputs.sarif }}
+  verdict:
+    description: >-
+      The verdict token of the run that decided this job's exit code: one of
+      pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or
+      could-not-run, spelled exactly as the second line of the text report
+      carries it. It is a label for conductor's own exit decision and decides
+      nothing itself. could-not-run also when the gate packages could not be
+      verified and so no gate ran. Empty when the installed conductor-version
+      predates the token (it has no --text-report), and when the run stopped
+      before the install step got as far as the audit.
+    value: ${{ steps.gates.outputs.verdict || steps.install.outputs.verdict }}
 
 runs:
   using: composite
@@ -655,13 +666,19 @@ runs:
         # actually passed. See issue #81.
         audit_status=0
         audit_out="$( ( cd "$npm_config_prefix/lib" && npm audit signatures ) 2>&1 )" || audit_status=$?
-        printf '%s\n' "$audit_out"
+        # CARRIAGE RETURNS STRIPPED from the raw print, both attempts (issue
+        # #83). A lone CR is a line terminator to the runner's log reader, so
+        # text after one in npm's output would start a fresh line and be
+        # honoured as a workflow command. The same reasoning as the tr
+        # flattening on the error and notice arguments below; this print is
+        # the one place that still emitted the bytes as they came.
+        printf '%s\n' "$audit_out" | tr -d '\r'
         if [ "$audit_status" -ne 0 ]; then
           first_reason="$(printf '%s' "$audit_out" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
           sleep "$AUDIT_RETRY_DELAY_SECONDS"
           audit_status=0
           audit_out="$( ( cd "$npm_config_prefix/lib" && npm audit signatures ) 2>&1 )" || audit_status=$?
-          printf '%s\n' "$audit_out"
+          printf '%s\n' "$audit_out" | tr -d '\r'
           if [ "$audit_status" -eq 0 ]; then
             printf '::notice::conductor: the registry signature audit failed once and passed on retry; the first attempt said: %s\n' "$first_reason"
           fi
@@ -680,6 +697,14 @@ runs:
           audit_reason="attempted twice, $AUDIT_RETRY_DELAY_SECONDS seconds apart. $(printf '%s' "$audit_out" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
           printf 'verification-failed=true\n' >> "$GITHUB_OUTPUT"
           printf 'verification-reason=%s\n' "$audit_reason" >> "$GITHUB_OUTPUT"
+          # The verdict for a run whose gates never ran: could-not-run, with
+          # the reason on the job summary. The gates step does not run after
+          # this step fails, so this is the only place either can be said.
+          # The reason is the flattened one above.
+          printf 'verdict=could-not-run\n' >> "$GITHUB_OUTPUT"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            printf 'conductor verdict: could-not-run (%s)\n\n' "$audit_reason" >> "$GITHUB_STEP_SUMMARY"
+          fi
           printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. %s\n' "$audit_reason"
           exit "$audit_status"
         fi
@@ -730,6 +755,10 @@ runs:
         OUTPUT: ${{ inputs.output }}
         WORKDIR: ${{ inputs.working-directory }}
         ADVISORY: ${{ inputs.advisory }}
+        # Where the text report of the same run goes, under the runner temp:
+        # outside the workspace, so the tree being judged can neither
+        # pre-place nor read it.
+        TEXT_REPORT: ${{ runner.temp }}/conductor-text-report.txt
       run: |
         set -eu
 
@@ -751,6 +780,54 @@ runs:
         # containing a bracket or a star is matched against the workspace,
         # handing the gate whatever happens to be checked out.
         ARGS=(run --stage "$STAGE" --format sarif --output "$OUTPUT")
+
+        # ONE RUN, TWO OUTPUTS (issue #85). The same run that writes the SARIF
+        # log and sets this step's exit code also writes the text report, with
+        # --text-report, into the runner temp. The verdict token below is read
+        # from THAT file, and the pull request comment step posts THAT file, so
+        # the token, the comment and the job's exit code are all one run's
+        # answer. Before this the comment came from a second run of the gates,
+        # which could disagree with the first whenever a gate's answer was time
+        # or network dependent.
+        #
+        # ONLY WHEN THE INSTALLED CONDUCTOR HAS THE FLAG, decided by asking the
+        # installed binary rather than by comparing version numbers. The
+        # conductor-version input installs whatever it says, and a version older
+        # than the one that added --text-report exits 2 on an unknown option:
+        # passing it blindly would turn every run pinned there into
+        # could-not-run. The backward-pin rule in the validate step does NOT
+        # cover this. It only guards pull_request events, and it compares
+        # against the TAG_CONDUCTOR constants, which move with a release; a
+        # push run may pin any older version, and a tag whose constants have
+        # not been raised past the flag's version would let one through on a
+        # pull request too. Asking the binary is right for both. An older
+        # conductor takes the fallback below: no --text-report, no token, and
+        # the comment step renders its report the way it always did, with a
+        # second run.
+        #
+        # `|| true` because a help request that fails means "cannot tell", and
+        # cannot tell takes the fallback, which is the behaviour this action
+        # had before the flag existed.
+        text_report_supported=0
+        conductor_help="$("$CONDUCTOR_BIN" run --help 2>/dev/null || true)"
+        case "$conductor_help" in
+          *--text-report*) text_report_supported=1 ;;
+        esac
+        if [ "$text_report_supported" -eq 1 ]; then
+          # Removed first, so that a run that dies before writing one cannot
+          # leave a previous invocation's report (the same runner temp serves a
+          # second use of this action in one job) to be read as this one's.
+          rm -f "$TEXT_REPORT"
+          printf 'text-report=%s\n' "$TEXT_REPORT" >> "$GITHUB_OUTPUT"
+          # --verbose and --compact-on-refusal are the two the comment has
+          # always asked for: a clean run still gets the full report and its
+          # token line, and a refused trust base gets the short body. Both are
+          # text-only flags, so the SARIF log is untouched.
+          ARGS+=(--verbose --compact-on-refusal --text-report "$TEXT_REPORT")
+        else
+          printf 'report-fallback=true\n' >> "$GITHUB_OUTPUT"
+        fi
+
         # Only when the base-ref input actually named one. Left empty, the
         # umbrella reads GITHUB_BASE_REF itself and treats an empty value as
         # "not a pull request", which is what a push build wants; passing
@@ -862,14 +939,65 @@ runs:
         # node_modules/.bin/conductor: that is the head's own install, chosen
         # by the head's own lockfile, and running it would let a pull request
         # choose the program that judges it.
-        "$CONDUCTOR_BIN" "${ARGS[@]}"
+        #
+        # CAPTURED, then re-raised at the very end. The verdict summary and
+        # output below have to be written whatever conductor said, and under
+        # set -e a non-zero here would end the step before they were. This
+        # step's exit status is conductor's own, in every state, and nothing
+        # after this line may change it.
+        status=0
+        "$CONDUCTOR_BIN" "${ARGS[@]}" || status=$?
+
+        # NOTHING BELOW MAY FAIL THE STEP. errexit is off from here: a summary
+        # or output write that fails must not turn conductor's exit 0 into a
+        # failure, and the `exit "$status"` at the bottom is the only exit.
+        set +e
+        if [ "$text_report_supported" -eq 1 ]; then
+          # The token line is the SECOND line of the report conductor wrote,
+          # read from the file and from no other source, and taken as data:
+          # it is flattened to one line (CR, LF and tab to a space, the same
+          # tr idiom the install step uses) before it goes anywhere near
+          # GITHUB_OUTPUT or the summary, so nothing in it can start a second
+          # line, whether a workflow command or another output. The report
+          # can carry text from the scanned repository, which is why line 2
+          # specifically is read rather than the first line that looks like a
+          # token: a finding's own text could contain one.
+          verdict_token=""
+          if [ -f "$TEXT_REPORT" ]; then
+            token_line="$(sed -n '2p' "$TEXT_REPORT")"
+            case "$token_line" in
+              'verdict-token: '*) verdict_token="${token_line#verdict-token: }" ;;
+            esac
+          fi
+          verdict_token="$(printf '%s' "$verdict_token" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
+          if [ -z "$verdict_token" ]; then
+            # No readable token. A non-zero exit with no report is a run that
+            # could not produce a verdict; a zero exit with none is not
+            # something the closed set has a word for.
+            if [ "$status" -ne 0 ]; then
+              verdict_token="could-not-run"
+            else
+              verdict_token="unknown"
+            fi
+          fi
+          printf 'verdict=%s\n' "$verdict_token" >> "$GITHUB_OUTPUT"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            printf 'conductor verdict: %s\n\n' "$verdict_token" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+        exit "$status"
 
     # OPT-IN, and OFF by an existing consumer's default. The README's own
-    # manual recipe ("The report as a pull request comment") already shows
-    # how to do this by hand: a second run of the gates in --format text,
-    # piped to `gh pr comment`. This step is the same idea, built in, made
-    # STICKY across re-runs with a hidden marker, and made FORK-SAFE: a
-    # posting failure warns and never fails the job.
+    # manual recipe ("The report as a pull request comment") shows how to do
+    # this by hand, piping a text report to `gh pr comment`. This step is the
+    # same idea, built in, made STICKY across re-runs with a hidden marker,
+    # and made FORK-SAFE: a posting failure warns and never fails the job.
+    #
+    # IT POSTS THE REPORT THE GATES STEP WROTE and never runs the gates
+    # itself, so the comment is the same run's answer as the job's exit code
+    # and the verdict token (issue #85). The one exception is an installed
+    # conductor too old to have --text-report, which the gates step flags
+    # with report-fallback, and which then gets the second run it always did.
     #
     # always(): composite-action steps stop after a failing prior step, and
     # the gates step above is exactly the one that fails on a blocking
@@ -894,6 +1022,11 @@ runs:
         # after the audit has actually passed. REASON is for the message.
         VERIFICATION_OK: ${{ steps.install.outputs.verification-ok }}
         VERIFICATION_REASON: ${{ steps.install.outputs.verification-reason }}
+        # From the gates step: the text report its own run wrote (empty when
+        # the step never got that far), and report-fallback when the installed
+        # conductor is too old to write one. See the note in the script.
+        TEXT_REPORT: ${{ steps.gates.outputs.text-report }}
+        REPORT_FALLBACK: ${{ steps.gates.outputs.report-fallback }}
         # The same absolute path the gates step uses, for the same reasons.
         # This step is where the missing-binary line actually surfaced on
         # 2026-09-22, because it runs `if: always()` and so ran after the
@@ -932,13 +1065,21 @@ runs:
       run: |
         set -eu
 
-        # A SECOND RUN OF THE GATES, purely to render the text report. The
-        # gates step above already wrote the verdict as SARIF; conductor has
-        # one format per run, so getting the human-readable report this
-        # action already documents (the README's own "conductor: clean,
-        # nothing blocked..." line) means asking again. `|| true`,
-        # deliberately: a blocking finding is this run's non-zero exit, and
-        # that verdict belongs to the gates step, not to this one.
+        # THIS STEP DOES NOT RUN THE GATES. The gates step already wrote the
+        # human-readable report, from the same run that wrote the SARIF log and
+        # set the job's exit code (--text-report, issue #85), and that file is
+        # what gets posted. So the comment, the verdict token on its second
+        # line and the job's verdict are one run's answer. This step used to
+        # re-run conductor purely to render text, since a run has one format,
+        # and the two runs could disagree whenever a gate's answer was time or
+        # network dependent.
+        #
+        # The ONE case that still runs conductor here is the fallback: an
+        # installed conductor too old to have --text-report, which the gates
+        # step marks with report-fallback. It is the render run this step
+        # always did, with `|| true` for the same reason as ever: a blocking
+        # finding is that run's non-zero exit, and the verdict belongs to the
+        # gates step.
         #
         # Guarded, deliberately: this assignment runs under `set -eu` before
         # any `|| true` appears in the step. Left bare, a `mktemp` failure
@@ -989,13 +1130,31 @@ runs:
         # verification failed" on their own pull request will reasonably fear
         # a compromise; the common cause is a transient outage and the comment
         # has to say so, or it escalates a hiccup into an incident.
-        if [ "${VERIFICATION_OK:-}" = "true" ]; then
-          "$CONDUCTOR_BIN" "${ARGS[@]}" || true
-        else
+        #
+        # FOUR BRANCHES, in this order:
+        #   1. not verified: the note above, and conductor is never run.
+        #   2. verified and the gates step wrote a non-empty text report: post
+        #      that file, byte for byte, and run nothing.
+        #   3. verified, and the gates step flagged an old conductor: the
+        #      fallback render run.
+        #   4. verified, but there is no report: the gates step did not get as
+        #      far as writing one, or conductor died before it did. Say that,
+        #      rather than post an empty comment or a stale one; the gates
+        #      step removes any previous file before it runs.
+        if [ "${VERIFICATION_OK:-}" != "true" ]; then
           {
             printf '%s\n\n' 'Conductor could not run. The gate packages were not verified, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
             printf '%s\n\n' "${VERIFICATION_REASON:-No reason was recorded. The job log has the failing step.}"
             printf '%s\n' 'Conductor verifies its tools against the registry before running, and refuses to trust one it could not verify. A registry or sigstore outage produces this too.'
+          } > "$REPORT_FILE"
+        elif [ -n "${TEXT_REPORT:-}" ] && [ -s "$TEXT_REPORT" ]; then
+          REPORT_FILE="$TEXT_REPORT"
+        elif [ "${REPORT_FALLBACK:-}" = "true" ]; then
+          "$CONDUCTOR_BIN" "${ARGS[@]}" || true
+        else
+          {
+            printf '%s\n\n' 'Conductor did not produce a report on this run, so there is nothing to show here. The gates step stopped before it wrote one. This is not a finding about this repository.'
+            printf '%s\n' 'The job log has the failing step.'
           } > "$REPORT_FILE"
         fi
 

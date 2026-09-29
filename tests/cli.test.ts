@@ -396,7 +396,7 @@ describe('conductor run --output', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe(
-      `conductor run: 3 gate(s), 0 finding(s); sarif report written to ${target}\n`
+      `conductor run: 3 gate(s), 0 finding(s); verdict-token pass; sarif report written to ${target}\n`
     );
   });
 
@@ -1108,6 +1108,173 @@ describe('conductor run --advisory', () => {
   );
 });
 
+describe('conductor run --text-report (issue #85)', () => {
+  const BLOCKED = JSON.stringify({
+    status: 'blocked',
+    exitCode: 1,
+    reasons: ['Budget soft_block: Changed 2 files, budget allows 1'],
+    contractFound: true,
+    contractFrozen: true,
+    budget: {
+      ok: false,
+      action: 'soft_block',
+      violations: [
+        {
+          fingerprint: 'a12fc3e4',
+          rule: 'max_files',
+          severity: 'soft_block',
+          message: 'Changed 2 files, budget allows 1',
+          matched: ['a.js', 'b.js'],
+        },
+      ],
+    },
+  });
+  const INTENT_ONLY = 'version: 1\ngates:\n  intent:\n    product: intent-guard\n';
+
+  it('writes the SARIF log and the text report from ONE run, each gate spawned once', () => {
+    const repo = repoWithPolicy();
+    const bin = tempDir();
+    const argvLog = path.join(tempDir(), 'argv.log');
+    writeFileSync(argvLog, '');
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, argvLog });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, argvLog });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, argvLog });
+    const out = tempDir();
+    const sarif = path.join(out, 'conductor.sarif');
+    const text = path.join(out, 'report.txt');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', sarif, '--text-report', text, '--verbose'],
+      bin
+    );
+
+    expect(result.status).toBe(0);
+    expect((JSON.parse(readFileSync(sarif, 'utf8')) as { version: string }).version).toBe('2.1.0');
+    const report = readFileSync(text, 'utf8').split('\n');
+    expect(report[0]).toMatch(/^conductor \d/);
+    expect(report[1]).toBe('verdict-token: pass');
+    // One invocation per gate. A second run of the gates, which is what this
+    // option exists to remove, would log every gate twice.
+    const calls = readFileSync(argvLog, 'utf8').split('\n').filter((line) => line.length > 0);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('writes what --format text would have rendered for the same result', () => {
+    const { repo, bin } = (() => {
+      const dir = repoWithPolicy(INTENT_ONLY);
+      const binDir = tempDir();
+      stubGate(binDir, 'intent-guard', { stdout: BLOCKED, exit: 1 });
+      return { repo: dir, bin: binDir };
+    })();
+    const out = tempDir();
+    const text = path.join(out, 'report.txt');
+
+    const both = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', path.join(out, 's.sarif'), '--text-report', text, '--advisory'],
+      bin
+    );
+    const plain = runCli(repo, ['run', '--staged', '--advisory'], bin);
+
+    expect(both.status).toBe(0);
+    // Equal but for the gate's own wall-clock time, which differs between
+    // two separate runs (this test runs the gates twice on purpose).
+    const withoutTiming = (body: string): string => body.replace(/\d+ms/g, 'Nms');
+    expect(withoutTiming(readFileSync(text, 'utf8'))).toBe(withoutTiming(plain.stdout));
+    expect(plain.stdout.split('\n')[1]).toMatch(/^verdict-token: advisory-blocked \(\d+\)$/);
+  });
+
+  it('keeps the exit code of the run, and the token agrees with it', () => {
+    const repo = repoWithPolicy(INTENT_ONLY);
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: BLOCKED, exit: 1 });
+    const out = tempDir();
+    const text = path.join(out, 'report.txt');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', path.join(out, 's.sarif'), '--text-report', text],
+      bin
+    );
+
+    expect(result.status).toBe(1);
+    expect(readFileSync(text, 'utf8').split('\n')[1]).toMatch(/^verdict-token: blocked \(\d+\)$/);
+    expect(result.stdout).toMatch(/; verdict-token blocked \(\d+\); sarif report written to /);
+  });
+
+  it('says could-not-run in the report and exits 2 when a gate is missing', () => {
+    const repo = repoWithPolicy(INTENT_ONLY);
+    const out = tempDir();
+    const text = path.join(out, 'report.txt');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', path.join(out, 's.sarif'), '--text-report', text, '--advisory'],
+      tempDir()
+    );
+
+    expect(result.status).toBe(2);
+    expect(readFileSync(text, 'utf8').split('\n')[1]).toBe('verdict-token: could-not-run');
+  });
+
+  it('puts the token on the job-log line, and leaves the rest of the line as it was', () => {
+    const repo = repoWithPolicy();
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', target], bin);
+
+    expect(result.stdout).toBe(
+      `conductor run: 3 gate(s), 0 finding(s); verdict-token pass; sarif report written to ${target}\n`
+    );
+  });
+
+  it('refuses --text-report with --format text, naming the reason, and writes nothing', () => {
+    const repo = repoWithPolicy();
+    const text = path.join(tempDir(), 'report.txt');
+
+    const result = runCli(repo, ['run', '--staged', '--format', 'text', '--text-report', text], tempDir());
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/--text-report is only meaningful with --format sarif/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+    expect(existsSync(text)).toBe(false);
+  });
+
+  it('refuses --text-report when the format comes from the policy file as text', () => {
+    const repo = repoWithPolicy(`${ALL_THREE_POLICY}report:\n  format: text\n`);
+    const text = path.join(tempDir(), 'report.txt');
+
+    const result = runCli(repo, ['run', '--staged', '--text-report', text], tempDir());
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/--text-report is only meaningful with --format sarif/);
+  });
+
+  it('reports an unwritable text-report path as a run that could not be carried out', () => {
+    const repo = repoWithPolicy();
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+    const bad = path.join(tempDir(), 'no-such-directory', 'report.txt');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', path.join(tempDir(), 's.sarif'), '--text-report', bad],
+      bin
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/report\.txt/);
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+});
+
 describe('sarif output, continued', () => {
   const DRIFTED = JSON.stringify({
     findings: [null],
@@ -1570,15 +1737,16 @@ describe('pull-request mode through the CLI', () => {
 
     expect(result.status).toBe(2);
     const lines = result.stdout.trimEnd().split('\n');
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toMatch(/^conductor \d+\.\d+\.\d+$/);
-    expect(lines[1]).toMatch(/^verdict: exit 2/);
-    expect(lines[2]).toMatch(/refused the trust base/);
+    expect(lines[1]).toBe('verdict-token: could-not-run');
+    expect(lines[2]).toMatch(/^verdict: exit 2/);
+    expect(lines[3]).toMatch(/refused the trust base/);
     // The detail line the full report would have printed for this case,
     // including the remedy: the pull request's own .guardrails.yaml is a
     // proposal and never takes effect until it lands on the base branch.
-    expect(lines[3]).toMatch(/No \.guardrails\.yaml on "base"/);
-    expect(lines[3]).toMatch(/is a proposal/);
+    expect(lines[4]).toMatch(/No \.guardrails\.yaml on "base"/);
+    expect(lines[4]).toMatch(/is a proposal/);
     expect(result.stdout).not.toMatch(/step log/i);
   });
 

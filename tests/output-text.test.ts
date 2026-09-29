@@ -1613,8 +1613,11 @@ describe('a refused trust base in the text report', () => {
       refused([outcome({ role: 'secrets', product: 'vault-guard', exitCode: null })])
     ).split('\n');
 
-    expect(lines[0]).toMatch(/refused the trust base/);
-    expect(lines[0]).toMatch(/origin\/main/);
+    // No version given, so the verdict-token line is the first line and the
+    // refusal follows it.
+    expect(lines[0]).toBe('verdict-token: could-not-run');
+    expect(lines[1]).toMatch(/refused the trust base/);
+    expect(lines[1]).toMatch(/origin\/main/);
   });
 
   it('still names the gates the inventory did hold', () => {
@@ -1659,6 +1662,7 @@ describe('a refused trust base in the text report', () => {
 
       expect(lines).toEqual([
         'conductor 9.9.9',
+        'verdict-token: could-not-run',
         'verdict: exit 2, the trust base "origin/main" could not be used, so no gate ran and ' +
           'nothing here is a result of any kind.',
         'conductor: refused the trust base "origin/main". Nothing was checked.',
@@ -1671,16 +1675,17 @@ describe('a refused trust base in the text report', () => {
       const text = renderText(refused(), { compact: true });
       const lines = text.trimEnd().split('\n');
 
-      expect(lines).toHaveLength(3);
-      expect(lines[0]).toMatch(/^verdict: exit 2/);
-      expect(lines[1]).toMatch(/refused the trust base/);
-      expect(lines[2]).toMatch(/does not resolve to a commit/);
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe('verdict-token: could-not-run');
+      expect(lines[1]).toMatch(/^verdict: exit 2/);
+      expect(lines[2]).toMatch(/refused the trust base/);
+      expect(lines[3]).toMatch(/does not resolve to a commit/);
       expect(text).not.toMatch(/step log/i);
     });
 
     it('wins over --verbose: a refusal never grows back to the full report under compact', () => {
       const text = renderText(refused(), { compact: true, verbose: true });
-      expect(text.trimEnd().split('\n')).toHaveLength(3);
+      expect(text.trimEnd().split('\n')).toHaveLength(4);
     });
 
     it('does nothing to a run that was not refused, even when requested', () => {
