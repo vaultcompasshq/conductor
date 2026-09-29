@@ -61,10 +61,12 @@ in the same change: a blocklist that differs per repository protects the
 intersection and advertises the difference, which is the same as not
 protecting it at all.
 
-Two files are allowlisted from the content checks, this one and the guard
-script itself, because both have to discuss the rules they enforce. An
-allowlist exempts a file's contents, never its name: a file path is visible
-on a public tree whether or not its contents are scanned.
+Two files are allowlisted from the path checks (an internal workspace path, a
+machine-specific absolute path), this one and the guard script itself, because
+both have to show example paths. The allowlist never covers the blocked-token
+scan or the dash rule: those run on every tracked file, this one included, and
+a file's name is scanned too, since a file path is visible on a public tree
+whether or not its contents are scanned.
 
 The citation check then reads `docs/INVARIANTS.md` and fails when a
 `src/*.ts` line or range runs past the end of that file, or names a file

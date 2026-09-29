@@ -3466,8 +3466,10 @@ Three details of the matching are load-bearing. Tokens are extracted from
 a copy with underscores and camelCase humps split apart, because `_` is a
 word character to a word boundary and a codename most plausibly appears as
 an identifier or an environment variable. The allowlist exempts a file's
-CONTENTS from the token and path rules but never its NAME, since the name
-is visible on a public file tree either way, and never the dash rule. And
+CONTENTS from the two PATH rules only (an earlier revision of this entry, and
+the code, also exempted the token scan, so CONTRIBUTING.md could carry a
+blocked name; fixed). It never exempts the token scan, the file's NAME, or the
+dash rule, since the name is visible on a public file tree either way. And
 the machine-path pattern requires exactly two segments under any of four
 roots, the same rule for all four, after an earlier version used two for
 home directories and one for temporary ones and so flagged prose that

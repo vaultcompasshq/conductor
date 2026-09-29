@@ -16,6 +16,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Fixed
 
+- The public-hygiene guard's allowlist (CONTRIBUTING.md and the guard script)
+  now exempts the two path checks only. The hashed-token scan runs on every
+  tracked file, allowlisted ones included; before, a blocked name could sit in
+  CONTRIBUTING.md unseen.
 - Security: `--output` (default `conductor.sarif` in the checkout) and
   `--text-report` are no longer written through a symbolic link. A pull
   request could commit a symlink by that name and have the run overwrite its

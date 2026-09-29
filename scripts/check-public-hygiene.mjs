@@ -38,6 +38,12 @@ const BANNED_HASHES = new Set([
   'c3b53b09f7f132caa42bd4ddb8acd99972439acb571e9322fe9607135197154b',
 ]);
 
+// Files exempt from the PATH checks only (internal workspace path, machine
+// path): CONTRIBUTING.md and this script have to show example paths. The
+// exemption never covers the blocked-token scan or the dash rule, which run
+// on every tracked file: an allowlist that exempted the token scan would let
+// exactly the file people paste notes into carry the names this guard exists
+// to keep out.
 const ALLOWLIST = new Set(['CONTRIBUTING.md', 'scripts/check-public-hygiene.mjs']);
 
 // Internal home-directory path shape: any absolute /Users/<name>/... path
@@ -155,22 +161,22 @@ export function scanFile(rel, text, { allowlisted, bannedHashes = BANNED_HASHES 
     }
   }
 
-  if (allowlisted) {
-    return findings;
-  }
-
-  // The specific pattern first, and only one finding per file: every
-  // internal workspace path is also a machine-specific one, and reporting
-  // both would read as two problems where there is one.
-  const pathMatch = text.match(INTERNAL_PATH);
-  if (pathMatch) {
-    findings.push(`${rel}:${lineNumberAt(text, pathMatch.index)}: internal workspace path`);
-  } else {
-    const machineMatch = text.match(MACHINE_PATH);
-    if (machineMatch) {
-      findings.push(
-        `${rel}:${lineNumberAt(text, machineMatch.index)}: machine-specific absolute path`
-      );
+  // The allowlist exempts the PATH checks only. The token scan below runs for
+  // every file, allowlisted or not.
+  if (!allowlisted) {
+    // The specific pattern first, and only one finding per file: every
+    // internal workspace path is also a machine-specific one, and reporting
+    // both would read as two problems where there is one.
+    const pathMatch = text.match(INTERNAL_PATH);
+    if (pathMatch) {
+      findings.push(`${rel}:${lineNumberAt(text, pathMatch.index)}: internal workspace path`);
+    } else {
+      const machineMatch = text.match(MACHINE_PATH);
+      if (machineMatch) {
+        findings.push(
+          `${rel}:${lineNumberAt(text, machineMatch.index)}: machine-specific absolute path`
+        );
+      }
     }
   }
 
