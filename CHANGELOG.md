@@ -14,6 +14,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- **Fixed:** the action's install step failed an advisory run on a single
+  transient registry attestation failure. `npm audit signatures` is now run
+  once more after a short pause (`AUDIT_RETRY_DELAY_SECONDS`, 5 seconds) when
+  the first attempt exits non-zero. It happened twice in one week with
+  nothing wrong: on 2026-09-22, and again on 2026-09-29 in runs 36514871399
+  and 36522330217, each cleared by a plain re-run with both packages verified
+  untouched. A pass on the retry continues and prints a `::notice::` naming
+  what the first attempt said; a second failure fails closed exactly as
+  before, with the second attempt's reason prefixed by "attempted twice".
+  One retry and no more, and `verification-ok` is still written only after an
+  audit has passed (issue #81).
+
 ## [0.6.0] - 2026-09-27
 
 **A minor package release.** `@vaultcompass/conductor` moves to 0.6.0 on npm

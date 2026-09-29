@@ -1046,7 +1046,9 @@ provenance even though all four packages publish it.
 > points npm at a mirror or proxy that does not (via `actions/setup-node`'s
 > `registry-url:`, a corporate `~/.npmrc`, or `npm_config_registry`), the
 > install succeeds and this step then fails with `EMISSINGSIGNATUREKEY`. A
-> sigstore outage has the same effect. It fails closed on purpose, so that is a
+> sigstore outage has the same effect. The audit is retried once after a short
+> pause before the step fails, to absorb a one-off registry hiccup. It fails
+> closed on purpose, so that is a
 > red gate rather than a skipped check; pin to `@v0.4.0`, which does not
 > verify, if it blocks you.
 

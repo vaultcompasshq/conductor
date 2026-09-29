@@ -445,6 +445,9 @@ runs:
         DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
         VAULT_GUARD_VERSION: ${{ inputs.vault-guard-version }}
         INTENT_GUARD_VERSION: ${{ inputs.intent-guard-version }}
+        # The pause before the single retry of the signature audit. The test
+        # harness sets it to 0.
+        AUDIT_RETRY_DELAY_SECONDS: '5'
       run: |
         set -eu
         mkdir -p "$npm_config_prefix"
@@ -639,9 +642,30 @@ runs:
         # In a subshell, so the cd cannot leak into anything added after it.
         # `|| audit_status=$?` is exempt from `set -e`, the same idiom the
         # pull request comment step already uses to guard its mktemp.
+        #
+        # RETRIED ONCE, and only once. Twice in a week (2026-09-22 and
+        # 2026-09-29) a transient registry attestation failure turned an
+        # advisory run red with nothing wrong: both cleared on a plain re-run
+        # and both packages were verified untouched. So a failing audit is run
+        # exactly one more time after a short pause. Fail-closed is unchanged:
+        # if the second attempt also fails, the step fails with the second
+        # attempt's reason and exit status. More than one retry would only
+        # lengthen a real outage and give a bad tree more chances to look
+        # clean. `verification-ok` is still written only after an audit has
+        # actually passed. See issue #81.
         audit_status=0
         audit_out="$( ( cd "$npm_config_prefix/lib" && npm audit signatures ) 2>&1 )" || audit_status=$?
         printf '%s\n' "$audit_out"
+        if [ "$audit_status" -ne 0 ]; then
+          first_reason="$(printf '%s' "$audit_out" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
+          sleep "$AUDIT_RETRY_DELAY_SECONDS"
+          audit_status=0
+          audit_out="$( ( cd "$npm_config_prefix/lib" && npm audit signatures ) 2>&1 )" || audit_status=$?
+          printf '%s\n' "$audit_out"
+          if [ "$audit_status" -eq 0 ]; then
+            printf '::notice::conductor: the registry signature audit failed once and passed on retry; the first attempt said: %s\n' "$first_reason"
+          fi
+        fi
         if [ "$audit_status" -ne 0 ]; then
           # Flattened to one line: this is read in a log and copied into a
           # pull request comment, and npm's output is several lines with the
@@ -653,7 +677,7 @@ runs:
           # this text is npm's own output over versions a pull request cannot
           # choose, but the flattening is presented here as the control and
           # should actually be one.
-          audit_reason="$(printf '%s' "$audit_out" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
+          audit_reason="attempted twice, $AUDIT_RETRY_DELAY_SECONDS seconds apart. $(printf '%s' "$audit_out" | tr '\n\r\t' '   ' | sed 's/  */ /g')"
           printf 'verification-failed=true\n' >> "$GITHUB_OUTPUT"
           printf 'verification-reason=%s\n' "$audit_reason" >> "$GITHUB_OUTPUT"
           printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. %s\n' "$audit_reason"
