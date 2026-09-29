@@ -861,7 +861,7 @@ describe('action.yml installs the gates without trusting them first', () => {
     // skips it and still exits 0.
     expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.8.0');
     expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.7.0');
-    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.6.0');
+    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.7.0');
     expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.9.0');
   });
 
@@ -894,7 +894,7 @@ describe('action.yml installs the gates outside the tree', () => {
     for (const input of VERSION_INPUTS) {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
-    expect(action.inputs?.['conductor-version']?.default).toBe('0.6.0');
+    expect(action.inputs?.['conductor-version']?.default).toBe('0.7.0');
     expect(action.inputs?.['dep-guard-version']?.default).toBe('0.9.0');
     expect(action.inputs?.['vault-guard-version']?.default).toBe('1.8.0');
     expect(action.inputs?.['intent-guard-version']?.default).toBe('1.7.0');
@@ -941,7 +941,7 @@ describe('action.yml installs the gates outside the tree', () => {
       'install',
       '-g',
       '--ignore-scripts',
-      '@vaultcompass/conductor@0.6.0',
+      '@vaultcompass/conductor@0.7.0',
       '@vaultcompass/dep-guard@0.9.0',
       '@vaultcompass/vault-guard@1.8.0',
       '@vaultcompass/intent-guard@1.7.0',
@@ -1190,9 +1190,9 @@ function tagVersion(prefix: string): string {
  *
  * Every one of the four inputs has published versions under its constant, so
  * the shipped step refuses real pins today and these cases can drive the
- * unmodified step text. Counted off the registry on 2026-09-27: 11 conductor
- * below 0.6.0 (0.2.0 through 0.5.0), 11 dep-guard below 0.9.0, 26 vault-guard
- * below 1.8.0, 9 intent-guard below 1.7.0. Fifty-seven pins in all that a
+ * unmodified step text. Counted off the registry on 2026-09-29: 12 conductor
+ * below 0.7.0 (0.2.0 through 0.6.0), 11 dep-guard below 0.9.0, 26 vault-guard
+ * below 1.8.0, 9 intent-guard below 1.7.0. Fifty-eight pins in all that a
  * consumer could write today and this tag now refuses on a pull request.
  *
  * Each value here is a version somebody could really have pinned, not a number
@@ -1235,7 +1235,7 @@ function scriptWithFutureTag(prefix: string): string {
 /**
  * The same device as scriptWithFutureTag, advancing PATCH instead of MINOR.
  *
- * As of this tag every one of the four TAG constants ends in patch 0 (0.6.0,
+ * As of this tag every one of the four TAG constants ends in patch 0 (0.7.0,
  * 0.9.0, 1.8.0, 1.7.0), so pin_not_backward's third arm -- pin_major ==
  * tag_major, pin_minor == tag_minor, pin_patch below tag_patch -- has no real
  * published version left that can drive it: a patch below zero does not
@@ -1344,7 +1344,7 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag every one of the
-    // four TAG constants ends in patch 0 (0.6.0, 0.9.0, 1.8.0, 1.7.0), so no
+    // four TAG constants ends in patch 0 (0.7.0, 0.9.0, 1.8.0, 1.7.0), so no
     // real published pin can reach this arm any more -- a patch below zero
     // does not exist. This test used to pin against TAG_INTENT_GUARD's own
     // patch of 2 (1.5.2), which release 0.5.1 retired along with the rest of
@@ -1407,7 +1407,7 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
       ['DEP_GUARD_VERSION', '0.10.0'],
       ['VAULT_GUARD_VERSION', '1.8.1'],
       ['VAULT_GUARD_VERSION', '1.10.0'],
-      ['CONDUCTOR_VERSION', '0.6.1'],
+      ['CONDUCTOR_VERSION', '0.7.1'],
       ['CONDUCTOR_VERSION', '0.10.0'],
     ];
     for (const [variable, value] of forward) {
@@ -1518,7 +1518,7 @@ describe('action.yml refuses a leading zero in any of the four version inputs', 
 
   it('still accepts a component that is a genuine single zero, like the shipped defaults', () => {
     // The fix must refuse a leading zero on a multi-digit component without
-    // refusing a lone zero digit: 0.6.0, 0.9.0 and 1.7.0-shaped versions all
+    // refusing a lone zero digit: 0.7.0, 0.9.0 and 1.7.0-shaped versions all
     // carry one or more single-zero components and have to keep passing.
     for (const input of VERSION_INPUTS) {
       const shipped = String(action.inputs?.[input]?.default ?? '');

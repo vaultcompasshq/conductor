@@ -643,8 +643,8 @@ below its constant, so the UNMODIFIED step refuses real pins today and the cases
 say so with real numbers: `conductor-version: 0.3.0`, `dep-guard-version: 0.5.0`,
 `vault-guard-version: 1.6.0` and `intent-guard-version: 1.4.0` are each driven
 through the shipped step text and refused on a pull-request run, and accepted
-with `GITHUB_BASE_REF` unset. Counted from the registry on 2026-09-27 there are
-57 such pins: 11 conductor versions below 0.6.0, 11 dep-guard below 0.9.0, 26
+with `GITHUB_BASE_REF` unset. Counted from the registry on 2026-09-29 there are
+58 such pins: 12 conductor versions below 0.7.0, 11 dep-guard below 0.9.0, 26
 vault-guard below 1.8.0 and 9 intent-guard below 1.7.0.
 
 A second set of cases drives a COPY of the step with one constant advanced a

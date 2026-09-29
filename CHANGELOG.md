@@ -14,6 +14,17 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-29
+
+**A minor package release.** `@vaultcompass/conductor` moves to 0.7.0 on npm
+and the action's `conductor-version` default moves to `0.7.0` in lockstep,
+the same number the `v0.7.0` tag names. This is a minor bump rather than a
+patch: a new CLI option (`--text-report`), a new action output (`verdict`),
+and the action now running the gates once for the job and the comment all
+change what the umbrella does and exposes, not just how it reports it. The
+0.6.1 action-only change (the signature-audit retry) is included, and is
+described in its own section below.
+
 ### Added
 
 - A verdict token: the text report's second line, directly under the version
@@ -66,6 +77,15 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   no longer start a line the runner's log reader would honour as a workflow
   command. The flattened `::error::` and `::notice::` arguments already did
   (issue #83).
+
+**The consumer cost.** On a pull request, the backward-pin rule now refuses
+`conductor-version` below `0.7.0`, because `TAG_CONDUCTOR_MINOR` moved with
+the default and that constant is what the rule measures a pin against. A
+workflow pinning `conductor-version: 0.6.0`, the version this README's own
+examples named before this release, is refused rather than run. The migration
+is to remove the input, whose default is the version this tag ships, or to
+raise it to `0.7.0` or newer. The other three gate defaults and their
+constants do not move in this release.
 
 ## [0.6.1] - 2026-09-29
 

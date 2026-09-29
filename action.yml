@@ -60,7 +60,7 @@ inputs:
       range would hand that decision to whatever the registry served on the
       morning of the run. The pin is only as protected as the workflow file
       is; see the note above the install step.
-    default: 0.6.0
+    default: 0.7.0
   dep-guard-version:
     description: >-
       The exact version of the dependency gate this action installs. Same
@@ -236,7 +236,7 @@ runs:
         # check, and be judged by the rule set it chose for itself. That is not
         # hypothetical, and not only for one input: EVERY ONE of the four has
         # published versions below its constant here. Counted from the registry
-        # on 2026-09-27, 57 of them: conductor 11 below 0.6.0, dep-guard 11
+        # on 2026-09-29, 58 of them: conductor 12 below 0.7.0, dep-guard 11
         # below 0.9.0, vault-guard 26 below 1.8.0, and intent-guard 9 below
         # 1.7.0, intent-guard 1.4.0 among them.
         #
@@ -278,7 +278,7 @@ runs:
         # nothing. This repository's own workflows reference it that way, which
         # is the usual reason to.
         TAG_CONDUCTOR_MAJOR=0
-        TAG_CONDUCTOR_MINOR=6
+        TAG_CONDUCTOR_MINOR=7
         TAG_CONDUCTOR_PATCH=0
         TAG_DEP_GUARD_MAJOR=0
         TAG_DEP_GUARD_MINOR=9
