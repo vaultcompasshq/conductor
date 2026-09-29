@@ -111,12 +111,14 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
   const env = { GITHUB_BASE_REF: 'main' };
 
   it('a tag origin/main at HEAD~1 no longer narrows the change set', () => {
-    const { root, headMinusOne } = twoCommitBranch();
+    const { root, base, headMinusOne } = twoCommitBranch();
     git(root, ['tag', 'origin/main', headMinusOne]);
 
     const resolved = resolveBaseRefInRepo(root, { env });
 
-    expect(resolved).toEqual({ ok: true, base: { ref: 'refs/remotes/origin/main', source: 'github' } });
+    // The commit id, read from the exact ref with show-ref: no name is ever
+    // handed to git's name resolution, so the tag has nothing to shadow.
+    expect(resolved).toEqual({ ok: true, base: { ref: base, source: 'github' } });
     if (!resolved.ok || resolved.base === null) throw new Error('unreachable');
     expect(changedPathsSince(root, resolved.base.ref)).toEqual({
       ok: true,
@@ -130,7 +132,7 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
     git(root, ['update-ref', PRIVATE, base]);
     expect(resolveBaseRefInRepo(root, { env })).toEqual({
       ok: true,
-      base: { ref: PRIVATE, source: 'github' },
+      base: { ref: base, source: 'github' },
     });
   });
 
@@ -139,7 +141,7 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
     git(root, ['update-ref', PRIVATE, headMinusOne]);
     expect(resolveBaseRefInRepo(root, { env })).toEqual({
       ok: true,
-      base: { ref: PRIVATE, source: 'github' },
+      base: { ref: headMinusOne, source: 'github' },
     });
   });
 
@@ -148,20 +150,32 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
     git(root, ['update-ref', PRIVATE, base]);
     expect(resolveBaseRefInRepo(root, { env })).toEqual({
       ok: true,
-      base: { ref: PRIVATE, source: 'github' },
+      base: { ref: base, source: 'github' },
     });
   });
 
-  it('with neither present, hands back the spelled remote ref so the diff fails closed naming fetch-depth: 0', () => {
+  it('a TAG named refs/conductor/trust-base is not the private ref (B2)', () => {
+    const { root, base, headMinusOne } = twoCommitBranch();
+    git(root, ['tag', PRIVATE, headMinusOne]);
+    // No private ref: the remote-tracking ref is used, never the tag.
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: base, source: 'github' },
+    });
+    // And with no remote-tracking ref either, nothing resolves: refused.
+    git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    const refused = resolveBaseRefInRepo(root, { env });
+    expect(refused.ok).toBe(false);
+  });
+
+  it('with neither present, refuses, naming fetch-depth: 0', () => {
     const { root } = twoCommitBranch();
     git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
     const resolved = resolveBaseRefInRepo(root, { env });
-    expect(resolved).toEqual({ ok: true, base: { ref: 'refs/remotes/origin/main', source: 'github' } });
-    if (!resolved.ok || resolved.base === null) throw new Error('unreachable');
-    const changed = changedPathsSince(root, resolved.base.ref);
-    expect(changed.ok).toBe(false);
-    if (changed.ok) throw new Error('unreachable');
-    expect(changed.detail).toMatch(/fetch-depth: 0/);
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) throw new Error('unreachable');
+    expect(resolved.detail).toMatch(/fetch-depth: 0/);
+    expect(resolved.detail).toContain('refs/conductor/trust-base');
   });
 
   it('refuses an explicit --base that a tag shadows, and keeps an unambiguous explicit one', () => {
@@ -176,6 +190,10 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
       ok: true,
       base: { ref: 'refs/remotes/origin/main', source: 'flag' },
     });
+    // An explicit refs/ name that does not exist as that exact ref (a tag of
+    // that name does not count) is refused, never resolved by name.
+    git(root, ['tag', 'refs/conductor/nothing', headMinusOne]);
+    expect(resolveBaseRefInRepo(root, { base: 'refs/conductor/nothing', env }).ok).toBe(false);
     expect(resolveBaseRefInRepo(root, { base: 'HEAD~1', env })).toEqual({
       ok: true,
       base: { ref: 'HEAD~1', source: 'flag' },
@@ -242,25 +260,32 @@ describe('changedPathsSince', () => {
     expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: ['src/my widget.ts'] });
   });
 
-  it('hands over names with a quote, a backslash, a tab and a newline byte for byte, never C-quoted (N3)', () => {
-    // Without -z git prints "secrets/a\"b.txt" with quotes and backslash
-    // escapes; the gate was then handed a path that names no file, and
-    // intent-guard refuses any explicit path with a backslash, so every pull
-    // request touching such a name was permanently could-not-run.
+  it('hands over names with a quote, a tab and a newline byte for byte, never C-quoted (N3)', () => {
+    // Without -z git prints "secrets/a\"b.txt" with quotes and escapes; the
+    // gate was then handed a path that names no file. intent-guard splits
+    // --paths on commas only, so a tab or newline inside a name is intact.
     const root = repoWithMain();
     git(root, ['checkout', '--quiet', '-b', 'feat/odd-names']);
-    const names = [
-      'secrets/a"b.txt',
-      'src/back\\slash.ts',
-      'src/tab\there.ts',
-      'src/new\nline.ts',
-    ];
+    const names = ['secrets/a"b.txt', 'src/tab\there.ts', 'src/new\nline.ts'];
     for (const name of names) {
       write(root, name, 'export const x = 1;\n');
     }
     commit(root, 'odd names');
 
     expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: [...names].sort() });
+  });
+
+  it('refuses a backslash in a path itself, naming the file: intent-guard refuses it in --paths', () => {
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/backslash']);
+    write(root, 'src/back\\slash.ts', 'export const x = 1;\n');
+    commit(root, 'backslash');
+
+    const changed = changedPathsSince(root, 'main');
+
+    expect(changed.ok).toBe(false);
+    expect(changed.ok === false && changed.detail).toContain('src/back\\slash.ts');
+    expect(changed.ok === false && changed.detail).toMatch(/backslash/);
   });
 
   it('fails closed on a path containing a comma, naming the path', () => {

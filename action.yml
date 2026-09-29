@@ -405,8 +405,8 @@ runs:
         # workflow file is the BASE branch's own instead, so that particular
         # attack does not apply there -- but the input is refused on that
         # event too, because pull-request mode already derives the trust base
-        # on both events (this same gates step passes
-        # origin/$GITHUB_BASE_REF whichever one fired), and an explicit
+        # on both events (the fetch step and this gates step pass the base
+        # branch's commit id whichever one fired), and an explicit
         # redirect has no legitimate use on either.
         #
         # OFF BOTH EVENTS -- push, schedule, workflow_dispatch, merge_group,
@@ -416,7 +416,7 @@ runs:
         # never be a pull request this rule needs to refuse.
         #
         # THE FIX IS TO REMOVE THE INPUT, never to set it to some other value:
-        # the action already derives origin/$GITHUB_BASE_REF itself on this
+        # the action already derives the base branch's commit itself on this
         # event, which is the base branch's own commit at the time the job
         # runs and is exactly what pull-request mode requires.
         #
@@ -431,7 +431,7 @@ runs:
         # already says, and nothing in this step can substitute for it.
         if [ -n "${GITHUB_BASE_REF:-}" ] && [ -n "${TRUST_BASE:-}" ]; then
           echo "conductor: the trust-base input may not be set on a pull_request or pull_request_target event. It was set to \"${TRUST_BASE}\"." >&2
-          echo "On pull_request the workflow file is the pull request's own; on pull_request_target it is the base branch's own. Either way pull-request mode already derives the trust base itself. REMOVE the input: the action derives origin/\$GITHUB_BASE_REF itself." >&2
+          echo "On pull_request the workflow file is the pull request's own; on pull_request_target it is the base branch's own. Either way pull-request mode already derives the trust base itself. REMOVE the input: the action fetches the base branch and derives its commit itself." >&2
           exit 1
         fi
 
@@ -726,6 +726,109 @@ runs:
         # comment step running an umbrella that was never verified at all.
         printf 'verification-ok=true\n' >> "$GITHUB_OUTPUT"
 
+    # FETCH THE TRUST BASE, IN ITS OWN STEP, and the ONLY step whose env
+    # carries github.token. It runs only on a pull request (github.base_ref is
+    # empty on push, merge_group, schedule and workflow_dispatch, so no token
+    # reaches those runs), and the gates step downstream has no token in its
+    # environment at all: conductor, gitleaks, osv-scanner, dep-guard,
+    # vault-guard and intent-guard inherit none.
+    #
+    # WHAT IT DOES. Fetches the base branch, forced, from the explicit server
+    # URL into the private ref refs/conductor/trust-base, then publishes the
+    # FETCHED COMMIT ID (full hex) as the `sha` output. The gates step hands
+    # conductor that id, never a ref name: git resolves a name through DWIM
+    # rules that include refs/tags/<name>, so a pushed tag named origin/<base>
+    # or refs/conductor/trust-base would otherwise be taken for the ref, while a
+    # full object id is not subject to those rules. refs/remotes/origin/* is
+    # never written or deleted here.
+    #
+    # AUTH is github.token as an http extraheader in GIT_CONFIG_COUNT /
+    # GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, never on the command line, so the
+    # token is not in argv; the value is the one actions/checkout writes (basic
+    # auth, user x-access-token). The caller's own GIT_CONFIG_* entries are kept
+    # (ours are appended after them), and an empty entry first resets any
+    # extraheader checkout persisted for this server so two Authorization
+    # headers are not sent. The job needs permissions: contents: read.
+    #
+    # WHAT THE EXPLICIT URL DOES NOT DO. It does not make the fetch immune to
+    # url.insteadOf or any other repository git configuration: those, GITHUB_ENV,
+    # GITHUB_PATH, hooks and replace refs are covered ONLY by the precondition
+    # that no code from the pull request ran earlier in the job.
+    #
+    # FAIL CLOSED. Any failure exits non-zero with a truthful message and
+    # publishes nothing, so the job stops before conductor is ever invoked with
+    # a stale or absent trust base. A stale private ref is removed first, and
+    # the removal is checked (a planted ref plus a .lock file makes both the
+    # fetch and the delete fail: that is a failure, not something to swallow).
+    # After a successful fetch the private ref must equal the fetched commit.
+    - name: Fetch the trust base
+      id: fetch-base
+      if: ${{ github.base_ref != '' && inputs.trust-base == '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        TRUST_BASE_TOKEN: ${{ github.token }}
+        GIT_TERMINAL_PROMPT: '0'
+      run: |
+        set -eu
+        fail() {
+          printf '::error::conductor: %s\n' "$1"
+          exit 1
+        }
+
+        # Never leave a stale private ref standing, and never swallow the
+        # failure to remove one.
+        if git show-ref --verify --quiet refs/conductor/trust-base; then
+          git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+          if git show-ref --verify --quiet refs/conductor/trust-base; then
+            fail "a refs/conductor/trust-base already exists in this checkout and could not be removed (a lock file or a permissions problem), so it cannot be trusted. Nothing was checked."
+          fi
+        fi
+
+        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+          DEPTH_ARGS=(--depth=1)
+        else
+          DEPTH_ARGS=()
+        fi
+        SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+        AUTH_KEY="http.${SERVER_URL}/.extraheader"
+        AUTH_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TRUST_BASE_TOKEN" | base64 | tr -d '\n')"
+        BASE_COUNT="${GIT_CONFIG_COUNT:-0}"
+        case "$BASE_COUNT" in
+          ''|*[!0-9]*) BASE_COUNT=0 ;;
+        esac
+        # Exported inside a subshell with computed names (the names depend on
+        # how many entries the caller already set): the header is in git's
+        # ENVIRONMENT only, never in any argv (not even env(1)'s), and nothing
+        # exported here outlives the subshell.
+        fetch_ok=1
+        (
+          export "GIT_CONFIG_COUNT=$((BASE_COUNT + 2))"
+          export "GIT_CONFIG_KEY_${BASE_COUNT}=${AUTH_KEY}"
+          export "GIT_CONFIG_VALUE_${BASE_COUNT}="
+          export "GIT_CONFIG_KEY_$((BASE_COUNT + 1))=${AUTH_KEY}"
+          export "GIT_CONFIG_VALUE_$((BASE_COUNT + 1))=${AUTH_VALUE}"
+          git fetch ${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"} "$SERVER_URL/$GITHUB_REPOSITORY.git" \
+            "+refs/heads/$GITHUB_BASE_REF:refs/conductor/trust-base" >/dev/null 2>&1
+        ) || fetch_ok=0
+        if [ "$fetch_ok" -ne 1 ]; then
+          git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+          fail "the base branch ${GITHUB_BASE_REF} could not be fetched into refs/conductor/trust-base, so there is no trust base and no gate was run. The job needs permissions: contents: read so github.token can read this repository; a network failure or a base branch that no longer exists gives the same result. Nothing was checked."
+        fi
+
+        # The fetched commit, as a full object id, read from the ref the
+        # fetch wrote with show-ref (the exact ref, not a name resolution) and
+        # checked against FETCH_HEAD: a mismatch means something else wrote
+        # the ref.
+        ref_sha="$(git show-ref --verify --hash refs/conductor/trust-base 2>/dev/null || true)"
+        fetch_head_sha="$(git rev-parse --verify --quiet --end-of-options 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+        if ! printf '%s' "$ref_sha" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' || [ "$ref_sha" != "$fetch_head_sha" ]; then
+          git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+          fail "refs/conductor/trust-base does not name the commit that was just fetched (ref: '${ref_sha}', fetched: '${fetch_head_sha}'), so something else wrote it. Nothing was checked."
+        fi
+        printf 'sha=%s\n' "$ref_sha" >> "$GITHUB_OUTPUT"
+
     - name: Run the gates
       id: gates
       shell: bash
@@ -750,14 +853,14 @@ runs:
         GITHUB_BASE_REF: ${{ github.base_ref }}
         GITHUB_HEAD_REF: ${{ github.head_ref }}
         BASE_REF: ${{ inputs.base-ref }}
-        # The base-ref fetch below runs non-interactively; without this a
-        # misconfigured runner could stall on a git credential prompt instead
-        # of failing fast. There is no timeout wrapper (no portable one on the
-        # bash runners), so this is the guard against the one hang path.
+        # Git never stalls on a credential prompt in this step (the gates
+        # shell out to git); it fails fast instead.
         GIT_TERMINAL_PROMPT: '0'
         TRUST_BASE: ${{ inputs.trust-base }}
-        # Read only by the base-branch fetch, which unsets it straight after.
-        TRUST_BASE_TOKEN: ${{ github.token }}
+        # The full commit id of the base branch, published by the "Fetch the
+        # trust base" step. THIS STEP HAS NO TOKEN IN ITS ENVIRONMENT, on any
+        # event: the token lives only in that step.
+        TRUST_BASE_SHA: ${{ steps.fetch-base.outputs.sha }}
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         OUTPUT: ${{ inputs.output }}
@@ -848,7 +951,7 @@ runs:
         # PULL-REQUEST MODE. On a pull_request event the rules come from the
         # base branch, so the pull request cannot change what it is judged by.
         #
-        # origin/$GITHUB_BASE_REF, and never a SHA. github.sha on a
+        # The BASE BRANCH's commit, and never github.sha. github.sha on a
         # pull_request event is the MERGE commit, which is HEAD, and
         # github.event.pull_request.head.sha is a different commit carrying
         # HEAD's tree whenever the base has not moved; either one puts the
@@ -859,7 +962,7 @@ runs:
         # GITHUB_BASE_REF is a BRANCH NAME and Actions defines it EMPTY
         # outside a pull request, so an empty value has to mean "not a pull
         # request": passing --trust-base unconditionally would hand every push
-        # build the literal ref "origin/" and fail it closed.
+        # build an empty trust base and fail it closed.
         # No opt-out value, on purpose. Base-ref judging is the floor rather
         # than a knob, and on a pull_request event the workflow file runs from
         # the pull request's own ref: a value here that switched the mode off
@@ -867,96 +970,23 @@ runs:
         if [ -n "$TRUST_BASE" ]; then
           ARGS+=(--trust-base "$TRUST_BASE")
         elif [ -n "${GITHUB_BASE_REF:-}" ]; then
-          # A SHALLOW, ONE-COMMIT FETCH OF JUST THE BASE BRANCH, so a
-          # shallow-checkout consumer does not get a spurious trust-base miss.
+          # THE BASE COMMIT COMES FROM THE "Fetch the trust base" STEP, which
+          # is the only step that holds a token, and it is passed as a FULL
+          # COMMIT ID, never as a ref name. git resolves a name through DWIM
+          # rules that include refs/tags/<name>: a pushed tag named
+          # origin/<base>, or refs/conductor/trust-base, would stand in for
+          # the ref. A 40- or 64-hex object id is not subject to those rules.
+          # No fetch happens here and this step's environment carries no
+          # token, so conductor and every gate it spawns inherit none.
           #
-          # THE HOLE THIS CLOSES. The default actions/checkout fetches
-          # depth: 1 -- the head commit alone -- so on that default,
-          # origin/$GITHUB_BASE_REF is not in the checkout at all and
-          # conductor's own git rev-parse / git show reads refuse it as a
-          # ref that does not resolve. That is the correct fail-closed
-          # answer to a ref that is genuinely unreachable, but to a consumer
-          # who never asked for the base branch it reads as "conductor is
-          # broken" rather than "the checkout does not carry it". One real
-          # consumer team hit exactly this and worked around it by adding
-          # their own fetch step; this closes the gap here instead, so every
-          # consumer does not have to discover the same workaround.
-          #
-          # NOT A NO-OP WHEN THE REF ALREADY RESOLVES (changed in the C1
-          # fix): see ALWAYS FETCHED below. It still fetches once per step,
-          # however many gates run.
-          #
-          # DEPTH 1 IS DELIBERATE AND IS NOT THE SAME FETCH THE INTENT GATE
-          # MAY WANT. conductor's own reads of a trust base (git show
-          # <ref>:./.guardrails.yaml, git rev-parse <ref>) never walk
-          # history: they read the one commit's tree, so its tip is enough.
-          # intent-guard's own change-set diff can need the merge base
-          # instead, which a depth-1 fetch of the branch tip does not carry
-          # once the branch has moved since the pull request forked from it;
-          # a consumer whose intent gate needs that still wants
-          # fetch-depth: 0 on their own checkout step. This fetch exists only
-          # to unblock conductor's OWN policy read, not to substitute for
-          # full history.
-          #
-          # NEVER HARD-FAILS: a fetch that cannot succeed is reported as a
-          # warning (below), and the run continues into conductor's own
-          # trust-base handling, which fails closed with its own explanation.
-          # The explicit src:dst refspec is what creates the ref conductor
-          # is about to be asked to read; `git fetch <url> <ref>` alone would
-          # only update FETCH_HEAD.
-          # THE BASE GOES INTO A PRIVATE, FULLY SPELLED REF, refs/conductor/
-          # trust-base, and that full ref is what conductor is handed. Never
-          # origin/<base>: git resolves a short name through refs/tags/ BEFORE
-          # refs/remotes/, so anyone who can push a tag named origin/<base>
-          # (no merge rights needed) would choose the commit the rules are
-          # read from, and with fetch-depth: 0 the tag is already in the
-          # checkout. refs/remotes/origin/* is neither read for the decision
-          # here nor written or deleted by this step; conductor compares it
-          # against the private ref when it exists and refuses a mismatch.
-          #
-          # ALWAYS FETCHED, WITH A FORCING (+) REFSPEC, from the EXPLICIT
-          # server URL rather than the remote named origin: a remote URL
-          # rewritten by earlier code in the job (or by url.insteadOf) cannot
-          # redirect it. DEPTH follows the checkout: --depth=1 only when the
-          # repository is already shallow; on a full clone a depth here would
-          # turn it shallow and blind the history gate.
-          #
-          # AUTHENTICATED WITH github.token through an http extraheader in
-          # GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, never on
-          # the command line, so the token is not in argv. The value is the
-          # one actions/checkout writes (basic auth, user x-access-token).
-          # Entry 0 resets any extraheader checkout persisted for this
-          # server, so two Authorization headers are not sent. The variables
-          # and the token are unset straight after the fetch, so conductor and
-          # the gates never inherit them. This needs the job to grant
-          # permissions: contents: read.
-          #
-          # A FETCH THAT FAILS DELETES ONLY refs/conductor/trust-base (so a
-          # stale one from an earlier step never stands in for the base) and
-          # warns; conductor is then handed a ref that does not resolve and
-          # fails closed (exit 2) with its own explanation. The step itself
-          # still does not hard-fail, and nothing under refs/remotes is
-          # touched.
-          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-            DEPTH_ARGS=(--depth=1)
-          else
-            DEPTH_ARGS=()
+          # An empty id on a pull request means the fetch step did not run or
+          # did not publish one. Refusing here (exit 2) is the fail-closed
+          # answer: conductor is never invoked with an absent trust base.
+          if [ -z "${TRUST_BASE_SHA:-}" ]; then
+            echo "conductor: this is a pull request but the trust base commit was not fetched (the 'Fetch the trust base' step did not run or failed), so no gate was run and nothing was checked." >&2
+            exit 2
           fi
-          SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
-          if [ -n "${TRUST_BASE_TOKEN:-}" ]; then
-            AUTH_KEY="http.${SERVER_URL}/.extraheader"
-            AUTH_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TRUST_BASE_TOKEN" | base64 | tr -d '\n')"
-            export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0="$AUTH_KEY" GIT_CONFIG_VALUE_0="" GIT_CONFIG_KEY_1="$AUTH_KEY" GIT_CONFIG_VALUE_1="$AUTH_VALUE"
-          fi
-          fetch_ok=1
-          git fetch ${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"} "$SERVER_URL/$GITHUB_REPOSITORY.git" "+refs/heads/$GITHUB_BASE_REF:refs/conductor/trust-base" >/dev/null 2>&1 || fetch_ok=0
-          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 TRUST_BASE_TOKEN AUTH_KEY AUTH_VALUE
-          if [ "$fetch_ok" -ne 1 ]; then
-            git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
-            printf '::warning::conductor: the base branch %s could not be fetched into refs/conductor/trust-base, so there is no trust base and conductor will refuse the run (exit 2), and any earlier copy of that ref was removed. The job needs permissions: contents: read so github.token can read this repository; a network failure or a base branch that no longer exists gives the same result. Nothing under refs/remotes was changed.\n' \
-              "$GITHUB_BASE_REF"
-          fi
-          ARGS+=(--trust-base "refs/conductor/trust-base")
+          ARGS+=(--trust-base "$TRUST_BASE_SHA")
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")
@@ -1095,6 +1125,7 @@ runs:
         # validate step refused the inputs or the install step died some
         # other way (an npm too old to verify, an npm install failure).
         VERIFICATION_FAILED: ${{ steps.install.outputs.verification-failed }}
+        TRUST_BASE_SHA: ${{ steps.fetch-base.outputs.sha }}
         VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
         INSTALL_OUTCOME: ${{ steps.install.outcome }}
         # From the gates step: the text report its own run wrote (empty when
@@ -1179,8 +1210,9 @@ runs:
         if [ -n "$TRUST_BASE" ]; then
           ARGS+=(--trust-base "$TRUST_BASE")
         elif [ -n "${GITHUB_BASE_REF:-}" ]; then
-          # The private ref the gates step fetched, by its full name.
-          ARGS+=(--trust-base "refs/conductor/trust-base")
+          # The full commit id the "Fetch the trust base" step published,
+          # exactly what the gates step passed (never a ref name).
+          ARGS+=(--trust-base "$TRUST_BASE_SHA")
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")

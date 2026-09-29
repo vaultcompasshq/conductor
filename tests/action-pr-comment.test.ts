@@ -258,7 +258,7 @@ describe('action.yml: the pr-comment step', () => {
       'if [ -n "$BASE_REF" ]',
       'if [ -n "$TRUST_BASE" ]',
       'elif [ -n "${GITHUB_BASE_REF:-}" ]',
-      '--trust-base "refs/conductor/trust-base"',
+      '--trust-base "$TRUST_BASE_SHA"',
       'if [ -n "$SPEC" ]',
     ]) {
       expect(gatesScript).toContain(line);

@@ -71,9 +71,22 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   The README and INVARIANTS no longer say depth 1 fails closed for this.
   The gitleaks spawn also sets `GIT_NO_REPLACE_OBJECTS=1`.
 - Security: the action no longer trusts `origin/<base>` as the trust base.
-  It fetches the base branch (forced, from the explicit server URL, with
-  `github.token` in GIT_CONFIG_* environment variables and never in argv)
-  into the private ref `refs/conductor/trust-base` and passes that full ref.
+  A new step, "Fetch the trust base", runs only on a pull request and is the
+  ONLY step whose environment holds `github.token` (the gates step and every
+  gate it spawns have none, on any event). It fetches the base branch (forced,
+  from `$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git`, the token in GIT_CONFIG_*
+  environment variables and never in argv) into the private ref
+  `refs/conductor/trust-base`, checks it equals the fetched commit, and
+  publishes the FULL COMMIT ID, which is what conductor and every gate receive:
+  never a ref name, because git resolves a name through refs/tags/ too (a
+  pushed tag named `refs/conductor/trust-base` or `origin/<base>` would have
+  been taken for the ref). A failed fetch, or a stale private ref that cannot be
+  removed, fails the step, so conductor never runs with a stale or absent trust
+  base. The CLI resolves no `refs/` name through name resolution, sees through
+  `origin/main~0`-style suffixes, and accepts a commit id on a pull request only
+  if it equals the private ref or `refs/remotes/origin/<base>`.
+  `url.insteadOf` and other repository git config remain covered only by the
+  no-pull-request-code-before-the-action precondition.
   Two holes closed: code from the pull request that ran earlier in the job
   could move `origin/<base>`, and a tag named `origin/<base>`, which anyone
   who can push tags can create, is resolved by git before the remote-tracking
@@ -81,9 +94,9 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   ref it resolves in full, refuses a short ref name that matches more than
   one kind of ref, and refuses a `refs/remotes/origin/<base>` that
   disagrees with the private ref. The fetch is depth 1 only when the checkout
-  is already shallow. If the fetch fails only the private ref is removed and a
-  warning naming the cause (the job needs `permissions: contents: read`) is
-  printed, so conductor fails closed; `refs/remotes/origin/*` is never touched.
+  is already shallow. If the fetch fails the step fails with an error naming the
+  cause (the job needs `permissions: contents: read`); only the private ref is
+  ever removed, and `refs/remotes/origin/*` is never touched.
   The job now needs `contents: read`. The README example runs the action in a
   job that runs no code from the pull request, and says that package.json
   lifecycle scripts bypass "require review on .github/workflows".

@@ -16,8 +16,10 @@ import {
   headTreeEqualsBase,
   policyDiffers,
   readPolicyAtRef,
+  refuseAmbiguousRef,
   refuseTrustBaseForPullRequest,
   refuseTrustBaseRef,
+  resolveRev,
 } from '../src/trust-base.js';
 
 const temps: string[] = [];
@@ -469,6 +471,87 @@ describe('a tag cannot shadow the trust base (B1)', () => {
     commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
     expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).toBeNull();
     expect(refuseTrustBaseForPullRequest(repo, 'pr-branch', 'main')).toMatch(/does not resolve/);
+  });
+});
+
+/**
+ * B2: git resolves the string refs/conductor/trust-base through its DWIM
+ * rules, which include refs/tags/<string>, so a TAG stored as
+ * refs/tags/refs/conductor/trust-base resolved whenever the private ref was
+ * absent. No ref NAME is trusted any more: the action passes a full commit
+ * id, and a refs/ name is checked with show-ref (the exact ref) before it is
+ * resolved.
+ */
+describe('a tag cannot become the trust base through ref name resolution (B2)', () => {
+  const PRIVATE = 'refs/conductor/trust-base';
+
+  function repoWithBaseAndTag(): { repo: string; base: string; other: string } {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    const other = commit(repo, { '.guardrails.yaml': 'version: 1\ngates: {}\n' }, 'permissive');
+    // Stored as refs/tags/refs/conductor/trust-base: what a pushed tag named
+    // refs/conductor/trust-base would be.
+    git(repo, ['tag', PRIVATE, other]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    return { repo, base, other };
+  }
+
+  it('a full commit id is the object even when a branch is named like it', () => {
+    const repo = emptyRepo();
+    const first = commit(repo, { 'a.txt': 'a\n' }, 'first');
+    const second = commit(repo, { 'b.txt': 'b\n' }, 'second');
+    git(repo, ['update-ref', `refs/heads/${first}`, second]);
+    expect(resolveRev(repo, first, 'commit')).toBe(first);
+  });
+
+  it('never resolves a refs/ name through a tag of that name: absent private ref means unresolvable', () => {
+    const { repo } = repoWithBaseAndTag();
+    expect(resolveRev(repo, PRIVATE, 'commit')).toBeNull();
+    expect(refuseTrustBaseRef(repo, PRIVATE)).toMatch(/does not resolve to a commit/);
+  });
+
+  it('the CLI refuses a refs/conductor/trust-base that exists only as a tag, on a pull request too', () => {
+    const { repo } = repoWithBaseAndTag();
+    expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).not.toBeNull();
+  });
+
+  it("accepts a full commit id equal to the private ref, or to refs/remotes/origin/<base>, and nothing else", () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', PRIVATE, base]);
+    const moved = commit(repo, { 'later.txt': 'x\n' }, 'base advanced');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', moved]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    expect(refuseTrustBaseForPullRequest(repo, base, 'main')).toBeNull();
+    expect(refuseTrustBaseForPullRequest(repo, moved, 'main')).toBeNull();
+    const head = git(repo, ['rev-parse', 'HEAD']).trim();
+    const refusal = refuseTrustBaseForPullRequest(repo, head, 'main');
+    expect(refusal).toMatch(head.slice(0, 12));
+    expect(refusal).toMatch(/trust base must be the base branch/);
+  });
+
+  it('refuses a full commit id when neither the private ref nor refs/remotes/origin/<base> exists, and when only a tag names it', () => {
+    const { repo, other } = repoWithBaseAndTag();
+    git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    expect(refuseTrustBaseForPullRequest(repo, other, 'main')).toMatch(/cannot verify/);
+  });
+});
+
+describe('refuseAmbiguousRef sees through revision syntax (N3)', () => {
+  it('refuses origin/main~0 and origin/main^{commit} when a tag shadows origin/main', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    const other = commit(repo, { 'x.txt': 'x\n' }, 'other');
+    git(repo, ['tag', 'origin/main', other]);
+    for (const spelled of ['origin/main', 'origin/main~0', 'origin/main^{commit}', 'origin/main^0', 'origin/main@{0}']) {
+      expect([spelled, refuseAmbiguousRef(repo, spelled)]).toEqual([
+        spelled,
+        expect.stringMatching(/ambiguous/),
+      ]);
+    }
+    expect(refuseAmbiguousRef(repo, 'HEAD~1')).toBeNull();
   });
 });
 

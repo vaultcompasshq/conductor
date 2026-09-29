@@ -37,6 +37,7 @@ interface ActionFile {
       run?: string;
       env?: Record<string, string>;
       id?: string;
+      if?: string;
     }>;
   };
 }
@@ -150,9 +151,10 @@ describe('action.yml', () => {
       .filter((line) => line.includes('ARGS'))
       .join('\n');
 
-    for (const name of ['BASE_REF', 'TRUST_BASE', 'SPEC', 'STAGE', 'OUTPUT']) {
+    for (const name of ['BASE_REF', 'TRUST_BASE', 'TRUST_BASE_SHA', 'SPEC', 'STAGE', 'OUTPUT']) {
       const quoted = new RegExp(`"\\$${name}"`, 'g');
-      expect(argumentLines.replace(quoted, '')).not.toContain(`$${name}`);
+      // (?![A-Z_]) so TRUST_BASE is not tripped by the longer TRUST_BASE_SHA.
+      expect(argumentLines.replace(quoted, '')).not.toMatch(new RegExp(`\\$${name}(?![A-Z_])`));
     }
   });
 
@@ -287,9 +289,9 @@ describe('action.yml: the advisory input', () => {
  * judged. The umbrella refuses that, but the action must not produce it.
  */
 describe('action.yml enters pull-request mode', () => {
-  it('passes the private, fully spelled trust-base ref when the event set a base, never a short origin/ name (B1)', () => {
-    expect(gatesScript).toContain('ARGS+=(--trust-base "refs/conductor/trust-base")');
-    expect(gatesScript).not.toMatch(/--trust-base "origin\//);
+  it('passes the full commit id the fetch step published when the event set a base, never a ref name (B2)', () => {
+    expect(gatesScript).toContain('ARGS+=(--trust-base "$TRUST_BASE_SHA")');
+    expect(gatesScript).not.toMatch(/--trust-base "(origin|refs)\//);
   });
 
   it('passes nothing when GITHUB_BASE_REF is empty, which is every push build', () => {
@@ -381,7 +383,7 @@ describe('action.yml refuses an explicit trust-base input on a pull request', ()
       expect(run.stderr).toMatch(/pull_request/);
       expect(run.stderr).toContain('refs/heads/feature/x');
       expect(run.stderr).toMatch(/remove the input/i);
-      expect(run.stderr).toContain('origin/$GITHUB_BASE_REF');
+      expect(run.stderr).toContain('fetches the base branch');
     }
   );
 
@@ -479,27 +481,29 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
   const PRIVATE_REF = 'refs/conductor/trust-base';
   const TOKEN = 'ghs_supersecrettokenvalue';
 
+  const fetchScript = steps.find((step) => step.id === 'fetch-base')?.run ?? '';
+
+  const fileLines = (file: string): string[] =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+
   /**
-   * Runs the gates step's own script, `conductor` replaced by a stub that
-   * exits 0 without reading its arguments (the fetch guard runs before that
-   * call, and nothing here is about what conductor does with the result),
-   * and `git` replaced by a pass-through shim that also appends every
-   * `fetch` invocation's argument line to `fetchLogPath`.
+   * Runs the "Fetch the trust base" step's own script for real, with `git`
+   * replaced by a pass-through shim that records every `fetch` invocation's
+   * argv and the GIT_CONFIG_* environment it was started with.
    */
-  function runGatesScript(
+  function runFetchScript(
     workdir: string,
     overrides: Record<string, string> = {}
-  ): { status: number; output: string; fetchLog: string[]; fetchEnvLog: string[]; conductorArgv: string[] } {
+  ): {
+    status: number;
+    output: string;
+    fetchLog: string[];
+    fetchEnvLog: string[];
+    sha: string | null;
+  } {
     const bin = tempDir();
-    const conductorShim = path.join(bin, 'conductor');
-    const conductorArgvPath = path.join(tempDir(), 'conductor-argv.txt');
-    writeFileSync(conductorArgvPath, '');
-    writeFileSync(
-      conductorShim,
-      `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(conductorArgvPath)}; done\nexit 0\n`
-    );
-    chmodSync(conductorShim, 0o755);
-
     const fetchLogPath = path.join(tempDir(), 'git-fetch-calls.txt');
     writeFileSync(fetchLogPath, '');
     const fetchEnvLogPath = path.join(tempDir(), 'git-fetch-env.txt');
@@ -510,7 +514,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       gitShim,
       `#!/bin/sh\nif [ "$1" = "fetch" ]; then printf '%s\\n' "$*" >> ${JSON.stringify(
         fetchLogPath
-      )}; printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" >> ${JSON.stringify(
+      )}; printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s;KEY2=%s;VALUE2=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" "$GIT_CONFIG_KEY_2" "$GIT_CONFIG_VALUE_2" >> ${JSON.stringify(
         fetchEnvLogPath
       )}; fi\nexec ${JSON.stringify(realGit)} "$@"\n`
     );
@@ -519,10 +523,64 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     const githubOutput = path.join(tempDir(), 'github-output.txt');
     writeFileSync(githubOutput, '');
 
+    const result = spawnSync('bash', ['-c', fetchScript], {
+      cwd: workdir,
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        GITHUB_OUTPUT: githubOutput,
+        GITHUB_BASE_REF: 'main',
+        GITHUB_SERVER_URL: `file://${serverFor.get(workdir) ?? '/nonexistent'}`,
+        GITHUB_REPOSITORY: 'acme/widgets',
+        TRUST_BASE_TOKEN: TOKEN,
+        ...overrides,
+      },
+    });
+
+    const shaLine = fileLines(githubOutput).find((line) => line.startsWith('sha='));
+    return {
+      status: result.status ?? -1,
+      output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+      fetchLog: fileLines(fetchLogPath),
+      fetchEnvLog: fileLines(fetchEnvLogPath),
+      sha: shaLine === undefined ? null : shaLine.slice('sha='.length),
+    };
+  }
+
+  /**
+   * Runs the gates step's own script with `conductor` replaced by a stub that
+   * records its argv AND its whole environment. The step has no token in its
+   * env mapping, so none is supplied here either, exactly as on a runner.
+   */
+  function runGatesScript(
+    workdir: string,
+    overrides: Record<string, string> = {}
+  ): { status: number; output: string; conductorArgv: string[]; conductorEnv: string; ran: boolean } {
+    const bin = tempDir();
+    const conductorShim = path.join(bin, 'conductor');
+    const conductorArgvPath = path.join(tempDir(), 'conductor-argv.txt');
+    const conductorEnvPath = path.join(tempDir(), 'conductor-env.txt');
+    writeFileSync(conductorArgvPath, '');
+    writeFileSync(conductorEnvPath, '');
+    writeFileSync(
+      conductorShim,
+      `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(conductorArgvPath)}; done\nenv >> ${JSON.stringify(conductorEnvPath)}\nexit 0\n`
+    );
+    chmodSync(conductorShim, 0o755);
+
+    const githubOutput = path.join(tempDir(), 'github-output.txt');
+    writeFileSync(githubOutput, '');
+
+    // Only the variables the step's own env mapping declares (plus PATH),
+    // never the parent's: the mapping is the whole of what a runner gives it.
+    const declared = Object.fromEntries(
+      Object.keys(stepEnv('gates')).map((key) => [key, ''])
+    );
     const result = spawnSync('bash', ['-c', gatesScript], {
       cwd: workdir,
       encoding: 'utf8',
       env: {
+        ...declared,
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
         // The step invokes the umbrella by absolute path now, so the stub has
         // to be reachable that way rather than only through PATH.
@@ -533,35 +591,60 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
         GITHUB_HEAD_REF: 'feature',
         BASE_REF: '',
         TRUST_BASE: '',
+        TRUST_BASE_SHA: '',
         SPEC: '',
         STAGE: 'ci',
         OUTPUT: 'conductor.sarif',
         WORKDIR: '.',
-        GITHUB_SERVER_URL: `file://${serverFor.get(workdir) ?? '/nonexistent'}`,
-        GITHUB_REPOSITORY: 'acme/widgets',
-        TRUST_BASE_TOKEN: TOKEN,
         ...overrides,
       },
     });
 
-    const lines = (file: string): string[] =>
-      readFileSync(file, 'utf8')
-        .split('\n')
-        .filter((line) => line.length > 0);
     return {
       status: result.status ?? -1,
       output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
-      fetchLog: lines(fetchLogPath),
-      fetchEnvLog: lines(fetchEnvLogPath),
-      conductorArgv: lines(conductorArgvPath),
+      conductorArgv: fileLines(conductorArgvPath),
+      conductorEnv: readFileSync(conductorEnvPath, 'utf8'),
+      // The gates step also asks the binary `run --help` (a capability probe),
+      // so "ran the gates" means it was handed the run's own arguments.
+      ran: fileLines(conductorArgvPath).includes('--stage'),
     };
   }
 
-  it('fetches the base into the private ref, from the explicit server URL, and hands conductor that full ref', () => {
+  const realBaseSha = (workdir: string): string =>
+    git(['rev-parse', 'refs/heads/main'], `${serverFor.get(workdir)}/acme/widgets.git`).trim();
+
+  it('the fetch is its OWN step, runs only on a pull request, and is the ONLY step whose env carries the token (B1)', () => {
+    const fetchStep = steps.find((step) => step.id === 'fetch-base');
+    expect(fetchStep).toBeDefined();
+    expect(fetchStep?.if).toMatch(/github\.base_ref != ''/);
+    expect(Object.keys(stepEnv('fetch-base'))).toContain('TRUST_BASE_TOKEN');
+    // The gates step has no token in its env at all, so conductor and every
+    // gate it spawns inherit none, on any event.
+    for (const key of Object.keys(stepEnv('gates'))) {
+      expect(key).not.toMatch(/TOKEN/i);
+    }
+    for (const value of Object.values(stepEnv('gates'))) {
+      expect(String(value)).not.toContain('github.token');
+    }
+    expect(gatesScript).not.toContain('TRUST_BASE_TOKEN');
+  });
+
+  it('on a push event (no base ref) the gates step runs with no token and passes no trust base (B1)', () => {
+    const { workdir } = makeShallowCheckout();
+    const run = runGatesScript(workdir, { GITHUB_BASE_REF: '' });
+    expect(run.status).toBe(0);
+    expect(run.ran).toBe(true);
+    expect(run.conductorArgv).not.toContain('--trust-base');
+    expect(run.conductorEnv).not.toMatch(/TOKEN/);
+    expect(run.conductorEnv).not.toContain(TOKEN);
+  });
+
+  it('fetches the base into the private ref from the explicit server URL and publishes the FULL commit id', () => {
     const { workdir } = makeShallowCheckout();
     expect(resolves(PRIVATE_REF, workdir)).toBe(false);
 
-    const run = runGatesScript(workdir);
+    const run = runFetchScript(workdir);
 
     expect(run.status).toBe(0);
     expect(run.fetchLog.length).toBe(1);
@@ -571,13 +654,32 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     // Never the remote named origin, and never a refs/remotes destination.
     expect(run.fetchLog[0]).not.toMatch(/\borigin\b/);
     expect(run.fetchLog[0]).not.toContain('refs/remotes');
-    expect(resolves(PRIVATE_REF, workdir)).toBe(true);
-    expect(run.conductorArgv[run.conductorArgv.indexOf('--trust-base') + 1]).toBe(PRIVATE_REF);
+    expect(run.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(run.sha).toBe(realBaseSha(workdir));
+    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).toBe(run.sha);
+  });
+
+  it('a full commit id trust base works end to end: the gates step hands conductor exactly that id, never a ref name (B2)', () => {
+    const { workdir } = makeShallowCheckout();
+    const fetched = runFetchScript(workdir);
+    const run = runGatesScript(workdir, { TRUST_BASE_SHA: fetched.sha ?? '' });
+    expect(run.status).toBe(0);
+    const passed = run.conductorArgv[run.conductorArgv.indexOf('--trust-base') + 1];
+    expect(passed).toBe(fetched.sha);
+    expect(passed).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('the gates step refuses to run conductor when a pull request has no trust base id (fetch did not run)', () => {
+    const { workdir } = makeShallowCheckout();
+    const run = runGatesScript(workdir, { TRUST_BASE_SHA: '' });
+    expect(run.status).toBe(2);
+    expect(run.ran).toBe(false);
+    expect(run.output).toMatch(/trust base/);
   });
 
   it('never puts the token in argv: it travels as an http extraheader in GIT_CONFIG_* environment variables', () => {
     const { workdir } = makeShallowCheckout();
-    const run = runGatesScript(workdir);
+    const run = runFetchScript(workdir);
 
     for (const line of run.fetchLog) {
       expect(line).not.toContain(TOKEN);
@@ -593,41 +695,35 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     expect(env).toContain(
       `VALUE1=AUTHORIZATION: basic ${Buffer.from(`x-access-token:${TOKEN}`).toString('base64')}`
     );
-    // And the token is not left in the environment conductor itself runs in.
     expect(run.output).not.toContain(TOKEN);
+  });
+
+  it("appends to a caller's GIT_CONFIG_* instead of overwriting it", () => {
+    const { workdir } = makeShallowCheckout();
+    const run = runFetchScript(workdir, {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'user.name',
+      GIT_CONFIG_VALUE_0: 'Caller',
+    });
+    const env = run.fetchEnvLog[0] ?? '';
+    expect(env).toContain('COUNT=3');
+    expect(env).toContain('KEY0=user.name;VALUE0=Caller;');
+    expect(env).toMatch(/KEY1=http\..*\/\.extraheader;VALUE1=;/);
+    expect(run.status).toBe(0);
   });
 
   it('replaces a stale private ref, and never writes or moves refs/remotes/origin/<base> (C1)', () => {
     const { workdir } = makeShallowCheckout();
-    // Something moved refs/remotes/origin/main to a crafted commit. The step
-    // must leave that ref alone (it is not the step's to fix) and judge by
-    // its own private ref, which is fetched fresh.
     git(['fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main'], workdir);
-    const realBase = git(['rev-parse', 'refs/remotes/origin/main'], workdir).trim();
     const crafted = git(['rev-parse', 'HEAD'], workdir).trim();
     git(['update-ref', 'refs/remotes/origin/main', crafted], workdir);
     git(['update-ref', PRIVATE_REF, crafted], workdir);
 
-    const run = runGatesScript(workdir);
+    const run = runFetchScript(workdir);
 
     expect(run.status).toBe(0);
-    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).toBe(realBase);
+    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).toBe(realBaseSha(workdir));
     expect(git(['rev-parse', 'refs/remotes/origin/main'], workdir).trim()).toBe(crafted);
-  });
-
-  it('a tag named origin/<base> cannot become the trust base: conductor is handed the private full ref (B1)', () => {
-    const { workdir } = makeShallowCheckout();
-    const head = git(['rev-parse', 'HEAD'], workdir).trim();
-    git(['tag', 'origin/main', head], workdir);
-
-    const run = runGatesScript(workdir);
-
-    const passed = run.conductorArgv[run.conductorArgv.indexOf('--trust-base') + 1];
-    expect(passed).toBe(PRIVATE_REF);
-    expect(passed).not.toBe('origin/main');
-    const realBase = git(['rev-parse', 'refs/heads/main'], serverFor.get(workdir) + '/acme/widgets.git').trim();
-    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).toBe(realBase);
-    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).not.toBe(head);
   });
 
   it('keeps a full clone full: no --depth when the checkout is not shallow (C2 interplay)', () => {
@@ -635,7 +731,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     git(['fetch', '--quiet', '--unshallow', 'origin'], workdir);
     expect(git(['rev-parse', '--is-shallow-repository'], workdir).trim()).toBe('false');
 
-    const run = runGatesScript(workdir);
+    const run = runFetchScript(workdir);
 
     expect(run.status).toBe(0);
     expect(run.fetchLog.length).toBe(1);
@@ -644,27 +740,53 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     expect(resolves(PRIVATE_REF, workdir)).toBe(true);
   });
 
-  it('on fetch failure removes ONLY a stale private ref, leaves refs/remotes/origin/* and the remote alone, and warns without failing (N1)', () => {
+  it('on fetch failure the step FAILS (non-zero, no id published), removes a stale private ref and leaves refs/remotes/origin/* alone (B2, N1)', () => {
     const { workdir } = makeShallowCheckout();
     git(['fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main'], workdir);
     const remoteBefore = git(['rev-parse', 'refs/remotes/origin/main'], workdir).trim();
     git(['update-ref', PRIVATE_REF, git(['rev-parse', 'HEAD'], workdir).trim()], workdir);
     const urlBefore = git(['remote', 'get-url', 'origin'], workdir).trim();
 
-    // The server cannot be reached: no credentials, no network, or a token
-    // without contents: read.
-    const run = runGatesScript(workdir, { GITHUB_REPOSITORY: 'acme/no-such-repo' });
+    const run = runFetchScript(workdir, { GITHUB_REPOSITORY: 'acme/no-such-repo' });
 
-    expect(run.status).toBe(0);
-    expect(run.output).toMatch(/::warning::/);
+    expect(run.status).not.toBe(0);
+    expect(run.sha).toBeNull();
+    expect(run.output).toMatch(/::error::/);
     expect(run.output).toMatch(/could not be fetched/);
     expect(run.output).toMatch(/contents: read/);
+    expect(run.output).not.toMatch(/conductor will refuse/);
     expect(resolves(PRIVATE_REF, workdir)).toBe(false);
     expect(git(['rev-parse', 'refs/remotes/origin/main'], workdir).trim()).toBe(remoteBefore);
     expect(git(['remote', 'get-url', 'origin'], workdir).trim()).toBe(urlBefore);
-    // Conductor is still handed the (now unresolvable) private ref, so it
-    // fails closed by itself.
-    expect(run.conductorArgv[run.conductorArgv.indexOf('--trust-base') + 1]).toBe(PRIVATE_REF);
+  });
+
+  it('a TAG named refs/conductor/trust-base plus a failed fetch does not become the trust base: the step fails, no id (B2)', () => {
+    const { workdir } = makeShallowCheckout();
+    const head = git(['rev-parse', 'HEAD'], workdir).trim();
+    git(['tag', PRIVATE_REF, head], workdir);
+
+    const run = runFetchScript(workdir, { GITHUB_REPOSITORY: 'acme/no-such-repo' });
+
+    expect(run.status).not.toBe(0);
+    expect(run.sha).toBeNull();
+    // Nothing published means the gates step (TRUST_BASE_SHA empty) refuses.
+    const gates = runGatesScript(workdir, { TRUST_BASE_SHA: run.sha ?? '' });
+    expect(gates.ran).toBe(false);
+    expect(gates.status).toBe(2);
+  });
+
+  it('a planted private ref plus a lock file fails closed, never using the planted ref (B3)', () => {
+    const { workdir } = makeShallowCheckout();
+    const crafted = git(['rev-parse', 'HEAD'], workdir).trim();
+    git(['update-ref', PRIVATE_REF, crafted], workdir);
+    // Blocks both the fetch's update and the delete: "cannot lock ref".
+    writeFileSync(path.join(workdir, '.git', 'refs', 'conductor', 'trust-base.lock'), '');
+
+    const run = runFetchScript(workdir);
+
+    expect(run.status).not.toBe(0);
+    expect(run.sha).toBeNull();
+    expect(run.output).toMatch(/::error::/);
   });
 });
 

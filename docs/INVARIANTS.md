@@ -1025,11 +1025,32 @@ the runner temp where the install prefix lives, or move
 `refs/remotes/origin/<base>`, and package.json lifecycle scripts run by an
 install are not stopped by branch protection on `.github/workflows`.
 
-WHAT THE PRIVATE REF CLOSES, AND ONLY THAT. The action fetches the base into
-`refs/conductor/trust-base` (forced, from the explicit server URL, with the
-token in GIT_CONFIG_* environment variables) and hands conductor that full
-ref; conductor also refuses a short name that a tag shadows (src/trust-base.ts,
-`refuseAmbiguousRef`). THE PRIVATE REF IS THE AUTHORITY when it is the ref in
+WHAT THE PRIVATE REF CLOSES, AND ONLY THAT. The action's own step "Fetch the
+trust base" (the ONLY step whose env holds a token; it runs only when
+`github.base_ref` is non-empty, so no push, merge_group, schedule or
+workflow_dispatch run ever has one, and the gates step has none at all) fetches
+the base into `refs/conductor/trust-base` (forced, from `$GITHUB_SERVER_URL/
+$GITHUB_REPOSITORY.git`, with the token in GIT_CONFIG_* environment variables,
+never argv), verifies the ref equals FETCH_HEAD, and publishes the FULL COMMIT
+ID. The gates step hands conductor and every gate that id, NEVER a ref name: git
+resolves a name through DWIM rules that include `refs/tags/<name>`, so a pushed
+tag named `refs/conductor/trust-base` or `origin/<base>` would otherwise be
+taken for the ref, while a full 40- or 64-hex id is the object (pinned by "a
+full commit id is the object even when a branch is named like it" in
+tests/trust-base.test.ts). Any fetch failure, a stale private ref that cannot be
+removed (a planted ref plus a `.lock` file), or a ref that does not equal the
+fetched commit FAILS THE STEP (exit 1), so conductor is never invoked with a
+stale or absent trust base; an empty id on a pull request is exit 2 in the gates
+step. The explicit URL does NOT make the fetch immune to `url.insteadOf` or any
+other repository git configuration: those are covered only by the precondition
+below. In the CLI no `refs/` name is ever resolved through name resolution
+(`resolveRev` reads the exact ref with `show-ref`), so a tag stored as
+`refs/tags/refs/conductor/trust-base` is not the private ref, and
+`refuseAmbiguousRef` looks through revision suffixes (`origin/main~0`,
+`origin/main^{commit}`). On a pull request the CLI accepts a full commit id only
+if it equals the private ref or `refs/remotes/origin/<base>` (both via
+`show-ref`). Conductor also refuses a short name that a tag shadows
+(src/trust-base.ts, `refuseAmbiguousRef`). THE PRIVATE REF IS THE AUTHORITY when it is the ref in
 use: nothing reads `refs/remotes/origin/<base>` for trust, and the two are NOT
 compared, because that ref is fixed at checkout time (it is the side
 pull-request code can move) while the private ref is fetched later, so a
@@ -1398,8 +1419,8 @@ advanced since checkout is benign). FAILS CLOSED when
 given ref is the private ref, accepted the same way: reachable on the default `actions/checkout`
 (fetch-depth: 1) when the base branch was not fetched. The ACTION fetches the
 base into that private ref itself (depth 1 on a shallow checkout, always
-forced, from the explicit server URL, and it deletes only a stale private ref
-if the fetch fails), so on the action a depth-1 checkout does NOT fail closed
+forced, from the explicit server URL, and it fails the step, deleting only a
+stale private ref, if the fetch fails), so on the action a depth-1 checkout does NOT fail closed
 here any more: the private ref resolves. What a depth-1 checkout now fails closed on is the history gate
 (gitleaks), described in the next paragraph. When the GIVEN ref does not
 resolve at all, this returns null rather than refusing a second time under a

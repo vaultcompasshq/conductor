@@ -1113,9 +1113,11 @@ provenance even though all four packages publish it.
 umbrella reads `GITHUB_BASE_REF` itself and treats an empty value as "not a
 pull request", which is what a push build wants.
 
-On a `pull_request` event the action fetches the base branch into a private
-ref and passes **`--trust-base refs/conductor/trust-base`** of its own accord
-(it needs `contents: read`), so the run takes
+On a `pull_request` event a dedicated step fetches the base branch into a
+private ref and the action passes **`--trust-base <the fetched commit id>`**
+of its own accord (the job needs `contents: read`; a failed fetch fails the job
+rather than running without a trust base; the token exists only in that fetch
+step and never in the gates), so the run takes
 its configuration from the base branch and the pull request cannot change the
 rules it is judged by; a change to the rules shows as a proposal line and
 takes effect after merge. See "The pull-request trust boundary" above. On any

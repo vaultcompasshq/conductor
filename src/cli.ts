@@ -342,8 +342,8 @@ function policyForRun(
   // the same rule for anyone invoking the CLI directly in CI, bypassing that
   // step. Checked BEFORE refuseTrustBaseRef and deliberately narrower than
   // it: it says nothing about HEAD or about tree equality, only about
-  // whether the given ref agrees with origin/<GITHUB_BASE_REF>, which is
-  // exactly what the composite action itself always passes. So on an
+  // whether the given ref agrees with the base branch (the full commit id the
+  // composite action's fetch step published). So on an
   // ordinary pull-request run this returns null immediately and
   // refuseTrustBaseRef runs its own checks unchanged, the equal-tree
   // first-parent exception (issue #69/#73) included.
@@ -597,11 +597,11 @@ export function buildProgram(): Command {
     )
     .option(
       '--base <ref>',
-      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to origin/<GITHUB_BASE_REF> when it is set.'
+      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to the base branch (refs/conductor/trust-base, else refs/remotes/origin/<GITHUB_BASE_REF>, as a commit id) when GITHUB_BASE_REF is set.'
     )
     .option(
       '--trust-base <ref>',
-      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action passes origin/<GITHUB_BASE_REF> on a pull_request event.'
+      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action fetches the base branch and passes its full commit id on a pull_request event.'
     )
     .option(
       '--output <path>',
