@@ -50,6 +50,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   An installed `conductor-version` that does not know `--text-report` is
   detected by asking the binary (`run --help`), and keeps the old second-run
   comment; the gates step exit status is conductor's own in every state.
+- The README now documents that the first-pull-request refusal recurs once
+  on every new base branch, and that a `branches:` filter on the workflow
+  trigger must include release and production branches so the promote pull
+  request is still checked (issue #87).
 
 ### Fixed
 
