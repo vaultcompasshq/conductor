@@ -552,7 +552,7 @@ the workflow file from the HEAD, so all four inputs are written by the pull
 request being judged. Once a gate has two published versions that is a bypass
 with an innocent shape: deleting a control reads as deleting a control, while
 `intent-guard-version: 1.4.0` reads as version management. It is not
-hypothetical here, because this tag ships intent-guard 1.7.0 and 1.4.0 is
+hypothetical here, because this tag ships intent-guard 1.8.0 and 1.4.0 is
 published.
 
 So where `GITHUB_BASE_REF` is non-empty the validate step refuses any of the
@@ -570,7 +570,7 @@ Five properties, each load-bearing:
   COMPATIBILITY: the oldest build of each gate that understands `--trust-base`.
   These are the tested versions this TAG ships. One constant serving both is how
   raising one silently raises the other. The two already disagree for
-  intent-guard: the floor is 1.4.0 and the tag ships 1.7.0.
+  intent-guard: the floor is 1.4.0 and the tag ships 1.8.0.
 - The comparison is against those hardcoded constants, never against anything
   derived from an input. An input looks identical whether a consumer pinned the
   current version or the default supplied it, so the step cannot tell a pin from
@@ -646,9 +646,9 @@ below its constant, so the UNMODIFIED step refuses real pins today and the cases
 say so with real numbers: `conductor-version: 0.3.0`, `dep-guard-version: 0.5.0`,
 `vault-guard-version: 1.6.0` and `intent-guard-version: 1.4.0` are each driven
 through the shipped step text and refused on a pull-request run, and accepted
-with `GITHUB_BASE_REF` unset. Counted from the registry on 2026-09-29 there are
-58 such pins: 12 conductor versions below 0.7.0, 11 dep-guard below 0.9.0, 26
-vault-guard below 1.8.0 and 9 intent-guard below 1.7.0.
+with `GITHUB_BASE_REF` unset. Counted from the registry on 2026-09-30 there are
+63 such pins: 13 conductor versions below 0.8.0, 13 dep-guard below 0.10.0, 27
+vault-guard below 1.9.0 and 10 intent-guard below 1.8.0.
 
 A second set of cases drives a COPY of the step with one constant advanced a
 minor version, which is the action as it will be the day a newer gate ships.

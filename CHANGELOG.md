@@ -14,6 +14,37 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-30
+
+**A minor package release.** `@vaultcompass/conductor` moves to 0.8.0 on npm
+and the action's `conductor-version` default moves to `0.8.0` in lockstep,
+the same number the `v0.8.0` tag names. The three gate defaults move too:
+intent-guard 1.8.0, dep-guard 0.10.0 and vault-guard 1.9.0.
+
+**The consumer cost.** Read this before moving your action tag.
+
+- History gates need `fetch-depth: 0`. Any shallow checkout, on any event, is
+  now could-not-run for a history gate (gitleaks), not only on pull requests.
+- Run the action in a job with no pull request code before it. The README
+  example shows the shape. The action reads its trust base and its rules from
+  places that code run earlier in the same job could otherwise move.
+- On a pull request the job needs `permissions: contents: read`, because the
+  action now fetches the base branch itself for the trust base. A failed fetch
+  fails the job; conductor never runs with a stale or absent trust base.
+- `nothing-checked` is a new sixth verdict token, for a run in which no gate
+  ran. A workflow that tests the `verdict` output for `pass`, or that lists
+  the five earlier tokens, must handle it. The exit status is unchanged.
+- An explicit `conductor-version` below `0.8.0` is refused on a pull request
+  after this bump, because `TAG_CONDUCTOR_MINOR` moved with the default. The
+  same holds for the three gate inputs below the new defaults. Pins must move
+  with the action tag: raise them, or remove the inputs to take this tag's
+  own versions.
+- The gate default pins moved, which brings each guard's stricter behaviour.
+  dep-guard 0.10.0: a private registry must be named in `.npmrc`, and a
+  lockfile format switch is refused. vault-guard 1.9.0: a key in documentation
+  is no longer downgraded, and JSON paths use forward slashes. intent-guard
+  1.8.0: the Stop hook needs SessionStart, or it fails closed.
+
 ### Fixed
 
 - A base branch that advances between checkout and the action's fetch no
@@ -126,6 +157,12 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   nothing. The exit
   status is unchanged (0). The action accepts `nothing-checked` only beside
   exit status 0, and its job summary says that nothing was checked.
+
+### Changed
+
+- The action's gate defaults: intent-guard 1.7.0 to 1.8.0, dep-guard 0.9.0 to
+  0.10.0, vault-guard 1.8.0 to 1.9.0, with the matching `TAG_` constants in
+  the backward-pin rule.
 
 ## [0.7.0] - 2026-09-29
 
