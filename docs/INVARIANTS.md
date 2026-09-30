@@ -1076,9 +1076,18 @@ below. In the CLI no `refs/` name is ever resolved through name resolution
 (`resolveRev` reads the exact ref with `show-ref`), so a tag stored as
 `refs/tags/refs/conductor/trust-base` is not the private ref, and
 `refuseAmbiguousRef` looks through revision suffixes (`origin/main~0`,
-`origin/main^{commit}`). On a pull request the CLI accepts a full commit id only
-if it equals the private ref or `refs/remotes/origin/<base>` (both via
-`show-ref`). Conductor also refuses a short name that a tag shadows
+`origin/main^{commit}`; only `~`, `^`, `:` and `@{` start a suffix, so a name
+with a literal `@`, such as a branch and a tag both called `feature@x`, is
+still checked). On a pull request the CLI accepts a full commit id only
+if it equals the private ref when that ref exists, and equals
+`refs/remotes/origin/<base>` ONLY when the private ref does not exist (both via
+`show-ref`): the remote-tracking ref is the side pull-request code can move, so
+an id that matches only it is refused once the authority exists (pinned by
+"refuses a full commit id equal to a MOVED refs/remotes/origin/<base> when the
+private ref exists"). An explicit intent gate `--base` that starts with a dash
+is refused (git would read it as an option: `--output=/x` wrote a file and
+returned an empty change set), and the change-set diff passes
+`--end-of-options` before the range as well. Conductor also refuses a short name that a tag shadows
 (src/trust-base.ts, `refuseAmbiguousRef`). THE PRIVATE REF IS THE AUTHORITY when it is the ref in
 use: nothing reads `refs/remotes/origin/<base>` for trust, and the two are NOT
 compared, because that ref is fixed at checkout time (it is the side

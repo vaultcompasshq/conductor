@@ -93,7 +93,11 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   removed, fails the step, so conductor never runs with a stale or absent trust
   base. The CLI resolves no `refs/` name through name resolution, sees through
   `origin/main~0`-style suffixes, and accepts a commit id on a pull request only
-  if it equals the private ref or `refs/remotes/origin/<base>`.
+  if it equals the private ref, or `refs/remotes/origin/<base>` only when the
+  private ref does not exist. An intent gate `--base` starting with a dash is
+  refused (it was option injection: `--output=/x` produced an empty change
+  set), and a name with a literal `@` is no longer cut short in the ambiguity
+  check.
   `url.insteadOf` and other repository git config remain covered only by the
   no-pull-request-code-before-the-action precondition.
   Two holes closed: code from the pull request that ran earlier in the job

@@ -78,6 +78,18 @@ export function resolveBaseRefInRepo(
   options: { base?: string; env: NodeJS.ProcessEnv }
 ): ResolvedBase {
   if (options.base !== undefined && options.base !== '') {
+    // A base that starts with a dash is an OPTION to git, not a ref:
+    // "--output=/x" made "git diff --output=/x...HEAD" write that file and
+    // print nothing, an empty change set the intent gate then judged as clean.
+    // Refused here, and changedPathsSince passes --end-of-options as well.
+    if (options.base.startsWith('-')) {
+      return {
+        ok: false,
+        detail:
+          `refusing "${options.base}" as the intent gate base: it starts with a dash, so git would ` +
+          'read it as an option rather than a ref. Nothing was checked.',
+      };
+    }
     const ambiguous = refuseAmbiguousRef(repoRoot, options.base, 'the intent gate base');
     if (ambiguous !== null) {
       return { ok: false, detail: ambiguous };
@@ -177,6 +189,10 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
       // names no file and which intent-guard refuses outright (backslash).
       '-z',
       '--no-renames',
+      // Everything after this is a revision, never an option, whatever the
+      // caller-given base looks like (the second line of defence behind the
+      // dash refusal in resolveBaseRefInRepo).
+      '--end-of-options',
       `${base}...HEAD`,
     ],
     { cwd: repoRoot, encoding: 'utf8' }

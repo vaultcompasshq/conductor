@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -204,9 +204,34 @@ describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
     const { root } = twoCommitBranch();
     expect(resolveBaseRefInRepo(root, { env: {} })).toEqual({ ok: true, base: null });
   });
+
+  it('refuses an explicit --base that starts with a dash: it is an option, not a ref (N2)', () => {
+    const { root } = twoCommitBranch();
+    for (const base of ['--output=/x', '-p', '--no-index']) {
+      const refused = resolveBaseRefInRepo(root, { base, env });
+      expect([base, refused.ok]).toEqual([base, false]);
+      if (refused.ok) throw new Error('unreachable');
+      expect(refused.detail).toContain(`"${base}"`);
+      expect(refused.detail).toMatch(/starts with a dash/);
+      expect(refused.detail).toMatch(/Nothing was checked/);
+    }
+  });
 });
 
 describe('changedPathsSince', () => {
+  it('never lets a base that looks like an option reach git as one: no file is written and the run fails closed (N2)', () => {
+    // Before the fix "--output=<file>...HEAD" was git diff's own --output
+    // option: it wrote that file and printed nothing, so the change set was
+    // empty and the intent gate judged nothing. The check in
+    // resolveBaseRefInRepo is the first line; --end-of-options in the git
+    // call is the second, proven here by calling the function directly.
+    const root = repoWithMain();
+    const target = path.join(tempDir(), 'injected.txt');
+    const changed = changedPathsSince(root, `--output=${target}`);
+    expect(changed.ok).toBe(false);
+    expect(existsSync(target)).toBe(false);
+  });
+
   it('lists what the branch changed and not what landed on the base afterwards', () => {
     // The three-dot form. Two-dot would attribute a commit somebody else
     // merged into main after this branch forked to this branch's author,

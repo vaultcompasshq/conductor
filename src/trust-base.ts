@@ -131,12 +131,15 @@ export function refuseAmbiguousRef(
 ): string | null {
   // The NAME part only: origin/main~0, origin/main^{commit} and origin/main@{0}
   // resolve through the same tag-first rules as origin/main, so a revision
-  // suffix is cut off (from the first ~ ^ @ :) before the check.
-  const cut = ref.search(/[~^@:]/);
+  // suffix is cut off (from the first ~ ^ : or @{) before the check. A bare @
+  // is HEAD and is NOT a cut: a name may carry a literal @ (a branch and a tag
+  // both named feature@x, where git picks the tag), and cutting there hid it.
+  const cut = ref.search(/[~^:]|@\{/);
   const name = cut === -1 ? ref : ref.slice(0, cut);
   if (
     name === '' ||
     name === 'HEAD' ||
+    name === '@' ||
     name.startsWith('refs/') ||
     /[\s{}\\]/.test(name) ||
     isFullObjectId(name)
@@ -384,13 +387,18 @@ export function refuseTrustBaseForPullRequest(
   // THE ACTION PASSES A FULL COMMIT ID, never a ref name (a full object id is
   // not subject to name resolution). It is accepted only when it IS the
   // private ref's commit (the authority, fetched and verified by the action's
-  // fetch step) or refs/remotes/origin/<base>'s (both read with show-ref).
+  // fetch step) or, ONLY when the private ref does not exist, the commit of
+  // refs/remotes/origin/<base> (both read with show-ref).
   if (isFullObjectId(ref)) {
     const given = resolveRev(repoRoot, ref, 'commit');
     if (given === null) {
       return null;
     }
-    if (given === privateCommit || given === expectedCommit) {
+    // The private ref is the ONLY acceptable answer when it exists: pull-request
+    // code can move refs/remotes/origin/<base>, so an id that matches only that
+    // ref is the attack, not a second answer. The remote-tracking ref is the
+    // reference only when the private ref is absent.
+    if (privateCommit !== null ? given === privateCommit : given === expectedCommit) {
       return null;
     }
     if (privateCommit === null && expectedCommit === null) {
