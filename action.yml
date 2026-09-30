@@ -726,12 +726,16 @@ runs:
         # comment step running an umbrella that was never verified at all.
         printf 'verification-ok=true\n' >> "$GITHUB_OUTPUT"
 
-    # FETCH THE TRUST BASE, IN ITS OWN STEP, and the ONLY step whose env
-    # carries github.token. It runs only on a pull request (github.base_ref is
-    # empty on push, merge_group, schedule and workflow_dispatch, so no token
-    # reaches those runs), and the gates step downstream has no token in its
-    # environment at all: conductor, gitleaks, osv-scanner, dep-guard,
-    # vault-guard and intent-guard inherit none.
+    # FETCH THE TRUST BASE, IN ITS OWN STEP. It is one of exactly TWO steps
+    # whose env carries a token (the other is "Post the report", which holds
+    # GH_TOKEN and runs only the comment poster); neither runs conductor. This
+    # one runs only on a pull request (github.base_ref is empty on push,
+    # merge_group, schedule and workflow_dispatch, so no token reaches those
+    # runs), and the gates step and the render step downstream have no token in
+    # their environment at all: conductor, gitleaks, osv-scanner, dep-guard,
+    # vault-guard and intent-guard inherit none. Inside this step the token is
+    # copied to a non-exported variable and removed from the environment before
+    # any git call, so only the fetch subshell has it.
     #
     # WHAT IT DOES. Fetches the base branch, forced, from the explicit server
     # URL into the private ref refs/conductor/trust-base, then publishes the
@@ -771,17 +775,32 @@ runs:
         TRUST_BASE_TOKEN: ${{ github.token }}
         GIT_TERMINAL_PROMPT: '0'
       run: |
-        set -eu
+        set -euo pipefail
         fail() {
           printf '::error::conductor: %s\n' "$1"
           exit 1
         }
 
+        # THE TOKEN IS MOVED OUT OF THE ENVIRONMENT FIRST. The step-level env
+        # entry is exported to every process in this step, so every git call
+        # below (and any hook one triggers) would inherit it. It is copied into
+        # a plain, NON-EXPORTED shell variable and unset, and the variable is
+        # read only inside the fetch subshell, where it becomes the extraheader.
+        fetch_token="$TRUST_BASE_TOKEN"
+        unset TRUST_BASE_TOKEN
+
         # Never leave a stale private ref standing, and never swallow the
-        # failure to remove one.
-        if git show-ref --verify --quiet refs/conductor/trust-base; then
-          git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
-          if git show-ref --verify --quiet refs/conductor/trust-base; then
+        # failure to remove one. A SYMBOLIC ref at this name counts, live or
+        # dangling: show-ref --verify says "no such ref" for a dangling one, and
+        # a forced fetch would then write THROUGH it into its target (for
+        # example refs/remotes/origin/main), while a plain delete of a live one
+        # deletes the target branch. So the symref is detected first and
+        # removed with --no-deref, which touches the name and nothing behind it.
+        if git symbolic-ref -q refs/conductor/trust-base >/dev/null 2>&1 \
+          || git show-ref --verify --quiet refs/conductor/trust-base; then
+          git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+          if git symbolic-ref -q refs/conductor/trust-base >/dev/null 2>&1 \
+            || git show-ref --verify --quiet refs/conductor/trust-base; then
             fail "a refs/conductor/trust-base already exists in this checkout and could not be removed (a lock file or a permissions problem), so it cannot be trusted. Nothing was checked."
           fi
         fi
@@ -793,7 +812,6 @@ runs:
         fi
         SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
         AUTH_KEY="http.${SERVER_URL}/.extraheader"
-        AUTH_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TRUST_BASE_TOKEN" | base64 | tr -d '\n')"
         BASE_COUNT="${GIT_CONFIG_COUNT:-0}"
         case "$BASE_COUNT" in
           ''|*[!0-9]*) BASE_COUNT=0 ;;
@@ -804,6 +822,7 @@ runs:
         # exported here outlives the subshell.
         fetch_ok=1
         (
+          AUTH_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$fetch_token" | base64 | tr -d '\n')"
           export "GIT_CONFIG_COUNT=$((BASE_COUNT + 2))"
           export "GIT_CONFIG_KEY_${BASE_COUNT}=${AUTH_KEY}"
           export "GIT_CONFIG_VALUE_${BASE_COUNT}="
@@ -823,7 +842,8 @@ runs:
         # the ref.
         ref_sha="$(git show-ref --verify --hash refs/conductor/trust-base 2>/dev/null || true)"
         fetch_head_sha="$(git rev-parse --verify --quiet --end-of-options 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
-        if ! printf '%s' "$ref_sha" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' || [ "$ref_sha" != "$fetch_head_sha" ]; then
+        sha_shape='^[0-9a-f]{40}([0-9a-f]{24})?$'
+        if ! [[ "$ref_sha" =~ $sha_shape ]] || [ "$ref_sha" != "$fetch_head_sha" ]; then
           git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
           fail "refs/conductor/trust-base does not name the commit that was just fetched (ref: '${ref_sha}', fetched: '${fetch_head_sha}'), so something else wrote it. Nothing was checked."
         fi
@@ -859,7 +879,10 @@ runs:
         TRUST_BASE: ${{ inputs.trust-base }}
         # The full commit id of the base branch, published by the "Fetch the
         # trust base" step. THIS STEP HAS NO TOKEN IN ITS ENVIRONMENT, on any
-        # event: the token lives only in that step.
+        # event. Exactly two steps in this action hold a token: that fetch
+        # step (github.token, to read the base branch) and the "Post the
+        # report" step (GH_TOKEN, to write the comment); neither one runs
+        # conductor.
         TRUST_BASE_SHA: ${{ steps.fetch-base.outputs.sha }}
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
@@ -921,7 +944,7 @@ runs:
         # fallback, which is the behaviour this action had before the flag
         # existed.
         text_report_supported=0
-        if conductor_help="$("$CONDUCTOR_BIN" run --help 2>/dev/null)"; then
+        if conductor_help="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN "$CONDUCTOR_BIN" run --help 2>/dev/null)"; then
           case "$conductor_help" in
             *--text-report*) text_report_supported=1 ;;
           esac
@@ -971,7 +994,7 @@ runs:
           ARGS+=(--trust-base "$TRUST_BASE")
         elif [ -n "${GITHUB_BASE_REF:-}" ]; then
           # THE BASE COMMIT COMES FROM THE "Fetch the trust base" STEP, which
-          # is the only step that holds a token, and it is passed as a FULL
+          # holds a token that no conductor-running step holds, and it is passed as a FULL
           # COMMIT ID, never as a ref name. git resolves a name through DWIM
           # rules that include refs/tags/<name>: a pushed tag named
           # origin/<base>, or refs/conductor/trust-base, would stand in for
@@ -1018,8 +1041,15 @@ runs:
         # set -e a non-zero here would end the step before they were. This
         # step's exit status is conductor's own, in every state, and nothing
         # after this line may change it.
+        #
+        # Run with the OIDC request variables REMOVED. A caller whose job
+        # grants id-token: write has the runner expose
+        # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN to
+        # every step, and conductor and the gates it spawns have no use for
+        # them. (Whatever else the caller put in the job's own env is theirs.)
         status=0
-        "$CONDUCTOR_BIN" "${ARGS[@]}" || status=$?
+        env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+          "$CONDUCTOR_BIN" "${ARGS[@]}" || status=$?
 
         # NOTHING BELOW MAY FAIL THE STEP. errexit is off from here: a summary
         # or output write that fails must not turn conductor's exit 0 into a
@@ -1103,8 +1133,18 @@ runs:
     # run then too. Nothing this step does can change the gates step's own
     # exit code, which composite actions carry through in the failed-step
     # shape regardless of what a later step does.
-    - name: Comment the report on the pull request
-      id: pr-comment
+    #
+    # TWO STEPS, AND ONLY THE SECOND HOLDS A TOKEN. This one, "Render the
+    # report", does everything up to and including the fallback conductor run
+    # and writes the comment body to a file under the runner temp; it has NO
+    # token in its environment, so conductor and every gate it spawns inherit
+    # none, on any event, including pull_request_target where github.token
+    # usually has write scope. The next step, "Post the report", holds
+    # GH_TOKEN and runs only the node poster on that file. Before the split
+    # this was one step with GH_TOKEN in its env, and its fallback path ran
+    # conductor with it.
+    - name: Render the report
+      id: pr-render
       if: |
         always() &&
         inputs.pr-comment == 'true' &&
@@ -1138,14 +1178,6 @@ runs:
         # 2026-09-22, because it runs `if: always()` and so ran after the
         # install step had already failed.
         CONDUCTOR_BIN: ${{ runner.temp }}/conductor-gates/bin/conductor
-        # gh reads its token from GH_TOKEN itself; nothing here puts it on a
-        # command line. github.token is read-only on a fork pull_request,
-        # which is what makes the posting step below fail there -- see
-        # scripts/pr-comment.mjs, which turns that failure into a warning
-        # rather than letting it propagate.
-        GH_TOKEN: ${{ github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
         # The same four inputs the gates step reads, so this run can mirror
         # it exactly. Read as variables rather than expanded into the
         # script, the same as every other input in this file.
@@ -1159,15 +1191,6 @@ runs:
         # gates step exits 0 on a blocking finding, and a comment rendered
         # without the same flag would say "verdict: exit 1" underneath it.
         ADVISORY: ${{ inputs.advisory }}
-        # The bundled script lives in THIS action's own tree, not the
-        # consumer's checkout, so it is reached by github.action_path rather
-        # than by a path relative to working-directory.
-        ACTION_PATH: ${{ github.action_path }}
-        # Empty by default. Only worth setting when this action runs more
-        # than once against the same pull request in one workflow (a
-        # monorepo running it per package), so each run's comment stays its
-        # own rather than fighting over one.
-        PR_COMMENT_MARKER: ${{ inputs.pr-comment-marker }}
       run: |
         set -eu
 
@@ -1194,7 +1217,12 @@ runs:
         # step that only exists to post an advisory comment. The `|| { ... }`
         # form is exempt from `set -e`: a command's failure inside an `||`
         # list never triggers it, only a bare command's would.
-        REPORT_FILE="$(mktemp)" || {
+        #
+        # Under the RUNNER TEMP, outside the workspace, because the file
+        # crosses to the next step ("Post the report") by PATH, published as
+        # this step's `report` output. A run that cannot make one publishes
+        # nothing, and the post step's own condition then skips it.
+        REPORT_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/conductor-pr-comment.XXXXXX")" || {
           echo "::warning::conductor: could not create a temporary file for the pull request comment step; skipping the pull request comment. The gate's own verdict is unaffected."
           exit 0
         }
@@ -1245,10 +1273,11 @@ runs:
         #      that file, byte for byte, and run nothing.
         #   3. verified, and the gates step flagged an old conductor: the
         #      fallback render run.
-        #   4. verified, but there is no report: the gates step did not get as
-        #      far as writing one, or conductor died before it did. Say that,
-        #      rather than post an empty comment or a stale one; the gates
-        #      step removes any previous file before it runs.
+        #   4. verified, but there is no report: the run did not get as far as
+        #      writing one (the fetch step failed and the gates never ran, or
+        #      conductor died before it wrote one). Say that, rather than post
+        #      an empty comment or a stale one; the gates step removes any
+        #      previous file before it runs.
         #
         # THE WORDING FOLLOWS WHAT HAPPENED (C5). The registry-outage sentence
         # is true only of a failed signature audit, so it is printed only
@@ -1275,21 +1304,62 @@ runs:
         elif [ -n "${TEXT_REPORT:-}" ] && [ -s "$TEXT_REPORT" ]; then
           REPORT_FILE="$TEXT_REPORT"
         elif [ "${REPORT_FALLBACK:-}" = "true" ]; then
-          "$CONDUCTOR_BIN" "${ARGS[@]}" || true
+          # Run with the OIDC request variables removed: a caller whose job
+          # grants id-token: write has the runner expose them to every step,
+          # and conductor and its gates have no use for them.
+          env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            "$CONDUCTOR_BIN" "${ARGS[@]}" || true
         else
           {
-            printf '%s\n\n' 'Conductor did not produce a report on this run, so there is nothing to show here. The gates step stopped before it wrote one. This is not a finding about this repository.'
+            printf '%s\n\n' 'Conductor did not produce a report on this run, so there is nothing to show here. The run stopped before a report was written (for example the trust base could not be fetched, or an earlier step failed). This is not a finding about this repository.'
             printf '%s\n' 'The job log has the failing step.'
           } > "$REPORT_FILE"
         fi
 
+        # Handed to the post step by PATH, never by content: the report is
+        # conductor's own output, but it can carry a finding's text or a path
+        # taken from the scanned repository, and neither belongs in a step
+        # output or on a command line.
+        printf 'report=%s\n' "$REPORT_FILE" >> "$GITHUB_OUTPUT"
+
+    # The only other step that holds a token (with "Fetch the trust base"),
+    # and it runs NOTHING but the poster. scripts/pr-comment.mjs reads the
+    # file the render step wrote, wraps it in a fenced block behind a hidden
+    # sticky marker, and never exits non-zero: a posting failure -- most
+    # commonly a fork pull_request's read-only token -- prints a ::warning::
+    # and returns. Skipped when the render step published no file.
+    - name: Post the report
+      id: pr-post
+      if: |
+        always() &&
+        inputs.pr-comment == 'true' &&
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') &&
+        steps.pr-render.outputs.report != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        REPORT_FILE: ${{ steps.pr-render.outputs.report }}
+        # gh reads its token from GH_TOKEN itself; nothing here puts it on a
+        # command line. github.token is read-only on a fork pull_request,
+        # which is what makes the posting fail there; the poster turns that
+        # into a warning rather than letting it propagate.
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        # The bundled script lives in THIS action's own tree, not the
+        # consumer's checkout, so it is reached by github.action_path rather
+        # than by a path relative to working-directory.
+        ACTION_PATH: ${{ github.action_path }}
+        # Empty by default. Only worth setting when this action runs more
+        # than once against the same pull request in one workflow (a
+        # monorepo running it per package), so each run's comment stays its
+        # own rather than fighting over one.
+        PR_COMMENT_MARKER: ${{ inputs.pr-comment-marker }}
+      run: |
+        set -eu
+
         # The report reaches the poster BY FILE PATH, never by interpolating
-        # its bytes into a command: it is conductor's own output, but it can
-        # carry a finding's text or a path taken from the scanned repository,
-        # and neither belongs on a command line. scripts/pr-comment.mjs reads
-        # it, wraps it in a fenced block behind a hidden sticky marker, and
-        # never exits non-zero: a posting failure -- most commonly a fork
-        # pull_request's read-only token -- prints a ::warning:: and returns.
+        # its bytes into a command.
         NODE_ARGS=(--report "$REPORT_FILE" --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY")
         if [ -n "$PR_COMMENT_MARKER" ]; then
           NODE_ARGS+=(--marker "$PR_COMMENT_MARKER")

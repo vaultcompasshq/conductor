@@ -495,12 +495,20 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
    */
   function runFetchScript(
     workdir: string,
-    overrides: Record<string, string> = {}
+    overrides: Record<string, string> = {},
+    shimOptions: {
+      /** A sh snippet run right after a SUCCESSFUL real `git fetch`, with $REAL_GIT set. */
+      afterFetch?: string;
+      /** Every `git update-ref` fails, as a lock file or a permissions problem would make it. */
+      failUpdateRef?: boolean;
+    } = {}
   ): {
     status: number;
     output: string;
     fetchLog: string[];
     fetchEnvLog: string[];
+    /** The subcommands of every git call that had TRUST_BASE_TOKEN in its environment. */
+    tokenSeenBy: string[];
     sha: string | null;
   } {
     const bin = tempDir();
@@ -508,15 +516,29 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     writeFileSync(fetchLogPath, '');
     const fetchEnvLogPath = path.join(tempDir(), 'git-fetch-env.txt');
     writeFileSync(fetchEnvLogPath, '');
+    const tokenSeenPath = path.join(tempDir(), 'git-token-seen.txt');
+    writeFileSync(tokenSeenPath, '');
     const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
     const gitShim = path.join(bin, 'git');
     writeFileSync(
       gitShim,
-      `#!/bin/sh\nif [ "$1" = "fetch" ]; then printf '%s\\n' "$*" >> ${JSON.stringify(
-        fetchLogPath
-      )}; printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s;KEY2=%s;VALUE2=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" "$GIT_CONFIG_KEY_2" "$GIT_CONFIG_VALUE_2" >> ${JSON.stringify(
-        fetchEnvLogPath
-      )}; fi\nexec ${JSON.stringify(realGit)} "$@"\n`
+      [
+        '#!/bin/sh',
+        `REAL_GIT=${JSON.stringify(realGit)}`,
+        // Every git call that inherited the token, by subcommand.
+        `if [ -n "\${TRUST_BASE_TOKEN:-}" ]; then printf '%s\\n' "$1" >> ${JSON.stringify(tokenSeenPath)}; fi`,
+        shimOptions.failUpdateRef === true ? 'if [ "$1" = "update-ref" ]; then exit 1; fi' : '',
+        'if [ "$1" = "fetch" ]; then',
+        `  printf '%s\\n' "$*" >> ${JSON.stringify(fetchLogPath)}`,
+        `  printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s;KEY2=%s;VALUE2=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" "$GIT_CONFIG_KEY_2" "$GIT_CONFIG_VALUE_2" >> ${JSON.stringify(fetchEnvLogPath)}`,
+        '  "$REAL_GIT" "$@"',
+        '  rc=$?',
+        `  if [ "$rc" -eq 0 ]; then ${shimOptions.afterFetch ?? ':'}; fi`,
+        '  exit $rc',
+        'fi',
+        'exec "$REAL_GIT" "$@"',
+        '',
+      ].join('\n')
     );
     chmodSync(gitShim, 0o755);
 
@@ -543,6 +565,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
       fetchLog: fileLines(fetchLogPath),
       fetchEnvLog: fileLines(fetchEnvLogPath),
+      tokenSeenBy: fileLines(tokenSeenPath),
       sha: shaLine === undefined ? null : shaLine.slice('sha='.length),
     };
   }
@@ -787,6 +810,106 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     expect(run.status).not.toBe(0);
     expect(run.sha).toBeNull();
     expect(run.output).toMatch(/::error::/);
+  });
+
+  const isSymbolic = (ref: string, cwd: string): boolean =>
+    spawnSync('git', ['symbolic-ref', '-q', ref], { cwd, encoding: 'utf8' }).status === 0;
+
+  it('a DANGLING symbolic ref at the private name is replaced, and the forced fetch does not write through it into refs/remotes/origin/main (N4)', () => {
+    const { workdir } = makeShallowCheckout();
+    // refs/remotes/origin/main does not exist here: the symref dangles, so
+    // show-ref --verify says "no such ref" and a plain existence check skips it.
+    expect(resolves('refs/remotes/origin/main', workdir)).toBe(false);
+    git(['symbolic-ref', PRIVATE_REF, 'refs/remotes/origin/main'], workdir);
+
+    const run = runFetchScript(workdir);
+
+    expect(run.status).toBe(0);
+    expect(isSymbolic(PRIVATE_REF, workdir)).toBe(false);
+    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).toBe(realBaseSha(workdir));
+    // The target of the symref was never written.
+    expect(resolves('refs/remotes/origin/main', workdir)).toBe(false);
+  });
+
+  it('a LIVE symbolic ref at the private name is removed without deleting or moving its target branch (N4)', () => {
+    const { workdir } = makeShallowCheckout();
+    git(['fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main'], workdir);
+    const crafted = git(['rev-parse', 'HEAD'], workdir).trim();
+    git(['update-ref', 'refs/remotes/origin/main', crafted], workdir);
+    git(['symbolic-ref', PRIVATE_REF, 'refs/remotes/origin/main'], workdir);
+
+    const run = runFetchScript(workdir);
+
+    expect(run.status).toBe(0);
+    expect(isSymbolic(PRIVATE_REF, workdir)).toBe(false);
+    expect(git(['rev-parse', PRIVATE_REF], workdir).trim()).toBe(realBaseSha(workdir));
+    expect(git(['rev-parse', 'refs/remotes/origin/main'], workdir).trim()).toBe(crafted);
+  });
+
+  it('fails when a stale private ref cannot be removed even though the fetch itself would succeed (B3 removal check, N5)', () => {
+    const { workdir } = makeShallowCheckout();
+    git(['update-ref', PRIVATE_REF, git(['rev-parse', 'HEAD'], workdir).trim()], workdir);
+
+    // Every update-ref fails (a delete blocked by a lock or permissions); the
+    // forced fetch is untouched and WOULD overwrite the planted ref cleanly,
+    // so only the explicit "could not be removed" failure stops this run.
+    const run = runFetchScript(workdir, {}, { failUpdateRef: true });
+
+    expect(run.status).not.toBe(0);
+    expect(run.sha).toBeNull();
+    expect(run.output).toMatch(/could not be removed/);
+    expect(run.fetchLog.length).toBe(0);
+  });
+
+  it('fails when the private ref does not equal FETCH_HEAD, though it is a well-formed commit id (B3 FETCH_HEAD check, N5)', () => {
+    const { workdir } = makeShallowCheckout();
+    const crafted = git(['rev-parse', 'HEAD'], workdir).trim();
+
+    // Something else rewrites the ref right after the fetch: the value is a
+    // valid full object id, so only the FETCH_HEAD comparison can tell.
+    const run = runFetchScript(
+      workdir,
+      {},
+      { afterFetch: `"$REAL_GIT" update-ref ${PRIVATE_REF} ${crafted}` }
+    );
+
+    expect(run.status).not.toBe(0);
+    expect(run.sha).toBeNull();
+    expect(run.output).toMatch(/does not name the commit that was just fetched/);
+  });
+
+  it('no git call in the fetch step inherits the token: only the fetch subshell has it, as the extraheader (N6)', () => {
+    const { workdir } = makeShallowCheckout();
+    // A stale ref forces update-ref calls as well as rev-parse and show-ref.
+    git(['update-ref', PRIVATE_REF, git(['rev-parse', 'HEAD'], workdir).trim()], workdir);
+
+    const run = runFetchScript(workdir);
+
+    expect(run.status).toBe(0);
+    expect(run.tokenSeenBy).toEqual([]);
+    // Still authenticated: the extraheader reached the fetch.
+    expect(run.fetchEnvLog[0] ?? '').toContain(
+      `VALUE1=AUTHORIZATION: basic ${Buffer.from(`x-access-token:${TOKEN}`).toString('base64')}`
+    );
+  });
+
+  it('tests the sha with a whole-value bash regex and runs under pipefail (nits)', () => {
+    expect(fetchScript).toMatch(/set -euo pipefail|set -eu -o pipefail|set -o pipefail/);
+    expect(fetchScript).toContain('=~');
+    expect(fetchScript).not.toMatch(/grep -Eq/);
+  });
+
+  it('the gates step runs conductor without the OIDC request variables a caller\'s id-token: write exposes (N6)', () => {
+    const { workdir } = makeShallowCheckout();
+    const run = runGatesScript(workdir, {
+      GITHUB_BASE_REF: '',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.example/req',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-request-secret',
+    });
+    expect(run.status).toBe(0);
+    expect(run.ran).toBe(true);
+    expect(run.conductorEnv).not.toContain('ACTIONS_ID_TOKEN_REQUEST');
+    expect(run.conductorEnv).not.toContain('oidc-request-secret');
   });
 });
 
@@ -2113,7 +2236,7 @@ describe('action.yml: the verdict token from the gates step', () => {
   });
 
   it('feeds the comment step the report path and the fallback marker from the gates step', () => {
-    const env = stepEnv('pr-comment');
+    const env = stepEnv('pr-render');
     expect(env['TEXT_REPORT']).toBe('${{ steps.gates.outputs.text-report }}');
     expect(env['REPORT_FALLBACK']).toBe('${{ steps.gates.outputs.report-fallback }}');
     expect(stepEnv('gates')['TEXT_REPORT']).toMatch(/runner\.temp/);

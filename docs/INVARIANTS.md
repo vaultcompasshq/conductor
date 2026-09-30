@@ -1028,10 +1028,28 @@ the runner temp where the install prefix lives, or move
 `refs/remotes/origin/<base>`, and package.json lifecycle scripts run by an
 install are not stopped by branch protection on `.github/workflows`.
 
+WHICH STEPS HOLD A TOKEN (pinned by "exactly two steps have a token in their
+env" in tests/action-pr-comment.test.ts): exactly TWO, and neither runs
+conductor. "Fetch the trust base" holds `github.token` (as TRUST_BASE_TOKEN;
+the script copies it into a non-exported variable and unsets it before its
+first git call, so only the fetch subshell has it, as the extraheader; pinned
+by "no git call in the fetch step inherits the token"). "Post the report"
+holds GH_TOKEN and runs only `node scripts/pr-comment.mjs` on the file the
+"Render the report" step wrote under the runner temp. The gates step and the
+render step, the only two that run conductor (the render step only on the
+old-conductor fallback), have no token in their env on any event, so
+conductor and every gate inherit none (on pull_request_target the token
+usually has write scope). Both also start conductor with
+`ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` removed
+(`env -u`), because a caller's `id-token: write` has the runner expose them to
+every step; pinned by the OIDC tests in tests/action.test.ts and
+tests/action-pr-comment.test.ts. A token a CALLER puts in the job's own env is
+theirs and is not stripped.
+
 WHAT THE PRIVATE REF CLOSES, AND ONLY THAT. The action's own step "Fetch the
-trust base" (the ONLY step whose env holds a token; it runs only when
+trust base" (it runs only when
 `github.base_ref` is non-empty, so no push, merge_group, schedule or
-workflow_dispatch run ever has one, and the gates step has none at all) fetches
+workflow_dispatch run ever has one) fetches
 the base into `refs/conductor/trust-base` (forced, from `$GITHUB_SERVER_URL/
 $GITHUB_REPOSITORY.git`, with the token in GIT_CONFIG_* environment variables,
 never argv), verifies the ref equals FETCH_HEAD, and publishes the FULL COMMIT
@@ -1040,8 +1058,16 @@ resolves a name through DWIM rules that include `refs/tags/<name>`, so a pushed
 tag named `refs/conductor/trust-base` or `origin/<base>` would otherwise be
 taken for the ref, while a full 40- or 64-hex id is the object (pinned by "a
 full commit id is the object even when a branch is named like it" in
-tests/trust-base.test.ts). Any fetch failure, a stale private ref that cannot be
-removed (a planted ref plus a `.lock` file), or a ref that does not equal the
+tests/trust-base.test.ts). A stale private ref is removed with
+`update-ref --no-deref -d` after `symbolic-ref -q` detects a SYMBOLIC one, live
+or dangling (a dangling one is invisible to `show-ref --verify`, and the forced
+fetch would then write through it into `refs/remotes/origin/<base>`; a plain
+delete of a live one deletes its target); pinned by the two "symbolic ref"
+tests in tests/action.test.ts, which also assert `refs/remotes/origin/main` is
+untouched. Any fetch failure, a stale private ref that cannot be
+removed (pinned by "fails when a stale private ref cannot be removed even
+though the fetch itself would succeed", which fails if only that check is
+removed), or a ref that does not equal the
 fetched commit FAILS THE STEP (exit 1), so conductor is never invoked with a
 stale or absent trust base; an empty id on a pull request is exit 2 in the gates
 step. The explicit URL does NOT make the fetch immune to `url.insteadOf` or any

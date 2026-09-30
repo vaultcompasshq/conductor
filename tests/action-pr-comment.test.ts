@@ -45,12 +45,21 @@ interface ActionFile {
 const actionYmlText = readFileSync(path.join(ROOT, 'action.yml'), 'utf8');
 const action = parseYaml(actionYmlText) as ActionFile;
 const steps = action.runs?.steps ?? [];
-const prCommentStep = steps.find((step) => step.id === 'pr-comment');
+// The comment is TWO steps: a tokenless render step (everything up to and
+// including the fallback conductor run, which writes the comment body to a
+// file under RUNNER_TEMP) and a post step that holds the token and runs only
+// the node poster on that file. `prCommentStep` is the render step, where the
+// branching and the conditions live; `postStep` is the poster.
+const prCommentStep = steps.find((step) => step.id === 'pr-render');
 const prCommentScript = prCommentStep?.run ?? '';
+const postStep = steps.find((step) => step.id === 'pr-post');
+const postScript = postStep?.run ?? '';
 
 function stepEnv(id: string): Record<string, string> {
   return steps.find((step) => step.id === id)?.env ?? {};
 }
+
+const POST_TOKEN = 'ghs_posttokenvalue';
 
 /**
  * Runs the real `pr-comment` step script under bash, with `node` and
@@ -84,9 +93,25 @@ function runPrCommentScript(
   conductorRan: boolean;
   conductorArgv: string[];
   reportBody: string;
+  /** The render step's exit status. `status` is the post step's (0 when it never ran). */
+  renderStatus: number | null;
+  /** Everything conductor's process saw (the fallback render run), '' when it never ran. */
+  conductorEnv: string;
+  /** The environment the poster (node) was started with, '' when the post step never ran. */
+  postEnv: string;
+  /** Whether the post step ran at all (it is skipped when the render step published no file). */
+  posted: boolean;
 } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-pr-comment-step-'));
   try {
+    const runnerTemp = path.join(dir, 'runner-temp');
+    mkdirSync(runnerTemp, { recursive: true });
+    const githubOutput = path.join(dir, 'github-output.txt');
+    writeFileSync(githubOutput, '');
+    const nodeEnvFile = path.join(dir, 'node-env.txt');
+    writeFileSync(nodeEnvFile, '');
+    const conductorEnvFile = path.join(dir, 'conductor-env.txt');
+    writeFileSync(conductorEnvFile, '');
     const bin = path.join(dir, 'bin');
     mkdirSync(bin, { recursive: true });
     const record = path.join(dir, 'node-argv.jsonl');
@@ -106,6 +131,7 @@ function runPrCommentScript(
         'for arg in "$@"; do\n' +
         `  printf '%s\\n' "$arg" >> ${JSON.stringify(record)}\n` +
         'done\n' +
+        `env >> ${JSON.stringify(nodeEnvFile)}\n` +
         'exit 0\n',
     );
     chmodSync(nodeShim, 0o755);
@@ -123,6 +149,14 @@ function runPrCommentScript(
       conductorShim,
       `#!/bin/sh\nprintf 'ran\\n' >> ${JSON.stringify(conductorRanMarker)}\n` +
         `for arg in "$@"; do printf '%s\\n' "$arg" >> ${JSON.stringify(conductorArgvFile)}; done\n` +
+        `env >> ${JSON.stringify(conductorEnvFile)}\n` +
+        // Writes the rendered text where it was told (--output), the way the
+        // real fallback render run does.
+        'prev=""\n' +
+        'for arg in "$@"; do\n' +
+        '  if [ "$prev" = "--output" ]; then printf \'FALLBACK-RENDER\\n\' > "$arg"; fi\n' +
+        '  prev="$arg"\n' +
+        'done\n' +
         'exit 0\n',
     );
     chmodSync(conductorShim, 0o755);
@@ -142,11 +176,22 @@ function runPrCommentScript(
     const textReportEnv =
       textReportBody !== undefined || emptyTextReport ? { TEXT_REPORT: textReportPath } : {};
 
-    const result = spawnSync('bash', ['-c', prCommentScript], {
+    // Only what each step's own env mapping declares (plus PATH and the
+    // runner-provided variables), never the parent's: the mapping is the whole
+    // of what a runner gives a step. The render step's mapping carries no
+    // token, so none is supplied to it; the post step's carries GH_TOKEN.
+    const declared = (id: string): Record<string, string> =>
+      Object.fromEntries(Object.keys(stepEnv(id)).map((key) => [key, '']));
+    const pathEnv = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
+
+    const renderResult = spawnSync('bash', ['-c', prCommentScript], {
       encoding: 'utf8',
       env: {
+        ...declared('pr-render'),
         ...textReportEnv,
-        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        PATH: pathEnv,
+        RUNNER_TEMP: runnerTemp,
+        GITHUB_OUTPUT: githubOutput,
         // The step invokes the umbrella by absolute path now, so the stub has
         // to be reachable that way rather than only through PATH.
         CONDUCTOR_BIN: conductorShim,
@@ -155,14 +200,37 @@ function runPrCommentScript(
         TRUST_BASE: '',
         SPEC: '',
         GITHUB_BASE_REF: '',
-        ACTION_PATH: '/action',
-        PR_NUMBER: '42',
-        GITHUB_REPOSITORY: 'acme/widgets',
-        PR_COMMENT_MARKER: '',
         ADVISORY: 'false',
         ...extraEnv,
       },
     });
+
+    // The post step runs only when the render step published a report path,
+    // exactly as its `if:` says; the harness reads the output the way the
+    // runner would.
+    const reportLine = readFileSync(githubOutput, 'utf8')
+      .split('\n')
+      .find((line) => line.startsWith('report='));
+    const publishedReport = reportLine === undefined ? '' : reportLine.slice('report='.length);
+    const posted = publishedReport !== '';
+    const result = posted
+      ? spawnSync('bash', ['-c', postScript], {
+          encoding: 'utf8',
+          env: {
+            ...declared('pr-post'),
+            PATH: pathEnv,
+            REPORT_FILE: publishedReport,
+            GH_TOKEN: POST_TOKEN,
+            ACTION_PATH: '/action',
+            PR_NUMBER: '42',
+            GITHUB_REPOSITORY: 'acme/widgets',
+            PR_COMMENT_MARKER: '',
+            ...(extraEnv.PR_COMMENT_MARKER === undefined
+              ? {}
+              : { PR_COMMENT_MARKER: extraEnv.PR_COMMENT_MARKER }),
+          },
+        })
+      : { status: renderResult.status, stdout: '', stderr: '' };
 
     const nodeArgv = readFileSync(record, 'utf8')
       .split('\n')
@@ -180,13 +248,18 @@ function runPrCommentScript(
       reportPath !== '' && existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : '';
 
     return {
-      status: result.status,
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
+      // Both steps must succeed for the pair to count as 0.
+      status: renderResult.status !== 0 ? renderResult.status : result.status,
+      stdout: `${renderResult.stdout ?? ''}${result.stdout ?? ''}`,
+      stderr: `${renderResult.stderr ?? ''}${result.stderr ?? ''}`,
       nodeArgv,
       conductorRan: existsSync(conductorRanMarker),
       conductorArgv,
       reportBody,
+      renderStatus: renderResult.status,
+      conductorEnv: readFileSync(conductorEnvFile, 'utf8'),
+      postEnv: readFileSync(nodeEnvFile, 'utf8'),
+      posted,
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -215,17 +288,23 @@ describe('action.yml: the pr-comment step', () => {
     expect(prCommentStep).toBeDefined();
     expect(prCommentStep?.shell).toBe('bash');
     const ids = steps.map((step) => step.id);
-    expect(ids.indexOf('gates')).toBeLessThan(ids.indexOf('pr-comment'));
+    expect(ids.indexOf('gates')).toBeLessThan(ids.indexOf('pr-render'));
+    expect(ids.indexOf('pr-render')).toBeLessThan(ids.indexOf('pr-post'));
+    expect(postStep).toBeDefined();
+    expect(postStep?.shell).toBe('bash');
   });
 
   it('only runs when pr-comment is exactly "true"', () => {
     expect(String(prCommentStep?.if ?? '')).toMatch(/inputs\.pr-comment == 'true'/);
+    expect(String(postStep?.if ?? '')).toMatch(/inputs\.pr-comment == 'true'/);
   });
 
   it('only runs on a pull_request or pull_request_target event', () => {
-    const condition = String(prCommentStep?.if ?? '');
-    expect(condition).toMatch(/github\.event_name == 'pull_request'/);
-    expect(condition).toMatch(/github\.event_name == 'pull_request_target'/);
+    for (const step of [prCommentStep, postStep]) {
+      const condition = String(step?.if ?? '');
+      expect(condition).toMatch(/github\.event_name == 'pull_request'/);
+      expect(condition).toMatch(/github\.event_name == 'pull_request_target'/);
+    }
   });
 
   it('runs even when the gates step already failed, so a blocking run still gets a comment', () => {
@@ -234,6 +313,12 @@ describe('action.yml: the pr-comment step', () => {
     // code being "the pull request's advisory report" -- not "whether a
     // developer gets to see it" -- actually rests on.
     expect(String(prCommentStep?.if ?? '')).toMatch(/always\(\)/);
+    expect(String(postStep?.if ?? '')).toMatch(/always\(\)/);
+  });
+
+  it('the post step runs only when the render step published a report file', () => {
+    expect(String(postStep?.if ?? '')).toMatch(/steps\.pr-render\.outputs\.report != ''/);
+    expect(stepEnv('pr-post').REPORT_FILE).toBe('${{ steps.pr-render.outputs.report }}');
   });
 
   it('reads the four report-shaping inputs from the environment, not by expanding them into the script', () => {
@@ -241,7 +326,7 @@ describe('action.yml: the pr-comment step', () => {
     // inside a run block is pasted in as source text before the shell sees
     // it.
     expect(prCommentScript).not.toMatch(/\$\{\{/);
-    const env = stepEnv('pr-comment');
+    const env = stepEnv('pr-render');
     expect(env.STAGE).toBe('${{ inputs.stage }}');
     expect(env.BASE_REF).toBe('${{ inputs.base-ref }}');
     expect(env.TRUST_BASE).toBe('${{ inputs.trust-base }}');
@@ -460,27 +545,109 @@ describe('action.yml: the pr-comment step', () => {
     // The consumer's own tree is what this action scans; its script lives in
     // THIS action's own tree instead, which github.action_path names
     // regardless of where the caller checked out.
-    expect(stepEnv('pr-comment').ACTION_PATH).toBe('${{ github.action_path }}');
-    expect(prCommentScript).toMatch(/node "\$ACTION_PATH\/scripts\/pr-comment\.mjs"/);
+    expect(stepEnv('pr-post').ACTION_PATH).toBe('${{ github.action_path }}');
+    expect(postScript).toMatch(/node "\$ACTION_PATH\/scripts\/pr-comment\.mjs"/);
   });
 
   it('passes the report by file path, never by interpolating its content into the command', () => {
-    expect(prCommentScript).toMatch(/--report "\$REPORT_FILE"/);
+    expect(postScript).toMatch(/--report "\$REPORT_FILE"/);
     // No `cat`, `$(<file)`, or similar substitution feeding the report's
     // bytes back into a shell command.
+    expect(postScript).not.toMatch(/cat "\$REPORT_FILE"/);
+    expect(postScript).not.toMatch(/\$\(<\s*"\$REPORT_FILE"\)/);
     expect(prCommentScript).not.toMatch(/cat "\$REPORT_FILE"/);
     expect(prCommentScript).not.toMatch(/\$\(<\s*"\$REPORT_FILE"\)/);
   });
 
   it('passes the pull request number and repository the node script needs', () => {
-    expect(prCommentScript).toMatch(/--pr "\$PR_NUMBER"/);
-    expect(prCommentScript).toMatch(/--repo "\$GITHUB_REPOSITORY"/);
-    expect(stepEnv('pr-comment').PR_NUMBER).toBe('${{ github.event.pull_request.number }}');
-    expect(stepEnv('pr-comment').GITHUB_REPOSITORY).toBe('${{ github.repository }}');
+    expect(postScript).toMatch(/--pr "\$PR_NUMBER"/);
+    expect(postScript).toMatch(/--repo "\$GITHUB_REPOSITORY"/);
+    expect(stepEnv('pr-post').PR_NUMBER).toBe('${{ github.event.pull_request.number }}');
+    expect(stepEnv('pr-post').GITHUB_REPOSITORY).toBe('${{ github.repository }}');
   });
 
-  it('gives gh a write-capable token by declaring GH_TOKEN from github.token', () => {
-    expect(stepEnv('pr-comment').GH_TOKEN).toBe('${{ github.token }}');
+  it('gives gh a write-capable token by declaring GH_TOKEN from github.token, on the POST step only', () => {
+    expect(stepEnv('pr-post').GH_TOKEN).toBe('${{ github.token }}');
+  });
+});
+
+/**
+ * MB1: the step that runs conductor must not hold a token. Before the split
+ * the comment step carried GH_TOKEN for its whole run and, on the fallback
+ * path, ran conductor (and so every gate) with it in the environment.
+ */
+describe('action.yml: the render step is tokenless and the post step is the only other token holder (MB1)', () => {
+  const holdsToken = (step: (typeof steps)[number]): boolean =>
+    Object.entries(step.env ?? {}).some(
+      ([key, value]) => /TOKEN/i.test(key) || String(value).includes('github.token')
+    );
+
+  it('exactly two steps have a token in their env: fetch-base and pr-post', () => {
+    expect(steps.filter(holdsToken).map((step) => step.id)).toEqual(['fetch-base', 'pr-post']);
+  });
+
+  it('the render step has no token-like key, no github.token or secrets expression, and no GH_TOKEN in its script', () => {
+    expect(prCommentStep).toBeDefined();
+    for (const [key, value] of Object.entries(prCommentStep?.env ?? {})) {
+      expect(key).not.toMatch(/TOKEN/i);
+      expect(String(value)).not.toMatch(/github\.token|secrets\./);
+    }
+    expect(prCommentScript).not.toMatch(/GH_TOKEN|GITHUB_TOKEN/);
+  });
+
+  it('the post step runs nothing but the poster: no conductor, no render', () => {
+    expect(postScript).not.toContain('CONDUCTOR_BIN');
+    expect(postScript).not.toMatch(/conductor-gates/);
+    expect(Object.keys(stepEnv('pr-post'))).not.toContain('CONDUCTOR_BIN');
+  });
+
+  it('on the fallback path conductor runs with NO GH_TOKEN and no token of any kind in its environment', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' });
+    expect(run.status).toBe(0);
+    expect(run.conductorRan).toBe(true);
+    expect(run.conductorEnv).not.toMatch(/TOKEN/);
+    expect(run.conductorEnv).not.toContain(POST_TOKEN);
+    expect(run.conductorEnv).not.toMatch(/GH_TOKEN/);
+  });
+
+  it('the post step gets the token, and the poster is the process that sees it', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true' }, { textReportBody: 'conductor 9.9.9\nverdict-token: pass\n' });
+    expect(run.posted).toBe(true);
+    expect(run.postEnv).toContain(`GH_TOKEN=${POST_TOKEN}`);
+  });
+
+  it('the posted comment body is unchanged on the fallback path: the render run\'s own output, by file path', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' });
+    expect(run.reportBody).toBe('FALLBACK-RENDER\n');
+    expect(run.nodeArgv).toEqual([
+      '/action/scripts/pr-comment.mjs',
+      '--report',
+      expect.any(String),
+      '--pr',
+      '42',
+      '--repo',
+      'acme/widgets',
+    ]);
+  });
+
+  it('the posted comment body is unchanged on the normal path: the gates step\'s report, byte for byte', () => {
+    const body = 'conductor 9.9.9\nverdict-token: blocked (2)\nrest\n';
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true' }, { textReportBody: body });
+    expect(run.reportBody).toBe(body);
+    expect(run.conductorRan).toBe(false);
+  });
+
+  it('the caller\'s OIDC request variables never reach conductor on the fallback path (N6)', () => {
+    const conductorEnvDump = (run: ReturnType<typeof runPrCommentScript>): string => run.conductorEnv;
+    const run = runPrCommentScript({
+      VERIFICATION_OK: 'true',
+      REPORT_FALLBACK: 'true',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.example/req',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-request-secret',
+    });
+    expect(run.conductorRan).toBe(true);
+    expect(conductorEnvDump(run)).not.toContain('ACTIONS_ID_TOKEN_REQUEST');
+    expect(conductorEnvDump(run)).not.toContain('oidc-request-secret');
   });
 });
 
@@ -493,7 +660,7 @@ describe('action.yml: the pr-comment step mirrors --advisory', () => {
   // derivation exactly" test already guards for --base/--trust-base/--spec.
 
   it('reads the advisory input from the environment, not by expanding it into the script', () => {
-    expect(stepEnv('pr-comment').ADVISORY).toBe('${{ inputs.advisory }}');
+    expect(stepEnv('pr-render').ADVISORY).toBe('${{ inputs.advisory }}');
     expect(prCommentScript).not.toMatch(/\$\{\{\s*inputs\.advisory/);
   });
 
@@ -567,8 +734,8 @@ describe('action.yml: pr-comment-marker input', () => {
   });
 
   it('is read into the pr-comment step as PR_COMMENT_MARKER, not expanded into the script', () => {
-    expect(stepEnv('pr-comment').PR_COMMENT_MARKER).toBe('${{ inputs.pr-comment-marker }}');
-    expect(prCommentScript).not.toMatch(/\$\{\{\s*inputs\.pr-comment-marker/);
+    expect(stepEnv('pr-post').PR_COMMENT_MARKER).toBe('${{ inputs.pr-comment-marker }}');
+    expect(postScript).not.toMatch(/\$\{\{\s*inputs\.pr-comment-marker/);
   });
 
   it('flows through to the CLI as --marker when the input is set, proven by actually running the step', () => {

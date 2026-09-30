@@ -71,9 +71,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   The README and INVARIANTS no longer say depth 1 fails closed for this.
   The gitleaks spawn also sets `GIT_NO_REPLACE_OBJECTS=1`.
 - Security: the action no longer trusts `origin/<base>` as the trust base.
-  A new step, "Fetch the trust base", runs only on a pull request and is the
-  ONLY step whose environment holds `github.token` (the gates step and every
-  gate it spawns have none, on any event). It fetches the base branch (forced,
+  A new step, "Fetch the trust base", runs only on a pull request. Exactly two
+  steps hold a token, and neither runs conductor: that fetch step
+  (`github.token`, to read the base branch; it moves the token into a
+  non-exported variable before its first git call, so only the fetch subshell
+  has it) and "Post the report" (`GH_TOKEN`, to write the pull request comment;
+  it runs only the comment poster). The gates step and the new "Render the
+  report" step, the only two that run conductor, have no token in their
+  environment on any event, and conductor is started there with
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` removed
+  (a job with `id-token: write` has the runner expose them to every step).
+  The comment used to be one step holding `GH_TOKEN` whose fallback path ran
+  conductor with it. It fetches the base branch (forced,
   from `$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git`, the token in GIT_CONFIG_*
   environment variables and never in argv) into the private ref
   `refs/conductor/trust-base`, checks it equals the fetched commit, and
