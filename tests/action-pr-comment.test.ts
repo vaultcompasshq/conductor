@@ -579,11 +579,37 @@ describe('action.yml: the pr-comment step', () => {
 describe('action.yml: the render step is tokenless and the post step is the only other token holder (MB1)', () => {
   const holdsToken = (step: (typeof steps)[number]): boolean =>
     Object.entries(step.env ?? {}).some(
-      ([key, value]) => /TOKEN/i.test(key) || String(value).includes('github.token')
+      ([key, value]) =>
+        /TOKEN/i.test(key) || /github\.token|secrets\./.test(String(value))
     );
 
   it('exactly two steps have a token in their env: fetch-base and pr-post', () => {
     expect(steps.filter(holdsToken).map((step) => step.id)).toEqual(['fetch-base', 'pr-post']);
+  });
+
+  it('a token expression is detected whatever the env key is called', () => {
+    expect(holdsToken({ env: { INNOCENT: '${{ secrets.ANYTHING }}' } } as (typeof steps)[number])).toBe(true);
+    expect(holdsToken({ env: { X: '${{ github.token }}' } } as (typeof steps)[number])).toBe(true);
+    expect(holdsToken({ env: { X: 'plain' } } as (typeof steps)[number])).toBe(false);
+  });
+
+  it('the caller caveat is stated where the absolute claim is made', () => {
+    const caveat = /job-level GH_TOKEN or GITHUB_TOKEN/;
+    expect(actionYmlText.match(new RegExp(caveat.source, 'g'))?.length).toBeGreaterThanOrEqual(2);
+    expect(readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8')).toMatch(/job-level `GH_TOKEN`/);
+  });
+
+  it('every update-ref delete in the fetch step uses --no-deref', () => {
+    const deletes = actionYmlText.match(/git update-ref [^\n]*-d refs\/conductor\/trust-base/g) ?? [];
+    expect(deletes.length).toBeGreaterThanOrEqual(3);
+    for (const line of deletes) {
+      expect(line).toContain('--no-deref');
+    }
+  });
+
+  it('the post step runs from the runner temp, so gh never runs inside the checkout', () => {
+    const post = steps.find((step) => step.id === 'pr-post');
+    expect(post?.['working-directory']).toBe('${{ runner.temp }}');
   });
 
   it('the render step has no token-like key, no github.token or secrets expression, and no GH_TOKEN in its script', () => {

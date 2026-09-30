@@ -92,7 +92,13 @@ export function extendPath(config: string): string | null {
 
 /** A file's contents at a ref, or null when the ref does not have it. */
 function showAtRef(repoRoot: string, ref: string, file: string): string | null {
-  const child = spawnSync('git', ['show', `${ref}:${file}`], { cwd: repoRoot, encoding: 'utf8' });
+  if (ref.startsWith('-')) {
+    return null;
+  }
+  const child = spawnSync('git', ['show', '--end-of-options', `${ref}:${file}`], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
   return child.status === 0 && typeof child.stdout === 'string' ? child.stdout : null;
 }
 

@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -628,5 +628,39 @@ describe('the version floor for handing a gate the flag', () => {
 
   it('accepts a leading v, which is how some builds print it', () => {
     expect(atLeastVersion('v1.4.0', '1.4.0')).toBe(true);
+  });
+});
+
+describe('a dash-leading trust base never reaches git as an option', () => {
+  it('refuses it in both refusal functions, before any git call', () => {
+    // Not a repository at all: any git call would fail differently, so a
+    // refusal naming the dash proves the guard ran first.
+    const notARepo = path.join(os.tmpdir(), 'conductor-no-such-repo');
+    expect(refuseTrustBaseRef(notARepo, '--output=pwned')).toMatch(/starts with "-"/);
+    expect(refuseTrustBaseForPullRequest(notARepo, '--output=pwned', 'main')).toMatch(
+      /starts with "-"/
+    );
+  });
+
+  it('refuses a tag named like an option that points at the base commit', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { 'conductor.yml': 'a: 1\n' }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    git(repo, ['update-ref', 'refs/tags/--output=pwned', base]);
+    expect(refuseTrustBaseForPullRequest(repo, '--output=pwned', 'main')).toMatch(
+      /starts with "-"/
+    );
+  });
+
+  it('readPolicyAtRef with a dash-leading ref never writes a file', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { 'conductor.yml': 'a: 1\n' }, 'base');
+    git(repo, ['update-ref', 'refs/tags/--output=pwned', base]);
+    // git reads "--output=pwned:./conductor.yml" as --output=<that path>, so
+    // the directory it would write into has to exist for the bug to show.
+    const sink = path.join(repo, 'pwned:.');
+    mkdirSync(sink);
+    expect(readPolicyAtRef(repo, '--output=pwned')).toBeNull();
+    expect(readdirSync(sink)).toEqual([]);
   });
 });

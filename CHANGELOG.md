@@ -78,7 +78,9 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   has it) and "Post the report" (`GH_TOKEN`, to write the pull request comment;
   it runs only the comment poster). The gates step and the new "Render the
   report" step, the only two that run conductor, have no token in their
-  environment on any event, and conductor is started there with
+  environment on any event (a job-level `GH_TOKEN` or `GITHUB_TOKEN` that the
+  calling workflow sets is inherited by every step and is not stripped), and
+  conductor is started there with
   `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` removed
   (a job with `id-token: write` has the runner expose them to every step).
   The comment used to be one step holding `GH_TOKEN` whose fallback path ran

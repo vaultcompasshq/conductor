@@ -1044,7 +1044,14 @@ usually has write scope). Both also start conductor with
 (`env -u`), because a caller's `id-token: write` has the runner expose them to
 every step; pinned by the OIDC tests in tests/action.test.ts and
 tests/action-pr-comment.test.ts. A token a CALLER puts in the job's own env is
-theirs and is not stripped.
+theirs and is not stripped: a job-level `GH_TOKEN` or `GITHUB_TOKEN` that the
+calling workflow sets is inherited by every step. THIS IS AN ENVIRONMENT
+PROPERTY, NOT ISOLATION. A gate that executes code can still append to
+GITHUB_ENV or GITHUB_PATH (BASH_ENV, NODE_OPTIONS, a planted `node` or `gh`) and
+so reach the post step, and the checkout's persisted credential is readable
+from disk anyway. "Post the report" sets `working-directory: ${{ runner.temp }}`
+so gh never runs inside the checkout (pinned by "the post step runs from the
+runner temp"); that narrows the exposure and does not close it.
 
 WHAT THE PRIVATE REF CLOSES, AND ONLY THAT. The action's own step "Fetch the
 trust base" (it runs only when

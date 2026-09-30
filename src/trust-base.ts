@@ -108,6 +108,22 @@ export function exactRefObject(repoRoot: string, fullRef: string): string | null
   return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value) ? value : null;
 }
 
+/**
+ * A caller-given trust base that starts with "-", or null. Git allows a tag
+ * named refs/tags/--output=x, and such a name handed to git as an argument is
+ * read as an option, not a revision. Refused before any git call sees it; the
+ * git calls below also pass --end-of-options as a second line of defence.
+ */
+export function refuseDashLeadingRef(ref: string): string | null {
+  if (!ref.startsWith('-')) {
+    return null;
+  }
+  return (
+    `refusing "${ref}" as the trust base: it starts with "-", which git would read as an ` +
+    'option rather than a revision. Pass a ref name or a full commit id. Nothing was checked.'
+  );
+}
+
 /** A full 40- or 64-hex object id: never subject to ref name resolution. */
 export function isFullObjectId(value: string): boolean {
   return /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
@@ -257,6 +273,10 @@ export function headTreeEqualsBase(repoRoot: string, ref: string): boolean {
  * learns the trees matched even on this accepted path.
  */
 export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null {
+  const dashed = refuseDashLeadingRef(ref);
+  if (dashed !== null) {
+    return dashed;
+  }
   const ambiguous = refuseAmbiguousRef(repoRoot, ref);
   if (ambiguous !== null) {
     return ambiguous;
@@ -371,6 +391,11 @@ export function refuseTrustBaseForPullRequest(
     return null;
   }
 
+  const dashed = refuseDashLeadingRef(ref);
+  if (dashed !== null) {
+    return dashed;
+  }
+
   const ambiguous = refuseAmbiguousRef(repoRoot, ref);
   if (ambiguous !== null) {
     return ambiguous;
@@ -449,6 +474,9 @@ export function refuseTrustBaseForPullRequest(
     return null;
   }
 
+  // A NAMED explicit trust base may equal refs/remotes/origin/<base> even
+  // while the private ref exists: the full-id rule above applies to the
+  // action's own id, not to a name the caller typed.
   if (givenCommit === expectedCommit) {
     return null;
   }
@@ -472,7 +500,10 @@ export function refuseTrustBaseForPullRequest(
  * be from somewhere else.
  */
 export function readPolicyAtRef(repoRoot: string, ref: string): string | null {
-  const child = spawnSync('git', ['show', `${ref}:./${POLICY_FILE_NAME}`], {
+  if (ref.startsWith('-')) {
+    return null;
+  }
+  const child = spawnSync('git', ['show', '--end-of-options', `${ref}:./${POLICY_FILE_NAME}`], {
     cwd: repoRoot,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
@@ -531,7 +562,10 @@ export function treeEntryAt(
   ref: string,
   relativePath: string
 ): { mode: string; type: string; sha: string } | null {
-  const child = spawnSync('git', ['ls-tree', ref, '--', `./${relativePath}`], {
+  if (ref.startsWith('-')) {
+    return null;
+  }
+  const child = spawnSync('git', ['ls-tree', '--end-of-options', ref, '--', `./${relativePath}`], {
     cwd: repoRoot,
     encoding: 'utf8',
   });

@@ -832,7 +832,7 @@ runs:
             "+refs/heads/$GITHUB_BASE_REF:refs/conductor/trust-base" >/dev/null 2>&1
         ) || fetch_ok=0
         if [ "$fetch_ok" -ne 1 ]; then
-          git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+          git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
           fail "the base branch ${GITHUB_BASE_REF} could not be fetched into refs/conductor/trust-base, so there is no trust base and no gate was run. The job needs permissions: contents: read so github.token can read this repository; a network failure or a base branch that no longer exists gives the same result. Nothing was checked."
         fi
 
@@ -844,7 +844,7 @@ runs:
         fetch_head_sha="$(git rev-parse --verify --quiet --end-of-options 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
         sha_shape='^[0-9a-f]{40}([0-9a-f]{24})?$'
         if ! [[ "$ref_sha" =~ $sha_shape ]] || [ "$ref_sha" != "$fetch_head_sha" ]; then
-          git update-ref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+          git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
           fail "refs/conductor/trust-base does not name the commit that was just fetched (ref: '${ref_sha}', fetched: '${fetch_head_sha}'), so something else wrote it. Nothing was checked."
         fi
         printf 'sha=%s\n' "$ref_sha" >> "$GITHUB_OUTPUT"
@@ -1046,7 +1046,9 @@ runs:
         # grants id-token: write has the runner expose
         # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN to
         # every step, and conductor and the gates it spawns have no use for
-        # them. (Whatever else the caller put in the job's own env is theirs.)
+        # them. (Whatever else the caller put in the job's own env is theirs:
+        # a job-level GH_TOKEN or GITHUB_TOKEN that the calling workflow sets
+        # is inherited by every step and is not stripped.)
         status=0
         env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
           "$CONDUCTOR_BIN" "${ARGS[@]}" || status=$?
@@ -1142,7 +1144,9 @@ runs:
     # usually has write scope. The next step, "Post the report", holds
     # GH_TOKEN and runs only the node poster on that file. Before the split
     # this was one step with GH_TOKEN in its env, and its fallback path ran
-    # conductor with it.
+    # conductor with it. That claim is about this step's own env, and
+    # a job-level GH_TOKEN or GITHUB_TOKEN that the calling workflow sets
+    # is inherited by every step and is not stripped.
     - name: Render the report
       id: pr-render
       if: |
@@ -1302,6 +1306,8 @@ runs:
             fi
           } > "$REPORT_FILE"
         elif [ -n "${TEXT_REPORT:-}" ] && [ -s "$TEXT_REPORT" ]; then
+          # The mktemp file above is unused on this branch: delete it.
+          rm -f "$REPORT_FILE"
           REPORT_FILE="$TEXT_REPORT"
         elif [ "${REPORT_FALLBACK:-}" = "true" ]; then
           # Run with the OIDC request variables removed: a caller whose job
@@ -1336,7 +1342,9 @@ runs:
         (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') &&
         steps.pr-render.outputs.report != ''
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      # The runner temp, never the checkout: gh (and the shell around it) must
+      # not run inside a tree the pull request controls.
+      working-directory: ${{ runner.temp }}
       env:
         REPORT_FILE: ${{ steps.pr-render.outputs.report }}
         # gh reads its token from GH_TOKEN itself; nothing here puts it on a
