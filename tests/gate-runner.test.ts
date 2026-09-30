@@ -203,6 +203,25 @@ describe('running one gate', () => {
     expect(outcome.findings[0].blocking).toBe(true);
   });
 
+  it('names the scoped @vaultcompass package for every managed gate on a LOCAL run too, never the bare name (C4)', () => {
+    // The unscoped dep-guard and intent-guard names are unclaimed on npm, so
+    // an agent told to "install dep-guard" could install a squatted package.
+    for (const product of ['dep-guard', 'vault-guard', 'intent-guard'] as const) {
+      const outcome = runGate(gate({ product }), {
+        repoRoot: tempDir(),
+        staged: true,
+        pathValue: tempDir(),
+      });
+      const texts = [outcome.couldNotRun?.detail ?? '', outcome.findings[0].message];
+      for (const text of texts) {
+        expect(text).toContain(`@vaultcompass/${product}`);
+        // Every mention of the package on an install line is the scoped one.
+        expect(text).not.toMatch(new RegExp(`(?<![/@\\w-])${product}(?![\\w-]) package`));
+        expect(text).not.toMatch(/Install it[.,]/);
+      }
+    }
+  });
+
   it('names the two places it looked in the order it looked in them', () => {
     // The line a user reads when a gate is missing tells them where to
     // install it. Naming PATH first, after resolution was flipped to try
@@ -214,8 +233,8 @@ describe('running one gate', () => {
       pathValue: tempDir(),
     });
 
-    expect(outcome.couldNotRun?.detail).toBe(
-      'no dep-guard binary in node_modules/.bin or on PATH'
+    expect(outcome.couldNotRun?.detail).toMatch(
+      /^no dep-guard binary in node_modules\/\.bin or on PATH\. /
     );
   });
 
@@ -1171,5 +1190,74 @@ describe('external gate exit semantics', () => {
     const out = runGate(gate({ role: 'secrets', product: 'vault-guard' }), { repoRoot: tempGitRepo(), staged: false, pathValue: bin });
     expect(out.couldNotRun?.reason).toBe('gate-error');
     expect(out.couldNotRun?.detail).toBe('the gate exited 2, which it uses for "could not run".');
+  });
+});
+
+describe('a gate that reads history, in a shallow checkout (C2)', () => {
+  const gl = (overrides: Partial<GatePolicy> = {}) =>
+    gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci', ...overrides });
+
+  /**
+   * A real depth-1 clone: main has one commit, branch pr adds a secret and
+   * removes it again, and the clone holds only the tip of pr.
+   */
+  function shallowClone(): string {
+    const source = tempGitRepo();
+    const git = (cwd: string, args: string[]) =>
+      execFileSync(
+        'git',
+        ['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', ...args],
+        { cwd, encoding: 'utf8' }
+      );
+    git(source, ['checkout', '--quiet', '-b', 'pr']);
+    commitFiles(source, { 'leak.txt': 'secret\n' }, 'add a secret');
+    git(source, ['rm', '--quiet', 'leak.txt']);
+    git(source, ['commit', '--quiet', '-m', 'remove it again']);
+    const dest = path.join(tempDir(), 'clone');
+    execFileSync('git', ['clone', '--quiet', '--depth', '1', '--branch', 'pr', `file://${source}`, dest]);
+    execFileSync('git', ['fetch', '--quiet', '--depth=1', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { cwd: dest });
+    expect(git(dest, ['rev-parse', '--is-shallow-repository']).trim()).toBe('true');
+    return dest;
+  }
+
+  it('is could-not-run and ENFORCED under a trust base, naming fetch-depth: 0, without spawning gitleaks', () => {
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', argvLog: log });
+    const out = runGate(gl({ enforce: false }), { repoRoot: shallowClone(), staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'origin/main' });
+    expect(out.couldNotRun?.reason).toBe('history-shallow');
+    expect(out.couldNotRun?.detail).toContain('fetch-depth: 0');
+    expect(out.enforce).toBe(true);
+    expect(out.argv).toEqual([]);
+    expect(existsSync(log)).toBe(false);
+    expect(out.findings.some((f) => f.ruleId === 'conductor/gate-failed')).toBe(true);
+  });
+
+  it('is could-not-run on a local run too, keeping the policy enforce value', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const out = runGate(gl({ enforce: false }), { repoRoot: shallowClone(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun?.reason).toBe('history-shallow');
+    expect(out.enforce).toBe(false);
+  });
+
+  it('spawns gitleaks with GIT_NO_REPLACE_OBJECTS=1, so replace refs and grafts cannot cut the history it reads', () => {
+    const bin = tempDir();
+    const envLog = path.join(tempDir(), 'env.txt');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', envLog });
+    runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(readFileSync(envLog, 'utf8')).toContain('GIT_NO_REPLACE_OBJECTS=1');
+  });
+
+  it('does not touch a gate that reads the tree, or a full clone', () => {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { exit: 0, stdout: '{"findings":[]}' });
+    const tree = runGate(gate(), { repoRoot: shallowClone(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(tree.couldNotRun?.reason).not.toBe('history-shallow');
+
+    const bin2 = tempDir();
+    stubGate(bin2, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const full = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin2, tempRoot: tempDir() });
+    expect(full.couldNotRun).toBeNull();
   });
 });

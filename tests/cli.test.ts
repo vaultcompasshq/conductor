@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1276,6 +1277,86 @@ describe('conductor run --text-report (issue #85)', () => {
 
     expect(result.status).toBe(2);
     expect(existsSync(text)).toBe(false);
+  });
+
+  describe('never writes through a symbolic link the pull request committed (C6)', () => {
+    function cleanGates(): string {
+      const bin = tempDir();
+      stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0 });
+      stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0 });
+      return bin;
+    }
+
+    it('refuses an --output that is a symlink, leaves its target untouched, and exits 2', () => {
+      const repo = repoWithPolicy();
+      const out = tempDir();
+      const victim = path.join(out, 'victim');
+      writeFileSync(victim, 'precious\n');
+      const sarif = path.join(out, 'conductor.sarif');
+      symlinkSync(victim, sarif);
+
+      const result = runCli(
+        repo,
+        ['run', '--staged', '--format', 'sarif', '--output', sarif, '--text-report', path.join(out, 't.txt')],
+        cleanGates()
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/symbolic link/);
+      expect(result.stderr).not.toMatch(STACK_FRAME);
+      expect(readFileSync(victim, 'utf8')).toBe('precious\n');
+      // Nothing was written after the refusal, so no finished text report.
+      expect(existsSync(path.join(out, 't.txt'))).toBe(false);
+    });
+
+    it('refuses a dangling --output symlink too, so it cannot create a file at its target', () => {
+      const repo = repoWithPolicy();
+      const out = tempDir();
+      const target = path.join(out, 'created-through-link');
+      const sarif = path.join(out, 'conductor.sarif');
+      symlinkSync(target, sarif);
+
+      const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', sarif], cleanGates());
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/symbolic link/);
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it('refuses a --text-report that is a symlink, leaves its target untouched, and exits 2', () => {
+      const repo = repoWithPolicy();
+      const out = tempDir();
+      const victim = path.join(out, 'victim');
+      writeFileSync(victim, 'precious\n');
+      const text = path.join(out, 'report.txt');
+      symlinkSync(victim, text);
+
+      const result = runCli(
+        repo,
+        ['run', '--staged', '--format', 'sarif', '--output', path.join(out, 's.sarif'), '--text-report', text],
+        cleanGates()
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/symbolic link/);
+      expect(readFileSync(victim, 'utf8')).toBe('precious\n');
+      // The refusal must not arm the cleanup path: the committed link itself
+      // is still there, not unlinked by the catch block (N4).
+      expect(lstatSync(text).isSymbolicLink()).toBe(true);
+    });
+
+    it('still overwrites an ordinary existing file', () => {
+      const repo = repoWithPolicy();
+      const out = tempDir();
+      const sarif = path.join(out, 'conductor.sarif');
+      writeFileSync(sarif, 'stale');
+
+      const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', sarif], cleanGates());
+
+      expect(result.status).toBe(0);
+      expect((JSON.parse(readFileSync(sarif, 'utf8')) as { version: string }).version).toBe('2.1.0');
+    });
   });
 
   it('reports an unwritable text-report path as a run that could not be carried out', () => {

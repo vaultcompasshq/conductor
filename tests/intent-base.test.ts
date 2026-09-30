@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { changedPathsSince, resolveBaseRef } from '../src/intent-base.js';
+import { changedPathsSince, resolveBaseRef, resolveBaseRefInRepo } from '../src/intent-base.js';
 
 const temps: string[] = [];
 
@@ -87,7 +87,151 @@ describe('resolveBaseRef', () => {
   });
 });
 
+/**
+ * The tag-shadow class (B1) for the intent gate's own base: a short
+ * origin/<base> resolves through refs/tags/ first, so a tag of that name at
+ * HEAD~1 would narrow the change set to the last commit.
+ */
+describe('resolveBaseRefInRepo: fully spelled, never shadowable', () => {
+  const PRIVATE = 'refs/conductor/trust-base';
+
+  /** main is the base (also refs/remotes/origin/main); feat has two commits. */
+  function twoCommitBranch(): { root: string; base: string; headMinusOne: string } {
+    const root = repoWithMain();
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['update-ref', 'refs/remotes/origin/main', base]);
+    git(root, ['checkout', '--quiet', '-b', 'feat/x']);
+    write(root, 'src/one.ts', 'export const one = 1;\n');
+    commit(root, 'first');
+    const headMinusOne = git(root, ['rev-parse', 'HEAD']).trim();
+    write(root, 'src/two.ts', 'export const two = 2;\n');
+    commit(root, 'second');
+    return { root, base, headMinusOne };
+  }
+  const env = { GITHUB_BASE_REF: 'main' };
+
+  it('a tag origin/main at HEAD~1 no longer narrows the change set', () => {
+    const { root, base, headMinusOne } = twoCommitBranch();
+    git(root, ['tag', 'origin/main', headMinusOne]);
+
+    const resolved = resolveBaseRefInRepo(root, { env });
+
+    // The commit id, read from the exact ref with show-ref: no name is ever
+    // handed to git's name resolution, so the tag has nothing to shadow.
+    expect(resolved).toEqual({ ok: true, base: { ref: base, source: 'github' } });
+    if (!resolved.ok || resolved.base === null) throw new Error('unreachable');
+    expect(changedPathsSince(root, resolved.base.ref)).toEqual({
+      ok: true,
+      paths: ['src/one.ts', 'src/two.ts'],
+    });
+  });
+
+  it('uses refs/conductor/trust-base when it is the only one present', () => {
+    const { root, base } = twoCommitBranch();
+    git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    git(root, ['update-ref', PRIVATE, base]);
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: base, source: 'github' },
+    });
+  });
+
+  it('uses the private ref, without a refusal, when both exist and differ: the base advanced after checkout (N2)', () => {
+    const { root, headMinusOne } = twoCommitBranch();
+    git(root, ['update-ref', PRIVATE, headMinusOne]);
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: headMinusOne, source: 'github' },
+    });
+  });
+
+  it('accepts both when they name the same commit', () => {
+    const { root, base } = twoCommitBranch();
+    git(root, ['update-ref', PRIVATE, base]);
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: base, source: 'github' },
+    });
+  });
+
+  it('a TAG named refs/conductor/trust-base is not the private ref (B2)', () => {
+    const { root, base, headMinusOne } = twoCommitBranch();
+    git(root, ['tag', PRIVATE, headMinusOne]);
+    // No private ref: the remote-tracking ref is used, never the tag.
+    expect(resolveBaseRefInRepo(root, { env })).toEqual({
+      ok: true,
+      base: { ref: base, source: 'github' },
+    });
+    // And with no remote-tracking ref either, nothing resolves: refused.
+    git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    const refused = resolveBaseRefInRepo(root, { env });
+    expect(refused.ok).toBe(false);
+  });
+
+  it('with neither present, refuses, naming fetch-depth: 0', () => {
+    const { root } = twoCommitBranch();
+    git(root, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    const resolved = resolveBaseRefInRepo(root, { env });
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) throw new Error('unreachable');
+    expect(resolved.detail).toMatch(/fetch-depth: 0/);
+    expect(resolved.detail).toContain('refs/conductor/trust-base');
+  });
+
+  it('refuses an explicit --base that a tag shadows, and keeps an unambiguous explicit one', () => {
+    const { root, headMinusOne } = twoCommitBranch();
+    git(root, ['tag', 'origin/main', headMinusOne]);
+    const refused = resolveBaseRefInRepo(root, { base: 'origin/main', env });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    expect(refused.detail).toMatch(/ambiguous/);
+    expect(refused.detail).toContain('as the intent gate base');
+    expect(resolveBaseRefInRepo(root, { base: 'refs/remotes/origin/main', env })).toEqual({
+      ok: true,
+      base: { ref: 'refs/remotes/origin/main', source: 'flag' },
+    });
+    // An explicit refs/ name that does not exist as that exact ref (a tag of
+    // that name does not count) is refused, never resolved by name.
+    git(root, ['tag', 'refs/conductor/nothing', headMinusOne]);
+    expect(resolveBaseRefInRepo(root, { base: 'refs/conductor/nothing', env }).ok).toBe(false);
+    expect(resolveBaseRefInRepo(root, { base: 'HEAD~1', env })).toEqual({
+      ok: true,
+      base: { ref: 'HEAD~1', source: 'flag' },
+    });
+  });
+
+  it('is null outside a pull request', () => {
+    const { root } = twoCommitBranch();
+    expect(resolveBaseRefInRepo(root, { env: {} })).toEqual({ ok: true, base: null });
+  });
+
+  it('refuses an explicit --base that starts with a dash: it is an option, not a ref (N2)', () => {
+    const { root } = twoCommitBranch();
+    for (const base of ['--output=/x', '-p', '--no-index']) {
+      const refused = resolveBaseRefInRepo(root, { base, env });
+      expect([base, refused.ok]).toEqual([base, false]);
+      if (refused.ok) throw new Error('unreachable');
+      expect(refused.detail).toContain(`"${base}"`);
+      expect(refused.detail).toMatch(/starts with a dash/);
+      expect(refused.detail).toMatch(/Nothing was checked/);
+    }
+  });
+});
+
 describe('changedPathsSince', () => {
+  it('never lets a base that looks like an option reach git as one: no file is written and the run fails closed (N2)', () => {
+    // Before the fix "--output=<file>...HEAD" was git diff's own --output
+    // option: it wrote that file and printed nothing, so the change set was
+    // empty and the intent gate judged nothing. The check in
+    // resolveBaseRefInRepo is the first line; --end-of-options in the git
+    // call is the second, proven here by calling the function directly.
+    const root = repoWithMain();
+    const target = path.join(tempDir(), 'injected.txt');
+    const changed = changedPathsSince(root, `--output=${target}`);
+    expect(changed.ok).toBe(false);
+    expect(existsSync(target)).toBe(false);
+  });
+
   it('lists what the branch changed and not what landed on the base afterwards', () => {
     // The three-dot form. Two-dot would attribute a commit somebody else
     // merged into main after this branch forked to this branch's author,
@@ -139,6 +283,34 @@ describe('changedPathsSince', () => {
     commit(root, 'spaced');
 
     expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: ['src/my widget.ts'] });
+  });
+
+  it('hands over names with a quote, a tab and a newline byte for byte, never C-quoted (N3)', () => {
+    // Without -z git prints "secrets/a\"b.txt" with quotes and escapes; the
+    // gate was then handed a path that names no file. intent-guard splits
+    // --paths on commas only, so a tab or newline inside a name is intact.
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/odd-names']);
+    const names = ['secrets/a"b.txt', 'src/tab\there.ts', 'src/new\nline.ts'];
+    for (const name of names) {
+      write(root, name, 'export const x = 1;\n');
+    }
+    commit(root, 'odd names');
+
+    expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: [...names].sort() });
+  });
+
+  it('refuses a backslash in a path itself, naming the file: intent-guard refuses it in --paths', () => {
+    const root = repoWithMain();
+    git(root, ['checkout', '--quiet', '-b', 'feat/backslash']);
+    write(root, 'src/back\\slash.ts', 'export const x = 1;\n');
+    commit(root, 'backslash');
+
+    const changed = changedPathsSince(root, 'main');
+
+    expect(changed.ok).toBe(false);
+    expect(changed.ok === false && changed.detail).toContain('src/back\\slash.ts');
+    expect(changed.ok === false && changed.detail).toMatch(/backslash/);
   });
 
   it('fails closed on a path containing a comma, naming the path', () => {

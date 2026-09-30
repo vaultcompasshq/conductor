@@ -8,7 +8,17 @@
 
 import { Command, CommanderError } from 'commander';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,6 +54,54 @@ import {
 
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
+
+/**
+ * Refuses a report path that is a symbolic link, dangling or not.
+ *
+ * --output defaults to conductor.sarif in the checkout, and a pull request can
+ * commit a symlink by that name. writeFileSync follows it, so the run would
+ * overwrite whatever it points at (a hook, .git/config, a runner file) with
+ * report text. lstat, never stat: stat follows the link and reports the
+ * target. A missing path is fine, and so is an ordinary file.
+ */
+function refuseSymlinkReportPath(target: string, what: string): void {
+  let info;
+  try {
+    info = lstatSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+  if (info.isSymbolicLink()) {
+    throw new PolicyError(
+      `refusing to write ${what} to ${target}: it is a symbolic link, and writing would follow it ` +
+        'to whatever it points at. Remove the link or choose another path.'
+    );
+  }
+}
+
+/**
+ * Writes a report file without ever following a symbolic link at the final
+ * path: the lstat refusal above for the message, plus O_NOFOLLOW where the
+ * platform has it so a link swapped in between the check and the open is
+ * refused by the kernel rather than followed.
+ */
+function writeReportFile(target: string, what: string, body: string): void {
+  refuseSymlinkReportPath(target, what);
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const fd = openSync(
+    target,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollow,
+    0o666
+  );
+  try {
+    writeSync(fd, body);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * The working-tree root, or a thrown one-line diagnosis of why there is none.
@@ -284,8 +342,8 @@ function policyForRun(
   // the same rule for anyone invoking the CLI directly in CI, bypassing that
   // step. Checked BEFORE refuseTrustBaseRef and deliberately narrower than
   // it: it says nothing about HEAD or about tree equality, only about
-  // whether the given ref agrees with origin/<GITHUB_BASE_REF>, which is
-  // exactly what the composite action itself always passes. So on an
+  // whether the given ref agrees with the base branch (the full commit id the
+  // composite action's fetch step published). So on an
   // ordinary pull-request run this returns null immediately and
   // refuseTrustBaseRef runs its own checks unchanged, the equal-tree
   // first-parent exception (issue #69/#73) included.
@@ -539,11 +597,11 @@ export function buildProgram(): Command {
     )
     .option(
       '--base <ref>',
-      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to origin/<GITHUB_BASE_REF> when it is set.'
+      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to the base branch (refs/conductor/trust-base, else refs/remotes/origin/<GITHUB_BASE_REF>, as a commit id) when GITHUB_BASE_REF is set.'
     )
     .option(
       '--trust-base <ref>',
-      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action passes origin/<GITHUB_BASE_REF> on a pull_request event.'
+      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action fetches the base branch and passes its full commit id on a pull_request event.'
     )
     .option(
       '--output <path>',
@@ -551,7 +609,7 @@ export function buildProgram(): Command {
     )
     .option(
       '--text-report <path>',
-      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
+      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, nothing-checked (exit 0 but no gate ran), advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
     )
     .option(
       '--spec <path>',
@@ -649,7 +707,7 @@ export function buildProgram(): Command {
           // own. Reporting exit 0 next to a report nobody can read is the
           // worst of the available answers: the upload step downstream would
           // fail on a missing file with no explanation here.
-          writeFileSync(options.output, rendered);
+          writeReportFile(options.output, 'the report', rendered);
         }
 
         // WRITTEN LAST, after the SARIF log or stdout, and removed again in
@@ -659,8 +717,11 @@ export function buildProgram(): Command {
         // post it as a comment, beside a red job. A text report that cannot
         // be written takes the could-not-run code, like an unwritable --output.
         if (options.textReport !== undefined && textReport !== undefined) {
+          // Checked BEFORE textReportPath is set, so the catch below never
+          // unlinks a path this run refused to touch.
+          refuseSymlinkReportPath(options.textReport, 'the text report');
           textReportPath = options.textReport;
-          writeFileSync(options.textReport, textReport);
+          writeReportFile(options.textReport, 'the text report', textReport);
         }
 
         if (options.output !== undefined) {

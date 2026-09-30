@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -16,8 +16,10 @@ import {
   headTreeEqualsBase,
   policyDiffers,
   readPolicyAtRef,
+  refuseAmbiguousRef,
   refuseTrustBaseForPullRequest,
   refuseTrustBaseRef,
+  resolveRev,
 } from '../src/trust-base.js';
 
 const temps: string[] = [];
@@ -385,6 +387,218 @@ describe('refusing an explicit trust-base that disagrees with GITHUB_BASE_REF (i
   });
 });
 
+/**
+ * B1: a short name like origin/main is resolved by git with refs/tags/ BEFORE
+ * refs/remotes/, so anyone who can push a tag named origin/main could choose
+ * the commit the rules are read from, with no code from the pull request
+ * running at all. Every ref the umbrella judges by is spelled in full, and a
+ * short name that matches more than one kind of ref is refused.
+ */
+describe('a tag cannot shadow the trust base (B1)', () => {
+  const PRIVATE = 'refs/conductor/trust-base';
+
+  /** main is the real base; a tag named origin/main points at a permissive commit. */
+  function shadowedRepo(): { repo: string; base: string; permissive: string } {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    git(repo, ['checkout', '--quiet', '-b', 'permissive']);
+    const permissive = commit(repo, { '.guardrails.yaml': 'version: 1\ngates: {}\n' }, 'permissive');
+    git(repo, ['tag', 'origin/main', permissive]);
+    git(repo, ['checkout', '--quiet', 'main']);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    return { repo, base, permissive };
+  }
+
+  it('refuses a short trust base that a tag shadows, for a local CLI user (no GITHUB_BASE_REF)', () => {
+    const { repo } = shadowedRepo();
+    const refusal = refuseTrustBaseRef(repo, 'origin/main');
+    expect(refusal).toMatch(/ambiguous/);
+    expect(refusal).toMatch(/refs\/tags\/origin\/main/);
+    expect(refusal).toMatch(/refs\/remotes\/origin\/main/);
+    // Spelled in full, the same commit is fine.
+    expect(refuseTrustBaseRef(repo, 'refs/remotes/origin/main')).toBeNull();
+  });
+
+  it('refuses the shadowed short name on a pull request too, and never resolves it to the tag', () => {
+    const { repo } = shadowedRepo();
+    const refusal = refuseTrustBaseForPullRequest(repo, 'origin/main', 'main');
+    expect(refusal).not.toBeNull();
+    expect(refusal).toMatch(/ambiguous/);
+  });
+
+  it('compares origin/<base> spelled in full, so a tag of that name cannot stand in for it', () => {
+    // An EXPLICIT trust base (private ref absent) is compared against the
+    // fully spelled remote-tracking ref, which is the only reference there is.
+    // Before the fix the expected side resolved through the tag, matched, and
+    // the run trusted the permissive commit.
+    const { repo, permissive } = shadowedRepo();
+    const refusal = refuseTrustBaseForPullRequest(repo, 'refs/heads/permissive', 'main');
+    expect(refusal).toMatch(/refs\/remotes\/origin\/main/);
+    expect(refusal).toMatch(permissive.slice(0, 12));
+    expect(refusal).toMatch(/something moved one of them/);
+  });
+
+  it('accepts the private ref when the base branch advanced between checkout and the private fetch (N2)', () => {
+    // refs/remotes/origin/<base> is fixed at checkout time, the private ref is
+    // fetched later; a merge in that window is benign. The private ref is the
+    // authority and nothing reads refs/remotes/origin/<base> for trust, so no
+    // comparison (and no false refusal).
+    const repo = emptyRepo();
+    const checkoutTime = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base at checkout');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', checkoutTime]);
+    const advanced = commit(repo, { 'later.txt': 'merged meanwhile\n' }, 'base advanced');
+    git(repo, ['update-ref', PRIVATE, advanced]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+
+    expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).toBeNull();
+  });
+
+  it('accepts the private ref when the same commit is in refs/remotes/origin/<base>', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', PRIVATE, base]);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).toBeNull();
+  });
+
+  it('accepts the private ref without comparison when refs/remotes/origin/<base> does not exist (depth-1 checkout), and nothing else', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', PRIVATE, base]);
+    git(repo, ['branch', 'pr-branch']);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).toBeNull();
+    expect(refuseTrustBaseForPullRequest(repo, 'pr-branch', 'main')).toMatch(/does not resolve/);
+  });
+});
+
+/**
+ * B2: git resolves the string refs/conductor/trust-base through its DWIM
+ * rules, which include refs/tags/<string>, so a TAG stored as
+ * refs/tags/refs/conductor/trust-base resolved whenever the private ref was
+ * absent. No ref NAME is trusted any more: the action passes a full commit
+ * id, and a refs/ name is checked with show-ref (the exact ref) before it is
+ * resolved.
+ */
+describe('a tag cannot become the trust base through ref name resolution (B2)', () => {
+  const PRIVATE = 'refs/conductor/trust-base';
+
+  function repoWithBaseAndTag(): { repo: string; base: string; other: string } {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    const other = commit(repo, { '.guardrails.yaml': 'version: 1\ngates: {}\n' }, 'permissive');
+    // Stored as refs/tags/refs/conductor/trust-base: what a pushed tag named
+    // refs/conductor/trust-base would be.
+    git(repo, ['tag', PRIVATE, other]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    return { repo, base, other };
+  }
+
+  it('a full commit id is the object even when a branch is named like it', () => {
+    const repo = emptyRepo();
+    const first = commit(repo, { 'a.txt': 'a\n' }, 'first');
+    const second = commit(repo, { 'b.txt': 'b\n' }, 'second');
+    git(repo, ['update-ref', `refs/heads/${first}`, second]);
+    expect(resolveRev(repo, first, 'commit')).toBe(first);
+  });
+
+  it('never resolves a refs/ name through a tag of that name: absent private ref means unresolvable', () => {
+    const { repo } = repoWithBaseAndTag();
+    expect(resolveRev(repo, PRIVATE, 'commit')).toBeNull();
+    expect(refuseTrustBaseRef(repo, PRIVATE)).toMatch(/does not resolve to a commit/);
+  });
+
+  it('the CLI refuses a refs/conductor/trust-base that exists only as a tag, on a pull request too', () => {
+    const { repo } = repoWithBaseAndTag();
+    expect(refuseTrustBaseForPullRequest(repo, PRIVATE, 'main')).not.toBeNull();
+  });
+
+  it("accepts a full commit id equal to the private ref when it exists, and nothing else (N1)", () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', PRIVATE, base]);
+    const moved = commit(repo, { 'later.txt': 'x\n' }, 'base advanced');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', moved]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    expect(refuseTrustBaseForPullRequest(repo, base, 'main')).toBeNull();
+    const head = git(repo, ['rev-parse', 'HEAD']).trim();
+    const refusal = refuseTrustBaseForPullRequest(repo, head, 'main');
+    expect(refusal).toMatch(head.slice(0, 12));
+    expect(refusal).toMatch(/trust base must be the base branch/);
+  });
+
+  it('refuses a full commit id equal to a MOVED refs/remotes/origin/<base> when the private ref exists (N1)', () => {
+    // Pull-request code can move the remote-tracking ref; once the private ref
+    // (the authority) exists, an id that matches only the moved ref is the
+    // attack, not a second acceptable answer.
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', PRIVATE, base]);
+    const moved = commit(repo, { '.guardrails.yaml': 'version: 1\ngates: {}\n' }, 'permissive');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', moved]);
+    const refusal = refuseTrustBaseForPullRequest(repo, moved, 'main');
+    expect(refusal).not.toBeNull();
+    expect(refusal).toMatch(/trust base must be the base branch/);
+  });
+
+  it('accepts a full commit id equal to refs/remotes/origin/<base> only when the private ref does not exist (N1)', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    commit(repo, { 'app.js': 'const x = 1;\n' }, 'head');
+    expect(refuseTrustBaseForPullRequest(repo, base, 'main')).toBeNull();
+  });
+
+  it('refuses a full commit id when neither the private ref nor refs/remotes/origin/<base> exists, and when only a tag names it', () => {
+    const { repo, other } = repoWithBaseAndTag();
+    git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    expect(refuseTrustBaseForPullRequest(repo, other, 'main')).toMatch(/cannot verify/);
+  });
+});
+
+describe('refuseAmbiguousRef sees through revision syntax (N3)', () => {
+  it('refuses origin/main~0 and origin/main^{commit} when a tag shadows origin/main', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    const other = commit(repo, { 'x.txt': 'x\n' }, 'other');
+    git(repo, ['tag', 'origin/main', other]);
+    for (const spelled of ['origin/main', 'origin/main~0', 'origin/main^{commit}', 'origin/main^0', 'origin/main@{0}']) {
+      expect([spelled, refuseAmbiguousRef(repo, spelled)]).toEqual([
+        spelled,
+        expect.stringMatching(/ambiguous/),
+      ]);
+    }
+    expect(refuseAmbiguousRef(repo, 'HEAD~1')).toBeNull();
+  });
+
+  it('refuses a name with a literal @ in it when a branch and a tag both carry it: git picks the tag (N3)', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY }, 'base');
+    git(repo, ['branch', 'feature@x', base]);
+    const other = commit(repo, { 'x.txt': 'x\n' }, 'other');
+    git(repo, ['tag', 'feature@x', other]);
+    // Cutting at every @ made this name "feature", which matches nothing.
+    for (const spelled of ['feature@x', 'feature@x~1', 'feature@x^{commit}']) {
+      expect([spelled, refuseAmbiguousRef(repo, spelled)]).toEqual([
+        spelled,
+        expect.stringMatching(/ambiguous.*feature@x/),
+      ]);
+    }
+  });
+
+  it('a bare @ is HEAD, and only @{ starts a reflog suffix (N3)', () => {
+    const repo = emptyRepo();
+    commit(repo, { 'a.txt': 'a\n' }, 'a');
+    expect(refuseAmbiguousRef(repo, '@')).toBeNull();
+    expect(refuseAmbiguousRef(repo, '@{1}')).toBeNull();
+    expect(refuseAmbiguousRef(repo, '@~1')).toBeNull();
+  });
+});
+
 describe('the version floor for handing a gate the flag', () => {
   it('accepts the version the flag arrived in and everything above it', () => {
     expect(atLeastVersion('1.4.0', '1.4.0')).toBe(true);
@@ -414,5 +628,39 @@ describe('the version floor for handing a gate the flag', () => {
 
   it('accepts a leading v, which is how some builds print it', () => {
     expect(atLeastVersion('v1.4.0', '1.4.0')).toBe(true);
+  });
+});
+
+describe('a dash-leading trust base never reaches git as an option', () => {
+  it('refuses it in both refusal functions, before any git call', () => {
+    // Not a repository at all: any git call would fail differently, so a
+    // refusal naming the dash proves the guard ran first.
+    const notARepo = path.join(os.tmpdir(), 'conductor-no-such-repo');
+    expect(refuseTrustBaseRef(notARepo, '--output=pwned')).toMatch(/starts with "-"/);
+    expect(refuseTrustBaseForPullRequest(notARepo, '--output=pwned', 'main')).toMatch(
+      /starts with "-"/
+    );
+  });
+
+  it('refuses a tag named like an option that points at the base commit', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { 'conductor.yml': 'a: 1\n' }, 'base');
+    git(repo, ['update-ref', 'refs/remotes/origin/main', base]);
+    git(repo, ['update-ref', 'refs/tags/--output=pwned', base]);
+    expect(refuseTrustBaseForPullRequest(repo, '--output=pwned', 'main')).toMatch(
+      /starts with "-"/
+    );
+  });
+
+  it('readPolicyAtRef with a dash-leading ref never writes a file', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { 'conductor.yml': 'a: 1\n' }, 'base');
+    git(repo, ['update-ref', 'refs/tags/--output=pwned', base]);
+    // git reads "--output=pwned:./conductor.yml" as --output=<that path>, so
+    // the directory it would write into has to exist for the bug to show.
+    const sink = path.join(repo, 'pwned:.');
+    mkdirSync(sink);
+    expect(readPolicyAtRef(repo, '--output=pwned')).toBeNull();
+    expect(readdirSync(sink)).toEqual([]);
   });
 });

@@ -226,13 +226,15 @@ describe('a pull-request run against an imported spec', () => {
 
   it('takes the base ref from the pull request environment when no --base was given', () => {
     const root = repo();
-    // A local branch standing in for the remote-tracking ref a CI checkout
-    // would have, so origin/main resolves without a remote.
-    git(root, ['branch', 'origin/main', 'main']);
+    // The remote-tracking ref a CI checkout would have, without a remote.
+    // The base is the commit id read from the exact ref, so a tag cannot
+    // shadow it.
+    git(root, ['update-ref', 'refs/remotes/origin/main', 'main']);
+    const mainSha = git(root, ['rev-parse', 'main']).trim();
 
     const result = run(root, binWith(CHECK_PASSING), { env: { GITHUB_BASE_REF: 'main' } });
 
-    expect(result.gates[0].intent?.baseRef).toBe('origin/main');
+    expect(result.gates[0].intent?.baseRef).toBe(mainSha);
   });
 });
 

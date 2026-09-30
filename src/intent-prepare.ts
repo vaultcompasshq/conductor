@@ -45,7 +45,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
-import { changedPathsSince, currentBranch, resolveBaseRef } from './intent-base.js';
+import { changedPathsSince, currentBranch, resolveBaseRefInRepo } from './intent-base.js';
 import { summariseStderr } from './normalize.js';
 import { SPEC_DIR, discoverSpec, prBodyFromEvent } from './intent-spec.js';
 import type { ResolvedBinary } from './resolve.js';
@@ -519,10 +519,14 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
     };
   }
 
-  const base = resolveBaseRef({
+  const resolvedBase = resolveBaseRefInRepo(repoRoot, {
     ...(options.base === undefined ? {} : { base: options.base }),
     env,
   });
+  if (!resolvedBase.ok) {
+    return { kind: 'failed', step: 'base', detail: resolvedBase.detail };
+  }
+  const base = resolvedBase.base;
 
   let paths: string[] | null = null;
   if (base !== null) {

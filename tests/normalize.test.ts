@@ -786,6 +786,18 @@ describe('the umbrella own missing-gate finding', () => {
     expect(finding.subject).toEqual({ kind: 'none' });
   });
 
+  it('names the scoped package to install, never a bare unscoped name (C4)', () => {
+    for (const product of ['dep-guard', 'vault-guard', 'intent-guard'] as const) {
+      const message = normalizeMissingGate('dependencies', product, [product]).message;
+      expect(message).toContain(`@vaultcompass/${product}`);
+      expect(message).not.toMatch(/Install it[.,]/);
+    }
+    // The external tools are not npm packages of this family.
+    const external = normalizeMissingGate('secrets-history', 'gitleaks', ['gitleaks']).message;
+    expect(external).not.toContain('@vaultcompass/gitleaks');
+    expect(external).toMatch(/Install gitleaks/);
+  });
+
   it('names every binary it looked for', () => {
     expect(finding.message).toMatch(/dep-guard/);
     expect(finding.details.candidates).toEqual(['dep-guard']);

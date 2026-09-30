@@ -14,6 +14,119 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Fixed
+
+- A base branch that advances between checkout and the action's fetch no
+  longer makes a pull-request run exit 2. The private `refs/conductor/trust-base`
+  is the authority and is no longer compared with `refs/remotes/origin/<base>`
+  (fixed at checkout time, and the side pull-request code can move); the
+  comparison is kept only for an explicit trust base, and the intent gate's
+  base follows the same rule.
+- The intent gate is now handed changed paths NUL-separated from git
+  (`--name-only -z`), so a file name with a quote, backslash, tab or newline
+  arrives intact. Before, git C-quoted it (`"secrets/a\"b.txt"`) and
+  intent-guard, which refuses a backslash in a path, left every pull request
+  touching such a name permanently could-not-run. A comma in a path is still
+  could-not-run, naming the file.
+- Security: the intent gate's base is now spelled in full as well. A tag named
+  `origin/<base>` at an earlier commit used to make the gate judge only the
+  last commit. On a pull request it now uses `refs/conductor/trust-base` if
+  present, else `refs/remotes/origin/<base>`, refuses (exit 2) when both exist
+  and disagree, and an explicit `--base` that a tag shadows is refused. A
+  depth-1 checkout still fails closed, naming `fetch-depth: 0`.
+- The public-hygiene guard's allowlist (CONTRIBUTING.md and the guard script)
+  now exempts the two path checks only. The hashed-token scan runs on every
+  tracked file, allowlisted ones included; before, a blocked name could sit in
+  CONTRIBUTING.md unseen.
+- Security: `--output` (default `conductor.sarif` in the checkout) and
+  `--text-report` are no longer written through a symbolic link. A pull
+  request could commit a symlink by that name and have the run overwrite its
+  target (a hook, `.git/config`, a runner file). A link at the final path,
+  dangling or not, is refused with exit 2, and the file is opened with
+  O_NOFOLLOW where the platform has it. The write order is unchanged.
+- The pull request comment no longer blames the registry for every
+  did-not-verify state. It branches on what happened: a refusal by the
+  action's own validate step (a backward pin, a trust-base input on a pull
+  request) says the inputs were refused and nothing was installed; an install
+  failure before the audit (npm too old to verify, npm install failing) says
+  so; only a signature audit that actually failed carries the reason and the
+  registry-or-sigstore-outage sentence. In every case conductor is not run.
+- Every missing-gate remedy now names the scoped package
+  `@vaultcompass/<product>` for dep-guard, vault-guard and intent-guard: the
+  missing-gate finding, the could-not-run detail on a local run (which used to
+  print no install remedy at all), and the comment `conductor init` writes
+  for a gate it did not find. The unscoped dep-guard and intent-guard names
+  are unclaimed on npm, so a bare "install dep-guard" could lead to a
+  squatted package.
+- Security: a history gate (gitleaks) in ANY shallow checkout is now
+  could-not-run with reason `history-shallow`, naming `fetch-depth: 0`. This
+  applies on any event (push, merge_group, a pull request, `fetch-depth: 50`),
+  not only trust-base runs; under a trust base it is also enforced (exit 2)
+  whatever `enforce` says, and on other runs the policy's own `enforce`
+  stands. Workflows that ran gitleaks on a shallow checkout and passed will
+  now report could-not-run until the checkout uses `fetch-depth: 0`. With the
+  default depth of 1, `<base>..HEAD` held one grafted commit and a secret
+  added then removed inside the pull request was never scanned (0 hits
+  shallow against 2 full). conductor does not deepen the checkout itself.
+  The README and INVARIANTS no longer say depth 1 fails closed for this.
+  The gitleaks spawn also sets `GIT_NO_REPLACE_OBJECTS=1`.
+- Security: the action no longer trusts `origin/<base>` as the trust base.
+  A new step, "Fetch the trust base", runs only on a pull request. Exactly two
+  steps hold a token, and neither runs conductor: that fetch step
+  (`github.token`, to read the base branch; it moves the token into a
+  non-exported variable before its first git call, so only the fetch subshell
+  has it) and "Post the report" (`GH_TOKEN`, to write the pull request comment;
+  it runs only the comment poster). The gates step and the new "Render the
+  report" step, the only two that run conductor, have no token in their
+  environment on any event (a job-level `GH_TOKEN` or `GITHUB_TOKEN` that the
+  calling workflow sets is inherited by every step and is not stripped), and
+  conductor is started there with
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` removed
+  (a job with `id-token: write` has the runner expose them to every step).
+  The comment used to be one step holding `GH_TOKEN` whose fallback path ran
+  conductor with it. It fetches the base branch (forced,
+  from `$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git`, the token in GIT_CONFIG_*
+  environment variables and never in argv) into the private ref
+  `refs/conductor/trust-base`, checks it equals the fetched commit, and
+  publishes the FULL COMMIT ID, which is what conductor and every gate receive:
+  never a ref name, because git resolves a name through refs/tags/ too (a
+  pushed tag named `refs/conductor/trust-base` or `origin/<base>` would have
+  been taken for the ref). A failed fetch, or a stale private ref that cannot be
+  removed, fails the step, so conductor never runs with a stale or absent trust
+  base. The CLI resolves no `refs/` name through name resolution, sees through
+  `origin/main~0`-style suffixes, and accepts a commit id on a pull request only
+  if it equals the private ref, or `refs/remotes/origin/<base>` only when the
+  private ref does not exist. An intent gate `--base` starting with a dash is
+  refused (it was option injection: `--output=/x` produced an empty change
+  set), and a name with a literal `@` is no longer cut short in the ambiguity
+  check.
+  `url.insteadOf` and other repository git config remain covered only by the
+  no-pull-request-code-before-the-action precondition.
+  Two holes closed: code from the pull request that ran earlier in the job
+  could move `origin/<base>`, and a tag named `origin/<base>`, which anyone
+  who can push tags can create, is resolved by git before the remote-tracking
+  ref, so it chose the commit the rules came from. conductor now spells every
+  ref it resolves in full, refuses a short ref name that matches more than
+  one kind of ref, and refuses a `refs/remotes/origin/<base>` that
+  disagrees with the private ref. The fetch is depth 1 only when the checkout
+  is already shallow. If the fetch fails the step fails with an error naming the
+  cause (the job needs `permissions: contents: read`); only the private ref is
+  ever removed, and `refs/remotes/origin/*` is never touched.
+  The job now needs `contents: read`. The README example runs the action in a
+  job that runs no code from the pull request, and says that package.json
+  lifecycle scripts bypass "require review on .github/workflows".
+- A run in which no gate ran at all (none enabled, or every one deferred,
+  tree-unchanged or skipped) no longer carries the verdict token `pass`. It
+  carries the new closed-set token `nothing-checked`, a SIXTH token that
+  consumers will now see (docs-only pull requests, equal-tree pull requests,
+  all-deferred runs). A workflow that tests the `verdict` output for `== 'pass'`
+  to mean "clean", or that lists the five earlier tokens, must add
+  `nothing-checked`. The
+  action's `verdict` output no longer reports a pass for a run that verified
+  nothing. The exit
+  status is unchanged (0). The action accepts `nothing-checked` only beside
+  exit status 0, and its job summary says that nothing was checked.
+
 ## [0.7.0] - 2026-09-29
 
 **A minor package release.** `@vaultcompass/conductor` moves to 0.7.0 on npm

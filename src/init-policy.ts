@@ -4,6 +4,7 @@ import path from 'node:path';
 import { NATIVE_CONTRACT_PATH } from './intent-prepare.js';
 import { DEFAULT_STAGE_FOR_ROLE, GATE_ROLES, POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
 import type { GateRole } from './policy.js';
+import { installName } from './normalize.js';
 import { CANDIDATES } from './resolve.js';
 
 export { POLICY_FILE_NAME };
@@ -109,7 +110,7 @@ export function renderPolicy(
     lines.push(`  # ${ROLE_DESCRIPTION[role]}`);
     if (!enabled) {
       lines.push(
-        `  # not found in node_modules/.bin or on PATH. Install ${product}, then set enabled: true.`
+        `  # not found in node_modules/.bin or on PATH. Install ${installName(product)}, then set enabled: true.`
       );
     }
     lines.push(`  ${role}:`);

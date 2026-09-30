@@ -282,14 +282,27 @@ describe('scanFile (unit)', () => {
     expect(findings).toEqual(['fixture.md:1: internal workspace path']);
   });
 
-  it('skips token and path rules, but not the dash rule, for allowlisted files', () => {
+  it('skips only the path rules for allowlisted files: the dash rule and the token scan still apply', () => {
     const emDash = String.fromCodePoint(0x2014);
     const text = `${MADE_UP_TOKEN} and ${FIXTURE_INTERNAL_PATH} and an ${emDash} dash`;
     const findings = scanFile('CONTRIBUTING.md', text, {
       allowlisted: true,
       bannedHashes: new Set([MADE_UP_TOKEN_HASH]),
     });
-    expect(findings).toEqual(['CONTRIBUTING.md:1: em/en dash (non-ASCII) in tracked file']);
+    // No internal-path finding (the allowlist exists so CONTRIBUTING.md can
+    // show example paths), but the blocked token is still reported.
+    expect(findings).toEqual([
+      'CONTRIBUTING.md:1: em/en dash (non-ASCII) in tracked file',
+      'CONTRIBUTING.md:1: blocked token (hash match)',
+    ]);
+  });
+
+  it('flags a blocked token in the body of an allowlisted file (C7)', () => {
+    const findings = scanFile('CONTRIBUTING.md', `Prose.\nA line naming ${MADE_UP_TOKEN} here.\n`, {
+      allowlisted: true,
+      bannedHashes: new Set([MADE_UP_TOKEN_HASH]),
+    });
+    expect(findings).toEqual(['CONTRIBUTING.md:2: blocked token (hash match)']);
   });
 
   it('reports the correct line number for a finding past line 1', () => {
@@ -317,13 +330,16 @@ describe('scanFile (unit)', () => {
     expect(findings).toEqual([`${rel}: blocked token in file path (hash match)`]);
   });
 
-  it('still scans the path of an allowlisted file, even though its contents are skipped', () => {
+  it('scans both the path and the body of an allowlisted file for blocked tokens', () => {
     const rel = `docs/${SINGLE_WORD_TOKEN}-migration.md`;
-    const findings = scanFile(rel, `Body mentions ${MADE_UP_TOKEN} too, but that is content.\n`, {
+    const findings = scanFile(rel, `Body mentions ${MADE_UP_TOKEN} too.\n`, {
       allowlisted: true,
       bannedHashes: new Set([SINGLE_WORD_TOKEN_HASH, MADE_UP_TOKEN_HASH]),
     });
-    expect(findings).toEqual([`${rel}: blocked token in file path (hash match)`]);
+    expect(findings).toEqual([
+      `${rel}: blocked token in file path (hash match)`,
+      `${rel}:1: blocked token (hash match)`,
+    ]);
   });
 
   it('catches a banned token embedded in a snake_case identifier', () => {

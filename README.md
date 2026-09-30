@@ -473,7 +473,8 @@ proceeds normally without mentioning them.
   pull-request run passes both: `--base` decides which paths are judged,
   `--trust-base` decides what they are judged by. When `GITHUB_BASE_REF` is
   set, an explicit `--trust-base` is accepted only when it resolves to the
-  same commit as `origin/$GITHUB_BASE_REF` (issue #58); anyone invoking the
+  same commit as `refs/remotes/origin/$GITHUB_BASE_REF`, or is the Action's
+  private `refs/conductor/trust-base` (issue #58); anyone invoking the
   CLI directly on a pull request, rather than through the Action, gets this
   as its own refusal, named below.
 - `--spec <path>` names the spec the intent gate imports its contract from.
@@ -571,6 +572,11 @@ code and the `enforce` flags the run already had.
 
 - `pass`: exit 0, and no gate, enforced or not, has a blocking finding or
   could not run.
+- `nothing-checked`: exit 0, but no gate ran at all (none is enabled, or
+  every enabled one was deferred to a later stage, had nothing to judge, or
+  was skipped). The exit status is unchanged, since nothing failed, but this
+  is not a pass: nothing was verified. In the Action the `verdict` output
+  carries this token, so a workflow can tell it apart from `pass`.
 - `advisory-blocked (N)`: the run would have exited 1, and `--advisory` made
   it exit 0. N is the blocking findings on enforced gates.
 - `unenforced-findings (N)`: exit 0, but a gate with `enforce: false` had
@@ -580,11 +586,13 @@ code and the `enforce` flags the run already had.
 - `could-not-run`: exit 2, a refused trust base included.
 
 When several apply the order is `could-not-run`, then `blocked` or
-`advisory-blocked`, then `unenforced-findings`, then `pass`. A run with
+`advisory-blocked`, then `unenforced-findings`, then `nothing-checked` (no gate
+ran) or `pass`. A run with
 `--advisory` whose only blocking findings sit on an unenforced gate is
 `unenforced-findings`, not `advisory-blocked`, because the flag did nothing
 there. A gate skipped for want of a contract does not by itself move the token
-off `pass`; the verdict sentence is where "nothing was checked" is said. A
+off `pass` when another gate ran; when no gate ran, the token is
+`nothing-checked` and the verdict sentence says "nothing was checked". A
 gate that exited non-zero with no finding marked blocking counts as one in N,
 so a state that is not a pass never prints a count of zero. The one-line
 summary of a clean, non-verbose run has no token line, since it is one line by
@@ -737,15 +745,19 @@ to remove the input; see "The Action" below.
 
 **The CLI check catches a misconfigured or innocent-looking redirect when
 `GITHUB_BASE_REF` is set**, for anyone invoking the CLI directly in CI. When
-that variable is set, an explicit `--trust-base` is accepted only when it
-resolves to the same commit as `origin/$GITHUB_BASE_REF`, which is exactly
-what the Action itself always passes, so an ordinary pull-request run is
+that variable is set, an explicit `--trust-base` is accepted only when it is
+`refs/conductor/trust-base`, the private ref the Action fetches the base
+branch into and always passes (that ref is the authority and is not compared
+with anything), or resolves to the same commit as
+`refs/remotes/origin/$GITHUB_BASE_REF`. So an ordinary pull-request run is
 unaffected. A ref naming the pull request's own branch, or anything else that
 disagrees, is refused with both refs and both commits named, through the same
 could-not-run path as every other trust-base refusal: exit 2, the report
-leads with the reason, and nothing is checked. When `origin/$GITHUB_BASE_REF`
-itself does not resolve, this fails closed too, naming it, for the same
-reason the fetch-depth remedy below exists.
+leads with the reason, and nothing is checked. A short name that matches both
+a tag and a branch or remote-tracking ref (a tag named `origin/main`) is
+refused as ambiguous: spell the ref in full. When neither resolves, this fails
+closed too, naming it, for the same reason the fetch-depth remedy below
+exists.
 
 **Neither layer closes anything against a pull request that edits its own
 workflow file.** A CLI invocation on a pull request can simply omit
@@ -899,8 +911,11 @@ human step. That step is exactly what a pull request cannot carry, so at the
 branch changed since it forked, from
 `git diff --name-only --no-renames <base>...HEAD` in the repository root.
 
-With no `--base`, `GITHUB_BASE_REF` is used as `origin/<value>` when it is
-set, and the text report says so. With neither, the intent gate runs the way
+With no `--base`, `GITHUB_BASE_REF` is used when it is set, spelled in full:
+`refs/conductor/trust-base` (the Action's private fetch of the base) if that
+exists, else `refs/remotes/origin/<value>`, so a tag of that name cannot
+shadow it. The text report says which. An explicit `--base` that matches both
+a tag and a branch is refused as ambiguous. With neither, the intent gate runs the way
 it does at a commit: against the staged index, or the paths you name.
 
 **This is why a local preview and a pull-request run can disagree about a
@@ -1098,8 +1113,11 @@ provenance even though all four packages publish it.
 umbrella reads `GITHUB_BASE_REF` itself and treats an empty value as "not a
 pull request", which is what a push build wants.
 
-On a `pull_request` event the action passes
-**`--trust-base origin/$GITHUB_BASE_REF`** of its own accord, so the run takes
+On a `pull_request` event a dedicated step fetches the base branch into a
+private ref and the action passes **`--trust-base <the fetched commit id>`**
+of its own accord (the job needs `contents: read`; a failed fetch fails the job
+rather than running without a trust base; the token exists only in that fetch
+step and never in the gates), so the run takes
 its configuration from the base branch and the pull request cannot change the
 rules it is judged by; a change to the rules shows as a proposal line and
 takes effect after merge. See "The pull-request trust boundary" above. On any
@@ -1113,7 +1131,8 @@ workflow file is the *base* branch's own instead, but the input is refused
 there too, because pull-request mode already derives the trust base on both
 events and an explicit redirect has no legitimate use on either. The refusal
 names the value that was given and the fix, which is to remove the input: the
-action already derives `origin/$GITHUB_BASE_REF` itself on that event.
+action already derives the private `refs/conductor/trust-base` itself on that
+event.
 
 There is deliberately **no input that turns pull-request mode off**.
 Base-ref judging is the floor rather than a knob, and on a `pull_request`
@@ -1191,7 +1210,6 @@ jobs:
           # clone, because on a pull request the rules are read from it: a
           # base ref that will not resolve is exit 2 for every enabled gate.
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
           # Not a bare major: Node 22.0.0 ships npm 10.5.1, which the action
@@ -1199,11 +1217,14 @@ jobs:
           # with. 22.1.0 or later, or 20.13.0 or later, carries an npm that
           # can verify.
           node-version: '22.11.0'
-          cache: pnpm
-      # Your own dependencies. The gates are NOT among the things this has to
-      # install: the action installs those itself, globally, at the versions
-      # pinned below.
-      - run: pnpm install --frozen-lockfile
+      # NOTHING FROM THE PULL REQUEST RUNS BEFORE THE ACTION IN THIS JOB.
+      # No `pnpm install`, `npm ci`, build or test step: an install runs the
+      # repository's own lifecycle scripts (a root postinstall), and that code
+      # could write the PATH the gates are resolved from, or the refs the
+      # policy is read from, before the gates ever start. Your own
+      # dependencies, build and tests belong in a separate job (see below).
+      # The gates are not among the things that job has to install: the action
+      # installs those itself, globally, at the versions pinned below.
       - id: conductor
         uses: vaultcompasshq/conductor@v0.7.0
         with:
@@ -1233,7 +1254,48 @@ jobs:
         continue-on-error: true
         with:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
+
+  # Your own dependencies, build and tests: a different job, so the code they
+  # run shares no runner, PATH or workspace with the gates.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.11.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
 ```
+
+**Run the gates in a job that runs no code from the pull request.** Do not
+run `pnpm install`, `npm ci`, a build or a test step before the conductor
+action in the same job, and do not put the action in a job whose earlier steps
+run the repository's own scripts. Anything that runs first shares the runner
+with the gates: it can write to `GITHUB_PATH`, to the runner's temp directory
+where the action installs the gates, or to the git refs the base policy is
+read from, and then it is the pull request choosing the program that judges
+it. The action fetches the base branch into its own private ref and judges by
+that, which closes a moved or tag-shadowed base ref and nothing else. Only
+keeping pull-request code out of the job covers the rest: `GITHUB_ENV`
+(`NODE_OPTIONS=--require`, `GIT_CONFIG_*`, `GIT_DIR`), `GITHUB_PATH`,
+`.git/config` changes (a remote URL, `url.insteadOf`, `core.fsmonitor`,
+credential helpers, `core.sshCommand`), git hooks such as
+`reference-transaction`, and replace refs or grafts. Say it plainly:
+package.json lifecycle scripts (`preinstall`, `install`, `postinstall`,
+`prepare`) run by an install bypass "require review on `.github/workflows`",
+because the pull request supplies them, not the workflow file. Branch
+protection on the workflow directory does not stop them, so the gates must
+not share a job with head code that runs first.
+
+**With gitleaks enabled the checkout must be `fetch-depth: 0`.** At the default
+depth of 1 the checkout is shallow, the range from the base to HEAD holds one
+grafted commit, and a secret added and then removed inside the pull request
+would never be seen. conductor detects a shallow checkout and reports the
+history gate as could-not-run, naming `fetch-depth: 0` (exit 2 on a pull
+request, whatever `enforce` says). It does not deepen the checkout for you.
 
 **The two external gates are installed by your workflow, not by the
 Action.** The Action still installs exactly its four npm packages and has no
@@ -1259,12 +1321,15 @@ checksum, the same way you would for a standalone security job:
           echo "$bin" >> "$GITHUB_PATH"
 ```
 
-`fetch-depth: 0` on the checkout matters more with gitleaks enabled: on a
-pull request conductor scans `<base>..HEAD`, and a base that was never
-fetched is a git error gitleaks itself would report as a clean scan of
-nothing. conductor reads that error off gitleaks' log and reports the gate
-as could-not-run instead. A missing tool is could-not-run as well, with the
-install step named in the report.
+`fetch-depth: 0` on the checkout is required with gitleaks enabled: on a
+pull request conductor scans `<base>..HEAD`. At depth 1 the checkout is
+shallow and that range holds a single commit, so a secret added and removed
+inside the pull request would go unseen; conductor detects the shallow
+checkout and reports the gate as could-not-run instead of scanning it. (A
+base that was never fetched at all is a git error gitleaks itself would
+report as a clean scan of nothing; conductor reads that error off gitleaks'
+log and reports the gate as could-not-run too.) A missing tool is
+could-not-run as well, with the install step named in the report.
 
 The `@v4` pins there are readable, not safe: a tag moves, so pinning by one
 runs whatever its author pushes to it next. Pin every third-party action by
@@ -1317,9 +1382,10 @@ jobs:
           advisory: true
 ```
 
-`action.yml` already shallow-fetches the trust base itself as of 0.4.5 when
-the checkout does not already carry it (see the changelog entry for that
-version), so this recipe needs no separate "fetch the base ref" step. None of
+`action.yml` fetches the trust base itself on every pull-request run, into its
+own private ref (depth 1 only when the checkout is already shallow, and always,
+whether or not the checkout carries the base), so this recipe needs no separate
+"fetch the base ref" step. None of
 the three steps above swallows its own exit code: a checkout or setup-node
 failure is an infrastructure problem this recipe should still surface, and
 the `conductor` step's own advisory behaviour comes from `advisory: true`
@@ -1442,7 +1508,9 @@ step and add `pull-requests: write` to the job's `permissions`:
       security-events: write
       pull-requests: write
     steps:
-      # ... checkout, pnpm, setup-node, install, as in the example above ...
+      # ... checkout and setup-node, as in the example above. Nothing from
+      # the pull request runs before the action in this job: no install, build
+      # or test step here; those belong in a separate job. ...
       - id: conductor
         uses: vaultcompasshq/conductor@v0.7.0
         with:

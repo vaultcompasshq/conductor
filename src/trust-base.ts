@@ -73,14 +73,131 @@ import { parse as parseYaml } from 'yaml';
 import { POLICY_FILE_NAME } from './policy.js';
 
 /**
+ * The private, fully spelled ref the composite action fetches the base branch
+ * into (action.yml, gates step). Nothing else writes it and no short name can
+ * shadow it: git resolves a short name like origin/main through refs/tags/
+ * BEFORE refs/remotes/, so a tag pushed by anyone able to push tags would
+ * otherwise choose the commit the rules are read from.
+ */
+export const PRIVATE_TRUST_BASE_REF = 'refs/conductor/trust-base';
+
+function refExists(repoRoot: string, fullRef: string): boolean {
+  const child = spawnSync('git', ['show-ref', '--verify', '--quiet', fullRef], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  return child.error === undefined && child.status === 0;
+}
+
+/**
+ * The object id a fully spelled ref EXACTLY names, or null when there is no
+ * such ref. `show-ref --verify` looks at that ref and nothing else: it does
+ * not run git's name-resolution rules, so a tag stored as
+ * refs/tags/refs/conductor/trust-base is never taken for
+ * refs/conductor/trust-base.
+ */
+export function exactRefObject(repoRoot: string, fullRef: string): string | null {
+  const child = spawnSync('git', ['show-ref', '--verify', '--hash', fullRef], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (child.error !== undefined || child.status !== 0) {
+    return null;
+  }
+  const value = (child.stdout ?? '').trim();
+  return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value) ? value : null;
+}
+
+/**
+ * A caller-given trust base that starts with "-", or null. Git allows a tag
+ * named refs/tags/--output=x, and such a name handed to git as an argument is
+ * read as an option, not a revision. Refused before any git call sees it; the
+ * git calls below also pass --end-of-options as a second line of defence.
+ */
+export function refuseDashLeadingRef(ref: string): string | null {
+  if (!ref.startsWith('-')) {
+    return null;
+  }
+  return (
+    `refusing "${ref}" as the trust base: it starts with "-", which git would read as an ` +
+    'option rather than a revision. Pass a ref name or a full commit id. Nothing was checked.'
+  );
+}
+
+/** A full 40- or 64-hex object id: never subject to ref name resolution. */
+export function isFullObjectId(value: string): boolean {
+  return /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
+}
+
+/**
+ * Why a SHORT ref name cannot be trusted as spelled, or null.
+ *
+ * A name that matches more than one kind of ref (a tag and a remote-tracking
+ * ref or a branch) is resolved by git in its own precedence order, tags
+ * first, with no warning under --quiet. That is a choice made by whoever can
+ * create the tag, so it is refused rather than resolved. A ref already spelled
+ * from refs/ is unambiguous, and revision expressions (HEAD, HEAD~1, a sha) are
+ * not names and are left to the callers' own checks.
+ */
+export function refuseAmbiguousRef(
+  repoRoot: string,
+  ref: string,
+  /** What the ref is used as, for the message: "the trust base", "the intent base". */
+  noun = 'the trust base'
+): string | null {
+  // The NAME part only: origin/main~0, origin/main^{commit} and origin/main@{0}
+  // resolve through the same tag-first rules as origin/main, so a revision
+  // suffix is cut off (from the first ~ ^ : or @{) before the check. A bare @
+  // is HEAD and is NOT a cut: a name may carry a literal @ (a branch and a tag
+  // both named feature@x, where git picks the tag), and cutting there hid it.
+  const cut = ref.search(/[~^:]|@\{/);
+  const name = cut === -1 ? ref : ref.slice(0, cut);
+  if (
+    name === '' ||
+    name === 'HEAD' ||
+    name === '@' ||
+    name.startsWith('refs/') ||
+    /[\s{}\\]/.test(name) ||
+    isFullObjectId(name)
+  ) {
+    return null;
+  }
+  const matches = [`refs/tags/${name}`, `refs/heads/${name}`, `refs/remotes/${name}`].filter((full) =>
+    refExists(repoRoot, full)
+  );
+  if (matches.length <= 1) {
+    return null;
+  }
+  return (
+    `refusing "${ref}" as ${noun}: the name "${name}" is ambiguous, it matches ${matches.join(' and ')}, ` +
+    'and git would pick one of them by its own precedence (tags first). Whoever can push a tag ' +
+    'could choose the base this way. Pass the ref spelled in full, for example ' +
+    'refs/remotes/origin/main. Nothing was checked.'
+  );
+}
+
+/**
  * What a rev resolves to at this repository, or null when it does not.
  *
  * `--quiet` suppresses git's own explanation, so there is nothing worth
  * forwarding on failure: the caller writes a sentence a reader can act on
  * rather than repeating the command line that failed.
  */
-function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): string | null {
-  const child = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${rev}^{${kind}}`], {
+export function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): string | null {
+  // A refs/ name is NEVER handed to git's name resolution: rev-parse would
+  // try refs/tags/<name> when the ref itself is absent, so a pushed tag named
+  // refs/conductor/trust-base would stand in for the private ref. The exact
+  // ref is read with show-ref and its object id is what gets resolved (a full
+  // object id is not subject to name resolution).
+  let target = rev;
+  if (rev.startsWith('refs/')) {
+    const exact = exactRefObject(repoRoot, rev);
+    if (exact === null) {
+      return null;
+    }
+    target = exact;
+  }
+  const child = spawnSync('git', ['rev-parse', '--verify', '--quiet', '--end-of-options', `${target}^{${kind}}`], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
@@ -156,6 +273,14 @@ export function headTreeEqualsBase(repoRoot: string, ref: string): boolean {
  * learns the trees matched even on this accepted path.
  */
 export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null {
+  const dashed = refuseDashLeadingRef(ref);
+  if (dashed !== null) {
+    return dashed;
+  }
+  const ambiguous = refuseAmbiguousRef(repoRoot, ref);
+  if (ambiguous !== null) {
+    return ambiguous;
+  }
   const base = resolveRev(repoRoot, ref, 'commit');
   if (base === null) {
     return (
@@ -230,11 +355,12 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
  * NAME on a pull_request or pull_request_target event, and empty everywhere
  * else -- a push, a schedule, workflow_dispatch, merge_group, a local run, or
  * a platform that never sets it. When it is set, the given ref is accepted
- * only when it resolves to the SAME COMMIT as origin/<githubBaseRef>, which
- * is exactly what the composite action itself always passes
- * (`--trust-base "origin/$GITHUB_BASE_REF"` in action.yml's gates step). So
- * an ordinary pull-request run sees the given ref and the expected ref as the
- * identical spelling and this returns null immediately, before
+ * only when it is the FULL COMMIT ID the composite action's "Fetch the trust
+ * base" step published (which must equal refs/conductor/trust-base, the
+ * authority, or refs/remotes/origin/<githubBaseRef>, both read with show-ref),
+ * or is that private ref itself, or -- for an explicit trust base -- resolves
+ * to the same commit as refs/remotes/origin/<githubBaseRef>. So an ordinary
+ * pull-request run through the action returns null here, before
  * refuseTrustBaseRef's own checks -- HEAD, and the equal-tree exception from
  * issue #69/#73 -- ever run: this check is narrower than those and says
  * nothing about HEAD or about tree equality, only about whether the given ref
@@ -242,11 +368,11 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
  * request's own branch, or anything else that disagrees, is refused with both
  * refs and both commits named.
  *
- * FAILS CLOSED when origin/<githubBaseRef> itself does not resolve, naming
- * it: reachable on the default actions/checkout (fetch-depth: 1), which does
- * not carry the base branch at all. The README already asks for
- * fetch-depth: 0, and a checkout that does not carry the base branch is not a
- * reason to skip the comparison.
+ * FAILS CLOSED when neither the private ref nor refs/remotes/origin/
+ * <githubBaseRef> exists, naming them: reachable through the CLI on the
+ * default actions/checkout (fetch-depth: 1), which does not carry the base
+ * branch at all. The README already asks for fetch-depth: 0, and a checkout
+ * that does not carry the base branch is not a reason to skip the comparison.
  *
  * When the GIVEN ref does not resolve at all, this returns null rather than
  * refusing: refuseTrustBaseRef is the function with its own sentence for an
@@ -265,13 +391,81 @@ export function refuseTrustBaseForPullRequest(
     return null;
   }
 
-  const expectedRef = `origin/${githubBaseRef}`;
+  const dashed = refuseDashLeadingRef(ref);
+  if (dashed !== null) {
+    return dashed;
+  }
+
+  const ambiguous = refuseAmbiguousRef(repoRoot, ref);
+  if (ambiguous !== null) {
+    return ambiguous;
+  }
+
+  // SPELLED IN FULL, and read with show-ref (resolveRev does that for every
+  // refs/ name): a short origin/<base> would resolve through
+  // refs/tags/origin/<base> first, and a refs/ name through a tag of that
+  // name when the ref is absent.
+  const expectedRef = `refs/remotes/origin/${githubBaseRef}`;
   const expectedCommit = resolveRev(repoRoot, expectedRef, 'commit');
+  const privateCommit = resolveRev(repoRoot, PRIVATE_TRUST_BASE_REF, 'commit');
+
+  // THE ACTION PASSES A FULL COMMIT ID, never a ref name (a full object id is
+  // not subject to name resolution). It is accepted only when it IS the
+  // private ref's commit (the authority, fetched and verified by the action's
+  // fetch step) or, ONLY when the private ref does not exist, the commit of
+  // refs/remotes/origin/<base> (both read with show-ref).
+  if (isFullObjectId(ref)) {
+    const given = resolveRev(repoRoot, ref, 'commit');
+    if (given === null) {
+      return null;
+    }
+    // The private ref is the ONLY acceptable answer when it exists: pull-request
+    // code can move refs/remotes/origin/<base>, so an id that matches only that
+    // ref is the attack, not a second answer. The remote-tracking ref is the
+    // reference only when the private ref is absent.
+    if (privateCommit !== null ? given === privateCommit : given === expectedCommit) {
+      return null;
+    }
+    if (privateCommit === null && expectedCommit === null) {
+      return (
+        `cannot verify "${ref}" as the trust base: neither ${PRIVATE_TRUST_BASE_REF} (the ` +
+        `composite action's fetch of the base branch) nor "${expectedRef}" exists in this ` +
+        'repository, so there is nothing to compare it against. Nothing was checked. In CI, fetch ' +
+        'the base branch (actions/checkout with fetch-depth: 0) before running the gates.'
+      );
+    }
+    return (
+      `refusing "${ref}" as the trust base: GITHUB_BASE_REF is set to "${githubBaseRef}", so this ` +
+      'run is a pull request, and on a pull request the trust base must be the base branch and ' +
+      `nothing else. It equals neither ${PRIVATE_TRUST_BASE_REF} (${privateCommit ?? 'absent'}) ` +
+      `nor ${expectedRef} (${expectedCommit ?? 'absent'}). Nothing was checked.`
+    );
+  }
+
+  // THE PRIVATE REF IS THE AUTHORITY, and nothing reads
+  // refs/remotes/origin/<base> for trust. That ref is fixed at checkout time
+  // and is the side pull-request code can move, while the private ref is
+  // fetched later by the action: comparing them adds a false refusal whenever
+  // the base branch advances in between, and no protection. Only an explicit
+  // trust base (below) has the remote-tracking ref as its one reference.
+  if (ref === PRIVATE_TRUST_BASE_REF) {
+    if (privateCommit !== null) {
+      return null;
+    }
+    return (
+      `refusing "${ref}" as the trust base: no such ref exists in this repository (a tag or ` +
+      'branch of that name does not count: only the exact ref the action fetched does). The ' +
+      'action\'s fetch of the base branch did not run or did not succeed. Nothing was checked.'
+    );
+  }
+
   if (expectedCommit === null) {
     return (
       `cannot verify "${ref}" as the trust base: "${expectedRef}" does not resolve to a commit ` +
-      'in this repository, so there is nothing to compare it against. Nothing was checked. In ' +
-      'CI, fetch the base branch (actions/checkout with fetch-depth: 0) before running the gates.'
+      `in this repository, so there is nothing to compare it against, and only ` +
+      `${PRIVATE_TRUST_BASE_REF} (fetched by the composite action) is accepted without it. ` +
+      'Nothing was checked. In CI, fetch the base branch (actions/checkout with ' +
+      'fetch-depth: 0) before running the gates.'
     );
   }
 
@@ -280,6 +474,9 @@ export function refuseTrustBaseForPullRequest(
     return null;
   }
 
+  // A NAMED explicit trust base may equal refs/remotes/origin/<base> even
+  // while the private ref exists: the full-id rule above applies to the
+  // action's own id, not to a name the caller typed.
   if (givenCommit === expectedCommit) {
     return null;
   }
@@ -288,7 +485,8 @@ export function refuseTrustBaseForPullRequest(
     `refusing "${ref}" as the trust base: GITHUB_BASE_REF is set to "${githubBaseRef}", so this ` +
     'run is a pull request, and on a pull request the trust base must be the base branch and ' +
     `nothing else. "${ref}" resolves to ${givenCommit}, and "${expectedRef}" resolves to ` +
-    `${expectedCommit}, a different commit. Pass ${expectedRef} instead. Nothing was checked.`
+    `${expectedCommit}, a different commit: something moved one of them, so neither can be ` +
+    `trusted. Pass ${expectedRef} or ${PRIVATE_TRUST_BASE_REF} instead. Nothing was checked.`
   );
 }
 
@@ -302,7 +500,10 @@ export function refuseTrustBaseForPullRequest(
  * be from somewhere else.
  */
 export function readPolicyAtRef(repoRoot: string, ref: string): string | null {
-  const child = spawnSync('git', ['show', `${ref}:./${POLICY_FILE_NAME}`], {
+  if (ref.startsWith('-')) {
+    return null;
+  }
+  const child = spawnSync('git', ['show', '--end-of-options', `${ref}:./${POLICY_FILE_NAME}`], {
     cwd: repoRoot,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
@@ -361,7 +562,10 @@ export function treeEntryAt(
   ref: string,
   relativePath: string
 ): { mode: string; type: string; sha: string } | null {
-  const child = spawnSync('git', ['ls-tree', ref, '--', `./${relativePath}`], {
+  if (ref.startsWith('-')) {
+    return null;
+  }
+  const child = spawnSync('git', ['ls-tree', '--end-of-options', ref, '--', `./${relativePath}`], {
     cwd: repoRoot,
     encoding: 'utf8',
   });

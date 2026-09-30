@@ -18,6 +18,8 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { PRIVATE_TRUST_BASE_REF, exactRefObject, refuseAmbiguousRef } from './trust-base.js';
+
 export interface BaseResolution {
   ref: string;
   /** Which input named it, so the report can say. */
@@ -47,6 +49,88 @@ export function resolveBaseRef(options: {
     return { ref: `origin/${fromGithub}`, source: 'github' };
   }
   return null;
+}
+
+export type ResolvedBase =
+  | { ok: true; base: BaseResolution | null }
+  | { ok: false; detail: string };
+
+/**
+ * The base to diff against, resolved against the repository and always
+ * spelled so a tag cannot shadow it (the same class as the trust base: git
+ * resolves a short origin/<base> through refs/tags/ first, so a tag at
+ * HEAD~1 would narrow the change set to the last commit).
+ *
+ *  - An explicit --base keeps its meaning, but a short name that matches
+ *    more than one kind of ref is refused (refuseAmbiguousRef).
+ *  - Otherwise, on a pull request: refs/conductor/trust-base (the composite
+ *    action's private fetch) when it exists, else refs/remotes/origin/<base>,
+ *    both in full. The private ref wins and is not compared against the
+ *    remote-tracking ref. If neither exists the spelled remote ref is returned and the
+ *    diff fails closed, naming fetch-depth: 0.
+ *  - Null outside a pull request.
+ *
+ * Nothing is deepened here: a depth-1 private ref has no merge base and the
+ * diff fails closed, the same outcome as a depth-1 origin/<base> always had.
+ */
+export function resolveBaseRefInRepo(
+  repoRoot: string,
+  options: { base?: string; env: NodeJS.ProcessEnv }
+): ResolvedBase {
+  if (options.base !== undefined && options.base !== '') {
+    // A base that starts with a dash is an OPTION to git, not a ref:
+    // "--output=/x" made "git diff --output=/x...HEAD" write that file and
+    // print nothing, an empty change set the intent gate then judged as clean.
+    // Refused here, and changedPathsSince passes --end-of-options as well.
+    if (options.base.startsWith('-')) {
+      return {
+        ok: false,
+        detail:
+          `refusing "${options.base}" as the intent gate base: it starts with a dash, so git would ` +
+          'read it as an option rather than a ref. Nothing was checked.',
+      };
+    }
+    const ambiguous = refuseAmbiguousRef(repoRoot, options.base, 'the intent gate base');
+    if (ambiguous !== null) {
+      return { ok: false, detail: ambiguous };
+    }
+    // A refs/ name is checked with show-ref: git's name resolution would
+    // otherwise fall back to refs/tags/<that name> when the ref is absent.
+    if (options.base.startsWith('refs/') && exactRefObject(repoRoot, options.base) === null) {
+      return {
+        ok: false,
+        detail:
+          `refusing "${options.base}" as the intent gate base: no such ref exists in this ` +
+          'repository (a tag of that name does not count). Nothing was checked.',
+      };
+    }
+    return { ok: true, base: { ref: options.base, source: 'flag' } };
+  }
+  const fromGithub = options.env.GITHUB_BASE_REF;
+  if (fromGithub === undefined || fromGithub === '') {
+    return { ok: true, base: null };
+  }
+  const remoteRef = `refs/remotes/origin/${fromGithub}`;
+  // The private ref is the authority when it exists; refs/remotes/origin/<base>
+  // is fixed at checkout time, is the side pull-request code can move, and is
+  // not compared against it (a merge to the base in between would be a false
+  // refusal). It is the base only when the private ref is absent. Both are
+  // read with show-ref (the EXACT ref, never git's name resolution, which
+  // would take a tag of that name) and the base handed on is the commit id.
+  const priv = exactRefObject(repoRoot, PRIVATE_TRUST_BASE_REF);
+  const remote = exactRefObject(repoRoot, remoteRef);
+  const chosen = priv ?? remote;
+  if (chosen === null) {
+    return {
+      ok: false,
+      detail:
+        `neither ${PRIVATE_TRUST_BASE_REF} (the composite action's fetch of the base branch) nor ` +
+        `${remoteRef} exists in this repository, so there is no base to measure the intent gate ` +
+        'against. Nothing was checked. In CI, check out with fetch-depth: 0, or fetch the base ' +
+        'ref before the run.',
+    };
+  }
+  return { ok: true, base: { ref: chosen, source: 'github' } };
 }
 
 /**
@@ -100,7 +184,15 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
       'core.quotePath=false',
       'diff',
       '--name-only',
+      // NUL-terminated, so a name with a quote, a backslash, a tab or a
+      // newline arrives byte for byte instead of C-quoted ("a\"b.txt"), which
+      // names no file and which intent-guard refuses outright (backslash).
+      '-z',
       '--no-renames',
+      // Everything after this is a revision, never an option, whatever the
+      // caller-given base looks like (the second line of defence behind the
+      // dash refusal in resolveBaseRefInRepo).
+      '--end-of-options',
       `${base}...HEAD`,
     ],
     { cwd: repoRoot, encoding: 'utf8' }
@@ -124,11 +216,11 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
     };
   }
 
-  // Split on newlines and NOTHING else. Trimming each line was corrupting a
+  // Split on NUL and NOTHING else. Trimming each entry was corrupting a
   // filename with leading or trailing whitespace into a different filename,
   // which is worse than refusing it: the gate would then check a path that
   // does not exist and never check the one that changed.
-  const paths = (child.stdout ?? '').split('\n').filter((line) => line.length > 0);
+  const paths = (child.stdout ?? '').split('\0').filter((line) => line.length > 0);
 
   for (const entry of paths) {
     // Fail closed rather than hand over a path the encoding cannot carry.
@@ -144,6 +236,21 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
           `the changed path "${entry}" contains a comma, and the intent gate takes its ` +
           'path list comma-joined, so it cannot be passed without splitting into two paths. ' +
           'Nothing was checked, rather than checking a path that does not exist.',
+      };
+    }
+    // intent-guard refuses ANY explicit --paths entry containing a backslash
+    // (skill/src/changed-paths.ts, explicitPathIssue: "it contains a
+    // backslash"), and exits 2 with a message that names the flag rather than
+    // the file. Said here instead, naming the file. A newline, tab or quote
+    // inside a path is accepted by intent-guard (it splits on commas only) and
+    // passes through intact.
+    if (entry.includes('\\')) {
+      return {
+        ok: false,
+        detail:
+          `the changed path "${entry}" contains a backslash, and intent-guard refuses an explicit ` +
+          'path list entry with one (--paths), so it cannot judge this change. Nothing was ' +
+          'checked. Rename the file, or run the intent gate against the index instead.',
       };
     }
     if (entry !== entry.trim()) {
