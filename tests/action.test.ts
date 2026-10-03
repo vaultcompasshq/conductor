@@ -2262,6 +2262,15 @@ describe('action.yml: the wording of a failed signature audit', () => {
   });
 });
 
+describe('action.yml: the pins handed to conductor for the PATH version-skew warning', () => {
+  it('passes each gate pin to the gates step by the names conductor reads', () => {
+    const env = stepEnv('gates');
+    expect(env['CONDUCTOR_EXPECTED_DEP_GUARD_VERSION']).toBe('${{ inputs.dep-guard-version }}');
+    expect(env['CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION']).toBe('${{ inputs.vault-guard-version }}');
+    expect(env['CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION']).toBe('${{ inputs.intent-guard-version }}');
+  });
+});
+
 describe('action.yml: a backward pin refusal leads with what happened, then the fix', () => {
   it('names the input and both versions first and ends the first line on the fix', () => {
     const prefix = TAG_CONSTANTS[VERSION_INPUTS[0]];

@@ -530,6 +530,29 @@ export function gateLogLines(result: RunResult): string[] {
 }
 
 /**
+ * One warning per gate that was found on PATH at a version other than the one
+ * this run expected (the Action's pin).
+ *
+ * For the job log only: it names where the binary was found, and an absolute
+ * path has no business in a published SARIF log or a pull request comment, so
+ * this is never part of either report. A warning and nothing more. Resolution
+ * is unchanged and the gate ran (or was refused) exactly as it would have
+ * without it.
+ */
+export function versionSkewWarnings(result: RunResult): string[] {
+  return result.gates.flatMap((gate) =>
+    gate.versionSkew === undefined
+      ? []
+      : [
+          `conductor: warning: ${gate.product} resolved from PATH reports version ${gate.versionSkew.found}, ` +
+            `but this run expects ${gate.versionSkew.expected} (the version the action pinned). ` +
+            `It was found at ${gate.versionSkew.path}. Resolution is unchanged and that binary was used. ` +
+            `Fix: remove the other ${gate.product} from PATH, or install ${gate.versionSkew.expected}.`,
+        ]
+  );
+}
+
+/**
  * How many blocking findings one gate that RAN is carrying, for the token.
  *
  * A gate that exited non-zero with nothing on screen marked blocking (the

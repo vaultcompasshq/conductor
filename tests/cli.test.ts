@@ -2874,3 +2874,38 @@ describe('the per-gate job log lines on stderr', () => {
     );
   });
 });
+
+describe('the PATH version-skew warning', () => {
+  function stubbed(vaultVersion: string): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: vaultVersion });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+    return bin;
+  }
+  const EXPECTED = {
+    CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.0',
+    CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: '1.9.0',
+    CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: '1.8.0',
+  };
+
+  it('names both versions and where the binary was found, and changes nothing else', () => {
+    const bin = stubbed('1.8.5');
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin, { env: EXPECTED });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('conductor: warning: vault-guard resolved from PATH reports version 1.8.5');
+    expect(result.stderr).toContain('expects 1.9.0');
+    expect(result.stderr).toContain(path.join(bin, 'vault-guard'));
+    expect(result.stderr).not.toContain('warning: dep-guard');
+    expect(result.stdout).toMatch(/clean, nothing blocked/);
+  });
+
+  it('says nothing when the versions match, or when nothing says what to expect', () => {
+    const matching = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.9.0'), { env: EXPECTED });
+    const unset = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.8.5'));
+
+    expect(matching.stderr).not.toContain('warning:');
+    expect(unset.stderr).not.toContain('warning:');
+  });
+});

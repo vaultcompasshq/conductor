@@ -462,6 +462,28 @@ function splitOnTreeUnchanged(
   return { toRun, treeUnchanged };
 }
 
+/**
+ * The environment variables the Action sets to say which version of each
+ * family gate it pinned, read only to warn when a gate resolved from PATH
+ * reports a different one. Not a control input: nothing about resolution or
+ * the verdict reads them, so a run that sets them wrongly gets a wrong warning
+ * and nothing else.
+ */
+const EXPECTED_VERSION_ENV: Partial<Record<Product, string>> = {
+  'dep-guard': 'CONDUCTOR_EXPECTED_DEP_GUARD_VERSION',
+  'vault-guard': 'CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION',
+  'intent-guard': 'CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION',
+};
+
+/** The `expectedVersion` option for one gate, or nothing. Exact versions only. */
+function expectedVersionOption(product: Product, env: NodeJS.ProcessEnv): { expectedVersion?: string } {
+  const name = EXPECTED_VERSION_ENV[product];
+  const value = name === undefined ? undefined : env[name];
+  return value !== undefined && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value)
+    ? { expectedVersion: value }
+    : {};
+}
+
 export function runAll(policy: Policy, options: RunOptions): RunResult {
   const { gates: partitioned, deferred, excluded } = partitionGates(policy, options.stage);
   const { toRun: gates, treeUnchanged } = splitOnTreeUnchanged(partitioned, options.trustBase);
@@ -550,6 +572,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           pathValue: options.pathValue,
           ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
           ...(intent === undefined ? {} : { intent }),
+          ...expectedVersionOption(gate.product, env),
           // For a run with no preparation: which contract the child will read
           // out of the repository itself. Looked up only for the gate it is
           // about, so no other gate pays for the two stat calls.

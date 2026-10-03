@@ -278,7 +278,10 @@ runs:
         # vaultcompasshq/conductor at a tag. A LOCAL-PATH reference instead,
         # the ./ form, reads action.yml out of the pull request's OWN tree, so
         # these constants are author-controlled there and this rule protects
-        # nothing.
+        # nothing. This repository's own .github/workflows/self-check.yml is
+        # the one workflow that references the action with ./ (advisory, a
+        # read-only token, no secrets), and a test holds it to being the only
+        # one.
         TAG_CONDUCTOR_MAJOR=0
         TAG_CONDUCTOR_MINOR=8
         TAG_CONDUCTOR_PATCH=0
@@ -896,6 +899,14 @@ runs:
         OUTPUT: ${{ inputs.output }}
         WORKDIR: ${{ inputs.working-directory }}
         ADVISORY: ${{ inputs.advisory }}
+        # The versions this action pinned for the three gates, handed to
+        # conductor ONLY so it can warn when a gate it resolved from PATH
+        # reports a different version (some other install earlier on PATH).
+        # A warning and nothing else: conductor reads these for no decision,
+        # resolution is unchanged, and a wrong value gets a wrong warning.
+        CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
+        CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: ${{ inputs.vault-guard-version }}
+        CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: ${{ inputs.intent-guard-version }}
         # Where the text report of the same run goes, under the runner temp:
         # outside the workspace, so the tree being judged can neither
         # pre-place nor read it.

@@ -394,9 +394,23 @@ export interface GateOutcome {
    * nowhere. Repository-relative because it reaches a published log.
    */
   nodeModulesSkipped?: string;
+  /**
+   * Present only when this gate was resolved from PATH, the version it
+   * reported differs from the one the run was told to expect (the Action's
+   * pin, handed over as an environment variable), and both are known. A
+   * statement for a warning, never an input to a decision: resolution,
+   * trust-base handling and the exit code are all settled without it.
+   */
+  versionSkew?: { expected: string; found: string; path: string };
 }
 
 export interface RunGateOptions {
+  /**
+   * The version this run expects of the gate, when something says so (the
+   * Action passes its pin). Compared with what the PATH binary reports, for a
+   * warning only. Absent means no expectation, which is every local run.
+   */
+  expectedVersion?: string;
   repoRoot: string;
   staged: boolean;
   /** PATH to search. Injected so tests never depend on the machine. */
@@ -1063,6 +1077,20 @@ function runGateInner(
   }
 
   const version = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);
+
+  // A PATH binary at a different version than the run was told to expect: a
+  // fact for a warning and nothing else. It sits on `progress` (which `base`
+  // is) so every outcome from here on carries it, and no branch below reads it.
+  if (
+    options.expectedVersion !== undefined &&
+    version !== null &&
+    binary.source === 'path' &&
+    version !== options.expectedVersion
+  ) {
+    Object.assign(progress, {
+      versionSkew: { expected: options.expectedVersion, found: version, path: binary.program },
+    });
+  }
 
   // The command-line floor. Only the external tools have one: the umbrella
   // writes flags they grew at a known release (gitleaks' git subcommand,

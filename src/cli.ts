@@ -31,7 +31,13 @@ import {
   revertInit,
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
-import { gateLogLines, jobLogSummary, renderText, verdictToken } from './output-text.js';
+import {
+  gateLogLines,
+  jobLogSummary,
+  renderText,
+  verdictToken,
+  versionSkewWarnings,
+} from './output-text.js';
 import {
   GATE_ROLES,
   GATE_STAGES,
@@ -745,7 +751,7 @@ export function buildProgram(): Command {
         // Written after the report file, so a failure above still takes the
         // catch below and these lines never describe a run that then exits 2
         // for an unwritable file.
-        const logLines = gateLogLines(result);
+        const logLines = [...gateLogLines(result), ...versionSkewWarnings(result)];
         if (logLines.length > 0) {
           process.stderr.write(`${logLines.join('\n')}\n`);
         }
