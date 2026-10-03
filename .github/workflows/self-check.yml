@@ -12,6 +12,10 @@ name: Self-check
 # no secrets, and judges this repository's own changes. Every consumer should
 # name the action by owner and tag instead (see the README).
 #
+# What it runs is the PUBLISHED conductor version from the action's own
+# default (the conductor-version input), against this repository's pull
+# requests. It does not build or run the pull request's own src.
+#
 # The policy it reads is .guardrails.yaml on the BASE branch, so the first pull
 # request that introduces that file has no policy to read and the run reports
 # could-not-run, once.
@@ -33,6 +37,7 @@ jobs:
         # History gates need the whole history, and the base branch has to be
         # in the checkout (see the README on fetch-depth).
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Setup Node.js
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0

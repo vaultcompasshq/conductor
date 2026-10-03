@@ -344,7 +344,7 @@ A gate that exits outside its product's clean and blocked codes (above 1,
 for the three family gates), or does not exit normally at all because it was
 killed or timed out, is could-not-run (src/gate-runner.ts:1347-1365). A gate
 that exits 1 with stdout that will not parse as JSON is could-not-run
-(src/gate-runner.ts:1417-1435). Reporting the second as a policy violation
+(the `normalizeUnparseableGate` return in `spawnAndRead`, src/gate-runner.ts). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
 What the gate itself said rides along on the could-not-run result as
@@ -356,7 +356,8 @@ by tests/gate-runner.test.ts:1266 ("carries the first stderr line of an exit 2
 gate as a bounded, sanitised excerpt"), 1287 ("falls back to a reason field in
 stdout JSON when stderr is empty, and never changes the exit 2") and 1306
 ("carries no excerpt, and does not throw, when an exit 2 gate printed nothing
-usable").
+usable"). The excerpt is also written to the job log on stderr in the per-gate
+log line, cleaned and capped.
 
 Pinned by tests/gate-runner.test.ts:241 ("treats exit 2 as could-not-run
 rather than as a policy violation") and 251 ("treats exit 1 with
@@ -1804,7 +1805,7 @@ neither changes behaviour.
   withheld (src/gate-runner.ts:1105-1106, the same `trustBase.withheld !==
   null` check that blanks the ref passed to `gateArgs`), including when
   dep-guard is older than 0.6.0, the version floor `TRUST_BASE_MIN_VERSION`
-  sets for `--trust-base` (src/gate-runner.ts:130-147). This is broader than
+  sets for `--trust-base` (the `TRUST_BASE_MIN_VERSION` constant in src/gate-runner.ts). This is broader than
   `--base` itself needs: unlike `--trust-base`, dep-guard's `--base` has
   been part of its CLI since the first published version, with no version
   floor of its own, so every dep-guard version this umbrella can run
@@ -3709,8 +3710,9 @@ comment.
 **The audit's failure carries its reason.** action.yml:675-726 captures the
 audit through a command substitution, writes `verification-failed` and
 `verification-reason` to the step outputs, prints a workflow error naming
-that no gate ran, which audit failed over which four packages, and what to do
-next (re-run once; treat a repeat as real), and then exits non-zero. Fail-closed is unchanged: the
+that no gate ran, which audit failed (over the installed tree), and what to do
+next (the step already retried once; re-run the job once and treat a repeat as
+real), and then exits non-zero. Fail-closed is unchanged: the
 exit is still non-zero and the gates step still does not run. Pinned by
 "records why signature verification failed and still exits non-zero" in
 tests/action.test.ts, which strips trailing comments as well as whole-line

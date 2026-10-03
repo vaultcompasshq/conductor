@@ -22,7 +22,7 @@ interface Step {
 interface Workflow {
   on: unknown;
   permissions?: Record<string, string>;
-  jobs: Record<string, { permissions?: Record<string, string>; steps: Step[] }>;
+  jobs: Record<string, { permissions?: Record<string, string>; steps?: Step[] }>;
 }
 
 function load(file: string): { text: string; workflow: Workflow } {
@@ -32,7 +32,7 @@ function load(file: string): { text: string; workflow: Workflow } {
 
 describe('the self-check workflow', () => {
   const { text, workflow } = load('self-check.yml');
-  const steps = Object.values(workflow.jobs).flatMap((job) => job.steps);
+  const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? []);
 
   it('runs on pull_request only, with a read-only token and no secrets', () => {
     expect(workflow.on).toEqual({ pull_request: null });
@@ -57,14 +57,14 @@ describe('the self-check workflow', () => {
     expect(local).toHaveLength(1);
     expect(local[0]?.with).toEqual({ advisory: 'true' });
     const checkout = steps.find((step) => step.uses?.startsWith('actions/checkout@'));
-    expect(checkout?.with).toEqual({ 'fetch-depth': 0 });
+    expect(checkout?.with).toEqual({ 'fetch-depth': 0, 'persist-credentials': false });
   });
 
   it('is the only workflow that references the action with ./', () => {
     for (const file of readdirSync(WORKFLOWS)) {
       const { workflow: other } = load(file);
       const local = Object.values(other.jobs)
-        .flatMap((job) => job.steps)
+        .flatMap((job) => job.steps ?? [])
         .filter((step) => step.uses === './');
       expect([file, local.length]).toEqual([file, file === 'self-check.yml' ? 1 : 0]);
     }

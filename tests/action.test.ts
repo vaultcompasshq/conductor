@@ -2244,21 +2244,25 @@ describe('action.yml: the verdict token from the gates step', () => {
 });
 
 describe('action.yml: the wording of a failed signature audit', () => {
-  it('names the audit and the four packages, says what to do next, and still fails closed', () => {
+  it('names the audit, says what to do next, and still fails closed', () => {
     const run = runInstall({}, '10.9.2', 2);
     const errors = run.stderr.split('\n').filter((l) => l.startsWith('::error::conductor: could not verify'));
 
     expect(run.status).toBe(12);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('npm audit signatures');
-    for (const name of ['conductor', 'dep-guard', 'vault-guard', 'intent-guard']) {
-      expect(errors[0]).toContain(name);
-    }
-    expect(errors[0]).toContain('re-run this job once');
-    expect(errors[0]).toContain('treat it as real');
+    expect(errors[0]).toContain('installed gate packages and their dependencies');
+    expect(errors[0]).toContain('This step already retried once; re-run the job once, and treat a repeat as real.');
     // The reason still ends the line, and the output name is unchanged.
     expect(errors[0]).toContain('attempted twice');
     expect(run.githubOutput).toContain('verification-failed=true');
+  });
+});
+
+describe('action.yml: the trust-base fetch failure leads with what happened, then the fix', () => {
+  it('names the permission to give the job in its Fix sentence', () => {
+    const text = readFileSync(path.join(ROOT, 'action.yml'), 'utf8');
+    expect(text).toContain('could not be fetched into refs/conductor/trust-base, so there is no trust base, no gate was run and nothing was checked. Fix: give this job permissions: contents: read');
   });
 });
 
