@@ -347,6 +347,17 @@ that exits 1 with stdout that will not parse as JSON is could-not-run
 (src/gate-runner.ts:1417-1435). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
+What the gate itself said rides along on the could-not-run result as
+`couldNotRun.gateSaid`: the first non-empty stderr line, or for a gate whose
+output is JSON on stdout a string `reason` field, sanitised to ASCII and cut
+to 160 characters. It is read after the exit code has been judged, never
+changes the outcome or the exit code, and its absence is not an error. Pinned
+by tests/gate-runner.test.ts:1266 ("carries the first stderr line of an exit 2
+gate as a bounded, sanitised excerpt"), 1287 ("falls back to a reason field in
+stdout JSON when stderr is empty, and never changes the exit 2") and 1306
+("carries no excerpt, and does not throw, when an exit 2 gate printed nothing
+usable").
+
 Pinned by tests/gate-runner.test.ts:241 ("treats exit 2 as could-not-run
 rather than as a policy violation") and 251 ("treats exit 1 with
 unparseable stdout as could-not-run, the rejected-config shape"), and end
@@ -3695,10 +3706,11 @@ as well as whole-line ones. Both halves were added after a reviewer defeated
 the first version by appending the phrase to an unrelated line as a trailing
 comment.
 
-**The audit's failure carries its reason.** action.yml:673-715 captures the
+**The audit's failure carries its reason.** action.yml:675-726 captures the
 audit through a command substitution, writes `verification-failed` and
 `verification-reason` to the step outputs, prints a workflow error naming
-that no gate ran, and then exits non-zero. Fail-closed is unchanged: the
+that no gate ran, which audit failed over which four packages, and what to do
+next (re-run once; treat a repeat as real), and then exits non-zero. Fail-closed is unchanged: the
 exit is still non-zero and the gates step still does not run. Pinned by
 "records why signature verification failed and still exits non-zero" in
 tests/action.test.ts, which strips trailing comments as well as whole-line
