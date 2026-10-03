@@ -29,6 +29,17 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   re-run once for a transient registry or sigstore failure, and treat a repeat
   as real. Wording only; the audit, the single retry and the exit status are
   unchanged.
+- When a gate resolved from PATH reports a version other than the one the
+  action pinned, the job log now carries a warning naming both versions and
+  where the binary was found. The action hands its three gate pins to conductor
+  as CONDUCTOR_EXPECTED_DEP_GUARD_VERSION, CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION
+  and CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION for this and nothing else. A
+  warning only: resolution, the gate that ran and the exit code are unchanged.
+- conductor now runs its own gates on its own pull requests: a new
+  `self-check.yml` workflow runs this repository's action from the checkout
+  (`uses: ./`) in advisory mode with `fetch-depth: 0`, a read-only token and no
+  secrets, and the repository gains a `.guardrails.yaml` (dependencies and
+  secrets) for it to read from the base branch.
 - Refusal wording now leads with what happened and ends on the one fix: a pull
   request pinning a gate backward, a base branch that could not be fetched, a
   base branch missing from the checkout (intent gate), a shallow checkout for a

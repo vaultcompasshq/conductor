@@ -1,0 +1,19 @@
+version: 1
+
+# The policy conductor runs on its own pull requests (see
+# .github/workflows/self-check.yml). Two gates: dependencies and secrets. The
+# intent gate is left off because this repository keeps no frozen contract.
+gates:
+  dependencies:
+    product: dep-guard
+    enabled: true
+    stage: commit
+    enforce: true
+  secrets:
+    product: vault-guard
+    enabled: true
+    stage: commit
+    enforce: true
+  intent:
+    product: intent-guard
+    enabled: false
