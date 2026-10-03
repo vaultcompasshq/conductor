@@ -2870,7 +2870,7 @@ describe('the per-gate job log lines on stderr', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(
-      'conductor: gate secrets (vault-guard 1.9.0): could-not-run (gate-error): INCOMPLETE: 1 file could not be read, exit 2'
+      'conductor: gate secrets (vault-guard 1.9.0): could-not-run (gate-error), exit 2, gate said: "INCOMPLETE: 1 file could not be read"'
     );
   });
 });
@@ -2907,5 +2907,31 @@ describe('the PATH version-skew warning', () => {
 
     expect(matching.stderr).not.toContain('warning:');
     expect(unset.stderr).not.toContain('warning:');
+  });
+
+  it('ignores an expected version that is not an exact x.y.z', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.8.5'), {
+      env: { ...EXPECTED, CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: 'latest' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain('warning:');
+  });
+});
+
+describe('the per-gate log lines when the report cannot be written', () => {
+  it('prints none: the run exits 2 on the write failure before the lines are written', () => {
+    // Pinned as the code behaves: the lines are written after the report, so a
+    // run that fails on writing it reports only the one-line error.
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.9.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+    const missingDir = path.join(tempDir(), 'no-such-dir', 'out.sarif');
+
+    const result = runCli(repoWithPolicy(), ['run', '--staged', '--format', 'sarif', '--output', missingDir], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).not.toContain('conductor: gate ');
   });
 });

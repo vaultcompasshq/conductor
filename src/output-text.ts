@@ -24,7 +24,7 @@
 
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN } from './exit-codes.js';
-import type { GateOutcome } from './gate-runner.js';
+import { type GateOutcome, cleanOutputLine } from './gate-runner.js';
 import { isLegacyContractPath } from './intent-prepare.js';
 import type { RunResult } from './run.js';
 
@@ -137,11 +137,11 @@ function gateSection(gate: GateOutcome): string[] {
   if (gate.couldNotRun !== null) {
     lines.push(`    ${gate.couldNotRun.detail}`);
     if (gate.couldNotRun.gateSaid !== undefined) {
-      lines.push(`    the gate said: ${gate.couldNotRun.gateSaid}`);
+      lines.push(`    gate said: "${gate.couldNotRun.gateSaid}"`);
     }
     if (gate.stderr.trim().length > 0) {
       for (const line of gate.stderr.trim().split('\n')) {
-        lines.push(`    | ${line}`);
+        lines.push(`    | ${cleanOutputLine(line)}`);
       }
     }
   }
@@ -496,11 +496,10 @@ export function gateLogLines(result: RunResult): string[] {
     let outcome: string;
     if (gate.couldNotRun !== null) {
       const reason = gate.couldNotRun.reason;
-      const said = gate.couldNotRun.gateSaid === undefined ? '' : `: ${gate.couldNotRun.gateSaid}`;
       outcome =
         reason === 'binary-missing' || reason === 'configured-command-missing'
           ? `missing (${reason})`
-          : `could-not-run (${reason})${said}`;
+          : `could-not-run (${reason})`;
     } else {
       const total = gate.findings.length;
       const blocking = gate.findings.filter((finding) => finding.blocking).length;
@@ -509,7 +508,8 @@ export function gateLogLines(result: RunResult): string[] {
     }
     lines.push(
       `conductor: gate ${gate.role} (${gate.product} ${version}): ${outcome}, ${exit}` +
-        (gate.enforce ? '' : ', not enforced')
+        (gate.enforce ? '' : ', not enforced') +
+        (gate.couldNotRun?.gateSaid === undefined ? '' : `, gate said: "${gate.couldNotRun.gateSaid}"`)
     );
   }
   const notRun = (role: string, product: string, why: string): string =>

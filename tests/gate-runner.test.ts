@@ -1318,3 +1318,144 @@ describe('what a gate says when it could not run', () => {
     expect(outcome.couldNotRun?.gateSaid).toBeUndefined();
   });
 });
+
+describe('the gate stated reason, continued', () => {
+  const vault = () => gate({ role: 'secrets', product: 'vault-guard' });
+
+  it('breaks up workflow-command markers, stays one line and stays capped', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', {
+      stdout: '',
+      stderr: `##[error]x ::add-mask::x ###[y :::z "quoted" ${'::'.repeat(200)}\nnext\n`,
+      exit: 2,
+    });
+
+    const said = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin }).couldNotRun?.gateSaid ?? '';
+
+    expect(said).toContain('error');
+    expect(said).toContain('add-mask');
+    expect(said).not.toContain('##[');
+    expect(said).not.toContain('::');
+    expect(said).not.toContain('"');
+    expect(said).not.toContain('\n');
+    expect(said.length).toBeLessThanOrEqual(GATE_SAID_MAX_CHARS);
+  });
+
+  it('breaks markers in a reason read from stdout JSON as well', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: JSON.stringify({ reason: '::warning::a ##[error]b' }), stderr: '', exit: 2 });
+
+    const said = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin }).couldNotRun?.gateSaid ?? '';
+
+    expect(said).not.toContain('##[');
+    expect(said).not.toContain('::');
+  });
+
+  it('reads a top-level reason and a run.reason alike', () => {
+    const top = tempDir();
+    stubGate(top, 'vault-guard', { stdout: JSON.stringify({ reason: 'top reason' }), stderr: '', exit: 2 });
+    const nested = tempDir();
+    stubGate(nested, 'vault-guard', { stdout: JSON.stringify({ run: { reason: 'nested reason' } }), stderr: '', exit: 2 });
+
+    expect(runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: top }).couldNotRun?.gateSaid).toBe('top reason');
+    expect(runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: nested }).couldNotRun?.gateSaid).toBe('nested reason');
+  });
+
+  it('is not taken from stdout for a gate whose output is a report file', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      exit: 2,
+      stdout: JSON.stringify({ reason: 'from stdout' }),
+      stderr: '',
+    });
+
+    const out = runGate(gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci' }), {
+      repoRoot: tempGitRepo(),
+      staged: false,
+      pathValue: bin,
+      tempRoot: tempDir(),
+    });
+
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.couldNotRun?.gateSaid).toBeUndefined();
+  });
+
+  it('carries none when the gate timed out', () => {
+    const bin = tempDir();
+    const file = path.join(bin, 'vault-guard');
+    writeFileSync(
+      file,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.9.0; exit 0; fi\necho stated-reason >&2\n/bin/sleep 5\n'
+    );
+    chmodSync(file, 0o755);
+
+    const out = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin, timeoutMs: 300 });
+
+    expect(out.exitCode).toBeNull();
+    expect(out.couldNotRun).not.toBeNull();
+    expect(out.couldNotRun?.gateSaid).toBeUndefined();
+  });
+
+  it('never reaches the findings or their fingerprints', () => {
+    const run = (reason: string) => {
+      const bin = tempDir();
+      stubGate(bin, 'vault-guard', { stdout: JSON.stringify({ reason }), stderr: '', exit: 2 });
+      return runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin });
+    };
+    const first = run('first distinctive reason');
+    const second = run('second distinctive reason');
+
+    expect(first.couldNotRun?.gateSaid).toBe('first distinctive reason');
+    expect(JSON.stringify(first.findings)).not.toContain('distinctive');
+    expect(JSON.stringify(first.findings)).toBe(JSON.stringify(second.findings));
+  });
+
+  it('records no version skew for a gate that was not found, and none when versions agree', () => {
+    const missing = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: tempDir(), expectedVersion: '1.9.0' });
+    expect(missing.couldNotRun?.reason).toBe('binary-missing');
+    expect(missing.versionSkew).toBeUndefined();
+
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: '', exit: 2, version: '1.9.0' });
+    const same = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin, expectedVersion: '1.9.0' });
+    expect(same.versionSkew).toBeUndefined();
+  });
+});
+
+describe('the wording of the reworded refusals', () => {
+  it('tells a shallow checkout what to do, in the Fix sentence', () => {
+    const repo = tempGitRepo();
+    const source = tempDir();
+    execFileSync('git', ['clone', '--quiet', '--depth=1', `file://${repo}`, source]);
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', exit: 0, stdout: '' });
+
+    const out = runGate(gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci' }), {
+      repoRoot: source,
+      staged: false,
+      pathValue: bin,
+      tempRoot: tempDir(),
+    });
+
+    expect(out.couldNotRun?.reason).toBe('history-shallow');
+    expect(out.couldNotRun?.detail).toMatch(/^gitleaks did not run, because this checkout is shallow/);
+    expect(out.couldNotRun?.detail).toContain('Fix: check out with fetch-depth: 0');
+  });
+
+  it('tells a too-old gate which version to upgrade to, in the Fix sentence', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.18.4', exit: 0, stdout: '' });
+
+    const out = runGate(gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci' }), {
+      repoRoot: tempGitRepo(),
+      staged: false,
+      pathValue: bin,
+      tempRoot: tempDir(),
+    });
+
+    expect(out.couldNotRun?.detail).toMatch(/^gitleaks did not run: the installed 8\.18\.4 is older than 8\.19\.0, /);
+    expect(out.couldNotRun?.detail).toContain('Fix: upgrade it to 8.19.0 or later.');
+  });
+});

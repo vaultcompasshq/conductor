@@ -1808,7 +1808,7 @@ describe('the per-gate job log lines', () => {
     );
 
     expect(lines).toEqual([
-      'conductor: gate dependencies (dep-guard 0.2.0): could-not-run (gate-error): corpus unreadable, exit 2, not enforced',
+      'conductor: gate dependencies (dep-guard 0.2.0): could-not-run (gate-error), exit 2, not enforced, gate said: "corpus unreadable"',
     ]);
   });
 
@@ -1849,6 +1849,28 @@ describe('the per-gate job log lines', () => {
       )
     );
 
-    expect(text).toContain('    the gate said: corpus unreadable');
+    expect(text).toContain('    gate said: "corpus unreadable"');
+  });
+
+  it('cleans each dumped stderr line: control characters become spaces and markers are broken, content kept', () => {
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 2,
+            couldNotRun: { reason: 'gate-error', detail: 'd' },
+            stderr: 'plain line\nbell\u0007and\u001b[2Jclear ::warning::x ##[error]y\n',
+          }),
+        ],
+        2
+      )
+    );
+
+    expect(text).toContain('    | plain line');
+    expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/);
+    expect(text).not.toContain('::');
+    expect(text).not.toContain('##[');
+    expect(text).toContain('warning');
+    expect(text).toContain('error');
   });
 });

@@ -127,17 +127,47 @@ export const GATE_SAID_MAX_CHARS = 160;
  * ASCII only and one line, because the excerpt lands in a job log line, in the
  * text report and in a pull-request comment: control characters, escape
  * sequences and anything a terminal would interpret are replaced, whitespace is
- * collapsed, and the result is cut at GATE_SAID_MAX_CHARS.
+ * collapsed, workflow-command markers are broken up, double quotes become
+ * single quotes (the excerpt is shown inside double quotes), and the result is
+ * cut at GATE_SAID_MAX_CHARS.
  */
 function sanitizeGateSaid(raw: string): string | null {
-  const flat = stripAnsi(raw)
-    .replace(/[^\x20-\x7e]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const flat = breakWorkflowMarkers(
+    stripAnsi(raw)
+      .replace(/[^\x20-\x7e]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  ).replace(/"/g, "'");
   if (flat === '') {
     return null;
   }
   return flat.length > GATE_SAID_MAX_CHARS ? `${flat.slice(0, GATE_SAID_MAX_CHARS - 3)}...` : flat;
+}
+
+/**
+ * Breaks up the two character sequences a CI log reader treats as a command
+ * ("##[" and "::") by putting a space inside them, so gate-printed text stays
+ * inert in a job log. Repeated until stable, so runs such as ":::" and "###["
+ * are covered too.
+ */
+export function breakWorkflowMarkers(text: string): string {
+  let out = text;
+  for (;;) {
+    const next = out.replace(/#(?=#\[)/g, '# ').replace(/:(?=:)/g, ': ');
+    if (next === out) {
+      return out;
+    }
+    out = next;
+  }
+}
+
+/**
+ * One line of raw gate output, made safe to print: control characters (escape
+ * included) become spaces and workflow-command markers are broken up. The
+ * content is otherwise left as it was.
+ */
+export function cleanOutputLine(raw: string): string {
+  return breakWorkflowMarkers(raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' '));
 }
 
 /**
