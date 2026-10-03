@@ -381,8 +381,6 @@ a normalizer reading a property off a null array element threw a
 field they read before reading it (src/normalize.ts:52-93), and the broad
 catch is the second line of that defence rather than the only one.
 
-Pinned by tests/run.test.ts:155 ("does not throw"), tests/run.test.ts:175 ("still runs and reports the other two gates") and tests/run.test.ts:188 ("carries no stack frame anywhere in the outcome"). Those three drive a gate whose stdout fails `JSON.parse` or fails the normalizer as a `NormalizeError`, which the inner catch already turns into could-not-run. None of them throws a non-`NormalizeError` into the backstop, so removing the backstop would leave them green.
-
 ## Where the tool refuses rather than guesses
 
 The umbrella has no built-in default policy. A missing `.guardrails.yaml`
@@ -685,7 +683,7 @@ an inventory of gate names so the report can say which gates did not run.
 READS ONLY, AND NEVER INTO THE REPOSITORY: `git rev-parse`, `git show`,
 `git show-ref`, `git rev-list` and `git ls-tree`. No checkout switch, no
 worktree, no stash, no write of any kind
-(src/trust-base.ts:20-42 states the rule and names only the first two;
+(src/trust-base.ts:20-42 states the rule;
 `resolveRev` is at 167-190 and `readPolicyAtRef` at 502-515).
 An umbrella that moved somebody's HEAD to do its job would be a worse bug
 than the one it fixes.
@@ -839,7 +837,7 @@ not make, and on a machine whose working tree sits under a symlinked mount
 the link's own entry was not being vetted at all (see `withResolvedParent`,
 src/trust-base.ts:625-628). The repository root arrives realpath'd and the
 program path did not, so the link's own spelling compared as OUTSIDE the tree
-and was skipped in silence. Pinned now by tests/cli.test.ts:2737 ("refuses an in-repo symlink on its own entry, before the target matters"). The test at tests/cli.test.ts:2763 ("vets the link's own entry even where the tree root is reached through a symlink") does not put the repository under a symlinked parent. It only symlinks the program, and the refusal is because that link is untracked, so it does not pin the mount case.
+and was skipped in silence. Pinned now by tests/cli.test.ts:2737 ("refuses an in-repo symlink on its own entry, before the target matters").
 
 IT RUNS BEFORE THE VERSION PROBE, and that ordering is the whole of it: the
 probe RUNS the program (called at src/gate-runner.ts:980, after the check at
@@ -3566,8 +3564,7 @@ dash rule, since the name is visible on a public file tree either way. And
 the machine-path pattern requires two or more segments under any of four
 roots, the same rule for all four, after an earlier version used two for
 home directories and one for temporary ones and so flagged prose that
-merely named a root. The comment in scripts/check-public-hygiene.mjs still
-says exactly two; the pattern matches two or more.
+merely named a root.
 
 Pinned by scripts/tests/check-public-hygiene.test.mjs, 26 declarations and
 33 cases once the three `it.each` rows are expanded, including

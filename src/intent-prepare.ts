@@ -435,11 +435,11 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
   const { repoRoot, env } = options;
   const timeoutMs = options.timeoutMs ?? 120_000;
 
-  // The contract source is decided FIRST, before git is touched. A repository
-  // with no spec is never blocked by this gate, and that promise has to hold
-  // on a shallow checkout too: resolving the base ref first would turn a
-  // fetch-depth of 1 into exit 2 on a repository the gate was never going to
-  // check anything in.
+  // The contract source is decided FIRST, before the base ref is resolved. A
+  // repository with no spec is never blocked by this gate, and that promise
+  // has to hold on a shallow checkout too: resolving the base ref first would
+  // turn a fetch-depth of 1 into exit 2 on a repository the gate was never
+  // going to check anything in.
   const eventPath = env.GITHUB_EVENT_PATH;
   const prBody = eventPath === undefined ? null : prBodyFromEvent(eventPath);
   const branch = currentBranch(repoRoot, env);
