@@ -70,13 +70,17 @@ whether or not its contents are scanned.
 
 The citation check then reads `docs/INVARIANTS.md` and fails when a line or
 range into `src/*.ts`, `tests/*.ts`, `scripts/*.mjs` or `action.yml` runs
-past the end of that file. A quoted test name, either in parentheses after
-the citation or as `"name" in tests/...`, must be the exact title of an
-`it` or `test` in that file, and a parenthetical name must sit on a line
-inside that test. It does not judge whether the lines still describe the
-claim; that re-derivation is a docs change. The check only stops a range
-the file no longer has, or a test name the file does not contain, from
-staying green.
+past the end of that file, or starts before line 1. A follow-on number
+after a citation (`file:52, 58 and 75`, or `file:136-142 for the level, and
+1015-1020`) is checked against that same file. A quoted test name, either
+in parentheses after the citation or as `"name" in tests/...`, must be the
+exact title of a runnable `it` or `test` in that file. Every name in a list
+(`"a", "b" and "c" in tests/...`) is checked, and a parenthetical name must
+sit on a line inside that test. A skipped test (`it.skip`, or a test inside
+`describe.skip`) does not count. A form this check cannot read fails rather
+than passing: a single-quoted or backtick title, a quoted title with no
+`in`, or a path prefixed with `./`. It does not judge whether the lines
+still describe the claim; that re-derivation is a docs change.
 
 ## Commit messages
 

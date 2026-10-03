@@ -149,6 +149,115 @@ describe('citationFindings', () => {
       ])
     ).toEqual([]);
   });
+
+  it('checks every quoted title in a list, not only the last', () => {
+    const text =
+      'Pinned by "missing one", "missing two" and "present" in tests/run.test.ts.\n';
+    const findings = citationFindings(text, () => 10, DOC, () => [
+      { name: 'present', start: 1, end: 4 },
+    ]);
+    expect(findings).toEqual([
+      `${DOC}:1: tests/run.test.ts has no test named "missing one"`,
+      `${DOC}:1: tests/run.test.ts has no test named "missing two"`,
+    ]);
+  });
+
+  it('checks a follow-on line against the same file', () => {
+    const text = 'Pinned by tests/exit-codes.test.ts:2, 58, 66 and 75.\n';
+    const findings = citationFindings(text, () => 10);
+    expect(findings).toEqual([
+      `${DOC}:1: tests/exit-codes.test.ts:58 exceeds tests/exit-codes.test.ts (10 lines)`,
+      `${DOC}:1: tests/exit-codes.test.ts:66 exceeds tests/exit-codes.test.ts (10 lines)`,
+      `${DOC}:1: tests/exit-codes.test.ts:75 exceeds tests/exit-codes.test.ts (10 lines)`,
+    ]);
+  });
+
+  it('checks a follow-on range after a short phrase against the same file', () => {
+    const text = 'See src/output-sarif.ts:1-2 for the level, and 50-60 for the run.\n';
+    const findings = citationFindings(text, () => 10);
+    expect(findings).toEqual([
+      `${DOC}:1: src/output-sarif.ts:50-60 exceeds src/output-sarif.ts (10 lines)`,
+    ]);
+  });
+
+  it('rejects a title that matches only an it.skip', () => {
+    const src = "  it.skip('hidden', () => {});\n  it('shown', () => {});\n";
+    const text = 'Pinned by "hidden" in tests/run.test.ts.\n';
+    expect(citationFindings(text, () => 10, DOC, () => testDeclarations(src))).toEqual([
+      `${DOC}:1: tests/run.test.ts has no runnable test named "hidden"`,
+    ]);
+  });
+
+  it('rejects a title that matches only a test inside describe.skip', () => {
+    const src = [
+      "describe.skip('suite', () => {",
+      "  it('hidden', () => {});",
+      '});',
+      "it('shown', () => {});",
+      '',
+    ].join('\n');
+    const text = 'Pinned by "hidden" in tests/run.test.ts.\n';
+    expect(citationFindings(text, () => 10, DOC, () => testDeclarations(src))).toEqual([
+      `${DOC}:1: tests/run.test.ts has no runnable test named "hidden"`,
+    ]);
+  });
+
+  it('rejects a title whose only it( is inside a block comment', () => {
+    const src = ['/*', "  it('hidden', () => {});", '*/', ''].join('\n');
+    const text = 'Pinned by "hidden" in tests/run.test.ts.\n';
+    expect(citationFindings(text, () => 10, DOC, () => testDeclarations(src))).toEqual([
+      `${DOC}:1: tests/run.test.ts has no test named "hidden"`,
+    ]);
+  });
+
+  it('rejects a title whose only it( is inside a template literal', () => {
+    const src = ['const example = `', "  it('hidden', () => {});", '`;', ''].join('\n');
+    const text = 'Pinned by "hidden" in tests/run.test.ts.\n';
+    expect(citationFindings(text, () => 10, DOC, () => testDeclarations(src))).toEqual([
+      `${DOC}:1: tests/run.test.ts has no test named "hidden"`,
+    ]);
+  });
+
+  it('rejects line 0', () => {
+    const text = 'See src/init.ts:0.\n';
+    expect(citationFindings(text, () => 10)).toEqual([
+      `${DOC}:1: src/init.ts:0 cites a line before 1`,
+    ]);
+  });
+
+  it('rejects a quoted test title that has no "in"', () => {
+    const text = 'Pinned by "does not throw" tests/run.test.ts.\n';
+    expect(citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ])).toEqual([
+      `${DOC}:1: "does not throw" tests/run.test.ts cites a test title with no "in"`,
+    ]);
+  });
+
+  it('rejects a single-quoted test title', () => {
+    const text = "Pinned by 'does not throw' in tests/run.test.ts.\n";
+    expect(citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ])).toEqual([
+      `${DOC}:1: tests/run.test.ts is cited with a '-quoted title, which this check does not read`,
+    ]);
+  });
+
+  it('rejects a backtick-quoted test title', () => {
+    const text = 'Pinned by `does not throw` in tests/run.test.ts.\n';
+    expect(citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ])).toEqual([
+      `${DOC}:1: tests/run.test.ts is cited with a backtick-quoted title, which this check does not read`,
+    ]);
+  });
+
+  it('rejects a ./ prefixed path', () => {
+    const text = 'See ./src/cli.ts:1.\n';
+    expect(citationFindings(text, () => 10)).toEqual([
+      `${DOC}:1: ./src/cli.ts:1 is a citation form this check does not read`,
+    ]);
+  });
 });
 
 describe('testDeclarations', () => {

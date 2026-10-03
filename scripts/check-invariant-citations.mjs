@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // Fails when docs/INVARIANTS.md cites a line range past the end of a file
-// under src/, tests/ or scripts/, or past the end of action.yml. A test
-// cited by title must be that exact title in the cited file, and a line
-// cited with the title must fall inside that test. A citation is re-derived
-// by the function or test it describes; this check only catches the drift
-// that is visible without reading the claim.
+// under src/, tests/ or scripts/, or past the end of action.yml, or cites a
+// line before 1. A test cited by title must be that exact title of a
+// runnable it or test in the cited file, and a line cited with the title
+// must fall inside that test. Every name in a quoted list is checked, and
+// a bare line number that continues a citation is checked against the same
+// file. A citation form this check cannot read fails. A citation is
+// re-derived by the function or test it describes; this check only catches
+// the drift that is visible without reading the claim.
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +17,16 @@ const DOC = 'docs/INVARIANTS.md';
 const CITE =
   /(?<![\w./-])((?:src|tests)\/[A-Za-z0-9._/-]+\.ts|scripts\/[A-Za-z0-9._/-]+\.mjs|action\.yml):(\d+)(?:-(\d+))?/g;
 const TEST_FILE = /^(?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs)$/;
-const NAME_IN_FILE = / in ((?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs))/g;
+const NAME_IN_FILE = / in[ \t]*(?:\n[ \t]*)?((?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs))/g;
+const DOT_SLASH =
+  /(?<![\w.-])\.\/((?:src|tests)\/[A-Za-z0-9._/-]+\.ts|scripts\/[A-Za-z0-9._/-]+\.mjs|action\.yml):\d+(?:-\d+)?/g;
+const TITLE_WITHOUT_IN =
+  /"[^"\n]{1,400}"\s+(?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs)/g;
+const TIGHT_FOLLOW =
+  /^(?:\s*,\s*and\s+(?:by\s+)?|\s+and\s+(?:by\s+)?|\s*,\s*)(\d+)(?:-(\d+))?/;
+const FOR_THE_FOLLOW =
+  /^\s+for the [a-z][a-z ]{0,40}?,?\s+and\s+(\d+)(?:-(\d+))?/;
+const AND_BY_FOLLOW = /^,\s+[^.]{0,400}?,\s+and\s+by\s+(\d+)(?:-(\d+))?/;
 
 // The number of lines an editor shows for the text: a trailing newline ends
 // the last line rather than starting an empty one, so "a\nb\n" is two lines,
@@ -220,50 +232,103 @@ function readTitle(text, paren) {
   return out;
 }
 
+function countNewlines(text, from, to) {
+  let n = 0;
+  for (let k = from; k < to && k < text.length; k++) {
+    if (text[k] === '\n') {
+      n++;
+    }
+  }
+  return n;
+}
+
 export function testDeclarations(source) {
   const total = countLines(source);
-  const lineStarts = [0];
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] === '\n') {
-      lineStarts.push(i + 1);
-    }
-  }
+  const found = [];
+  let i = 0;
+  let line = 1;
+  let atLineStart = true;
+  let indent = 0;
 
-  function lineText(lineIdx) {
-    const from = lineStarts[lineIdx];
-    const to = lineStarts[lineIdx + 1] ?? source.length;
-    return source.slice(from, to).replace(/\n$/, '');
-  }
-
-  const boundaries = [];
-  const boundaryRe = /^(\s*)(?:it|test|describe)(?:\.(?:each|only|skip))?\s*\(/;
-  for (let lineIdx = 0; lineIdx < total; lineIdx++) {
-    const line = lineText(lineIdx);
-    if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) {
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '\n') {
+      line++;
+      atLineStart = true;
+      indent = 0;
+      i++;
       continue;
     }
-    const mark = line.match(boundaryRe);
-    if (mark) {
-      boundaries.push({ line: lineIdx + 1, indent: mark[1].length });
+    if (atLineStart && (c === ' ' || c === '\t')) {
+      indent++;
+      i++;
+      continue;
     }
+    if (c === '/' && source[i + 1] === '/') {
+      while (i < source.length && source[i] !== '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      i += 2;
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        if (source[i] === '\n') {
+          line++;
+        }
+        i++;
+      }
+      i = Math.min(source.length, i + 2);
+      atLineStart = false;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      const next = skipString(source, i);
+      line += countNewlines(source, i, next);
+      i = next;
+      atLineStart = false;
+      continue;
+    }
+    if (c === '/' && regexLikely(source, i)) {
+      const next = skipRegex(source, i);
+      line += countNewlines(source, i, next);
+      i = next;
+      atLineStart = false;
+      continue;
+    }
+    if (atLineStart) {
+      const head = source.slice(i).match(/^(it|test|describe)((?:\.(?:each|only|skip))*)\s*\(/);
+      if (head) {
+        found.push({
+          line,
+          indent,
+          kind: head[1] === 'describe' ? 'describe' : 'it',
+          skipped: head[2].includes('.skip'),
+          each: head[2].includes('.each'),
+          openParen: i + head[0].length - 1,
+        });
+        i += head[0].length;
+        atLineStart = false;
+        continue;
+      }
+    }
+    atLineStart = false;
+    i++;
   }
 
-  const startRe = /^(\s*)(?:it|test)(?:\.(each|only|skip))?\s*\(/;
+  function blockEnd(item) {
+    const next = found.find((b) => b.line > item.line && b.indent <= item.indent);
+    return next ? next.line - 1 : total;
+  }
+
   const decls = [];
-  for (let lineIdx = 0; lineIdx < total; lineIdx++) {
-    const line = lineText(lineIdx);
-    if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) {
+  for (const item of found) {
+    if (item.kind !== 'it') {
       continue;
     }
-    const mark = line.match(startRe);
-    if (!mark) {
-      continue;
-    }
-    const indent = mark[1].length;
-    const openParen = lineStarts[lineIdx] + mark[0].length - 1;
-    let titleParen = openParen;
-    if (mark[2] === 'each') {
-      const after = skipBalanced(source, openParen);
+    let titleParen = item.openParen;
+    if (item.each) {
+      const after = skipBalanced(source, item.openParen);
       let j = after;
       while (j < source.length && /\s/.test(source[j])) {
         j++;
@@ -277,22 +342,41 @@ export function testDeclarations(source) {
     if (name === null) {
       continue;
     }
-    const start = lineIdx + 1;
-    const next = boundaries.find((b) => b.line > start && b.indent <= indent);
-    decls.push({ name, start, end: next ? next.line - 1 : total });
+    const enclosedSkip = found.some(
+      (block) =>
+        block.kind === 'describe' &&
+        block.skipped &&
+        block.line < item.line &&
+        block.indent < item.indent &&
+        blockEnd(block) >= item.line
+    );
+    const next = found.find((b) => b.line > item.line && b.indent <= item.indent);
+    const decl = { name, start: item.line, end: next ? next.line - 1 : total };
+    if (item.skipped || enclosedSkip) {
+      decl.skipped = true;
+    }
+    decls.push(decl);
   }
   return decls;
 }
 
-function quotedNameBefore(text, index) {
-  let q = index - 1;
-  while (q >= 0 && /\s/.test(text[q])) {
-    q--;
+function skipSpaceBack(text, i) {
+  while (i >= 0 && /[ \t]/.test(text[i])) {
+    i--;
   }
-  if (text[q] !== '"') {
-    return null;
+  if (text[i] === '\n') {
+    let j = i - 1;
+    while (j >= 0 && /[ \t]/.test(text[j])) {
+      j--;
+    }
+    if (text[j] !== '\n') {
+      i = j;
+    }
   }
-  const close = q;
+  return i;
+}
+
+function quotedNameEndingAt(text, close) {
   let i = close - 1;
   while (i >= 0 && text[i] !== '"') {
     if (text[i] === '\n' && text[i - 1] === '\n') {
@@ -306,10 +390,41 @@ function quotedNameBefore(text, index) {
   if (text[i] !== '"') {
     return null;
   }
-  return normalizeCitedName(text.slice(i + 1, close));
+  return { name: normalizeCitedName(text.slice(i + 1, close)), open: i };
 }
 
-function parentheticalName(text, from) {
+function quotedNamesBefore(text, index) {
+  const names = [];
+  let cursor = index;
+  while (names.length < 20) {
+    const close = skipSpaceBack(text, cursor - 1);
+    if (text[close] !== '"') {
+      break;
+    }
+    const quoted = quotedNameEndingAt(text, close);
+    if (quoted === null) {
+      break;
+    }
+    names.unshift(quoted.name);
+    const before = skipSpaceBack(text, quoted.open - 1);
+    if (text[before] === ',') {
+      cursor = before;
+      continue;
+    }
+    if (
+      before >= 2 &&
+      text.slice(before - 2, before + 1) === 'and' &&
+      (before < 3 || !/\w/.test(text[before - 3]))
+    ) {
+      cursor = before - 2;
+      continue;
+    }
+    break;
+  }
+  return names;
+}
+
+function takeTitle(text, from) {
   let i = from;
   while (i < text.length && /[ \t]/.test(text[i])) {
     i++;
@@ -327,22 +442,99 @@ function parentheticalName(text, from) {
   if (end === -1 || end - i > 600) {
     return null;
   }
-  return normalizeCitedName(text.slice(i + 2, end));
+  return { name: normalizeCitedName(text.slice(i + 2, end)), end: end + 2 };
+}
+
+function skipParens(text, open) {
+  let depth = 0;
+  let i = open;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"' || c === '`') {
+      i = skipString(text, i);
+      continue;
+    }
+    if (c === '(') {
+      depth++;
+    } else if (c === ')') {
+      depth--;
+      if (depth === 0) {
+        return i + 1;
+      }
+    }
+    i++;
+  }
+  return i;
+}
+
+function followSpan(match, at) {
+  const start = Number(match[1]);
+  const end = match[2] === undefined ? start : Number(match[2]);
+  const suffix = match[2] === undefined ? match[1] : `${match[1]}-${match[2]}`;
+  return { start, end, endIndex: at + match[0].length, numberAt: at + match[0].length - suffix.length };
+}
+
+function nextContinuation(text, pos) {
+  let i = pos;
+  while (i < text.length) {
+    const rest = text.slice(i);
+    const tight = rest.match(TIGHT_FOLLOW);
+    if (tight) {
+      return followSpan(tight, i);
+    }
+    const gloss = rest.match(/^\s*\(/);
+    if (gloss && !/^\s*\("/.test(rest)) {
+      const open = i + gloss[0].length - 1;
+      const after = skipParens(text, open);
+      if (after <= i) {
+        return null;
+      }
+      i = after;
+      continue;
+    }
+    const forThe = rest.match(FOR_THE_FOLLOW);
+    if (forThe) {
+      return followSpan(forThe, i);
+    }
+    const andBy = rest.match(AND_BY_FOLLOW);
+    if (andBy && !/(?:src|tests|scripts)\/|action\.yml:/.test(andBy[0])) {
+      return followSpan(andBy, i);
+    }
+    return null;
+  }
+  return null;
+}
+
+function rangeProblem(docPath, line, file, start, end, length, shown) {
+  if (length === undefined) {
+    return `${docPath}:${line}: ${shown} cites ${file}, which is not a source file`;
+  }
+  if (start < 1 || end < 1) {
+    return `${docPath}:${line}: ${shown} cites a line before 1`;
+  }
+  if (start > length || end > length || end < start) {
+    return `${docPath}:${line}: ${shown} exceeds ${file} (${length} lines)`;
+  }
+  return null;
 }
 
 function nameFindings(docPath, line, file, name, cite, decls, start, end) {
   const matches = (decls ?? []).filter((decl) => decl.name === name);
-  if (matches.length === 0) {
+  const live = matches.filter((decl) => !decl.skipped);
+  if (live.length === 0) {
+    if (matches.length > 0) {
+      return [`${docPath}:${line}: ${file} has no runnable test named "${name}"`];
+    }
     return [`${docPath}:${line}: ${file} has no test named "${name}"`];
   }
   if (start === undefined) {
     return [];
   }
-  const hit = matches.find((decl) => start >= decl.start && end <= decl.end);
+  const hit = live.find((decl) => start >= decl.start && end <= decl.end);
   if (hit) {
     return [];
   }
-  const decl = matches[0];
+  const decl = live[0];
   const where = cite ?? file;
   return [
     `${docPath}:${line}: ${where} ("${name}") is outside that test (lines ${decl.start}-${decl.end})`,
@@ -352,6 +544,16 @@ function nameFindings(docPath, line, file, name, cite, decls, start, end) {
 export function citationFindings(text, lineCount, docPath = DOC, testsIn = () => undefined) {
   const findings = [];
 
+  for (const match of text.matchAll(DOT_SLASH)) {
+    const line = lineNumberAt(text, match.index);
+    findings.push(`${docPath}:${line}: ${match[0]} is a citation form this check does not read`);
+  }
+
+  for (const match of text.matchAll(TITLE_WITHOUT_IN)) {
+    const line = lineNumberAt(text, match.index);
+    findings.push(`${docPath}:${line}: ${match[0]} cites a test title with no "in"`);
+  }
+
   for (const match of text.matchAll(CITE)) {
     const file = match[1];
     const start = Number(match[2]);
@@ -359,29 +561,63 @@ export function citationFindings(text, lineCount, docPath = DOC, testsIn = () =>
     const cite = match[0];
     const line = lineNumberAt(text, match.index);
     const length = lineCount(file);
-
-    if (length === undefined) {
-      findings.push(`${docPath}:${line}: ${cite} cites ${file}, which is not a source file`);
-    } else if (start > length || end > length || end < start) {
-      findings.push(`${docPath}:${line}: ${cite} exceeds ${file} (${length} lines)`);
+    const primary = rangeProblem(docPath, line, file, start, end, length, cite);
+    if (primary) {
+      findings.push(primary);
     }
 
+    let pos = match.index + match[0].length;
     if (TEST_FILE.test(file)) {
-      const name = parentheticalName(text, match.index + match[0].length);
-      if (name !== null) {
-        findings.push(...nameFindings(docPath, line, file, name, cite, testsIn(file), start, end));
+      const titled = takeTitle(text, pos);
+      if (titled) {
+        findings.push(...nameFindings(docPath, line, file, titled.name, cite, testsIn(file), start, end));
+        pos = titled.end;
+      }
+    }
+
+    while (pos < text.length) {
+      const step = nextContinuation(text, pos);
+      if (!step) {
+        break;
+      }
+      const stepLine = lineNumberAt(text, step.numberAt);
+      const shown = step.end === step.start ? `${file}:${step.start}` : `${file}:${step.start}-${step.end}`;
+      const problem = rangeProblem(docPath, stepLine, file, step.start, step.end, length, shown);
+      if (problem) {
+        findings.push(problem);
+      }
+      pos = step.endIndex;
+      if (TEST_FILE.test(file)) {
+        const titled = takeTitle(text, pos);
+        if (titled) {
+          findings.push(
+            ...nameFindings(docPath, stepLine, file, titled.name, shown, testsIn(file), step.start, step.end)
+          );
+          pos = titled.end;
+        }
       }
     }
   }
 
   for (const match of text.matchAll(NAME_IN_FILE)) {
     const file = match[1];
-    const name = quotedNameBefore(text, match.index);
-    if (name === null) {
+    const line = lineNumberAt(text, match.index);
+    const closer = text[skipSpaceBack(text, match.index - 1)];
+    if (closer === "'") {
+      findings.push(
+        `${docPath}:${line}: ${file} is cited with a '-quoted title, which this check does not read`
+      );
       continue;
     }
-    const line = lineNumberAt(text, match.index);
-    findings.push(...nameFindings(docPath, line, file, name, null, testsIn(file)));
+    if (closer === '`') {
+      findings.push(
+        `${docPath}:${line}: ${file} is cited with a backtick-quoted title, which this check does not read`
+      );
+      continue;
+    }
+    for (const name of quotedNamesBefore(text, match.index)) {
+      findings.push(...nameFindings(docPath, line, file, name, null, testsIn(file)));
+    }
   }
 
   return findings;
@@ -436,13 +672,13 @@ function main() {
       console.error(`x ${finding}`);
     }
     console.error(
-      '\ncheck-invariant-citations: a cited range runs past the end of its file, or a cited test name is not a test in that file. Re-derive it from the function or test the sentence describes.'
+      '\ncheck-invariant-citations: a cited range is outside its file, a cited test name is not a runnable test in that file, or the citation is a form this check does not read. Re-derive it from the function or test the sentence describes.'
     );
     process.exit(1);
   }
 
   console.log(
-    'check-invariant-citations: every citation in docs/INVARIANTS.md is inside its file, and every cited test name is a test in that file.'
+    'check-invariant-citations: every citation in docs/INVARIANTS.md is inside its file, and every cited test name is a runnable test in that file.'
   );
 }
 
