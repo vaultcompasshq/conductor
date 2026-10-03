@@ -31,7 +31,7 @@ import {
   revertInit,
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
-import { jobLogSummary, renderText, verdictToken } from './output-text.js';
+import { gateLogLines, jobLogSummary, renderText, verdictToken } from './output-text.js';
 import {
   GATE_ROLES,
   GATE_STAGES,
@@ -737,6 +737,17 @@ export function buildProgram(): Command {
             `conductor run: ${jobLogSummary(result)}; verdict-token ${verdictToken(result, advisory)}; ` +
               `${format} report written to ${options.output}\n`
           );
+        }
+        // One plain line per gate on stderr, on every run and after the report
+        // is out, so the job log says which gate did what and why without
+        // anybody opening a report. stderr rather than stdout so that stdout
+        // stays exactly the report (SARIF or text) for a caller that pipes it.
+        // Written after the report file, so a failure above still takes the
+        // catch below and these lines never describe a run that then exits 2
+        // for an unwritable file.
+        const logLines = gateLogLines(result);
+        if (logLines.length > 0) {
+          process.stderr.write(`${logLines.join('\n')}\n`);
         }
         process.exitCode = applyAdvisory(result.exitCode, advisory);
       } catch (err) {

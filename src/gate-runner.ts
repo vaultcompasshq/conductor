@@ -107,6 +107,88 @@ export type CouldNotRunReason =
 export interface CouldNotRun {
   reason: CouldNotRunReason;
   detail: string;
+  /**
+   * What the gate itself said about why it could not run: a short, bounded,
+   * sanitised excerpt of its own stderr (first line) or, failing that, of a
+   * `reason` field in its JSON output. Present only when the gate exited with
+   * a code the umbrella does not read as a verdict and said something. It is
+   * information for the reader and never an input to a decision: the exit
+   * code and `reason` above are decided before this is looked at.
+   */
+  gateSaid?: string;
+}
+
+/** The longest excerpt of a gate's own reason that is carried. */
+export const GATE_SAID_MAX_CHARS = 160;
+
+/**
+ * A short, plain excerpt of one line of gate output.
+ *
+ * ASCII only and one line, because the excerpt lands in a job log line, in the
+ * text report and in a pull-request comment: control characters, escape
+ * sequences and anything a terminal would interpret are replaced, whitespace is
+ * collapsed, and the result is cut at GATE_SAID_MAX_CHARS.
+ */
+function sanitizeGateSaid(raw: string): string | null {
+  const flat = stripAnsi(raw)
+    .replace(/[^\x20-\x7e]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (flat === '') {
+    return null;
+  }
+  return flat.length > GATE_SAID_MAX_CHARS ? `${flat.slice(0, GATE_SAID_MAX_CHARS - 3)}...` : flat;
+}
+
+/**
+ * What a gate that exited with a non-verdict code said about why.
+ *
+ * TOTAL, and never a decision: the caller has already settled that this is a
+ * could-not-run, and nothing here can change that. The first non-empty stderr
+ * line is preferred, since that is where every gate in the family prints its
+ * reason on exit 2 (dep-guard, intent-guard and vault-guard all do). Failing
+ * that, stdout is parsed only for a gate whose output is JSON on stdout, and
+ * only a string `reason` field (top level, or on `run`) is read; anything else,
+ * including output that does not parse, is simply no excerpt.
+ */
+export function gateStatedReason(
+  stderr: string,
+  stdout: string | null | undefined,
+  stdoutIsJson: boolean
+): string | null {
+  try {
+    const firstLine = stripAnsi(stderr)
+      .split('\n')
+      .map((line) => sanitizeGateSaid(line))
+      .find((line) => line !== null);
+    if (firstLine !== undefined && firstLine !== null) {
+      return firstLine;
+    }
+    if (!stdoutIsJson || typeof stdout !== 'string' || !stdout.trimStart().startsWith('{')) {
+      return null;
+    }
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    const run = record.run;
+    const candidates = [
+      record.reason,
+      typeof run === 'object' && run !== null ? (run as Record<string, unknown>).reason : undefined,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const excerpt = sanitizeGateSaid(candidate);
+        if (excerpt !== null) {
+          return excerpt;
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -536,9 +618,12 @@ export function gateArgs(
       // a passthrough value being read as the positional.
       //
       // `scan` takes --trust-base from 1.7.0. On exit 2 it prints a line on
-      // stderr and may also write a JSON document (it can on a staged run);
-      // conductor never parses stdout on exit 2, so the could-not-run path
-      // above handles both before JSON.parse is reached.
+      // stderr and may also write a JSON document (it can on a staged run, and
+      // from 1.9.1 on a scan that skipped files). conductor never reads a
+      // verdict out of stdout on exit 2: the could-not-run branch in
+      // spawnAndRead, below, returns before the verdict JSON.parse is reached.
+      // That branch does read the stderr first line, or a reason field in the
+      // JSON, as a bounded excerpt for the reader (gateStatedReason).
       return [...(staged ? ['--staged'] : []), '-f', 'json', ...trust, ...passthrough];
     case 'intent-guard': {
       if (intent === undefined) {
@@ -1350,10 +1435,21 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       exitCode === null
         ? 'the gate did not exit normally (killed, or timed out).'
         : `the gate exited ${exitCode}, which it uses for "could not run".`;
+    // WHY, in the gate's own words, when it said. Read here and nowhere
+    // earlier: the exit code has already been judged above, and this only
+    // annotates the result. It never reads stdout for a verdict.
+    const gateSaid =
+      exitCode === null
+        ? null
+        : gateStatedReason(withRun.stderr, child.stdout, profile.output.kind === 'stdout');
     return {
       ...withRun,
       exitCode,
-      couldNotRun: { reason: 'gate-error', detail },
+      couldNotRun: {
+        reason: 'gate-error',
+        detail,
+        ...(gateSaid === null ? {} : { gateSaid }),
+      },
       // The child's own stderr goes with it. The text report prints it from
       // the outcome, but a gate that could not run gets no SARIF run of its
       // own, so this finding is the only place a published log can say what

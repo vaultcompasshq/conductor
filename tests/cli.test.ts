@@ -2838,3 +2838,39 @@ describe('a gate that refuses its own state directory', () => {
     expect(result.stdout).not.toMatch(/drift/);
   });
 });
+
+describe('the per-gate job log lines on stderr', () => {
+  it('prints one line per gate on a clean run and leaves stdout as it was', () => {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.9.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('conductor: gate dependencies (dep-guard 0.10.0): ok, exit 0');
+    expect(result.stderr).toContain('conductor: gate secrets (vault-guard 1.9.0): ok, exit 0');
+    expect(result.stderr).toContain('conductor: gate intent (intent-guard 1.8.0): ok, exit 0');
+    expect(result.stdout.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('says why a gate could not run, in the gate own words, with its exit code', () => {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', {
+      stdout: '',
+      stderr: 'INCOMPLETE: 1 file could not be read\nmore detail\n',
+      exit: 2,
+      version: '1.9.0',
+    });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      'conductor: gate secrets (vault-guard 1.9.0): could-not-run (gate-error): INCOMPLETE: 1 file could not be read, exit 2'
+    );
+  });
+});

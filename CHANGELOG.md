@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- `conductor run` now writes one plain line per gate to stderr on every run,
+  naming the gate, the version it ran, its outcome (ok, findings with a count,
+  could-not-run, missing, or skipped with the reason) and its exit code, so the
+  job log says which gate did what without opening a report. stdout is
+  unchanged.
+- A gate that exits with a code conductor does not read as a verdict (an exit 2)
+  now has the first line it printed on stderr, or a `reason` field in its JSON,
+  carried into the report ("the gate said: ...") and the log line, cut to 160
+  ASCII characters. It never changes the outcome or the exit code.
+
 ## [0.8.0] - 2026-09-30
 
 **A minor package release.** `@vaultcompass/conductor` moves to 0.8.0 on npm

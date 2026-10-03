@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { decideTrustBase, runGate } from '../src/gate-runner.js';
+import { GATE_SAID_MAX_CHARS, decideTrustBase, runGate } from '../src/gate-runner.js';
 import type { GatePolicy } from '../src/policy.js';
 import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, stubGate } from './helpers/stub-gate.js';
 
@@ -1259,5 +1259,62 @@ describe('a gate that reads history, in a shallow checkout (C2)', () => {
     stubGate(bin2, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
     const full = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin2, tempRoot: tempDir() });
     expect(full.couldNotRun).toBeNull();
+  });
+});
+
+describe('what a gate says when it could not run', () => {
+  it('carries the first stderr line of an exit 2 gate as a bounded, sanitised excerpt', () => {
+    const bin = tempDir();
+    const long = 'x'.repeat(500);
+    stubGate(bin, 'dep-guard', {
+      stdout: '',
+      stderr: `\u001b[31m\u001b[1mcorpus\u0007 unreadable ${long}\u001b[0m\nsecond line\n`,
+      exit: 2,
+    });
+
+    const outcome = runGate(gate(), { repoRoot: tempDir(), staged: true, pathValue: bin });
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.couldNotRun?.reason).toBe('gate-error');
+    const said = outcome.couldNotRun?.gateSaid ?? '';
+    expect(said.startsWith('corpus unreadable xxx')).toBe(true);
+    expect(said.length).toBe(GATE_SAID_MAX_CHARS);
+    expect(said.endsWith('...')).toBe(true);
+    expect(said).not.toContain('second line');
+    expect(said).not.toMatch(/[^\x20-\x7e]/);
+  });
+
+  it('falls back to a reason field in stdout JSON when stderr is empty, and never changes the exit 2', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', {
+      stdout: JSON.stringify({ run: { reason: 'two files could not be read' } }),
+      stderr: '',
+      exit: 2,
+    });
+
+    const outcome = runGate(gate({ role: 'secrets', product: 'vault-guard' }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+    });
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.couldNotRun?.reason).toBe('gate-error');
+    expect(outcome.couldNotRun?.gateSaid).toBe('two files could not be read');
+  });
+
+  it('carries no excerpt, and does not throw, when an exit 2 gate printed nothing usable', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: '{not json at all', stderr: '  \n', exit: 2 });
+
+    const outcome = runGate(gate({ role: 'secrets', product: 'vault-guard' }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: bin,
+    });
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.couldNotRun?.reason).toBe('gate-error');
+    expect(outcome.couldNotRun?.gateSaid).toBeUndefined();
   });
 });

@@ -136,6 +136,9 @@ function gateSection(gate: GateOutcome): string[] {
 
   if (gate.couldNotRun !== null) {
     lines.push(`    ${gate.couldNotRun.detail}`);
+    if (gate.couldNotRun.gateSaid !== undefined) {
+      lines.push(`    the gate said: ${gate.couldNotRun.gateSaid}`);
+    }
     if (gate.stderr.trim().length > 0) {
       for (const line of gate.stderr.trim().split('\n')) {
         lines.push(`    | ${line}`);
@@ -467,6 +470,63 @@ export function jobLogSummary(result: RunResult): string {
     return `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
   }
   return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
+}
+
+/**
+ * One plain line per gate, for the job log: which gate, which version, what
+ * happened, and the exit code. Written to stderr by cli.ts on EVERY run, so
+ * an adopter reading the log learns which gate did what without opening a
+ * report (the SARIF log, the text report file or the pull request comment).
+ *
+ * Outcomes, in the words the lines use: `ok`, `findings (N, M blocking)`,
+ * `could-not-run (reason)` with the gate's own stated reason when it gave
+ * one, `missing (reason)` for a gate that was not found, and `skipped (why)`
+ * for a gate that was enabled and never spawned (deferred by stage, left out
+ * by --gate, no contract, tree unchanged). A gate with no process behind it
+ * says `no exit code`, never a made-up one.
+ *
+ * Describes, decides nothing: every word is read off the outcomes the exit
+ * code was already composed from. Same plain ASCII as the rest of this file.
+ */
+export function gateLogLines(result: RunResult): string[] {
+  const lines: string[] = [];
+  for (const gate of result.gates) {
+    const version = gate.productVersion === null ? 'version unknown' : gate.productVersion;
+    const exit = gate.exitCode === null ? 'no exit code' : `exit ${gate.exitCode}`;
+    let outcome: string;
+    if (gate.couldNotRun !== null) {
+      const reason = gate.couldNotRun.reason;
+      const said = gate.couldNotRun.gateSaid === undefined ? '' : `: ${gate.couldNotRun.gateSaid}`;
+      outcome =
+        reason === 'binary-missing' || reason === 'configured-command-missing'
+          ? `missing (${reason})`
+          : `could-not-run (${reason})${said}`;
+    } else {
+      const total = gate.findings.length;
+      const blocking = gate.findings.filter((finding) => finding.blocking).length;
+      outcome =
+        total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
+    }
+    lines.push(
+      `conductor: gate ${gate.role} (${gate.product} ${version}): ${outcome}, ${exit}` +
+        (gate.enforce ? '' : ', not enforced')
+    );
+  }
+  const notRun = (role: string, product: string, why: string): string =>
+    `conductor: gate ${role} (${product}): skipped (${why}), no exit code`;
+  for (const gate of result.deferred) {
+    lines.push(notRun(gate.role, gate.product, `deferred to stage ${gate.stage}`));
+  }
+  for (const gate of result.skipped) {
+    lines.push(notRun(gate.role, gate.product, skipWording(gate.reason).line));
+  }
+  for (const gate of result.excluded) {
+    lines.push(notRun(gate.role, gate.product, '--gate did not name it'));
+  }
+  for (const gate of result.treeUnchanged) {
+    lines.push(notRun(gate.role, gate.product, 'head tree equals the base tree'));
+  }
+  return lines;
 }
 
 /**
