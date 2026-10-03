@@ -23,6 +23,12 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   now has the first line it printed on stderr, or a `reason` field in its JSON,
   carried into the report ("the gate said: ...") and the log line, cut to 160
   ASCII characters. It never changes the outcome or the exit code.
+- A failed npm signature audit of the gate packages now says in the job error
+  and in the pull request comment which audit ran, over which four packages,
+  that npm's output names the package and the check, and what to do next:
+  re-run once for a transient registry or sigstore failure, and treat a repeat
+  as real. Wording only; the audit, the single retry and the exit status are
+  unchanged.
 
 ## [0.8.0] - 2026-09-30
 

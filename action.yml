@@ -710,7 +710,15 @@ runs:
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             printf 'conductor verdict: could-not-run (%s)\n\n' "$audit_reason" >> "$GITHUB_STEP_SUMMARY"
           fi
-          printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. %s\n' "$audit_reason"
+          # WORDED AS WHAT FAILED, THEN WHAT TO DO. What failed: the npm
+          # signature audit (`npm audit signatures`) over the four packages
+          # this action installs, at the versions it pins; npm's own output,
+          # which is appended last and names the offending package and the
+          # check it failed, is the reason. What to do: one re-run for a
+          # transient registry or sigstore failure (the retry above already
+          # covers the short ones), and a repeat is real, not a flake. Wording
+          # only: nothing here changes what fails or what exits.
+          printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. The npm signature audit (npm audit signatures) of @vaultcompass/conductor, dep-guard, vault-guard and intent-guard failed; the package and the check that failed are named in the npm output at the end of this line. Next step: re-run this job once, because a registry or sigstore outage clears on its own. If the same failure comes back, treat it as real and do not merge on it. %s\n' "$audit_reason"
           exit "$audit_status"
         fi
         # ACCEPT ONLY IF PROVABLY OK, not refuse if bad. The npm floor above
@@ -1295,7 +1303,7 @@ runs:
             elif [ "${VERIFICATION_FAILED:-}" = "true" ]; then
               printf '%s\n\n' 'Conductor could not run. The gate packages were not verified, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
               printf '%s\n\n' "${VERIFICATION_REASON:-No reason was recorded. The job log has the failing step.}"
-              printf '%s\n' 'Conductor verifies its tools against the registry before running, and refuses to trust one it could not verify. A registry or sigstore outage produces this too.'
+              printf '%s\n' 'Conductor verifies its tools against the registry (npm audit signatures, over its own package and the three gates) before running, and refuses to trust one it could not verify. The package and the check that failed are named above. A registry or sigstore outage produces this too: re-run the job once, and if the same failure comes back, treat it as real.'
             elif [ "${INSTALL_OUTCOME:-}" = "failure" ]; then
               printf '%s\n\n' 'Conductor could not run. The install step failed before the gate packages could be verified (for example an npm too old to verify signatures, or the npm install itself failing), so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
               printf '%s\n' 'The step error in the job log says which.'
