@@ -377,3 +377,28 @@ describe('changedPathsSince', () => {
     expect(changed.ok).toBe(false);
   });
 });
+
+describe('the intent base refusals lead with what happened, then the fix', () => {
+  it('says the base branch is not in the repository, then names the fix', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    writeFileSync(path.join(root, 'a.txt'), 'a\n');
+    commit(root, 'one');
+
+    const resolved = resolveBaseRefInRepo(root, { env: { GITHUB_BASE_REF: 'main' } });
+
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) throw new Error('unreachable');
+    expect(resolved.detail).toMatch(/^the base branch is not in this repository: neither refs\/conductor\/trust-base/);
+    expect(resolved.detail).toMatch(/Fix: in CI, check out with fetch-depth: 0, or fetch the base ref before the run\.$/);
+  });
+
+  it('says git could not resolve the range, then names the fix', () => {
+    const changed = changedPathsSince(tempDir(), 'main');
+
+    expect(changed.ok).toBe(false);
+    if (changed.ok) throw new Error('unreachable');
+    expect(changed.detail).toMatch(/^git could not resolve "main\.\.\.HEAD"/);
+    expect(changed.detail).toMatch(/Fix: check out with fetch-depth: 0, or fetch the base ref before the run\.$/);
+  });
+});

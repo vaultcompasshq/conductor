@@ -2242,3 +2242,48 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(stepEnv('gates')['TEXT_REPORT']).toMatch(/runner\.temp/);
   });
 });
+
+describe('action.yml: the wording of a failed signature audit', () => {
+  it('names the audit, says what to do next, and still fails closed', () => {
+    const run = runInstall({}, '10.9.2', 2);
+    const errors = run.stderr.split('\n').filter((l) => l.startsWith('::error::conductor: could not verify'));
+
+    expect(run.status).toBe(12);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('npm audit signatures');
+    expect(errors[0]).toContain('installed gate packages and their dependencies');
+    expect(errors[0]).toContain('This step already retried once; re-run the job once, and treat a repeat as real.');
+    // The reason still ends the line, and the output name is unchanged.
+    expect(errors[0]).toContain('attempted twice');
+    expect(run.githubOutput).toContain('verification-failed=true');
+  });
+});
+
+describe('action.yml: the trust-base fetch failure leads with what happened, then the fix', () => {
+  it('names the permission to give the job in its Fix sentence', () => {
+    const text = readFileSync(path.join(ROOT, 'action.yml'), 'utf8');
+    expect(text).toContain('could not be fetched into refs/conductor/trust-base, so there is no trust base, no gate was run and nothing was checked. Fix: give this job permissions: contents: read');
+  });
+});
+
+describe('action.yml: the pins handed to conductor for the PATH version-skew warning', () => {
+  it('passes each gate pin to the gates step by the names conductor reads', () => {
+    const env = stepEnv('gates');
+    expect(env['CONDUCTOR_EXPECTED_DEP_GUARD_VERSION']).toBe('${{ inputs.dep-guard-version }}');
+    expect(env['CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION']).toBe('${{ inputs.vault-guard-version }}');
+    expect(env['CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION']).toBe('${{ inputs.intent-guard-version }}');
+  });
+});
+
+describe('action.yml: a backward pin refusal leads with what happened, then the fix', () => {
+  it('names the input and both versions first and ends the first line on the fix', () => {
+    const prefix = TAG_CONSTANTS[VERSION_INPUTS[0]];
+    const run = runValidateScript(scriptWithFutureTag(prefix), {}, { GITHUB_BASE_REF: 'main' });
+    const first = run.stderr.split('\n')[0] ?? '';
+
+    expect(run.status).not.toBe(0);
+    expect(first.startsWith(`conductor: refused the ${VERSION_INPUTS[0]} input on this pull request: it asks for `)).toBe(true);
+    expect(first).toContain(`it asks for ${tagVersion(prefix)}, which is older than `);
+    expect(first).toMatch(/Fix: remove the input, or raise it to \S+ or later\.$/);
+  });
+});

@@ -14,6 +14,42 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+- `conductor run` now writes one plain line per gate to stderr on every run,
+  naming the gate, the version it ran, its outcome (ok, findings with a count,
+  could-not-run, missing, or skipped with the reason) and its exit code, so the
+  job log says which gate did what without opening a report. stdout is
+  unchanged.
+- A gate that exits with a code conductor does not read as a verdict (an exit 2)
+  now has the first line it printed on stderr, or a `reason` field in its JSON,
+  carried into the report and the log line as `gate said: "..."`, cut to 160
+  ASCII characters, with double quotes replaced and workflow-command markers
+  broken up. Each raw stderr line in the report is cleaned the same way
+  (control characters become spaces). It never changes the outcome or the exit
+  code.
+- A failed npm signature audit of the gate packages now says in the job error
+  and in the pull request comment which audit ran (`npm audit signatures`, over
+  the installed gate packages and their dependencies), that npm's output is the
+  reason, and what to do next: this step already retried once, so re-run the
+  job once, and treat a repeat as real. Wording only; the audit, the single
+  retry and the exit status are unchanged.
+- When a gate resolved from PATH reports a version other than the one the
+  action pinned, the job log now carries a warning naming both versions and
+  where the binary was found. The action hands its three gate pins to conductor
+  as CONDUCTOR_EXPECTED_DEP_GUARD_VERSION, CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION
+  and CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION for this and nothing else. A
+  warning only: resolution, the gate that ran and the exit code are unchanged.
+- conductor now runs its own gates on its own pull requests: a new
+  `self-check.yml` workflow runs this repository's action from the checkout
+  (`uses: ./`) in advisory mode with `fetch-depth: 0`, `persist-credentials:
+  false`, a read-only token and no secrets. It runs the published conductor
+  version from the action's default against this repository's pull requests,
+  not the pull request's own source. The repository gains a `.guardrails.yaml` (dependencies and
+  secrets) for it to read from the base branch.
+- Refusal wording now leads with what happened and ends on the one fix: a pull
+  request pinning a gate backward, a base branch that could not be fetched, a
+  base branch missing from the checkout (intent gate), a shallow checkout for a
+  history gate, and a gate older than the floor conductor speaks. Wording only.
+
 ## [0.8.0] - 2026-09-30
 
 **A minor package release.** `@vaultcompass/conductor` moves to 0.8.0 on npm

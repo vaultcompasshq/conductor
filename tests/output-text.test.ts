@@ -13,7 +13,7 @@ import {
   normalizeOsvScanner,
   normalizeVaultGuard,
 } from '../src/normalize.js';
-import { renderText } from '../src/output-text.js';
+import { gateLogLines, renderText } from '../src/output-text.js';
 import type { RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -1751,5 +1751,126 @@ describe('the node_modules candidate a pull-request run skipped', () => {
     const text = renderText(skippedRun([outcome({ exitCode: 0 })]), { verbose: true });
 
     expect(text).not.toMatch(/node_modules/);
+  });
+});
+
+describe('the per-gate job log lines', () => {
+  it('says gate, version, outcome and exit code for each kind of outcome', () => {
+    const lines = gateLogLines(
+      result(
+        [
+          outcome({ role: 'dependencies', exitCode: 0 }),
+          outcome({
+            role: 'secrets',
+            product: 'vault-guard',
+            productVersion: '1.9.0',
+            exitCode: 1,
+            findings: vaultGuard.findings,
+          }),
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: null,
+            exitCode: null,
+            binary: null,
+            couldNotRun: { reason: 'binary-missing', detail: 'no intent-guard binary on PATH' },
+          }),
+        ],
+        2
+      )
+    );
+
+    expect(lines[0]).toBe('conductor: gate dependencies (dep-guard 0.2.0): ok, exit 0');
+    expect(lines[1]).toMatch(
+      /^conductor: gate secrets \(vault-guard 1\.9\.0\): findings \(\d+, \d+ blocking\), exit 1$/
+    );
+    expect(lines[2]).toBe(
+      'conductor: gate intent (intent-guard version unknown): missing (binary-missing), no exit code'
+    );
+  });
+
+  it('carries the gate own stated reason on a could-not-run gate, and the not-enforced mark', () => {
+    const lines = gateLogLines(
+      result(
+        [
+          outcome({
+            exitCode: 2,
+            enforce: false,
+            couldNotRun: {
+              reason: 'gate-error',
+              detail: 'the gate exited 2, which it uses for "could not run".',
+              gateSaid: 'corpus unreadable',
+            },
+          }),
+        ],
+        0
+      )
+    );
+
+    expect(lines).toEqual([
+      'conductor: gate dependencies (dep-guard 0.2.0): could-not-run (gate-error), exit 2, not enforced, gate said: "corpus unreadable"',
+    ]);
+  });
+
+  it('names a gate that was never spawned, with the reason', () => {
+    const lines = gateLogLines(
+      result(
+        [],
+        0,
+        [{ role: 'intent', product: 'intent-guard', stage: 'ci' }],
+        [{ role: 'secrets', product: 'vault-guard', reason: 'no-contract', detail: 'd' }],
+        [{ role: 'dependencies', product: 'dep-guard' }],
+        [{ role: 'vulnerabilities', product: 'osv-scanner' }]
+      )
+    );
+
+    expect(lines).toEqual([
+      'conductor: gate intent (intent-guard): skipped (deferred to stage ci), no exit code',
+      'conductor: gate secrets (vault-guard): skipped (no contract), no exit code',
+      'conductor: gate dependencies (dep-guard): skipped (--gate did not name it), no exit code',
+      'conductor: gate vulnerabilities (osv-scanner): skipped (head tree equals the base tree), no exit code',
+    ]);
+  });
+
+  it('shows the gate own reason in the full text report section as well', () => {
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 2,
+            couldNotRun: {
+              reason: 'gate-error',
+              detail: 'the gate exited 2, which it uses for "could not run".',
+              gateSaid: 'corpus unreadable',
+            },
+          }),
+        ],
+        2
+      )
+    );
+
+    expect(text).toContain('    gate said: "corpus unreadable"');
+  });
+
+  it('cleans each dumped stderr line: control characters become spaces and markers are broken, content kept', () => {
+    const text = renderText(
+      result(
+        [
+          outcome({
+            exitCode: 2,
+            couldNotRun: { reason: 'gate-error', detail: 'd' },
+            stderr: 'plain line\nbell\u0007and\u001b[2Jclear ::warning::x ##[error]y\n',
+          }),
+        ],
+        2
+      )
+    );
+
+    expect(text).toContain('    | plain line');
+    expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/);
+    expect(text).not.toContain('::');
+    expect(text).not.toContain('##[');
+    expect(text).toContain('warning');
+    expect(text).toContain('error');
   });
 });

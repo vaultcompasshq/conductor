@@ -278,7 +278,10 @@ runs:
         # vaultcompasshq/conductor at a tag. A LOCAL-PATH reference instead,
         # the ./ form, reads action.yml out of the pull request's OWN tree, so
         # these constants are author-controlled there and this rule protects
-        # nothing.
+        # nothing. This repository's own .github/workflows/self-check.yml is
+        # the one workflow that references the action with ./ (advisory, a
+        # read-only token, no secrets), and a test holds it to being the only
+        # one.
         TAG_CONDUCTOR_MAJOR=0
         TAG_CONDUCTOR_MINOR=8
         TAG_CONDUCTOR_PATCH=0
@@ -337,8 +340,8 @@ runs:
           if pin_not_backward "$2" "$3" "$4" "$5"; then
             return 0
           fi
-          printf 'conductor: on a pull request the %s input may not ask for a version older than the one this action tag ships. It asks for %s, and this tag ships %s.%s.%s.\n' \
-            "$1" "$2" "$3" "$4" "$5" >&2
+          printf 'conductor: refused the %s input on this pull request: it asks for %s, which is older than %s.%s.%s, the version this action tag ships, and a pull request may not pin a gate backward. Fix: remove the input, or raise it to %s.%s.%s or later.\n' \
+            "$1" "$2" "$3" "$4" "$5" "$3" "$4" "$5" >&2
           pin_status=1
         }
 
@@ -710,7 +713,14 @@ runs:
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             printf 'conductor verdict: could-not-run (%s)\n\n' "$audit_reason" >> "$GITHUB_STEP_SUMMARY"
           fi
-          printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. %s\n' "$audit_reason"
+          # WORDED AS WHAT FAILED, THEN WHAT TO DO. What failed: the npm
+          # signature audit (`npm audit signatures`) over the installed tree,
+          # which is the four gate packages and everything they depend on;
+          # npm's own output, appended last, is the reason. What to do: this
+          # step already retried once, so re-run the job once, and treat a
+          # repeat as real. Wording only: nothing here changes what fails or
+          # what exits.
+          printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. The npm signature audit (npm audit signatures) of the installed gate packages and their dependencies failed, and the npm output at the end of this line is the reason. This step already retried once; re-run the job once, and treat a repeat as real. %s\n' "$audit_reason"
           exit "$audit_status"
         fi
         # ACCEPT ONLY IF PROVABLY OK, not refuse if bad. The npm floor above
@@ -832,7 +842,7 @@ runs:
         ) || fetch_ok=0
         if [ "$fetch_ok" -ne 1 ]; then
           git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
-          fail "the base branch ${GITHUB_BASE_REF} could not be fetched into refs/conductor/trust-base, so there is no trust base and no gate was run. The job needs permissions: contents: read so github.token can read this repository; a network failure or a base branch that no longer exists gives the same result. Nothing was checked."
+          fail "the base branch ${GITHUB_BASE_REF} could not be fetched into refs/conductor/trust-base, so there is no trust base, no gate was run and nothing was checked. Fix: give this job permissions: contents: read so github.token can read this repository. A network failure or a base branch that no longer exists gives the same result, so if the permission is already there, check the base branch and re-run."
         fi
 
         # The fetched commit, as a full object id, read from the ref the
@@ -888,6 +898,14 @@ runs:
         OUTPUT: ${{ inputs.output }}
         WORKDIR: ${{ inputs.working-directory }}
         ADVISORY: ${{ inputs.advisory }}
+        # The versions this action pinned for the three gates, handed to
+        # conductor ONLY so it can warn when a gate it resolved from PATH
+        # reports a different version (some other install earlier on PATH).
+        # A warning and nothing else: conductor reads these for no decision,
+        # resolution is unchanged, and a wrong value gets a wrong warning.
+        CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
+        CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: ${{ inputs.vault-guard-version }}
+        CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: ${{ inputs.intent-guard-version }}
         # Where the text report of the same run goes, under the runner temp:
         # outside the workspace, so the tree being judged can neither
         # pre-place nor read it.
@@ -1295,7 +1313,7 @@ runs:
             elif [ "${VERIFICATION_FAILED:-}" = "true" ]; then
               printf '%s\n\n' 'Conductor could not run. The gate packages were not verified, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
               printf '%s\n\n' "${VERIFICATION_REASON:-No reason was recorded. The job log has the failing step.}"
-              printf '%s\n' 'Conductor verifies its tools against the registry before running, and refuses to trust one it could not verify. A registry or sigstore outage produces this too.'
+              printf '%s\n' 'Conductor verifies its tools against the registry (npm audit signatures, over the installed gate packages and their dependencies) before running, and refuses to trust one it could not verify. The reason is given above. A registry or sigstore outage produces this too. This step already retried once; re-run the job once, and treat a repeat as real.'
             elif [ "${INSTALL_OUTCOME:-}" = "failure" ]; then
               printf '%s\n\n' 'Conductor could not run. The install step failed before the gate packages could be verified (for example an npm too old to verify signatures, or the npm install itself failing), so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
               printf '%s\n' 'The step error in the job log says which.'
