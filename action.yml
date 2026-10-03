@@ -337,8 +337,8 @@ runs:
           if pin_not_backward "$2" "$3" "$4" "$5"; then
             return 0
           fi
-          printf 'conductor: on a pull request the %s input may not ask for a version older than the one this action tag ships. It asks for %s, and this tag ships %s.%s.%s.\n' \
-            "$1" "$2" "$3" "$4" "$5" >&2
+          printf 'conductor: refused the %s input on this pull request: it asks for %s, which is older than %s.%s.%s, the version this action tag ships, and a pull request may not pin a gate backward. Fix: remove the input, or raise it to %s.%s.%s or later.\n' \
+            "$1" "$2" "$3" "$4" "$5" "$3" "$4" "$5" >&2
           pin_status=1
         }
 
@@ -840,7 +840,7 @@ runs:
         ) || fetch_ok=0
         if [ "$fetch_ok" -ne 1 ]; then
           git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
-          fail "the base branch ${GITHUB_BASE_REF} could not be fetched into refs/conductor/trust-base, so there is no trust base and no gate was run. The job needs permissions: contents: read so github.token can read this repository; a network failure or a base branch that no longer exists gives the same result. Nothing was checked."
+          fail "the base branch ${GITHUB_BASE_REF} could not be fetched into refs/conductor/trust-base, so there is no trust base, no gate was run and nothing was checked. Fix: give this job permissions: contents: read so github.token can read this repository. A network failure or a base branch that no longer exists gives the same result, so if the permission is already there, check the base branch and re-run."
         fi
 
         # The fetched commit, as a full object id, read from the ref the

@@ -2261,3 +2261,16 @@ describe('action.yml: the wording of a failed signature audit', () => {
     expect(run.githubOutput).toContain('verification-failed=true');
   });
 });
+
+describe('action.yml: a backward pin refusal leads with what happened, then the fix', () => {
+  it('names the input and both versions first and ends the first line on the fix', () => {
+    const prefix = TAG_CONSTANTS[VERSION_INPUTS[0]];
+    const run = runValidateScript(scriptWithFutureTag(prefix), {}, { GITHUB_BASE_REF: 'main' });
+    const first = run.stderr.split('\n')[0] ?? '';
+
+    expect(run.status).not.toBe(0);
+    expect(first.startsWith(`conductor: refused the ${VERSION_INPUTS[0]} input on this pull request: it asks for `)).toBe(true);
+    expect(first).toContain(`it asks for ${tagVersion(prefix)}, which is older than `);
+    expect(first).toMatch(/Fix: remove the input, or raise it to \S+ or later\.$/);
+  });
+});

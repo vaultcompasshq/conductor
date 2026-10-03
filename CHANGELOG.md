@@ -29,6 +29,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   re-run once for a transient registry or sigstore failure, and treat a repeat
   as real. Wording only; the audit, the single retry and the exit status are
   unchanged.
+- Refusal wording now leads with what happened and ends on the one fix: a pull
+  request pinning a gate backward, a base branch that could not be fetched, a
+  base branch missing from the checkout (intent gate), a shallow checkout for a
+  history gate, and a gate older than the floor conductor speaks. Wording only.
 
 ## [0.8.0] - 2026-09-30
 

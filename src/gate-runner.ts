@@ -1043,10 +1043,10 @@ function runGateInner(
   // the version probe so nothing is executed for a run that cannot be honest.
   if (profileFor(gate.product).readsHistory && isShallowRepository(options.repoRoot)) {
     const detail =
-      `this checkout is shallow, so the git history ${gate.product} reads is truncated: ` +
-      'with the default actions/checkout depth of 1 the range from the base to HEAD holds a ' +
-      'single grafted commit, and a secret added and then removed inside the pull request ' +
-      'would never be seen. Check out with fetch-depth: 0 (actions/checkout) or run ' +
+      `${gate.product} did not run, because this checkout is shallow and the git history it reads ` +
+      'is truncated: with the default actions/checkout depth of 1 the range from the base to HEAD ' +
+      'holds a single grafted commit, and a secret added and then removed inside the pull ' +
+      'request would never be seen. Fix: check out with fetch-depth: 0 (actions/checkout) or run ' +
       'git fetch --unshallow, then run again. conductor does not deepen the checkout itself.';
     return {
       ...base,
@@ -1077,8 +1077,9 @@ function runGateInner(
     !atLeastVersion(version, profile.minVersion)
   ) {
     const detail =
-      `${gate.product} ${version} is older than ${profile.minVersion}, the oldest version whose ` +
-      `command line this umbrella speaks. Upgrade it to ${profile.minVersion} or later.`;
+      `${gate.product} did not run: the installed ${version} is older than ${profile.minVersion}, ` +
+      'the oldest version whose command line this umbrella speaks. ' +
+      `Fix: upgrade it to ${profile.minVersion} or later.`;
     return {
       ...base,
       productVersion: version,
