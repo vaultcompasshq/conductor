@@ -68,11 +68,15 @@ scan or the dash rule: those run on every tracked file, this one included, and
 a file's name is scanned too, since a file path is visible on a public tree
 whether or not its contents are scanned.
 
-The citation check then reads `docs/INVARIANTS.md` and fails when a
-`src/*.ts` line or range runs past the end of that file, or names a file
-that is not under `src`. It does not judge whether the lines still describe
-the function; that re-derivation is a docs change. The check only stops a
-range the file no longer has from staying green.
+The citation check then reads `docs/INVARIANTS.md` and fails when a line or
+range into `src/*.ts`, `tests/*.ts`, `scripts/*.mjs` or `action.yml` runs
+past the end of that file. A quoted test name, either in parentheses after
+the citation or as `"name" in tests/...`, must be the exact title of an
+`it` or `test` in that file, and a parenthetical name must sit on a line
+inside that test. It does not judge whether the lines still describe the
+claim; that re-derivation is a docs change. The check only stops a range
+the file no longer has, or a test name the file does not contain, from
+staying green.
 
 ## Commit messages
 
