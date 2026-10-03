@@ -270,13 +270,15 @@ function describeErrors(errors: ValidateFunction['errors'], source: string): str
  * Why one reserved key is reserved.
  *
  * The general sentence, at the bottom, is that the umbrella writes that exact
- * flag itself, and it is true of most of these keys. Three of them are
- * reserved for other reasons, and a message giving the wrong reason sends
- * somebody to the wrong fix: they go looking in the command line for a flag
- * the umbrella never writes, find nothing, and conclude the rejection is a
- * bug in this tool. A test in policy.test.ts derives the flags gateArgs
- * actually writes and holds this list of exceptions to exactly those three,
- * so a fourth cannot be added without saying why.
+ * flag itself, and it is true of most of these keys. Two keys are reserved
+ * although the umbrella writes no such flag, and that is what
+ * policy.test.ts pins: format on vault-guard, and base on intent-guard. The
+ * test derives the flags gateArgs actually writes and holds that
+ * reserved-without-writing list to exactly those two, so another one cannot
+ * be added without saying why. trust-base, and base on dep-guard, get their
+ * own messages as well, because the umbrella writes those flags only on some
+ * runs and the general sentence would send somebody looking for a flag that
+ * is not on the command line of the run they are debugging.
  */
 function reservedReason(product: Product, key: string): string {
   if (key === 'trust-base') {

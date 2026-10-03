@@ -62,7 +62,7 @@ const INTERNAL_PATH = /\/Users\/[^/\s]+\/(?:[^/\s]+\/)*[Pp]rojects\/[^/\s]+/;
 // contain the shapes it looks for. Segments stop at quotes as well as at
 // whitespace, so a path inside a quoted string ends where the string does.
 //
-// EXACTLY TWO segments under the root are required, and the same rule
+// TWO OR MORE segments under the root are required, and the same rule
 // applies to all four roots. It was two for the home directories and one for
 // the temporary ones, which flagged prose saying /private/tmp while the
 // comment beside it and CONTRIBUTING.md both said two. A guard that cannot

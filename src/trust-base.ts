@@ -21,10 +21,10 @@
 // mirrored on purpose so the two gates cannot disagree about what a trust
 // base is:
 //
-//  - READS ONLY, AND NEVER INTO THE REPOSITORY. `git rev-parse` and
-//    `git show`, both of which only read. No checkout switch, no worktree, no
-//    stash, no write of any kind. An umbrella that moved somebody's HEAD to
-//    do its job would be a worse bug than the one it fixes.
+//  - READS ONLY, AND NEVER INTO THE REPOSITORY. This file runs read-only git:
+//    rev-parse, show, show-ref, rev-list and ls-tree. No checkout switch, no
+//    worktree, no stash, no write of any kind. An umbrella that moved
+//    somebody's HEAD to do its job would be a worse bug than the one it fixes.
 //
 //  - FAIL CLOSED ON THE REF. A ref that will not resolve is could-not-run for
 //    every enabled gate. It is never a reason to fall back to the head,

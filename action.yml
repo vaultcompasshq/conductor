@@ -278,8 +278,7 @@ runs:
         # vaultcompasshq/conductor at a tag. A LOCAL-PATH reference instead,
         # the ./ form, reads action.yml out of the pull request's OWN tree, so
         # these constants are author-controlled there and this rule protects
-        # nothing. This repository's own workflows reference it that way, which
-        # is the usual reason to.
+        # nothing.
         TAG_CONDUCTOR_MAJOR=0
         TAG_CONDUCTOR_MINOR=8
         TAG_CONDUCTOR_PATCH=0

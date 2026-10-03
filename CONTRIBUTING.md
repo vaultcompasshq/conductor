@@ -68,11 +68,32 @@ scan or the dash rule: those run on every tracked file, this one included, and
 a file's name is scanned too, since a file path is visible on a public tree
 whether or not its contents are scanned.
 
-The citation check then reads `docs/INVARIANTS.md` and fails when a
-`src/*.ts` line or range runs past the end of that file, or names a file
-that is not under `src`. It does not judge whether the lines still describe
-the function; that re-derivation is a docs change. The check only stops a
-range the file no longer has from staying green.
+The citation check then reads `docs/INVARIANTS.md` and checks two things:
+that every cited line or range into `src/*.ts`, `tests/*.ts`,
+`scripts/*.mjs` or `action.yml` lies inside that file, and that every cited
+test title exists in the cited file. A range may be written `10-12`,
+`10 to 12` or `10 through 12`. A follow-on number after a citation
+(`file:52, 58 and 75`, `file:136-142 for the level, and 1015-1020`, or
+`file:1704 to 1802 (fail closed), 1819`) is checked against that same file.
+
+A title in parentheses after a line (`file:52 ("title")`) must be the
+exact title of a runnable `it` or `test` in that file, and the line must
+sit inside that test. A title cited with no line must also exist exactly:
+written before the file (`"a", "b" and "c" in tests/...`, `"title", also
+in tests/...`, or `"title" in the same file`, meaning the test file named
+last before it) it must be a runnable `it` or `test`; written after the
+file (`tests/... ("title")`, `tests/...'s "title"`, `tests/... (describe
+block "title")`, or a list of them joined by commas or `and`) it may also
+be a runnable `describe` title. A skipped test (`it.skip`, or a test inside
+`describe.skip`) does not count.
+
+A form this check cannot read fails rather than passing: a single-quoted
+or backtick title, a quoted title with no `in`, a quoted title after
+`file:line` that is not in parentheses, a line number in parentheses after
+a quoted title, `in the same file` with no test file named before it, or a
+path prefixed with `./`. A passing check means the cited lines and titles
+exist; it does not show that the cited test pins the claim beside it. That
+is a reading of the test, done when the citation is written or changed.
 
 ## Commit messages
 
