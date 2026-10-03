@@ -252,6 +252,117 @@ describe('citationFindings', () => {
     ]);
   });
 
+  it('checks a range written with to or through, and keeps checking the numbers after it', () => {
+    const text =
+      'Pinned by tests/init.test.ts:1 (one), 2 to 3 (fail closed), 999 (gone)\nand 5 through 6000.\n';
+    expect(citationFindings(text, () => 10)).toEqual([
+      `${DOC}:1: tests/init.test.ts:999 exceeds tests/init.test.ts (10 lines)`,
+      `${DOC}:2: tests/init.test.ts:5-6000 exceeds tests/init.test.ts (10 lines)`,
+    ]);
+  });
+
+  it('checks the end of a to range that closes a chain', () => {
+    const text = 'Pinned by tests/init.test.ts:1, 2 and 3 to 9999, which drive it.\n';
+    expect(citationFindings(text, () => 10)).toEqual([
+      `${DOC}:1: tests/init.test.ts:3-9999 exceeds tests/init.test.ts (10 lines)`,
+    ]);
+  });
+
+  it('checks a title cited in parentheses after its file with no line', () => {
+    const text = 'Pinned by tests/run.test.ts ("no such test"): the refusal.\n';
+    const findings = citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ]);
+    expect(findings).toEqual([`${DOC}:1: tests/run.test.ts has no test named "no such test"`]);
+  });
+
+  it('checks every title in a list after its file, joined by "and, separately,"', () => {
+    const text =
+      'Pinned by tests/run.test.ts ("does not throw" and,\nseparately, "no such test").\n';
+    const findings = citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ]);
+    expect(findings).toEqual([`${DOC}:1: tests/run.test.ts has no test named "no such test"`]);
+  });
+
+  it('checks a title after a comma or a possessive, with no line', () => {
+    const text = 'Pinned by tests/run.test.ts, "gone one"\nand tests/run.test.ts\'s "gone two" describe block.\n';
+    const findings = citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ]);
+    expect(findings).toEqual([
+      `${DOC}:1: tests/run.test.ts has no test named "gone one"`,
+      `${DOC}:2: tests/run.test.ts has no test named "gone two"`,
+    ]);
+  });
+
+  it('accepts a describe title after its file, but not a skipped one', () => {
+    const src = [
+      "describe('the suite', () => {",
+      "  it('one', () => {});",
+      '});',
+      "describe.skip('the hidden suite', () => {",
+      "  it('two', () => {});",
+      '});',
+      '',
+    ].join('\n');
+    const text =
+      'Pinned by tests/run.test.ts ("the suite") and tests/run.test.ts (describe block "the hidden suite").\n';
+    expect(citationFindings(text, () => 10, DOC, () => testDeclarations(src))).toEqual([
+      `${DOC}:1: tests/run.test.ts has no runnable test named "the hidden suite"`,
+    ]);
+  });
+
+  it('does not take a describe title for a title cited with a line', () => {
+    const src = ["describe('the suite', () => {", "  it('one', () => {});", '});', ''].join('\n');
+    const text = 'Pinned by tests/run.test.ts:2 ("the suite").\n';
+    expect(citationFindings(text, () => 10, DOC, () => testDeclarations(src))).toEqual([
+      `${DOC}:1: tests/run.test.ts has no test named "the suite"`,
+    ]);
+  });
+
+  it('checks a title cited in the same file against the test file named before it', () => {
+    const text =
+      'Pinned by "present" in tests/run.test.ts, plus "missing" in the same file.\n';
+    const findings = citationFindings(text, () => 10, DOC, (file) =>
+      file === 'tests/run.test.ts' ? [{ name: 'present', start: 1, end: 4 }] : undefined
+    );
+    expect(findings).toEqual([`${DOC}:1: tests/run.test.ts has no test named "missing"`]);
+  });
+
+  it('rejects a title cited in the same file when no test file was named before it', () => {
+    const text = 'Pinned by "present" in the same file.\n';
+    expect(citationFindings(text, () => 10, DOC, () => [])).toEqual([
+      `${DOC}:1: "present" is cited in the same file, but no test file is named before it`,
+    ]);
+  });
+
+  it('checks a title cited as also in a file', () => {
+    const text = 'Pinned by "missing", also in tests/run.test.ts.\n';
+    const findings = citationFindings(text, () => 10, DOC, () => [
+      { name: 'present', start: 1, end: 4 },
+    ]);
+    expect(findings).toEqual([`${DOC}:1: tests/run.test.ts has no test named "missing"`]);
+  });
+
+  it('rejects a quoted title after a line that is not in parentheses', () => {
+    const text = 'Pinned by tests/run.test.ts:2, "does not throw".\n';
+    expect(citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ])).toEqual([
+      `${DOC}:1: tests/run.test.ts:2 is followed by a quoted title outside parentheses, a citation form this check does not read; cite FILE:LINE ("title")`,
+    ]);
+  });
+
+  it('rejects a line number in parentheses after a title', () => {
+    const text = 'Pinned by tests/run.test.ts, "does not throw"\n(line 9999).\n';
+    expect(citationFindings(text, () => 10, DOC, () => [
+      { name: 'does not throw', start: 1, end: 4 },
+    ])).toEqual([
+      `${DOC}:1: a line number in parentheses after a quoted title is a citation form this check does not read; cite FILE:LINE ("title")`,
+    ]);
+  });
+
   it('rejects a ./ prefixed path', () => {
     const text = 'See ./src/cli.ts:1.\n';
     expect(citationFindings(text, () => 10)).toEqual([
@@ -295,6 +406,22 @@ describe('testDeclarations', () => {
     ].join('\n');
     expect(testDeclarations(src)).toEqual([
       { name: 'refuses to write over %s own generated hook', start: 1, end: 3 },
+    ]);
+  });
+
+  it('reads the tests after a template literal whose expression holds a regular expression', () => {
+    const src = [
+      'const line = `${raw.replace(/\'/g, "x")}`;',
+      "it('after the literal', () => {});",
+    ].join('\n');
+    expect(testDeclarations(src)).toEqual([{ name: 'after the literal', start: 2, end: 2 }]);
+  });
+
+  it('reads a describe title as a describe', () => {
+    const src = ["describe('the suite', () => {", "  it('one', () => {});", '});'].join('\n');
+    expect(testDeclarations(src)).toEqual([
+      { name: 'the suite', start: 1, end: 3, kind: 'describe' },
+      { name: 'one', start: 2, end: 3 },
     ]);
   });
 });

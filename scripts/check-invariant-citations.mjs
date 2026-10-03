@@ -1,32 +1,59 @@
 #!/usr/bin/env node
-// Fails when docs/INVARIANTS.md cites a line range past the end of a file
-// under src/, tests/ or scripts/, or past the end of action.yml, or cites a
-// line before 1. A test cited by title must be that exact title of a
-// runnable it or test in the cited file, and a line cited with the title
-// must fall inside that test. Every name in a quoted list is checked, and
-// a bare line number that continues a citation is checked against the same
-// file. A citation form this check cannot read fails. A citation is
-// re-derived by the function or test it describes; this check only catches
-// the drift that is visible without reading the claim.
+// Checks two things about docs/INVARIANTS.md: every cited line or range
+// into src/, tests/, scripts/ or action.yml lies inside that file, and
+// every cited test title exists in the cited file.
+//
+// A range is "10-12", "10 to 12" or "10 through 12", and a number that
+// continues a citation is checked against the same file. A title in
+// parentheses after a line must be the exact title of a runnable it or test
+// that contains that line. A title with no line, before the file ("t" in
+// FILE, "t", also in FILE, "t" in the same file) must be a runnable it or
+// test; after the file (FILE ("t"), FILE's "t") it may also be a runnable
+// describe. Every name in a list is checked. A citation form this check
+// cannot read fails.
+//
+// Passing means the cited lines and titles exist. Whether the cited test
+// pins the claim beside it is read from the test when the citation is
+// written or changed; this check does not judge it.
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DOC = 'docs/INVARIANTS.md';
-const CITE =
-  /(?<![\w./-])((?:src|tests)\/[A-Za-z0-9._/-]+\.ts|scripts\/[A-Za-z0-9._/-]+\.mjs|action\.yml):(\d+)(?:-(\d+))?/g;
-const TEST_FILE = /^(?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs)$/;
-const NAME_IN_FILE = / in[ \t]*(?:\n[ \t]*)?((?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs))/g;
+// A range is written "10-12", "10 to 12" or "10 through 12"; all three are
+// read as the same range, so a worded range is checked rather than ending
+// the chain of follow-on lines after it.
+const RANGE = String.raw`(\d+)(?:(?:-|\s+(?:to|through)\s+)(\d+))?`;
+const RANGE_AT_END = new RegExp(`${RANGE}$`);
+const TEST_PATH = String.raw`(?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs)`;
+const CITE = new RegExp(
+  String.raw`(?<![\w./-])((?:src|tests)\/[A-Za-z0-9._/-]+\.ts|scripts\/[A-Za-z0-9._/-]+\.mjs|action\.yml):` +
+    RANGE,
+  'g'
+);
+const TEST_FILE = new RegExp(`^${TEST_PATH}$`);
+// A test file named anywhere, with or without a line number after it. Used to
+// find a title cited with no line number, and the file "the same file" means.
+const TEST_MENTION = new RegExp(String.raw`(?<![\w./-])(${TEST_PATH})(?![\w/-])`, 'g');
+// "title" in FILE, "title", also in FILE, and "title" in the same file.
+const NAME_IN_FILE = new RegExp(
+  String.raw`[ \t\n]+(also[ \t]*(?:\n[ \t]*)?)?in[ \t]*(?:\n[ \t]*)?(?:(${TEST_PATH})|(the same file))`,
+  'g'
+);
 const DOT_SLASH =
   /(?<![\w.-])\.\/((?:src|tests)\/[A-Za-z0-9._/-]+\.ts|scripts\/[A-Za-z0-9._/-]+\.mjs|action\.yml):\d+(?:-\d+)?/g;
 const TITLE_WITHOUT_IN =
   /"[^"\n]{1,400}"\s+(?:tests|scripts)\/[A-Za-z0-9._/-]+\.test\.(?:ts|mjs)/g;
-const TIGHT_FOLLOW =
-  /^(?:\s*,\s*and\s+(?:by\s+)?|\s+and\s+(?:by\s+)?|\s*,\s*)(\d+)(?:-(\d+))?/;
-const FOR_THE_FOLLOW =
-  /^\s+for the [a-z][a-z ]{0,40}?,?\s+and\s+(\d+)(?:-(\d+))?/;
-const AND_BY_FOLLOW = /^,\s+[^.]{0,400}?,\s+and\s+by\s+(\d+)(?:-(\d+))?/;
+// A line number in parentheses straight after a quoted title, "title" (line
+// 43). The line is relative to nothing this check can name, so it fails; the
+// form that is checked is FILE:43 ("title").
+const LINE_AFTER_TITLE = /"\s*\(\s*lines?\s+\d+/g;
+const TIGHT_FOLLOW = new RegExp(
+  String.raw`^(?:\s*,\s*and\s+(?:by\s+)?|\s+and\s+(?:by\s+)?|\s*,\s*)` + RANGE
+);
+const FOR_THE_FOLLOW = new RegExp(String.raw`^\s+for the [a-z][a-z ]{0,40}?,?\s+and\s+` + RANGE);
+const AND_BY_FOLLOW = new RegExp(String.raw`^,\s+[^.]{0,400}?,\s+and\s+by\s+` + RANGE);
 
 // The number of lines an editor shows for the text: a trailing newline ends
 // the last line rather than starting an empty one, so "a\nb\n" is two lines,
@@ -113,6 +140,10 @@ function skipBraces(text, open) {
     const c = text[i];
     if (c === "'" || c === '"' || c === '`') {
       i = skipString(text, i);
+      continue;
+    }
+    if (c === '/' && text[i + 1] !== '/' && text[i + 1] !== '*' && regexLikely(text, i)) {
+      i = skipRegex(text, i);
       continue;
     }
     if (c === '{') {
@@ -323,7 +354,29 @@ export function testDeclarations(source) {
 
   const decls = [];
   for (const item of found) {
-    if (item.kind !== 'it') {
+    if (item.kind === 'describe') {
+      if (item.each) {
+        continue;
+      }
+      const name = readTitle(source, item.openParen);
+      if (name === null) {
+        continue;
+      }
+      const skipped =
+        item.skipped ||
+        found.some(
+          (block) =>
+            block.kind === 'describe' &&
+            block.skipped &&
+            block.line < item.line &&
+            block.indent < item.indent &&
+            blockEnd(block) >= item.line
+        );
+      const decl = { name, start: item.line, end: blockEnd(item), kind: 'describe' };
+      if (skipped) {
+        decl.skipped = true;
+      }
+      decls.push(decl);
       continue;
     }
     let titleParen = item.openParen;
@@ -445,6 +498,53 @@ function takeTitle(text, from) {
   return { name: normalizeCitedName(text.slice(i + 2, end)), end: end + 2 };
 }
 
+// The closing quote of a title cited after its file: a quote followed by
+// punctuation, white space or the end of the text. A quote inside a title
+// ("exactly "true"") is followed by a letter or another quote, so it does not
+// end the title.
+function titleCloseAfter(text, open) {
+  let i = open + 1;
+  while (i < text.length && i - open <= 600) {
+    if (text[i] === '\n' && text[i + 1] === '\n') {
+      return -1;
+    }
+    if (text[i] === '"' && (i + 1 >= text.length || /[\s),.:;]/.test(text[i + 1]))) {
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+// Titles cited straight after a test file with no line number:
+// FILE ("title"), FILE, "title", FILE's "title", FILE (describe block
+// "title"), and a list of them joined by commas or "and". Each one is checked
+// as the title of a runnable test or describe block in that file.
+export function titlesAfterFile(text, from) {
+  const rest = text.slice(from);
+  const lead = rest.match(/^(?:'s)?,?[ \t]*(?:\n[ \t]*)?(?:\([ \t]*(?:describe block[ \t]*(?:\n[ \t]*)?)?)?"/);
+  if (!lead) {
+    return [];
+  }
+  const names = [];
+  let open = from + lead[0].length - 1;
+  while (names.length < 20) {
+    const close = titleCloseAfter(text, open);
+    if (close === -1) {
+      break;
+    }
+    names.push(normalizeCitedName(text.slice(open + 1, close)));
+    const sep = text
+      .slice(close + 1)
+      .match(/^[ \t]*(?:\n[ \t]*)?(?:,[ \t]*(?:\n[ \t]*)?)?(?:and[ \t]*(?:\n[ \t]*)?)?(?:,?[ \t]*(?:\n[ \t]*)?separately,[ \t]*(?:\n[ \t]*)?)?"/);
+    if (!sep || sep[0].trim() === '"') {
+      break;
+    }
+    open = close + sep[0].length;
+  }
+  return names;
+}
+
 function skipParens(text, open) {
   let depth = 0;
   let i = open;
@@ -470,7 +570,7 @@ function skipParens(text, open) {
 function followSpan(match, at) {
   const start = Number(match[1]);
   const end = match[2] === undefined ? start : Number(match[2]);
-  const suffix = match[2] === undefined ? match[1] : `${match[1]}-${match[2]}`;
+  const suffix = match[0].match(RANGE_AT_END)[0];
   return { start, end, endIndex: at + match[0].length, numberAt: at + match[0].length - suffix.length };
 }
 
@@ -505,6 +605,14 @@ function nextContinuation(text, pos) {
   return null;
 }
 
+// A quoted title straight after FILE:LINE with no parentheses, FILE:LINE,
+// "title" or FILE:LINE "title". The checked form is FILE:LINE ("title").
+const BARE_TITLE_AFTER_LINE = /^,?[ \t]*(?:\n[ \t]*)?"/;
+
+function unreadTitleAfterLine(docPath, line, shown) {
+  return `${docPath}:${line}: ${shown} is followed by a quoted title outside parentheses, a citation form this check does not read; cite FILE:LINE ("title")`;
+}
+
 function rangeProblem(docPath, line, file, start, end, length, shown) {
   if (length === undefined) {
     return `${docPath}:${line}: ${shown} cites ${file}, which is not a source file`;
@@ -518,8 +626,10 @@ function rangeProblem(docPath, line, file, start, end, length, shown) {
   return null;
 }
 
-function nameFindings(docPath, line, file, name, cite, decls, start, end) {
-  const matches = (decls ?? []).filter((decl) => decl.name === name);
+function nameFindings(docPath, line, file, name, cite, decls, start, end, withDescribe = false) {
+  const matches = (decls ?? []).filter(
+    (decl) => decl.name === name && (withDescribe || decl.kind !== 'describe')
+  );
   const live = matches.filter((decl) => !decl.skipped);
   if (live.length === 0) {
     if (matches.length > 0) {
@@ -572,6 +682,8 @@ export function citationFindings(text, lineCount, docPath = DOC, testsIn = () =>
       if (titled) {
         findings.push(...nameFindings(docPath, line, file, titled.name, cite, testsIn(file), start, end));
         pos = titled.end;
+      } else if (BARE_TITLE_AFTER_LINE.test(text.slice(pos))) {
+        findings.push(unreadTitleAfterLine(docPath, line, cite));
       }
     }
 
@@ -594,15 +706,60 @@ export function citationFindings(text, lineCount, docPath = DOC, testsIn = () =>
             ...nameFindings(docPath, stepLine, file, titled.name, shown, testsIn(file), step.start, step.end)
           );
           pos = titled.end;
+        } else if (BARE_TITLE_AFTER_LINE.test(text.slice(pos))) {
+          findings.push(unreadTitleAfterLine(docPath, stepLine, shown));
         }
       }
     }
   }
 
-  for (const match of text.matchAll(NAME_IN_FILE)) {
-    const file = match[1];
+  for (const match of text.matchAll(LINE_AFTER_TITLE)) {
     const line = lineNumberAt(text, match.index);
-    const closer = text[skipSpaceBack(text, match.index - 1)];
+    findings.push(
+      `${docPath}:${line}: a line number in parentheses after a quoted title is a citation form this check does not read; cite FILE:LINE ("title")`
+    );
+  }
+
+  const mentions = [...text.matchAll(TEST_MENTION)];
+
+  for (const mention of mentions) {
+    const file = mention[1];
+    const after = mention.index + mention[0].length;
+    if (text[after] === ':' && /\d/.test(text[after + 1] ?? '')) {
+      continue;
+    }
+    const titles = titlesAfterFile(text, after);
+    const line = lineNumberAt(text, mention.index);
+    for (const name of titles) {
+      findings.push(...nameFindings(docPath, line, file, name, null, testsIn(file), undefined, undefined, true));
+    }
+  }
+
+  for (const match of text.matchAll(NAME_IN_FILE)) {
+    let anchor = match.index;
+    if (match[1] !== undefined) {
+      const comma = skipSpaceBack(text, anchor - 1);
+      if (text[comma] === ',') {
+        anchor = comma;
+      }
+    }
+    const line = lineNumberAt(text, match.index);
+    let file = match[2];
+    if (file === undefined) {
+      const names = quotedNamesBefore(text, anchor);
+      if (names.length === 0) {
+        continue;
+      }
+      const previous = mentions.filter((m) => m.index < anchor).pop();
+      if (previous === undefined) {
+        findings.push(
+          `${docPath}:${line}: "${names[0]}" is cited in the same file, but no test file is named before it`
+        );
+        continue;
+      }
+      file = previous[1];
+    }
+    const closer = text[skipSpaceBack(text, anchor - 1)];
     if (closer === "'") {
       findings.push(
         `${docPath}:${line}: ${file} is cited with a '-quoted title, which this check does not read`
@@ -615,7 +772,7 @@ export function citationFindings(text, lineCount, docPath = DOC, testsIn = () =>
       );
       continue;
     }
-    for (const name of quotedNamesBefore(text, match.index)) {
+    for (const name of quotedNamesBefore(text, anchor)) {
       findings.push(...nameFindings(docPath, line, file, name, null, testsIn(file)));
     }
   }
@@ -678,7 +835,7 @@ function main() {
   }
 
   console.log(
-    'check-invariant-citations: every citation in docs/INVARIANTS.md is inside its file, and every cited test name is a runnable test in that file.'
+    'check-invariant-citations: every cited line in docs/INVARIANTS.md is inside its file, and every cited test title exists in its file.'
   );
 }
 

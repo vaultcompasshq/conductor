@@ -218,15 +218,16 @@ non-zero produces a non-zero composed code whatever the umbrella made of
 its output. The flag exists only so a gate whose exit code somehow said
 clean while its own report carried a blocking finding still fails the run.
 
-Pinned by tests/exit-codes.test.ts, twelve cases, of which the ones that
-matter are "does not take the numeric maximum of the children codes"
-(line 43, whose single gate exited 1 and is could-not-run, so the answer
-is 2 where the maximum would be 1), "lets could-not-run outrank a
-blocking gate rather than the other way round" (line 34), and "is 1 when
-a gate reported a blocking finding even if its exit code did not" (line
-22). The wiring from a real
-run into that function is tests/run.test.ts:159, which drives a gate whose
-output has drifted shape and asserts the composed code is 2 and not 1.
+Pinned by the twelve cases in tests/exit-codes.test.ts, of which the ones
+that matter are tests/exit-codes.test.ts:43 ("does not take the numeric
+maximum of the children codes"), 34 ("lets could-not-run outrank a
+blocking gate rather than the other way round") and 22 ("is 1 when a gate
+reported a blocking finding even if its exit code did not"). The first of
+those has a single gate that exited 1 and is could-not-run, so the answer
+is 2 where the maximum would be 1. The wiring from a real run into that
+function is tests/run.test.ts:159 ("composes to 2, not to 1"), which
+drives a gate whose output has drifted shape and asserts the composed code
+is 2 and not 1.
 
 `ExitInput.enforce` is REQUIRED rather than defaulted
 (src/exit-codes.ts:69), so a call site that has not thought about
@@ -346,8 +347,14 @@ that exits 1 with stdout that will not parse as JSON is could-not-run
 (src/gate-runner.ts:1417-1435). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
-Pinned by tests/gate-runner.test.ts:241 and 251, and end to end by
-tests/run.test.ts:159 and tests/cli.test.ts:104.
+Pinned by tests/gate-runner.test.ts:241 ("treats exit 2 as could-not-run
+rather than as a policy violation") and 251 ("treats exit 1 with
+unparseable stdout as could-not-run, the rejected-config shape"), and end
+to end by tests/run.test.ts:245 ("is visible as an umbrella finding, so it
+reaches the published format too") and 538 ("reaches
+gate-output-unparseable too, which is the same reader problem"), and by
+tests/cli.test.ts:122 ("prints no stack frames when a gate exits with its
+could-not-run code"), which asserts the CLI exits 2.
 
 AGENTS.md and README.md both used to say the umbrella raises no findings
 of its own "beyond conductor/gate-missing". That was false and always had
@@ -962,30 +969,45 @@ at tests/normalize.test.ts:898-966.
 The three additions of the fix round are pinned separately, because each of
 them is a way the mechanism above was true and the REPORT of it was not:
 
-- The refusal as its own outcome: tests/output-text.test.ts:1053-1113 (exit
-  2 and the reason with no gate in the inventory, the fetch-depth remedy,
-  leading with it, still naming the gates there were, and never the clean
-  one-line summary) and tests/output-sarif.test.ts:1710-1785 (the run
-  exists, the notification and its ref, error level, `executionSuccessful`
-  false, the could-not-run results survive, silence when not refused). End
-  to end through the CLI on a real repository at tests/cli.test.ts:1050,
-  1078 and 1117, the last of which is a head policy that will not parse.
-- The program rule: tests/cli.test.ts:1220-1885, eighteen cases on real
-  repositories. All THREE attack shapes are driven BEFORE and after, so each
-  refusal is measured against a run where the planted program demonstrably
-  did execute rather than against an assumption that it would have. The
-  wrapper shape is at tests/cli.test.ts:1502-1668, with the two directions
-  that keep the directory rule usable rather than a ban on vendoring beside
-  it: a vendored directory left entirely alone is accepted, and a change
-  elsewhere in the repository refuses nothing. The mutation that matters for
-  those two is comparing the ROOT tree instead of the directory tree, which
-  reddens four.
+- The refusal as its own outcome: tests/output-text.test.ts:1598 ("says
+  exit 2 and the reason when the inventory names no gate at all"), 1607
+  ("carries the fetch-depth remedy, which is the fix in nine cases out of
+  ten"), 1611 ("leads with the refusal rather than burying it under the gate
+  sections"), 1623 ("still names the gates the inventory did hold") and 1639
+  ("never prints the clean one-line summary for a refusal"), and
+  tests/output-sarif.test.ts:2013 ("writes the umbrella run even when there
+  is no gate and no finding"), 2022 ("carries a conductor/trust-base-refused
+  notification naming the ref"), 2035 ("raises it at error level, unlike
+  every other notification here"), 2047 ("says the analysis did not
+  complete"), 2053 ("keeps the could-not-run results for whatever gates the
+  inventory named") and 2067 ("says nothing of the kind on a run that was
+  not refused"). End to end through the CLI on a real repository at
+  tests/cli.test.ts:1705 ("still reports the refusal when the head policy
+  enables no gate at all"), 1733 ("writes a SARIF log with the refusal even
+  when the head policy enables no gate") and 1772 ("reports the refusal when
+  the head policy will not parse at all").
+- The program rule: tests/cli.test.ts ("the program a pull-request run is
+  allowed to execute"), eighteen cases on real repositories. All THREE
+  attack shapes are driven BEFORE and after, so each refusal is measured
+  against a run where the planted program demonstrably did execute rather
+  than against an assumption that it would have. The wrapper shape is
+  tests/cli.test.ts ("a base-approved wrapper whose helper the head
+  replaced"), with the two directions that keep the directory rule usable
+  rather than a ban on vendoring beside it: tests/cli.test.ts:2551
+  ("accepts a vendored directory the pull request left entirely alone") and
+  2562 ("does not refuse over a change elsewhere in the repository"). The
+  mutation that matters for those two is comparing the ROOT tree instead of
+  the directory tree, which reddens four.
 - The version refusal and the vault-guard pass-down:
-  tests/gate-runner.test.ts:280-432 and 415-589, with the summed proposal at
-  tests/run.test.ts:647 and the real gate at
-  tests/dogfood.e2e.test.ts:779-859, which drives the sibling's built
-  vault-guard through the policy's absolute `command:` and skips, loudly,
-  when there is no such build on the machine.
+  tests/gate-runner.test.ts ("deciding whether a gate can be put into
+  pull-request mode" and "the trust base on the command line and on the
+  outcome"), with the summed proposal at tests/run.test.ts:733 ("sums a
+  proposal raised by the secrets gate alongside the intent gate own") and
+  the real gate at tests/dogfood.e2e.test.ts:847 ("takes the config from
+  the base ref and reports the secret anyway") and 855 ("reports the muting
+  attempt as that gate's own proposal"), which drive the sibling's built
+  vault-guard through the policy's absolute `command:` and are skipped,
+  with a warning, when there is no such build on the machine.
 
 All three gates are in the table as of 0.3.0, and THE COMPOSED TEST THE
 DESIGN CALLS THE ACCEPTANCE CRITERION FOR THIS WAVE NOW RUNS
@@ -1247,21 +1269,32 @@ the same repository.
 
 Pinned at three levels, and the parity direction is pinned at every one of
 them, because a skip that also fired on ordinary runs would silently change
-what a hook executes. The resolution decision:
-tests/resolve.test.ts:244-363. The gate: tests/gate-runner.test.ts:610-721,
-where each case plants a marker binary under `node_modules/.bin` so "the
-other one ran" is a fact about the filesystem rather than about a `source`
-field. The reports: tests/output-text.test.ts:1167-1219 and
-tests/output-sarif.test.ts:1787-1841. Through the CLI on a real repository:
-tests/cli.test.ts:1687-1710, where the same plant that 0.3.0 refused is now
-unreachable AND the real gate on PATH reports the secret it was hiding. End
-to end against the real gates: tests/dogfood.e2e.test.ts:662-776, which
+what a hook executes. The resolution decision: tests/resolve.test.ts
+("resolution on a pull-request run" and "naming the candidate a
+pull-request run skipped"), with the parity direction at
+tests/resolve.test.ts:316 ("leaves the ordinary run alone, node_modules/.bin
+first"). The gate: tests/gate-runner.test.ts ("a pull-request run and the
+repository own node_modules"), where each case plants a marker binary under
+`node_modules/.bin` so "the other one ran" is a fact about the filesystem
+rather than about a `source` field, with the parity direction at
+tests/gate-runner.test.ts:770 ("says nothing and changes nothing outside
+pull-request mode"). The reports: tests/output-text.test.ts ("the
+node_modules candidate a pull-request run skipped") and
+tests/output-sarif.test.ts ("the node_modules candidate a pull-request run
+skipped"). Through the CLI on a real repository: tests/cli.test.ts:2607
+("never reaches it under a trust base, and the gate on PATH reports what it
+hid"), where the same plant that 0.3.0 refused is now unreachable AND the
+gate on PATH reports the secret it was hiding, with the parity direction at
+tests/cli.test.ts:2789 ("changes nothing outside pull-request mode"). End to
+end against the real gates: tests/dogfood.e2e.test.ts ("the gates also
+installed as devDependencies, which is every repository here"), which
 plants two marker binaries in the dogfood clone's own `node_modules/.bin`,
-and the composed test's PATH variant asserts the line is ABSENT
-(tests/dogfood.e2e.test.ts:1203), which is what keeps it from being
-decoration that appears on every run. The action itself:
-tests/action.test.ts:233-436, which RUNS both scripts under bash with npm
-replaced by a recorder rather than pattern-matching the YAML.
+and the composed test's PATH variant, tests/dogfood.e2e.test.ts:1202
+("reaches the same verdict with no command: override anywhere"), asserts
+the line is ABSENT, which is what keeps it from being decoration that
+appears on every run. The action itself: tests/action.test.ts ("action.yml
+installs the gates outside the tree"), which RUNS both scripts under bash
+with npm replaced by a recorder rather than pattern-matching the YAML.
 
 WHAT THIS STILL DOES NOT DO, stated here because a reader should not infer
 more coverage than there is:
@@ -1379,13 +1412,14 @@ could-not-run gate rather than passing silently; the exit code comes from the
 history gate alone in both directions (clean and blocking); and a run with
 `treeUnchanged: false` skips nothing, so the ordinary pull-request path is
 pinned not to have moved. End to end through the CLI, tests/cli.test.ts ("the
-equal-tree exception through the CLI"), against a real repository built with
+equal-tree exception through the CLI (issue #69)"), against a real repository built with
 an actual `git merge --no-ff`, asserting the history gate's own section
 appears, the tree-unchanged line names the skipped gate, and neither a
 could-not-run finding nor `conductor/gate-missing` appears for the gate that
-was never spawned. The reports, in tests/output-text.test.ts and
-tests/output-sarif.test.ts ("a gate skipped because the head tree is
-unchanged"): the full-report line, the one-line summary clause, the verdict
+was never spawned. The reports, in tests/output-text.test.ts ("a gate
+skipped because the head tree is unchanged (issue #69)") and
+tests/output-sarif.test.ts ("records a gate skipped because the head tree
+is unchanged, as a note beside the others (issue #69)"): the full-report line, the one-line summary clause, the verdict
 branch for an empty gate list, and the SARIF notification at note level,
 absent entirely when nothing was skipped this way.
 
@@ -1516,7 +1550,7 @@ backward-pin rule says of itself, and neither of the two checks in this
 entry claims to be a substitute for it.
 
 Pinned by tests/trust-base.test.ts ("refusing an explicit trust-base that
-disagrees with GITHUB_BASE_REF"): the no-op with `GITHUB_BASE_REF` unset, the
+disagrees with GITHUB_BASE_REF (issue #58)"): the no-op with `GITHUB_BASE_REF` unset, the
 accepted case where the given ref resolves to the same commit as
 `origin/<githubBaseRef>`, the refusal naming both refs and both commits on the
 simplest disagreeing shape, the fail-closed case when
@@ -1531,13 +1565,14 @@ branch, where the merge tree matches neither parent's tree, so neither of
 (`refuseTrustBaseRef(repo, prBranchTip)` returns null) before asserting that
 `refuseTrustBaseForPullRequest` refuses it. End to end through the CLI,
 tests/cli.test.ts ("the CLI refuses an explicit trust-base that disagrees
-with GITHUB_BASE_REF"): the same simplest-shape refusal, the accepted
+with GITHUB_BASE_REF (issue #58)"): the same simplest-shape refusal, the accepted
 `origin/<base>` shape, GITHUB_BASE_REF unset leaving the ORIGINAL (pre-#58)
 refusal message in place (what tells apart a correctly-scoped check from one
 that fires unconditionally), and the same real #58 merge-commit shape driven
 through a real repository and the built CLI. The Action, tests/action.test.ts
 ("action.yml refuses an explicit trust-base input on a pull request" and,
-separately, "declares TRUST_BASE in the validate step"), driven by running
+separately, "declares TRUST_BASE in the validate step, so the pull-request
+refusal below can read it"), driven by running
 the real validate step's script: refused on a pull_request event, accepted
 off one, accepted when no input was given at all, and the step's own `env:`
 wiring for `TRUST_BASE` pinned on its own, since nothing else in the suite
@@ -3474,9 +3509,14 @@ reaching the terminal puts a local filesystem path in front of a user who
 cannot act on any of it, and puts one into a report that gets uploaded.
 The message is the part that says what went wrong.
 
-Pinned by tests/cli.test.ts:99, 117, 131, 142 and 151, and by
-tests/run.test.ts:188, which walks the whole outcome object looking for a
-stack frame.
+Pinned by tests/cli.test.ts:104 ("reports a drifted gate output as exit 2
+with no stack frames"), 122 ("prints no stack frames when a gate exits with
+its could-not-run code"), 136 ("prints no stack frames when a gate binary
+is missing"), 147 ("prints a one-line message and no stack for a policy
+file that will not parse") and 157 ("prints a one-line message and no stack
+when there is no policy file at all"), and by tests/run.test.ts:188
+("carries no stack frame anywhere in the outcome"), which walks the whole
+outcome object looking for a stack frame.
 
 ## The child's working directory is the repository root
 
@@ -4256,7 +4296,7 @@ rule for the other silent exit 0: a run where no gate ran at all (none enabled,
 or every one deferred, tree-unchanged or skipped) keeps its exit status of 0 but
 is labelled `nothing-checked`, never `pass`, because a run where no gate ran at
 all is not clean whatever the exit code says. Pinned by tests/verdict-token.test.ts
-("is nothing-checked, never pass") and tests/action.test.ts (the closed-set pair
+("is nothing-checked, never pass, for a run with no gate at all (exit stays 0)") and tests/action.test.ts (the closed-set pair
 check).
 
 THE ONE PLACE A SECOND RUN REMAINS, and why. The action installs whatever
