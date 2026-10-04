@@ -169,7 +169,7 @@ function existsAsFile(candidate: string): boolean {
   }
 }
 
-function findOnPath(name: string, pathValue: string): string | null {
+export function findOnPath(name: string, pathValue: string): string | null {
   for (const dir of pathValue.split(path.delimiter)) {
     if (dir.length === 0) {
       continue;

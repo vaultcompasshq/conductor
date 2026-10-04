@@ -22,9 +22,16 @@
 // base is:
 //
 //  - READS ONLY, AND NEVER INTO THE REPOSITORY. This file runs read-only git:
-//    rev-parse, show, show-ref, rev-list and ls-tree. No checkout switch, no
-//    worktree, no stash, no write of any kind. An umbrella that moved
+//    rev-parse, show-ref, rev-list, ls-tree and cat-file. No checkout switch,
+//    no worktree, no stash, no write of any kind. An umbrella that moved
 //    somebody's HEAD to do its job would be a worse bug than the one it fixes.
+//
+//    Every function here that hands git a revision refuses a dash-leading one
+//    itself, before git sees it, and ends the revision list with "--" where
+//    the command takes paths, so git always reads the revision as a revision
+//    and every path as a path. One reader (`readFileAtRef`) looks a path up
+//    in the ref's tree and reads the blob by its id. --end-of-options is not
+//    used: git rev-parse only accepts it from git 2.30.
 //
 //  - FAIL CLOSED ON THE REF. A ref that will not resolve is could-not-run for
 //    every enabled gate. It is never a reason to fall back to the head,
@@ -65,12 +72,11 @@
 //    (`headTreeEqualsBase` below) and run only the gates whose input is
 //    history rather than the tree.
 
-import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
-import { POLICY_FILE_NAME } from './policy.js';
+import { gitComplaint, runGit } from './git.js';
 
 /**
  * The private, fully spelled ref the composite action fetches the base branch
@@ -81,38 +87,56 @@ import { POLICY_FILE_NAME } from './policy.js';
  */
 export const PRIVATE_TRUST_BASE_REF = 'refs/conductor/trust-base';
 
-function refExists(repoRoot: string, fullRef: string): boolean {
-  const child = spawnSync('git', ['show-ref', '--verify', '--quiet', fullRef], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  return child.error === undefined && child.status === 0;
+/** What a fully spelled ref names: nothing, an object, or an answer git could not give. */
+export type RefLookup =
+  | { kind: 'absent' }
+  | { kind: 'ref'; oid: string }
+  | { kind: 'error'; detail: string };
+
+/**
+ * The object a fully spelled ref EXACTLY names, keeping "no such ref" apart
+ * from "git could not answer". `show-ref --verify` looks at that ref and
+ * nothing else: it does not run git's name-resolution rules, so a tag stored
+ * as refs/tags/refs/conductor/trust-base is never taken for
+ * refs/conductor/trust-base. With --quiet it exits 1 for a ref that is not
+ * there and something else for a failure, which is the split this needs.
+ */
+export function exactRefLookup(repoRoot: string, fullRef: string): RefLookup {
+  if (fullRef.startsWith('-')) {
+    return { kind: 'error', detail: `refusing "${fullRef}": it starts with "-"` };
+  }
+  const probe = runGit(repoRoot, ['show-ref', '--verify', '--quiet', fullRef]);
+  if (probe.error === undefined && probe.status === 1) {
+    return { kind: 'absent' };
+  }
+  if (probe.error !== undefined || probe.status !== 0) {
+    return { kind: 'error', detail: `cannot read ${fullRef}: ${gitComplaint(probe)}` };
+  }
+  const read = runGit(repoRoot, ['show-ref', '--verify', '--hash', fullRef]);
+  const value = read.stdout.trim();
+  if (read.error !== undefined || read.status !== 0 || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)) {
+    return { kind: 'error', detail: `cannot read ${fullRef}: ${gitComplaint(read)}` };
+  }
+  return { kind: 'ref', oid: value };
 }
 
 /**
  * The object id a fully spelled ref EXACTLY names, or null when there is no
- * such ref. `show-ref --verify` looks at that ref and nothing else: it does
- * not run git's name-resolution rules, so a tag stored as
- * refs/tags/refs/conductor/trust-base is never taken for
- * refs/conductor/trust-base.
+ * such ref or it cannot be read. For callers where both mean "cannot use
+ * it"; a caller that would fall back to something else on absence uses
+ * `exactRefLookup` instead, so an unreadable ref never takes that fallback.
  */
 export function exactRefObject(repoRoot: string, fullRef: string): string | null {
-  const child = spawnSync('git', ['show-ref', '--verify', '--hash', fullRef], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  if (child.error !== undefined || child.status !== 0) {
-    return null;
-  }
-  const value = (child.stdout ?? '').trim();
-  return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value) ? value : null;
+  const lookup = exactRefLookup(repoRoot, fullRef);
+  return lookup.kind === 'ref' ? lookup.oid : null;
 }
 
 /**
  * A caller-given trust base that starts with "-", or null. Git allows a tag
  * named refs/tags/--output=x, and such a name handed to git as an argument is
- * read as an option, not a revision. Refused before any git call sees it; the
- * git calls below also pass --end-of-options as a second line of defence.
+ * read as an option, not a revision. Refused before any git call sees it; each
+ * git-calling function below refuses one again itself, so no caller can skip
+ * the check.
  */
 export function refuseDashLeadingRef(ref: string): string | null {
   if (!ref.startsWith('-')) {
@@ -162,9 +186,22 @@ export function refuseAmbiguousRef(
   ) {
     return null;
   }
-  const matches = [`refs/tags/${name}`, `refs/heads/${name}`, `refs/remotes/${name}`].filter((full) =>
-    refExists(repoRoot, full)
-  );
+  const matches: string[] = [];
+  for (const full of [`refs/tags/${name}`, `refs/heads/${name}`, `refs/remotes/${name}`]) {
+    const lookup = exactRefLookup(repoRoot, full);
+    if (lookup.kind === 'error') {
+      // Could not tell whether the name is shadowed, so it cannot be trusted
+      // as spelled. Refused with git's own reason rather than read as absent.
+      return (
+        `refusing "${ref}" as ${noun}: whether the name "${name}" is ambiguous could not be ` +
+        `checked (${lookup.detail}). Pass the ref spelled in full, for example ` +
+        'refs/remotes/origin/main. Nothing was checked.'
+      );
+    }
+    if (lookup.kind === 'ref') {
+      matches.push(full);
+    }
+  }
   if (matches.length <= 1) {
     return null;
   }
@@ -184,6 +221,11 @@ export function refuseAmbiguousRef(
  * rather than repeating the command line that failed.
  */
 export function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree'): string | null {
+  // A dash-leading rev is an option to git, not a revision. Refused here,
+  // inside the function that calls git, so no caller can skip it.
+  if (rev.startsWith('-')) {
+    return null;
+  }
   // A refs/ name is NEVER handed to git's name resolution: rev-parse would
   // try refs/tags/<name> when the ref itself is absent, so a pushed tag named
   // refs/conductor/trust-base would stand in for the private ref. The exact
@@ -197,14 +239,13 @@ export function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree
     }
     target = exact;
   }
-  const child = spawnSync('git', ['rev-parse', '--verify', '--quiet', '--end-of-options', `${target}^{${kind}}`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
+  // No "--" here: rev-parse --verify takes exactly one revision and reads it
+  // only as a revision.
+  const child = runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${target}^{${kind}}`]);
   if (child.error !== undefined || child.status !== 0) {
     return null;
   }
-  const value = (child.stdout ?? '').trim();
+  const value = child.stdout.trim();
   return value === '' ? null : value;
 }
 
@@ -219,14 +260,14 @@ export function resolveRev(repoRoot: string, rev: string, kind: 'commit' | 'tree
  * branch first and the pull request's own head second.
  */
 function headParents(repoRoot: string): string[] {
-  const child = spawnSync('git', ['rev-list', '--parents', '-n', '1', 'HEAD'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
+  // "--" ends the revisions, so HEAD is read as a revision whatever files the
+  // working tree holds. A failure stays an empty list, which refuses the
+  // equal-tree exception: the fail-closed direction.
+  const child = runGit(repoRoot, ['rev-list', '--parents', '-n', '1', 'HEAD', '--']);
   if (child.error !== undefined || child.status !== 0) {
     return [];
   }
-  const line = (child.stdout ?? '').trim();
+  const line = child.stdout.trim();
   if (line === '') {
     return [];
   }
@@ -407,7 +448,25 @@ export function refuseTrustBaseForPullRequest(
   // name when the ref is absent.
   const expectedRef = `refs/remotes/origin/${githubBaseRef}`;
   const expectedCommit = resolveRev(repoRoot, expectedRef, 'commit');
-  const privateCommit = resolveRev(repoRoot, PRIVATE_TRUST_BASE_REF, 'commit');
+  // The private ref decides which reference applies, so a private ref git
+  // could not read is never taken for an absent one: the remote-tracking ref
+  // is the reference only when the private ref is truly absent.
+  const privateLookup = exactRefLookup(repoRoot, PRIVATE_TRUST_BASE_REF);
+  if (privateLookup.kind === 'error') {
+    return (
+      `cannot verify "${ref}" as the trust base: ${privateLookup.detail}. Check that git can ` +
+      `read the repository and that the action's fetch of the base branch into ` +
+      `${PRIVATE_TRUST_BASE_REF} succeeded. Nothing was checked.`
+    );
+  }
+  const privateCommit =
+    privateLookup.kind === 'absent' ? null : resolveRev(repoRoot, PRIVATE_TRUST_BASE_REF, 'commit');
+  if (privateLookup.kind === 'ref' && privateCommit === null) {
+    return (
+      `cannot verify "${ref}" as the trust base: ${PRIVATE_TRUST_BASE_REF} exists but does not ` +
+      'name a commit. Nothing was checked.'
+    );
+  }
 
   // THE ACTION PASSES A FULL COMMIT ID, never a ref name (a full object id is
   // not subject to name resolution). It is accepted only when it IS the
@@ -491,27 +550,67 @@ export function refuseTrustBaseForPullRequest(
 }
 
 /**
- * The policy file's contents at a ref, or null when that ref carries none.
- *
- * `git show`, never a checkout switch and never a read from the working
- * tree. The `./` is load-bearing for the same reason it is in intent-guard:
- * it makes git resolve the path relative to the working directory, which is
- * the repository root here, rather than to wherever the repository root would
- * be from somewhere else.
+ * How a control file that cannot be read at the base is cleared, as one
+ * sentence for every refusal that names one. The pull request that fixes the
+ * file is judged against the same base, so it cannot pass this check itself.
  */
-export function readPolicyAtRef(repoRoot: string, ref: string): string | null {
-  if (ref.startsWith('-')) {
-    return null;
+export function unreadableBaseRemedy(relativePath: string): string {
+  return (
+    `To clear it, make ${relativePath} a regular file on the base branch, with no symbolic ` +
+    'link or submodule in the directories above it. The pull request ' +
+    'that does so is judged against this same base, so it has to be merged by someone ' +
+    'allowed to merge without this check passing.'
+  );
+}
+
+/** One file at a ref: not there, its text, or a read this run could not make. */
+export type FileAtRef =
+  | { kind: 'absent' }
+  | { kind: 'file'; text: string }
+  | { kind: 'error'; detail: string };
+
+/**
+ * One file's contents at a ref, with absent, present and unreadable kept
+ * apart. THE ONE READER for every file the umbrella takes from a ref.
+ *
+ * Two steps. `git ls-tree <ref> -- ./<path>` looks the path up in the ref's
+ * tree: a listing that succeeds and names nothing is ABSENT, and a listing
+ * that fails is an ERROR. The entry must be a regular file; a symlink, a
+ * directory or a submodule at the path, or at any directory above it, is an
+ * ERROR, never read as its link target or as nothing. Then
+ * `git cat-file blob <id>` reads the blob by the id the listing named, and a
+ * failure there is an ERROR too. The path is only ever a path and the
+ * revision only ever a revision, so a file name can never be read as part of
+ * a revision, and absent, present and unreadable are three separate answers.
+ *
+ * No caller turns an ERROR into empty text or into a default. An error is
+ * could-not-run: the trusted file exists, or may, and nothing was judged
+ * against it.
+ *
+ * The `./` makes git resolve the path relative to the working directory,
+ * which is the repository root here.
+ */
+export function readFileAtRef(repoRoot: string, ref: string, relativePath: string): FileAtRef {
+  const listed = treeEntryAt(repoRoot, ref, relativePath);
+  if (listed.kind !== 'entry') {
+    return listed;
   }
-  const child = spawnSync('git', ['show', '--end-of-options', `${ref}:./${POLICY_FILE_NAME}`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  if (child.error !== undefined || child.status !== 0) {
-    return null;
+  if (listed.type !== 'blob' || !isRegularFileMode(listed.mode)) {
+    return {
+      kind: 'error',
+      detail:
+        `${relativePath} is not a regular file at "${ref}" (git lists it with mode ${listed.mode}), ` +
+        'so there is no file to read there',
+    };
   }
-  return child.stdout ?? '';
+  const blob = runGit(repoRoot, ['cat-file', 'blob', listed.sha]);
+  if (blob.error !== undefined || blob.status !== 0) {
+    return {
+      kind: 'error',
+      detail: `${relativePath} is listed at "${ref}" but its contents could not be read: ${gitComplaint(blob)}`,
+    };
+  }
+  return { kind: 'file', text: blob.stdout };
 }
 
 /**
@@ -524,7 +623,7 @@ export function readPolicyAtRef(repoRoot: string, ref: string): string | null {
  * compared instead, which is the fail-closed direction: an unparseable head
  * policy is reported as a change rather than quietly matching.
  *
- * BOTH SIDES COME FROM `git show`, base and head alike, and that is not an
+ * BOTH SIDES COME FROM `readFileAtRef`, base and head alike, and that is not an
  * accident of implementation. intent-guard read its head side from the
  * working tree with a call that follows symlinks, so a pull request that
  * replaced a control file with a link compared equal to the base and was
@@ -549,38 +648,71 @@ export function policyDiffers(base: string | null, head: string | null): boolean
 /** The one line the report prints when the head proposes a different policy. */
 export const POLICY_PROPOSAL_LINE = 'policy changed in this pull request';
 
+/** One path's tree entry at a ref: not there, the entry, or a listing that failed. */
+export type TreeEntry =
+  | { kind: 'absent' }
+  | { kind: 'entry'; mode: string; type: string; sha: string }
+  | { kind: 'error'; detail: string };
+
 /**
- * One path's tree entry at a ref, or null when the ref has no such path.
+ * One path's tree entry at a ref, keeping "the ref has no such path" apart
+ * from "git could not list it".
  *
  * `ls-tree` rather than `git show`, because the BLOB ID is the thing being
  * compared and `show` prints contents without telling you what kind of entry
  * produced them. The mode comes with it, so a regular file can be told from a
  * symlink, a submodule or a directory in the same read.
+ *
+ * Only a listing that SUCCEEDS and names nothing is absent. ls-tree exiting
+ * non-zero (a ref that will not resolve, a tree it cannot read) is a read
+ * this run cannot make, and so is a path with a symlink or a submodule at
+ * any directory above it in the ref's tree: what the path means there is
+ * decided outside the tree, so it is an error, never absent.
  */
-export function treeEntryAt(
-  repoRoot: string,
-  ref: string,
-  relativePath: string
-): { mode: string; type: string; sha: string } | null {
+export function treeEntryAt(repoRoot: string, ref: string, relativePath: string): TreeEntry {
   if (ref.startsWith('-')) {
-    return null;
+    return {
+      kind: 'error',
+      detail: `refusing "${ref}": it starts with "-", which git would read as an option rather than a revision`,
+    };
   }
-  const child = spawnSync('git', ['ls-tree', '--end-of-options', ref, '--', `./${relativePath}`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
+  const segments = relativePath.split('/').filter((segment) => segment !== '' && segment !== '.');
+  for (let depth = 1; depth < segments.length; depth += 1) {
+    const parent = segments.slice(0, depth).join('/');
+    const listed = listOne(repoRoot, ref, parent);
+    if (listed.kind !== 'entry') {
+      return listed;
+    }
+    if (listed.mode === '120000' || listed.mode === '160000') {
+      return {
+        kind: 'error',
+        detail:
+          `${parent} is a ${listed.mode === '120000' ? 'symbolic link' : 'submodule'} at "${ref}", ` +
+          `so ${relativePath} cannot be read there as a file in the tree`,
+      };
+    }
+    if (listed.type !== 'tree') {
+      return { kind: 'absent' };
+    }
+  }
+  return listOne(repoRoot, ref, relativePath);
+}
+
+/** One `ls-tree` listing of exactly this path. */
+function listOne(repoRoot: string, ref: string, relativePath: string): TreeEntry {
+  const child = runGit(repoRoot, ['ls-tree', ref, '--', `./${relativePath}`]);
   if (child.error !== undefined || child.status !== 0) {
-    return null;
+    return { kind: 'error', detail: `cannot list ${relativePath} at "${ref}": ${gitComplaint(child)}` };
   }
-  const line = (child.stdout ?? '').split('\n').find((entry) => entry.trim().length > 0);
+  const line = child.stdout.split('\n').find((entry) => entry.trim().length > 0);
   if (line === undefined) {
-    return null;
+    return { kind: 'absent' };
   }
   const [mode, type, sha] = line.split(/\s+/);
   if (mode === undefined || type === undefined || sha === undefined) {
-    return null;
+    return { kind: 'error', detail: `cannot read the listing of ${relativePath} at "${ref}"` };
   }
-  return { mode, type, sha };
+  return { kind: 'entry', mode, type, sha };
 }
 
 /** The two modes that mean an ordinary file git will hand back. */
@@ -638,7 +770,9 @@ function treeShaAt(repoRoot: string, ref: string, relativeDir: string): string |
     return resolveRev(repoRoot, ref, 'tree');
   }
   const entry = treeEntryAt(repoRoot, ref, relativeDir);
-  return entry === null || entry.type !== 'tree' ? null : entry.sha;
+  // Absent, unreadable or not a directory all mean "not the approved tree",
+  // which refuses the program: the fail-closed direction for each.
+  return entry.kind !== 'entry' || entry.type !== 'tree' ? null : entry.sha;
 }
 
 /**
@@ -735,8 +869,19 @@ export function refuseHeadControlledProgram(
 
   for (const candidate of candidates) {
     const relative = path.relative(repoReal, candidate).split(path.sep).join('/');
-    const base = treeEntryAt(repoRoot, trustBase, relative);
-    const head = treeEntryAt(repoRoot, 'HEAD', relative);
+    const baseEntry = treeEntryAt(repoRoot, trustBase, relative);
+    const headEntry = treeEntryAt(repoRoot, 'HEAD', relative);
+
+    for (const listed of [baseEntry, headEntry]) {
+      if (listed.kind === 'error') {
+        return (
+          `the gate program at ${relative} could not be checked against "${trustBase}": ` +
+          `${listed.detail}. Nothing was checked by this gate.`
+        );
+      }
+    }
+    const base = baseEntry.kind === 'entry' ? baseEntry : null;
+    const head = headEntry.kind === 'entry' ? headEntry : null;
 
     if (base === null || head === null) {
       return (

@@ -4,7 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync }
 import os from 'node:os';
 import path from 'node:path';
 
-import { changedPathsSince, resolveBaseRef, resolveBaseRefInRepo } from '../src/intent-base.js';
+import { useGitProgram } from '../src/git.js';
+import {
+  changedPathsSince,
+  orderForPathsFlag,
+  pathsFlagRefusal,
+  resolveBaseRef,
+  resolveBaseRefInRepo,
+} from '../src/intent-base.js';
 
 const temps: string[] = [];
 
@@ -223,13 +230,29 @@ describe('changedPathsSince', () => {
     // Before the fix "--output=<file>...HEAD" was git diff's own --output
     // option: it wrote that file and printed nothing, so the change set was
     // empty and the intent gate judged nothing. The check in
-    // resolveBaseRefInRepo is the first line; --end-of-options in the git
-    // call is the second, proven here by calling the function directly.
+    // resolveBaseRefInRepo is the first line; the refusal inside
+    // changedPathsSince is the second, proven here by calling it directly.
     const root = repoWithMain();
     const target = path.join(tempDir(), 'injected.txt');
     const changed = changedPathsSince(root, `--output=${target}`);
     expect(changed.ok).toBe(false);
+    if (changed.ok) throw new Error('unreachable');
+    expect(changed.detail).toMatch(/starts with a dash/);
     expect(existsSync(target)).toBe(false);
+  });
+
+  it('lists the change when the working tree holds a file named like the range', () => {
+    // The range is always read as a range, whatever the working tree holds.
+    const root = repoWithMain();
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'feat/range']);
+    write(root, 'src/widget/cache.ts', 'export const cache = 1;\n');
+    write(root, `${base}...HEAD`, 'a file named like the range\n');
+    commit(root, 'branch work');
+    const changed = changedPathsSince(root, base);
+    expect(changed.ok).toBe(true);
+    if (!changed.ok) throw new Error('unreachable');
+    expect(changed.paths).toContain('src/widget/cache.ts');
   });
 
   it('lists what the branch changed and not what landed on the base afterwards', () => {
@@ -300,7 +323,7 @@ describe('changedPathsSince', () => {
     expect(changedPathsSince(root, 'main')).toEqual({ ok: true, paths: [...names].sort() });
   });
 
-  it('refuses a backslash in a path itself, naming the file: intent-guard refuses it in --paths', () => {
+  it('lists a path with a backslash as it is, and names it as one --paths cannot carry', () => {
     const root = repoWithMain();
     git(root, ['checkout', '--quiet', '-b', 'feat/backslash']);
     write(root, 'src/back\\slash.ts', 'export const x = 1;\n');
@@ -308,17 +331,15 @@ describe('changedPathsSince', () => {
 
     const changed = changedPathsSince(root, 'main');
 
-    expect(changed.ok).toBe(false);
-    expect(changed.ok === false && changed.detail).toContain('src/back\\slash.ts');
-    expect(changed.ok === false && changed.detail).toMatch(/backslash/);
+    expect(changed).toEqual({ ok: true, paths: ['src/back\\slash.ts'] });
+    expect(pathsFlagRefusal(['src/back\\slash.ts'])).toMatch(/"src\/back\\slash\.ts" contains a backslash/);
   });
 
-  it('fails closed on a path containing a comma, naming the path', () => {
-    // The only shape intent-guard's --paths accepts is comma-joined, so a
-    // comma in a filename splits one path into two: a phantom entry that can
-    // be reported outside allowed_paths, and a real path that silently stops
-    // being checked against a protected one. Refusing to answer is the only
-    // honest option, because both halves of that failure are invisible.
+  it('lists a path with a comma as it is, and names it as one --paths cannot carry', () => {
+    // --paths is comma-joined, so a comma in a filename would split one path
+    // into two: a phantom entry and a real path that silently stops being
+    // checked. Where --paths is the only channel that is refused; where the
+    // gate reads the change set from git itself the path is judged.
     const root = repoWithMain();
     git(root, ['checkout', '--quiet', '-b', 'feat/commas']);
     write(root, 'src/a,b.ts', 'export const ab = 1;\n');
@@ -326,12 +347,11 @@ describe('changedPathsSince', () => {
 
     const changed = changedPathsSince(root, 'main');
 
-    expect(changed.ok).toBe(false);
-    expect(changed.ok === false && changed.detail).toContain('src/a,b.ts');
-    expect(changed.ok === false && changed.detail).toMatch(/comma/);
+    expect(changed).toEqual({ ok: true, paths: ['src/a,b.ts'] });
+    expect(pathsFlagRefusal(['src/a,b.ts'])).toMatch(/"src\/a,b\.ts" contains a comma/);
   });
 
-  it('fails closed on a path with leading whitespace, naming the path', () => {
+  it('lists a path with leading whitespace as it is, and names it as one --paths cannot carry', () => {
     const root = repoWithMain();
     git(root, ['checkout', '--quiet', '-b', 'feat/leading']);
     write(root, ' leading.ts', 'export const l = 1;\n');
@@ -339,8 +359,8 @@ describe('changedPathsSince', () => {
 
     const changed = changedPathsSince(root, 'main');
 
-    expect(changed.ok).toBe(false);
-    expect(changed.ok === false && changed.detail).toContain('leading.ts');
+    expect(changed).toEqual({ ok: true, paths: [' leading.ts'] });
+    expect(pathsFlagRefusal([' leading.ts'])).toMatch(/leading or trailing whitespace/);
   });
 
   it('reports an empty change set as an empty list rather than as a failure', () => {
@@ -378,6 +398,96 @@ describe('changedPathsSince', () => {
   });
 });
 
+describe('an unreadable private ref is never taken for an absent one', () => {
+  const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+
+  /** A git that fails, as git does on a read it cannot make, for the private ref only. */
+  function failingPrivateRefGit(): string {
+    const bin = tempDir();
+    const file = path.join(bin, 'git');
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *"show-ref --verify --quiet refs/conductor/trust-base"*) echo "fatal: cannot read refs/conductor/trust-base" >&2; exit 128 ;;',
+        'esac',
+        `exec ${REAL_GIT} "$@"`,
+        '',
+      ].join('\n'),
+      { mode: 0o755 }
+    );
+    return file;
+  }
+
+  function prBranch(): string {
+    const root = repoWithMain();
+    git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    git(root, ['checkout', '--quiet', '-b', 'feat/x']);
+    write(root, 'src/one.ts', 'export const one = 1;\n');
+    commit(root, 'first');
+    return root;
+  }
+
+  it('refuses, naming the ref, instead of falling back to refs/remotes/origin/<base>', () => {
+    const root = prBranch();
+    useGitProgram(failingPrivateRefGit());
+    try {
+      const resolved = resolveBaseRefInRepo(root, { env: { GITHUB_BASE_REF: 'main' } });
+      expect(resolved.ok).toBe(false);
+      if (resolved.ok) throw new Error('unreachable');
+      expect(resolved.detail).toMatch(/^the base branch could not be read: cannot read refs\/conductor\/trust-base/);
+      expect(resolved.detail).toMatch(/nothing was checked\. Fix: check that git can read the repository/);
+    } finally {
+      useGitProgram('git');
+    }
+  });
+
+  it('still falls back to refs/remotes/origin/<base> when the private ref is simply absent', () => {
+    const root = prBranch();
+    const remote = git(root, ['rev-parse', 'refs/remotes/origin/main']).trim();
+    expect(resolveBaseRefInRepo(root, { env: { GITHUB_BASE_REF: 'main' } })).toEqual({
+      ok: true,
+      base: { ref: remote, source: 'github' },
+    });
+  });
+});
+
+describe('a moved submodule pointer', () => {
+  it('is listed even when .gitmodules says ignore = all', () => {
+    const root = repoWithMain();
+    write(root, '.gitmodules', '[submodule "lib"]\n\tpath = vendor/lib\n\turl = ./lib\n\tignore = all\n');
+    git(root, ['add', '.gitmodules']);
+    git(root, ['update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},vendor/lib`]);
+    // Committed straight from the index: "git add -A" would drop a gitlink
+    // with no checkout behind it.
+    git(root, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base with an ignored submodule']);
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'feat/bump']);
+    git(root, ['update-index', '--cacheinfo', `160000,${'2'.repeat(40)},vendor/lib`]);
+    git(root, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'move the pointer']);
+
+    const changed = changedPathsSince(root, base);
+
+    expect(changed).toEqual({ ok: true, paths: ['vendor/lib'] });
+  });
+});
+
+describe('the --paths list', () => {
+  it('leaves the order alone unless the first path starts with a dash', () => {
+    expect(orderForPathsFlag(['a.ts', '-b.md'])).toEqual(['a.ts', '-b.md']);
+    expect(orderForPathsFlag(['-b.md', '-c.md', 'a.ts', 'd.ts'])).toEqual(['a.ts', '-b.md', '-c.md', 'd.ts']);
+    expect(orderForPathsFlag(['-b.md'])).toEqual(['-b.md']);
+    expect(orderForPathsFlag([])).toEqual([]);
+  });
+
+  it('refuses a dash-leading change set only when every path starts with a dash', () => {
+    expect(pathsFlagRefusal(['-b.md', 'a.ts'])).toBeNull();
+    expect(pathsFlagRefusal(['-b.md', '-c.md'])).toMatch(/every changed path starts with "-"/);
+    expect(pathsFlagRefusal([])).toBeNull();
+  });
+});
+
 describe('the intent base refusals lead with what happened, then the fix', () => {
   it('says the base branch is not in the repository, then names the fix', () => {
     const root = tempDir();
@@ -391,6 +501,17 @@ describe('the intent base refusals lead with what happened, then the fix', () =>
     if (resolved.ok) throw new Error('unreachable');
     expect(resolved.detail).toMatch(/^the base branch is not in this repository: neither refs\/conductor\/trust-base/);
     expect(resolved.detail).toMatch(/Fix: in CI, check out with fetch-depth: 0, or fetch the base ref before the run\.$/);
+  });
+
+  it('says the trust base names no commit, then names the fix', () => {
+    const root = repoWithMain();
+
+    const resolved = resolveBaseRefInRepo(root, { env: {}, trustBase: 'origin/nope' });
+
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) throw new Error('unreachable');
+    expect(resolved.detail).toMatch(/^the trust base does not resolve to a commit: "origin\/nope"/);
+    expect(resolved.detail).toMatch(/Fix: pass a trust base that is a commit in this checkout/);
   });
 
   it('says git could not resolve the range, then names the fix', () => {

@@ -7,23 +7,29 @@
 // branch after this branch forked to this branch, so somebody else's merge
 // breaches this pull request's change budget.
 //
-// The umbrella computes the path set ITSELF rather than handing intent-guard
-// its own `--base`, and that is a deliberate cost. The contract for a run may
-// live in a temporary directory (see intent-prepare.ts), and `--base` inside
-// the gate resolves git relative to `--project`, where there is no
-// repository. Computing the set here and passing `--paths` is the one
-// arrangement that works for both the native and the imported contract, and
-// the flags below are copied from intent-guard 1.2.1 so the two agree on what
-// "changed" means rather than agreeing by coincidence.
+// The umbrella computes the path set ITSELF, and how it reaches the gate
+// depends on the contract. An imported contract lives in a temporary
+// directory (see intent-prepare.ts), where the gate's own `--base` would
+// resolve git relative to a `--project` with no repository in it, so that
+// gate is always handed `--paths`. A native contract on an intent-guard new
+// enough to read the change set from git itself is handed the gate's own
+// `--base` instead (`intentChangeChannel` in gate-runner.ts), and `--paths`
+// otherwise. The flags below are copied from intent-guard so the two agree
+// on what "changed" means rather than agreeing by coincidence.
 
-import { spawnSync } from 'node:child_process';
-
-import { PRIVATE_TRUST_BASE_REF, exactRefObject, refuseAmbiguousRef } from './trust-base.js';
+import { runGit } from './git.js';
+import {
+  PRIVATE_TRUST_BASE_REF,
+  exactRefLookup,
+  exactRefObject,
+  refuseAmbiguousRef,
+  resolveRev,
+} from './trust-base.js';
 
 export interface BaseResolution {
   ref: string;
   /** Which input named it, so the report can say. */
-  source: 'flag' | 'github';
+  source: 'flag' | 'github' | 'trust-base';
 }
 
 export type ChangedPaths = { ok: true; paths: string[] } | { ok: false; detail: string };
@@ -68,6 +74,8 @@ export type ResolvedBase =
  *    both in full. The private ref wins and is not compared against the
  *    remote-tracking ref. If neither exists the spelled remote ref is returned and the
  *    diff fails closed, naming fetch-depth: 0.
+ *  - Otherwise, on a run with a trust base: the commit the trust base
+ *    resolves to.
  *  - Null outside a pull request.
  *
  * Nothing is deepened here: a depth-1 private ref has no merge base and the
@@ -75,13 +83,13 @@ export type ResolvedBase =
  */
 export function resolveBaseRefInRepo(
   repoRoot: string,
-  options: { base?: string; env: NodeJS.ProcessEnv }
+  options: { base?: string; trustBase?: string; env: NodeJS.ProcessEnv }
 ): ResolvedBase {
   if (options.base !== undefined && options.base !== '') {
     // A base that starts with a dash is an OPTION to git, not a ref:
     // "--output=/x" made "git diff --output=/x...HEAD" write that file and
     // print nothing, an empty change set the intent gate then judged as clean.
-    // Refused here, and changedPathsSince passes --end-of-options as well.
+    // Refused here, and changedPathsSince refuses it again itself.
     if (options.base.startsWith('-')) {
       return {
         ok: false,
@@ -108,7 +116,26 @@ export function resolveBaseRefInRepo(
   }
   const fromGithub = options.env.GITHUB_BASE_REF;
   if (fromGithub === undefined || fromGithub === '') {
-    return { ok: true, base: null };
+    if (options.trustBase === undefined) {
+      return { ok: true, base: null };
+    }
+    // No other base was named, so the change set is measured from the trust
+    // base: the commit the rules were read from is the one the pull request
+    // is judged against. Handed on as the commit id it resolves to, read the
+    // same way the trust base itself was (resolveRev never sends a refs/
+    // name through git's name resolution).
+    const commit = resolveRev(repoRoot, options.trustBase, 'commit');
+    if (commit === null) {
+      return {
+        ok: false,
+        detail:
+          `the trust base does not resolve to a commit: "${options.trustBase}" names no commit in ` +
+          'this repository, so there is no base to measure the intent gate against and nothing ' +
+          'was checked. Fix: pass a trust base that is a commit in this checkout (in CI, check out ' +
+          'with fetch-depth: 0).',
+      };
+    }
+    return { ok: true, base: { ref: commit, source: 'trust-base' } };
   }
   const remoteRef = `refs/remotes/origin/${fromGithub}`;
   // The private ref is the authority when it exists; refs/remotes/origin/<base>
@@ -117,8 +144,21 @@ export function resolveBaseRefInRepo(
   // refusal). It is the base only when the private ref is absent. Both are
   // read with show-ref (the EXACT ref, never git's name resolution, which
   // would take a tag of that name) and the base handed on is the commit id.
-  const priv = exactRefObject(repoRoot, PRIVATE_TRUST_BASE_REF);
-  const remote = exactRefObject(repoRoot, remoteRef);
+  // A private ref git could not read is a refusal, never taken for an absent
+  // one; the remote-tracking ref is used only when the private ref is absent.
+  const privLookup = exactRefLookup(repoRoot, PRIVATE_TRUST_BASE_REF);
+  if (privLookup.kind === 'error') {
+    return {
+      ok: false,
+      detail:
+        `the base branch could not be read: ${privLookup.detail}, so there is no base to measure ` +
+        'the intent gate against and nothing was checked. Fix: check that git can read the ' +
+        `repository and that the action's fetch of the base branch into ${PRIVATE_TRUST_BASE_REF} ` +
+        'succeeded, then run again.',
+    };
+  }
+  const priv = privLookup.kind === 'ref' ? privLookup.oid : null;
+  const remote = priv === null ? exactRefObject(repoRoot, remoteRef) : null;
   const chosen = priv ?? remote;
   if (chosen === null) {
     return {
@@ -146,11 +186,8 @@ export function currentBranch(repoRoot: string, env: NodeJS.ProcessEnv): string 
   if (fromGithub !== undefined && fromGithub !== '') {
     return fromGithub;
   }
-  const child = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  const value = (child.stdout ?? '').trim();
+  const child = runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const value = child.stdout.trim();
   if (child.status !== 0 || value === '' || value === 'HEAD') {
     return null;
   }
@@ -177,8 +214,18 @@ export function currentBranch(repoRoot: string, env: NodeJS.ProcessEnv): string 
  * git error, because an empty path set is indistinguishable from a clean run.
  */
 export function changedPathsSince(repoRoot: string, base: string): ChangedPaths {
-  const child = spawnSync(
-    'git',
+  // Refused here, inside the function that calls git, so no caller can skip
+  // it: "--output=/x...HEAD" is an option to git diff, not a range.
+  if (base.startsWith('-')) {
+    return {
+      ok: false,
+      detail:
+        `refusing "${base}" as the intent gate base: it starts with a dash, so git would read it ` +
+        'as an option rather than a ref. Nothing was checked.',
+    };
+  }
+  const child = runGit(
+    repoRoot,
     [
       '-c',
       'core.quotePath=false',
@@ -189,13 +236,15 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
       // names no file and which intent-guard refuses outright (backslash).
       '-z',
       '--no-renames',
-      // Everything after this is a revision, never an option, whatever the
-      // caller-given base looks like (the second line of defence behind the
-      // dash refusal in resolveBaseRefInRepo).
-      '--end-of-options',
+      // A moved submodule pointer is a change, and is listed whatever
+      // .gitmodules or git config says about ignoring submodules: the command
+      // line value overrides both.
+      '--ignore-submodules=none',
       `${base}...HEAD`,
+      // Ends the revisions, so the range is always read as a range.
+      '--',
     ],
-    { cwd: repoRoot, encoding: 'utf8' }
+    { maxBuffer: 64 * 1024 * 1024 }
   );
 
   if (child.error !== undefined) {
@@ -205,7 +254,7 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
     // git's own first line usually ends in a full stop, and this message
     // continues after it. Two in a row reads as a typo in a message somebody
     // is already reading because something went wrong.
-    const stderr = ((child.stderr ?? '').trim().split('\n')[0] ?? '').replace(/\.+$/, '');
+    const stderr = (child.stderr.trim().split('\n')[0] ?? '').replace(/\.+$/, '');
     return {
       ok: false,
       detail:
@@ -220,49 +269,73 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
   // filename with leading or trailing whitespace into a different filename,
   // which is worse than refusing it: the gate would then check a path that
   // does not exist and never check the one that changed.
-  const paths = (child.stdout ?? '').split('\0').filter((line) => line.length > 0);
+  const paths = child.stdout.split('\0').filter((line) => line.length > 0);
+  return { ok: true, paths };
+}
 
+/**
+ * Why this change set cannot be handed to intent-guard as one `--paths`
+ * value, or null when it can.
+ *
+ * Asked only where `--paths` is the channel: a contract imported from a spec
+ * (its project is a temporary directory with no repository, so the gate
+ * cannot read the change set from git itself) or an intent-guard older than
+ * the release whose own `--base` reads the change set from git. Where the
+ * gate reads git itself, none of this applies and the change is judged.
+ *
+ *  - A comma: `--paths` is comma-joined, so a comma in a filename arrives as
+ *    two paths, a phantom that can be reported as outside allowed_paths and a
+ *    real path that quietly stops being measured against a protected one.
+ *  - A backslash: intent-guard refuses an explicit path list entry with one.
+ *  - Leading or trailing whitespace: it cannot survive the list intact.
+ *  - EVERY path starting with "-": intent-guard reads a `--paths` value that
+ *    starts with "-" as a missing value, and there is no `--paths=value` form
+ *    (verified against intent-guard 1.8.0: it is an unknown option). One path
+ *    starting with "-" is fine once another leads the list
+ *    (`orderForPathsFlag`), so this is refused only when every path does.
+ *
+ * A space or any other byte inside a path passes through unchanged.
+ */
+export function pathsFlagRefusal(paths: readonly string[]): string | null {
   for (const entry of paths) {
-    // Fail closed rather than hand over a path the encoding cannot carry.
-    // `--paths` is comma-joined, which is the only shape intent-guard 1.2.1
-    // accepts, so a comma in a filename arrives as two paths: a phantom that
-    // can be reported as outside allowed_paths, and a real path that quietly
-    // stops being measured against a protected one. It invents a breach and
-    // hides one, and neither half is visible in the report.
     if (entry.includes(',')) {
-      return {
-        ok: false,
-        detail:
-          `the changed path "${entry}" contains a comma, and the intent gate takes its ` +
-          'path list comma-joined, so it cannot be passed without splitting into two paths. ' +
-          'Nothing was checked, rather than checking a path that does not exist.',
-      };
+      return (
+        `the changed path "${entry}" contains a comma, and intent-guard takes an explicit path ` +
+        'list comma-joined, so it cannot be passed without splitting into two paths.'
+      );
     }
-    // intent-guard refuses ANY explicit --paths entry containing a backslash
-    // (skill/src/changed-paths.ts, explicitPathIssue: "it contains a
-    // backslash"), and exits 2 with a message that names the flag rather than
-    // the file. Said here instead, naming the file. A newline, tab or quote
-    // inside a path is accepted by intent-guard (it splits on commas only) and
-    // passes through intact.
     if (entry.includes('\\')) {
-      return {
-        ok: false,
-        detail:
-          `the changed path "${entry}" contains a backslash, and intent-guard refuses an explicit ` +
-          'path list entry with one (--paths), so it cannot judge this change. Nothing was ' +
-          'checked. Rename the file, or run the intent gate against the index instead.',
-      };
+      return (
+        `the changed path "${entry}" contains a backslash, and intent-guard refuses an explicit ` +
+        'path list entry with one.'
+      );
     }
     if (entry !== entry.trim()) {
-      return {
-        ok: false,
-        detail:
-          `the changed path "${entry}" has leading or trailing whitespace, which cannot ` +
-          'survive the gate path list intact. Nothing was checked, rather than checking a ' +
-          'path that does not exist. A space inside a path is fine.',
-      };
+      return (
+        `the changed path "${entry}" has leading or trailing whitespace, which cannot survive ` +
+        'the path list intact. A space inside a path is fine.'
+      );
     }
   }
+  if (paths.length > 0 && paths.every((entry) => entry.startsWith('-'))) {
+    return (
+      `every changed path starts with "-" (the first is "${paths[0]}"), and intent-guard reads ` +
+      'a path list that starts with "-" as a missing value.'
+    );
+  }
+  return null;
+}
 
-  return { ok: true, paths };
+/**
+ * The change set in the order it is joined for `--paths`: unchanged, except
+ * that when the first path starts with "-" the first path that does not is
+ * moved to the front, so the joined value does not start with "-". Order
+ * carries no meaning to the gate.
+ */
+export function orderForPathsFlag(paths: readonly string[]): string[] {
+  const lead = paths.findIndex((entry) => !entry.startsWith('-'));
+  if (paths.length === 0 || !paths[0]!.startsWith('-') || lead === -1) {
+    return [...paths];
+  }
+  return [paths[lead]!, ...paths.slice(0, lead), ...paths.slice(lead + 1)];
 }

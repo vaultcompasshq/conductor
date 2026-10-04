@@ -43,7 +43,9 @@ inputs:
   spec:
     description: >-
       An explicit spec for the intent gate, outranking a Spec: line in the pull
-      request body and the branch-name convention.
+      request body and the branch-name convention. On a pull-request run the
+      spec is read from the base ref, and a frozen contract on the base takes
+      precedence over it.
     default: ''
   output:
     description: >-
@@ -62,22 +64,22 @@ inputs:
       range would hand that decision to whatever the registry served on the
       morning of the run. The pin is only as protected as the workflow file
       is; see the note above the install step.
-    default: 0.8.0
+    default: 0.8.1
   dep-guard-version:
     description: >-
       The exact version of the dependency gate this action installs. Same
       rule as conductor-version.
-    default: 0.10.0
+    default: 0.10.1
   vault-guard-version:
     description: >-
       The exact version of the secrets gate this action installs. Same rule
       as conductor-version.
-    default: 1.9.0
+    default: 1.9.1
   intent-guard-version:
     description: >-
       The exact version of the intent gate this action installs. Same rule as
       conductor-version.
-    default: 1.8.0
+    default: 1.8.1
   pr-comment:
     description: >-
       Set to exactly "true" to post conductor's own text report as a pull
@@ -238,10 +240,14 @@ runs:
         # one that predates the rule that would have caught it, clear the shape
         # check, and be judged by the rule set it chose for itself. That is not
         # hypothetical, and not only for one input: EVERY ONE of the four has
-        # published versions below its constant here. Counted from the registry
-        # on 2026-09-30, 63 of them: conductor 13 below 0.8.0, dep-guard 13
-        # below 0.10.0, vault-guard 27 below 1.9.0, and intent-guard 10 below
-        # 1.8.0, intent-guard 1.4.0 among them.
+        # published versions below its constant here. 66 of them: the registry
+        # count of 2026-10-04 (conductor 13 below 0.8.0, dep-guard 12 below
+        # 0.10.0, vault-guard 27 below 1.9.0, intent-guard 10 below 1.8.0)
+        # plus the one version each that the previous constants named and the
+        # current ones sit above (conductor 0.8.0, dep-guard 0.10.0,
+        # vault-guard 1.9.0, intent-guard 1.8.0), so conductor 14 below 0.8.1,
+        # dep-guard 13 below 0.10.1, vault-guard 28 below 1.9.1 and
+        # intent-guard 11 below 1.8.1, intent-guard 1.4.0 among them.
         #
         # This is the same class of hole as an input that turns pull-request
         # mode off, which the trust-base input above refuses to offer for
@@ -258,14 +264,15 @@ runs:
         # the one event where the workflow file is written by the side under
         # judgment, is refused.
         #
-        # SEPARATE CONSTANTS FROM ANY FLAG FLOOR, and the two must not be
-        # merged even where they hold the same number. TRUST_BASE_MIN_VERSION
-        # in src/gate-runner.ts is FLAG COMPATIBILITY: the oldest build of each
-        # gate that understands --trust-base, raised in the commit that starts
-        # passing a newer flag. These are THE TESTED VERSIONS THIS TAG SHIPS,
-        # and they move with the pins above. One constant serving both is how
-        # raising one silently raises the other. They already disagree:
-        # intent-guard's floor is 1.4.0 and this tag ships 1.8.0.
+        # SEPARATE CONSTANTS FROM ANY FLOOR, and the two must not be merged
+        # even where they hold the same number. TRUST_BASE_MIN_VERSION in
+        # src/gate-runner.ts is the oldest build of each gate conductor will
+        # run on a pull-request run, wherever it was installed from. These are
+        # THE TESTED VERSIONS THIS TAG SHIPS, and they move with the pins
+        # above. One constant serving both is how raising one silently raises
+        # the other. As of this tag the two hold the same numbers for all three
+        # gates; a later tag that ships a newer gate raises these and need not
+        # raise the floor.
         #
         # COMPARED AGAINST THESE HARDCODED CONSTANTS, never against anything
         # derived from an input. An input looks identical whether the consumer
@@ -284,16 +291,16 @@ runs:
         # one.
         TAG_CONDUCTOR_MAJOR=0
         TAG_CONDUCTOR_MINOR=8
-        TAG_CONDUCTOR_PATCH=0
+        TAG_CONDUCTOR_PATCH=1
         TAG_DEP_GUARD_MAJOR=0
         TAG_DEP_GUARD_MINOR=10
-        TAG_DEP_GUARD_PATCH=0
+        TAG_DEP_GUARD_PATCH=1
         TAG_VAULT_GUARD_MAJOR=1
         TAG_VAULT_GUARD_MINOR=9
-        TAG_VAULT_GUARD_PATCH=0
+        TAG_VAULT_GUARD_PATCH=1
         TAG_INTENT_GUARD_MAJOR=1
         TAG_INTENT_GUARD_MINOR=8
-        TAG_INTENT_GUARD_PATCH=0
+        TAG_INTENT_GUARD_PATCH=1
 
         # ONE COMPARISON, CALLED FOUR TIMES. Four hand-written copies would be
         # four places for one to drift into a weaker shape, on a check where

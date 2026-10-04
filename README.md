@@ -610,7 +610,12 @@ request could point a gate at a script it added in the same commit.
 
 **On a pull-request run the rules come from the base branch.** With
 `--trust-base <ref>` the umbrella reads `.guardrails.yaml` from that ref with
-`git show` and judges the head tree against it. A `.guardrails.yaml` in the
+git and judges the head tree against it. A trusted file at the base that git
+cannot read as a regular file (a symlink, a directory, a submodule, or a file
+below a symlinked or submodule directory) is could-not-run, never replaced by
+a default. Clear it by making the file a regular file on the base branch; the
+pull request that does so is judged against that same base, so it has to be
+merged by someone allowed to merge without this check passing. A `.guardrails.yaml` in the
 pull request never takes effect for that run, `command:` and `args:`
 included, so **a pull request cannot change the rules it is judged by, and
 cannot choose the program that judges it, as long as that program is
@@ -823,10 +828,11 @@ choose its own judge on exactly the repositories that have no rules yet. See
 "Adopting conductor" below for the sequence and for how to see what your
 policy will do before you merge it.
 
-**Which gates are covered.** All five: dep-guard from **0.6.0**,
-intent-guard from **1.4.0**, vault-guard from **1.7.0**, and the two
+**Which gates are covered.** All five: dep-guard from **0.10.1**,
+intent-guard from **1.8.1**, vault-guard from **1.9.1**, and the two
 external gates at their command-line floors, gitleaks **8.19.0** and
-osv-scanner **2.0.0**.
+osv-scanner **2.0.0**. On a pull-request run an older family gate is
+could-not-run rather than run outside pull-request mode.
 
 **The external gates get their pull-request mode from the umbrella.**
 Neither tool has a `--trust-base`, and both auto-load a config from the tree
@@ -884,21 +890,49 @@ in the diff. Only the root `osv-scanner.toml` is read from the base and
 passed with `--config`, which overrides any nested one for the run; a
 nested one the pull request adds or edits is reported as a proposal.
 
-The umbrella asks each gate its version and passes the flag only to a build
-that understands it, so an older gate is not handed a flag it would reject. A
-gate that was not put into pull-request mode read its own rules out of the
-tree being judged, which is the thing this exists to prevent, so it is never
-silent: it gets a line in the report, a clause on the clean one-line summary,
-and a `conductor/trust-base-not-passed` notification in the SARIF log. For a
-gate that IS in the table, a version that cannot be read at all is
-could-not-run rather than a quiet downgrade: the umbrella cannot establish
-that the gate would take its rules from the base ref, and running it anyway
-would put it outside the boundary on exactly the runs where something is
-already wrong.
+The umbrella asks each gate its version before it runs it. On a run with a
+trust base, a gate older than its pull-request-mode minimum (intent-guard
+1.8.1, vault-guard 1.9.1, dep-guard 0.10.1) is could-not-run (exit 2),
+never run without the flag: without it the gate would take its rules from
+the tree being judged. The fix is to install that minimum or newer, or to
+remove an explicit older version pin. A version that cannot be read at all
+is could-not-run too: the umbrella cannot establish that the gate would
+take its rules from the base ref. The one gate that runs without the flag
+is an intent gate judging a contract imported from the base for the run,
+whose project is a temporary directory with no repository to resolve a ref
+in; that is never silent: it gets a line in the report, a clause on the
+clean one-line summary, and a `conductor/trust-base-not-passed`
+notification in the SARIF log.
 
 Outside pull-request mode nothing changes. A pre-commit hook and a direct run
 on your own checkout are already inside the trust boundary, and neither passes
 the flag.
+
+**In CI, pull-request mode needs a trust base.** A run in GitHub Actions with
+`GITHUB_BASE_REF` set and no `--trust-base` is could-not-run (exit 2): its
+rules have to come from the base branch, and no base was named. Pass `--trust-base
+refs/remotes/origin/<base branch>` with `fetch-depth: 0`, or use the Action,
+which always passes one. A pre-commit hook run inside a pull-request job hits
+this too: skip the hook in CI, or pass the trust base to it.
+
+**On a pull-request run PATH holds only absolute entries, and conductor's own
+git comes from outside the repository.** Empty and relative entries are
+removed for conductor and every gate it starts, with one notice naming them,
+and conductor runs the first git on PATH that lives outside the repository's
+work tree; with none, the run is could-not-run and says to put git's own
+directory on PATH. A gate found only through a removed entry is reported
+missing; put it on an absolute PATH entry or name it with an absolute
+`command:`. Every gate conductor starts, and everything a gate starts, gets
+a PATH whose first entry is a private directory outside the repository
+holding only that same git, so a gate that runs git by name runs it too; on
+Windows no such directory is made and the gates look git up through the
+cleaned PATH, and a system temp directory inside the repository is
+could-not-run until TMPDIR names one outside it.
+
+**git 2.31 or later** is needed on a pull-request run with the secrets-history
+gate (gitleaks) enabled, because conductor hands it `git log --diff-merges`,
+which arrived in git 2.31. Only that gate checks: an older git makes it
+could-not-run, naming the version, and the other gates run.
 
 ## Intent at a pull request
 
@@ -915,7 +949,9 @@ With no `--base`, `GITHUB_BASE_REF` is used when it is set, spelled in full:
 `refs/conductor/trust-base` (the Action's private fetch of the base) if that
 exists, else `refs/remotes/origin/<value>`, so a tag of that name cannot
 shadow it. The text report says which. An explicit `--base` that matches both
-a tag and a branch is refused as ambiguous. With neither, the intent gate runs the way
+a tag and a branch is refused as ambiguous. With neither but a `--trust-base`
+(merge_group, workflow_dispatch, a CLI run), the change set is measured from
+the trust base. With none of the three, the intent gate runs the way
 it does at a commit: against the staged index, or the paths you name.
 
 **This is why a local preview and a pull-request run can disagree about a
@@ -938,12 +974,31 @@ fallback to an empty path set, because an empty path set is what a passing
 gate looks like. In Actions this is almost always a shallow checkout, so
 **`actions/checkout` needs `fetch-depth: 0`** for the merge base to exist.
 
+**On a pull-request run the base decides.** With `--trust-base`, whether a
+frozen contract governs the pull request is read from the base ref alone. A
+frozen contract on the base is used, ahead of everything in the list below,
+`--spec` included (the report says so when `--spec` was given), and the gate
+judges any edit to it against the base copy. That holds for every
+intent-guard that can run on a pull-request run, since one older than its
+pull-request-mode minimum is could-not-run rather than run without the base
+ref. With no frozen contract on the
+base, nothing in the pull request becomes the contract: a spec on the base,
+found by rules 1, 3 and 4 below, is imported from its base copy (so on such a
+run `--spec` must be a plain path inside the repository that the base
+carries), and otherwise
+the gate is skipped with "No contract on the base". A contract or spec the
+pull request adds is reported as a proposal, so adopting the intent gate
+merges, and the next pull request is judged against it. Retiring or replacing
+a frozen contract through a judged pull request is refused by the intent gate
+itself and needs an administrator to merge it.
+
 **Where the contract comes from**, in order:
 
 1. `--spec <path>` on the umbrella's own command line. Typed just now, so it
-   outranks everything, and a path here that is not on disk is reported
-   rather than replaced: running a different contract than the one somebody
-   named is the wrong kindness.
+   outranks everything else in this list, and a path here that is not on
+   disk is reported rather than replaced: running a different contract than
+   the one somebody named is the wrong kindness. On a pull-request run it is
+   read from the base, and a frozen contract on the base takes precedence.
 2. `<repo>/.intent-guard/intent-contract.yaml`, when it is **frozen**, and
    `<repo>/.conductor/intent-contract.yaml` after it. The native flow wins
    wherever a team has done it. Frozen is the test rather than present: an
@@ -1149,7 +1204,8 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead:
+SHA instead. The recipes in this README pin the v0.8.0 commit and are
+updated to the v0.8.1 commit after that release is tagged.
 
 ```yaml
 name: guardrails

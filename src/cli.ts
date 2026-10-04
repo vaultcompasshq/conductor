@@ -7,7 +7,6 @@
 // decisions be tested without a subprocess.
 
 import { Command, CommanderError } from 'commander';
-import { execFileSync } from 'node:child_process';
 import {
   closeSync,
   constants as fsConstants,
@@ -19,10 +18,22 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, EXIT_OK } from './exit-codes.js';
+import {
+  absolutePathEntries,
+  createGitShim,
+  pinGitOutside,
+  pinnedGitInside,
+  realPathInside,
+  removeGitShim,
+  runGit,
+  tempInsideTreeMessage,
+  workTreeAbove,
+} from './git.js';
 import {
   applyInit,
   planInit,
@@ -53,8 +64,9 @@ import type { RunTrustBase } from './run.js';
 import {
   headTreeEqualsBase,
   policyDiffers,
-  readPolicyAtRef,
+  readFileAtRef,
   refuseTrustBaseForPullRequest,
+  unreadableBaseRemedy,
   refuseTrustBaseRef,
 } from './trust-base.js';
 
@@ -142,34 +154,24 @@ function writeReportFile(target: string, what: string, body: string): void {
  * the path's spelling.
  */
 function isGitDirectory(cwd: string): boolean {
-  try {
-    return (
-      execFileSync('git', ['rev-parse', '--is-inside-git-dir'], {
-        cwd,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim() === 'true'
-    );
-  } catch {
-    return false;
-  }
+  const result = runGit(cwd, ['rev-parse', '--is-inside-git-dir']);
+  return result.error === undefined && result.status === 0 && result.stdout.trim() === 'true';
 }
 
 function repoRoot(cwd: string): string {
-  try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+  const result = runGit(cwd, ['rev-parse', '--show-toplevel']);
+  if (result.error === undefined && result.status === 0) {
+    return result.stdout.trim();
+  }
+  {
+    const err = result.error;
+    if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
       throw new Error(
         'git is not on PATH, so the repository root could not be found. Install git, or ' +
           'run conductor from a shell that has it.'
       );
     }
-    if (typeof (err as { status?: unknown }).status === 'number') {
+    if (err === undefined && typeof result.status === 'number') {
       // git ran and refused. The directory is named because it is the one
       // thing the reader has to check, and it is the directory they typed
       // the command in rather than anything internal to this tool.
@@ -187,7 +189,9 @@ function repoRoot(cwd: string): string {
     // git is there and never got as far as an exit code: a permissions
     // problem, or a machine out of processes. Neither of the two sentences
     // above would be true, so this says what actually happened.
-    throw new Error(`git could not be run to find the repository root: ${(err as Error).message}`);
+    throw new Error(
+      `git could not be run to find the repository root: ${err?.message ?? 'it did not exit normally'}`
+    );
   }
 }
 
@@ -290,7 +294,7 @@ function applyAdvisory(exitCode: number, advisory: boolean): number {
 type PolicyForRun =
   | { kind: 'policy'; policy: Policy; trustBase?: RunTrustBase }
   /** The trust base could not be judged against. `inventory` only names gates. */
-  | { kind: 'refused'; ref: string; detail: string; inventory: Policy };
+  | { kind: 'refused'; ref: string; detail: string; inventory: Policy; notGiven?: boolean };
 
 /**
  * Reads the policy for one run, from the base ref in pull-request mode.
@@ -337,9 +341,37 @@ function policyForRun(
   root: string,
   trustBase: string | undefined,
   overrides: CliOverrides,
-  githubBaseRef: string | undefined
+  githubBaseRef: string | undefined,
+  githubActions: string | undefined
 ): PolicyForRun {
   if (trustBase === undefined) {
+    // A PULL-REQUEST JOB WITH NO TRUST BASE would take its rules from the
+    // tree being judged. In Actions (GITHUB_ACTIONS and GITHUB_BASE_REF both
+    // set) that is refused, could-not-run, naming the two ways to clear it.
+    // Outside Actions one notice line, and the run goes on as before: a local
+    // shell that happens to export GITHUB_BASE_REF is the user's own tree.
+    if (githubBaseRef !== undefined && githubBaseRef !== '') {
+      const why =
+        `GITHUB_BASE_REF is set to "${githubBaseRef}", so this is a pull-request job, and no ` +
+        '--trust-base was given: the policy would come from the tree being judged.';
+      if (githubActions === 'true') {
+        return {
+          kind: 'refused',
+          ref: '',
+          notGiven: true,
+          detail:
+            `${why} Pass --trust-base refs/remotes/origin/${githubBaseRef} (check out with ` +
+            'fetch-depth: 0), or use the Action, which passes it. A pre-commit hook run inside ' +
+            'a pull-request job (conductor run --staged) hits this too: skip the hook in CI, ' +
+            'or pass --trust-base to it. Nothing was checked.',
+          inventory: inventoryFromHead(root, overrides),
+        };
+      }
+      process.stderr.write(
+        `conductor: ${why} Outside GitHub Actions the run goes on with the working tree policy; ` +
+          'in Actions it is refused. Pass --trust-base for pull-request mode.\n'
+      );
+    }
     return { kind: 'policy', policy: applyCliOverrides(loadPolicy(root), overrides) };
   }
 
@@ -364,8 +396,26 @@ function policyForRun(
     };
   }
 
-  const baseText = readPolicyAtRef(root, trustBase);
-  const headText = readPolicyAtRef(root, 'HEAD');
+  const baseRead = readFileAtRef(root, trustBase, POLICY_FILE_NAME);
+  const headRead = readFileAtRef(root, 'HEAD', POLICY_FILE_NAME);
+
+  if (baseRead.kind === 'error') {
+    // UNREADABLE IS NOT ABSENT. The base may carry a policy, and nothing was
+    // judged against it, so this is the could-not-run refusal with git's own
+    // reason, never the "run conductor init" sentence below and never a run
+    // under any other policy.
+    return {
+      kind: 'refused',
+      ref: trustBase,
+      detail:
+        `cannot read ${POLICY_FILE_NAME} at "${trustBase}": ${baseRead.detail}. On a pull-request ` +
+        `run every rule comes from the base ref, so nothing was checked. ` +
+        unreadableBaseRemedy(POLICY_FILE_NAME),
+      inventory: inventoryFromHead(root, overrides),
+    };
+  }
+  const baseText = baseRead.kind === 'file' ? baseRead.text : null;
+  const headText = headRead.kind === 'file' ? headRead.text : null;
 
   if (baseText === null) {
     // CONFIG ABSENT ON THE BASE, not a policy error thrown from here. The old
@@ -419,7 +469,9 @@ function policyForRun(
     ),
     trustBase: {
       ref: trustBase,
-      policyChanged: policyDiffers(baseText, headText),
+      // A head file git could not read is reported as a change, the
+      // fail-closed direction: it is never taken to match the base.
+      policyChanged: headRead.kind === 'error' ? true : policyDiffers(baseText, headText),
       refusal: null,
       // Computed AFTER refuseTrustBaseRef has already returned null, on the
       // one shape that check accepts despite an identical tree: a merge
@@ -429,6 +481,69 @@ function policyForRun(
       treeUnchanged: headTreeEqualsBase(root, trustBase),
     },
   };
+}
+
+/**
+ * On a run with a trust base: removes every PATH entry that resolves against
+ * the working directory, for this process and for every child it starts,
+ * says what it removed, and pins git to the first git on PATH whose real path
+ * is outside the repository's work tree.
+ *
+ * Nearly every child runs with the repository root as its working directory,
+ * and that tree is the one under judgment, so every PATH lookup resolves
+ * against an absolute directory, and conductor's own git is never a program
+ * inside that tree. An absolute PATH entry inside the tree is kept: a gate
+ * installed as a dependency is reached that way, and the program check
+ * (refuseHeadControlledProgram) governs it. Runs without a trust base keep
+ * PATH exactly as given: a local hook commonly relies on a relative entry,
+ * and the tree there is the user's own. A gate that can no longer be found
+ * is the ordinary gate-missing outcome, cleared with an absolute PATH entry
+ * or an absolute command:.
+ *
+ * The work tree is found without running git (`workTreeAbove`), from the
+ * directory the run starts in; the caller checks the pinned git again
+ * against the root git then reports.
+ *
+ * Then puts a private directory first on PATH for this process and every
+ * child (`createGitShim`): a directory outside the tree holding only a link
+ * named git to the pinned program, so a gate, or anything a gate starts, that
+ * looks git up by name runs the pinned git even when an absolute PATH entry
+ * inside the tree holds a git of its own. Returns that directory, for the
+ * caller to remove when the run ends, or null on Windows, where none is made.
+ */
+function pinPathForTrustBase(start: string): string | null {
+  const { value, removed } = absolutePathEntries(process.env.PATH ?? '');
+  if (removed.length > 0) {
+    process.env.PATH = value;
+    process.stderr.write(
+      `conductor: pull-request mode removed ${removed.length} PATH ` +
+        `${removed.length === 1 ? 'entry' : 'entries'} that resolve against the working ` +
+        `directory (${removed.map((entry) => JSON.stringify(entry)).join(', ')}), which on a ` +
+        'pull-request run is the tree being judged. Use absolute PATH entries for any tool a ' +
+        'gate needs.\n'
+    );
+  }
+  const workTree = workTreeAbove(start);
+  const excluded = workTree === null ? [start] : [workTree];
+  const pinned = pinGitOutside(value, excluded);
+  if (pinned === null) {
+    throw new Error(noGitOutsideMessage());
+  }
+  const shim = createGitShim(pinned, os.tmpdir(), excluded);
+  if (shim !== null) {
+    // Never a trailing separator: an empty entry would mean the working
+    // directory, which is the tree being judged.
+    process.env.PATH = value === '' ? shim : `${shim}${path.delimiter}${value}`;
+  }
+  return shim;
+}
+
+function noGitOutsideMessage(): string {
+  return (
+    'no git outside the repository was found on PATH. On a pull-request run conductor runs ' +
+    'git only from a directory outside the tree being judged. Put the directory that holds ' +
+    'your git installation on PATH as an absolute entry. Nothing was checked.'
+  );
 }
 
 function parseFormat(value: string): 'text' | 'sarif' {
@@ -619,7 +734,7 @@ export function buildProgram(): Command {
     )
     .option(
       '--spec <path>',
-      'the spec the intent gate imports its contract from, outranking a Spec: line in the pull request body and the branch-name convention'
+      'the spec the intent gate imports its contract from, outranking a Spec: line in the pull request body and the branch-name convention. On a pull-request run (--trust-base) the spec is read from the base ref, and a frozen contract on the base takes precedence over it'
     )
     .option(
       '--verbose',
@@ -643,20 +758,44 @@ export function buildProgram(): Command {
     .action((options: RunCliOptions) => {
       const cwd = process.cwd();
       let textReportPath: string | undefined;
+      // The private git directory of a trust-base run, removed in the
+      // finally below on every way out of this action.
+      let gitShim: string | null = null;
 
       try {
+        // BEFORE ANY GIT CALL, including the one that finds the repository.
+        if (options.trustBase !== undefined) {
+          gitShim = pinPathForTrustBase(
+            options.project === undefined ? cwd : path.resolve(cwd, options.project)
+          );
+        }
         // Inside the try, because resolveProjectRoot (like repoRoot before
         // it) reports rather than guesses, and the catch below is what turns
         // any of its sentences into one line on stderr and the could-not-run
         // exit code.
         const root = resolveProjectRoot(cwd, options.project);
+        // And once more against the root git reported, which is the tree the
+        // gates judge: the pinned git is never a program inside it.
+        if (options.trustBase !== undefined && pinnedGitInside(root)) {
+          throw new Error(noGitOutsideMessage());
+        }
+        // The same for the private git directory: never inside that tree.
+        if (gitShim !== null && realPathInside(root, gitShim)) {
+          throw new Error(tempInsideTreeMessage(os.tmpdir()));
+        }
         const overrides: CliOverrides = {
           ...(parseRoles(options.gate) === undefined
             ? {}
             : { gates: parseRoles(options.gate) as GateRole[] }),
         };
         const stage = parseStage(options.stage);
-        const source = policyForRun(root, options.trustBase, overrides, process.env.GITHUB_BASE_REF);
+        const source = policyForRun(
+          root,
+          options.trustBase,
+          overrides,
+          process.env.GITHUB_BASE_REF,
+          process.env.GITHUB_ACTIONS
+        );
         const policy = source.kind === 'policy' ? source.policy : source.inventory;
         const format = parseFormat(options.format ?? policy.report.format);
         // BEFORE ANY GATE RUNS. With --format text the text report already is
@@ -674,6 +813,7 @@ export function buildProgram(): Command {
           source.kind === 'refused'
             ? refusedTrustBase(source.inventory, source.ref, source.detail, {
                 ...(stage === undefined ? {} : { stage }),
+                ...(source.notGiven === true ? { notGiven: true } : {}),
               })
             : runAll(source.policy, {
                 repoRoot: root,
@@ -784,6 +924,10 @@ export function buildProgram(): Command {
             ? err.message
             : `conductor: ${err instanceof Error ? err.message : String(err)}`
         );
+      } finally {
+        if (gitShim !== null) {
+          removeGitShim(gitShim);
+        }
       }
     });
 

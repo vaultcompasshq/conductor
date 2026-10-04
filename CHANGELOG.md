@@ -14,6 +14,160 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-04
+
+**A patch package release that can turn a green run red.**
+`@vaultcompass/conductor` moves to 0.8.1 on npm and the action's
+`conductor-version` default moves to `0.8.1` in lockstep. The three gate
+defaults move too: intent-guard 1.8.1, dep-guard 0.10.1 and vault-guard
+1.9.1. Each of those is itself a patch release that can turn a run red.
+
+### What can newly turn a run red, and how to clear each
+
+- **A pull-request job in GitHub Actions with no `--trust-base` is
+  could-not-run (exit 2)** when `GITHUB_BASE_REF` is set, a pre-commit hook
+  run inside such a job included. Clear it by using the Action, which always
+  passes a trust base, by passing `--trust-base
+  refs/remotes/origin/<base branch>` yourself (with `fetch-depth: 0`), or by
+  not running the hook in CI. Outside Actions this prints one notice and the
+  run goes on.
+- **A family gate older than its pull-request-mode minimum is could-not-run
+  on a pull-request run**, enforced whatever the policy says, instead of
+  running without `--trust-base`. The minimums are intent-guard 1.8.1,
+  vault-guard 1.9.1 and dep-guard 0.10.1, the versions this release's action
+  defaults install. Clear it by installing the named minimum or newer, or by
+  removing an explicit older version pin (a `*-guard-version` input, or an
+  older copy earlier on PATH). Runs without a trust base are unchanged.
+- **The action's four version inputs below this tag's defaults are refused
+  on a pull request**, as before, and the defaults now end in patch 1, so an
+  explicit `conductor-version: 0.8.0`, `dep-guard-version: 0.10.0`,
+  `vault-guard-version: 1.9.0` or `intent-guard-version: 1.8.0` kept while
+  moving the action to this tag is refused before any gate runs. Remove the
+  input, or raise it to this tag's default or newer.
+- **A control file that is a symbolic link on the base is could-not-run.** A
+  base `.guardrails.yaml`, intent contract, or external-tool config, ignore
+  file or extended file that is a symlink, a directory, a submodule or a
+  missing object at the base ref, or that sits below a symlinked or
+  submodule directory there, stops the run with git's reason. Clear it by
+  making that path a regular file on the base branch. The pull request that
+  does so is judged against the same base, so it has to be merged by someone
+  allowed to merge without this check passing.
+- **PATH is cleaned on a pull-request run.** Empty and relative PATH entries
+  are removed, with one notice naming them, and conductor runs the first git
+  on PATH that is outside the repository's work tree. A gate found only
+  through a removed entry is now reported missing; clear it with an absolute
+  PATH entry or an absolute `command:`. With no git outside the repository on
+  PATH the run is could-not-run; clear it by putting git's own directory on
+  PATH as an absolute entry. On POSIX every gate also finds conductor's
+  pinned git first on PATH, through a private directory outside the
+  repository that holds only that git and is removed when the run ends; a
+  system temporary directory inside the repository, or one where that
+  directory cannot be made, is could-not-run, cleared by setting TMPDIR to a
+  writable directory outside the repository. On Windows the PATH cleaning
+  and the git pin apply, no private directory is made, and the gates look git
+  up through the cleaned PATH. Runs without a trust base are unchanged.
+- **git 2.31 or later when gitleaks runs on a pull-request run.** conductor
+  hands gitleaks `git log --diff-merges=first-parent`, which arrived in git
+  2.31. An older git, or one whose version cannot be read, is a named
+  could-not-run for that gate before it is spawned. Clear it by upgrading git.
+- **Paths an intent gate older than 1.8.1 cannot be handed.** On a
+  pull-request run such a gate no longer runs at all (see the minimums
+  above). On a run without a trust base that names `--base`, a change set
+  with a comma, a backslash or edge whitespace in a path, or in which every
+  path starts with "-", is could-not-run for a native contract on
+  intent-guard below 1.8.1; clear it by upgrading intent-guard to 1.8.1,
+  which reads the change set from git itself. For an imported contract, on
+  any version, the change set can only be handed over as a list; clear it by
+  freezing the contract and committing it to the base branch, with
+  intent-guard 1.8.1 or later.
+- **The intent contract is taken from the base ref on a pull-request run,
+  `--spec` included.** When the base has a frozen contract it is used even if
+  the pull request edits or deletes it, or passes `--spec`, and every
+  intent-guard that can run on such a run judges that edit against the base
+  copy. Clear a contract change by landing it on the base branch first;
+  retiring or replacing a frozen contract through a judged pull request needs
+  an administrator (see the README). When the base has none, nothing in the
+  pull request becomes the contract: a spec on the base is imported from its
+  base copy (so `--spec` must be a plain path inside the repository that the
+  base carries), and otherwise the gate is skipped with "No contract on the
+  base" (exit 0). A contract or spec the pull request adds is reported as a
+  proposal, so a first adoption merges and is judged from the next pull
+  request.
+- **A trust base on its own makes the run pull-request shaped.** With
+  `--trust-base` and no `--base` or `GITHUB_BASE_REF` (merge_group,
+  workflow_dispatch, a CLI run), the intent gate now judges the branch
+  change set since the trust base. A change outside its budget now blocks
+  there. Clear it as on any pull request: keep the change inside the
+  contract, or land the contract change on the base branch first.
+- **A moved submodule pointer counts against the intent budget** even where
+  `.gitmodules` says `ignore = all`. Clear it by keeping the pointer move
+  inside the contract, as any other changed path.
+- **A specs or plans directory linked out of the repository**, on a run
+  WITHOUT a trust base, is could-not-run at the spec step. Clear it by
+  replacing the link with the directory itself, or by naming the spec with
+  `--spec`. On a pull-request run nothing in the working tree is followed:
+  the spec and plan are read from the base ref, a spec named by `--spec` or a
+  `Spec:` line under a directory that is a symbolic link on the base is
+  could-not-run at the spec step with git's reason (clear it by committing
+  the directory itself to the base branch), and the branch-name convention
+  finds no spec or plan inside such a directory.
+- **`conductor init` and `--revert` refuse a `.guardrails` directory or
+  manifest that is a symlink out of the checkout** (exit 2, nothing
+  written). Clear it by replacing the link with a real directory.
+- **conductor sets `GIT_NO_REPLACE_OBJECTS` on every git call it makes**,
+  hook runs included, and on gitleaks' history scan. A repository that uses
+  `git replace` to change what its history looks like is judged on the
+  original objects. There is no setting to turn this off.
+
+### Moving to vault-guard 1.9.1 under conductor
+
+- A file the secrets gate cannot scan (unreadable, over 32 MiB, over its
+  per-file time budget, or tracked but missing on disk in pull-request mode)
+  makes vault-guard exit 2, which conductor reports as could-not-run (exit 2
+  for an enforced gate). Clear it by fixing the file or declaring it in
+  `ignore.paths` in `.vault-guard.json`; vault-guard's stderr prints the
+  exact entry.
+- On a pull request vault-guard reads `.vault-guard.json` from the base, so
+  the `ignore.paths` entry must be merged in its OWN pull request before the
+  pin moves to 1.9.1. A pull request that adds the entry and moves the pin
+  together only proposes the entry, and is judged without it.
+- `--advisory` (the Action's `advisory` input) does not soften exit 2: it
+  turns a blocking result (exit 1) into exit 0 and leaves could-not-run
+  alone.
+- On a pull request an explicit `vault-guard-version` input older than this
+  action's default (1.9.1) is refused before any gate runs, as for the other
+  three version inputs. Remove the input, or set it to 1.9.1 or newer.
+
+### Moving to dep-guard 0.10.1 under conductor
+
+- dep-guard 0.10.1 refuses a pull request whose lockfile set loses what it
+  reads (`lockfile-downgrade`, exit 2): a new or changed root lockfile it
+  does not read beside one it does, or every read lockfile removed while a
+  manifest declares dependencies. Clear it by adding the entries the message
+  prints to `acknowledgedLockfiles` in `.dep-guard.json` on the base branch,
+  by deleting the stale lockfile in the pull request, or by an administrator
+  merge after reviewing the lockfile by hand.
+- dep-guard 0.10.0 and earlier reject a config containing the
+  `acknowledgedLockfiles` key, so add it only after the pin has moved to
+  0.10.1 everywhere conductor runs dep-guard (the Action, a pre-commit hook,
+  a devDependency).
+
+### Fixed
+
+- A changed path with a comma, a backslash, edge whitespace or a leading
+  "-" is judged through intent-guard's own `--base` for a native contract
+  on intent-guard 1.8.1 or later. Below that, a leading "-" is handled by
+  ordering the path list, and the remaining refusals now say to upgrade
+  the gate, or, for an imported contract, to freeze the contract on the
+  base branch.
+- A proposal line for an external tool's config now says the neutral
+  stand-in was used when the base carries no copy, instead of naming a base
+  copy that does not exist.
+- When the base's frozen contract outranks `--spec`, the report says so in
+  one line.
+
+### Reporting and wording
+
 - `conductor run` now writes one plain line per gate to stderr on every run,
   naming the gate, the version it ran, its outcome (ok, findings with a count,
   could-not-run, missing, or skipped with the reason) and its exit code, so the
@@ -53,6 +207,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   request pinning a gate backward, a base branch that could not be fetched, a
   base branch missing from the checkout (intent gate), a shallow checkout for a
   history gate, and a gate older than the floor conductor speaks. Wording only.
+- A gate that could not run because of conductor's own decision (a git below
+  the floor, a path list it cannot pass, a PATH or private git directory
+  failure, a gate below its minimum) now carries conductor's reason into its
+  per-gate job log line as `conductor said: "..."`, cleaned, on one line,
+  capped and quoted the same way as `gate said`. Reporting only.
+- The `NOT in pull-request mode` report line and the
+  `conductor/trust-base-not-passed` SARIF notification now describe the one
+  case left that reaches them, an intent gate judging a contract imported
+  from the base for the run, and no longer say the gate read its rules from
+  the tree being judged.
 
 ## [0.8.0] - 2026-09-30
 

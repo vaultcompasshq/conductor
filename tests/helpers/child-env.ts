@@ -19,7 +19,16 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-const LEAKED_ON_PULL_REQUEST_EVENT = ['GITHUB_BASE_REF', 'GITHUB_HEAD_REF', 'GITHUB_EVENT_PATH'] as const;
+// GITHUB_ACTIONS is set on every Actions job, not only on a pull request, but
+// it belongs here too: with GITHUB_BASE_REF it is what makes a run with no
+// --trust-base refuse (src/cli.ts, policyForRun), so a test that opts
+// GITHUB_BASE_REF back in must not behave differently on a hosted runner.
+const LEAKED_ON_PULL_REQUEST_EVENT = [
+  'GITHUB_BASE_REF',
+  'GITHUB_HEAD_REF',
+  'GITHUB_EVENT_PATH',
+  'GITHUB_ACTIONS',
+] as const;
 
 export interface ChildEnvOptions {
   /**

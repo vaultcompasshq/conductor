@@ -46,6 +46,13 @@ export type SpecDiscovery =
   | { kind: 'missing-flag'; spec: string }
   /** The pull request body said `Spec: none`: there is nothing to import. */
   | { kind: 'waived' }
+  /**
+   * The convention spec, or the plan for any spec, resolves outside the
+   * repository (its directory is a symlink pointing out of the checkout).
+   * Refused rather than read, and rather than dropped: the gate is reported
+   * as unable to run, never as having nothing to check.
+   */
+  | { kind: 'escaped'; path: string }
   | { kind: 'none' };
 
 /**
@@ -181,7 +188,7 @@ function exists(repoRoot: string, relative: string): boolean {
  * the failure actually had: "superpowers" beat
  * "1.2.1-base-and-superpowers" by being shorter and vaguer.
  */
-function bestMatch(names: string[], target: string): string | undefined {
+export function bestMatch(names: string[], target: string): string | undefined {
   return names
     .filter((name) => stemMatches(normalizeStem(name), target))
     .sort((a, b) => {
@@ -216,13 +223,29 @@ function bestMatch(names: string[], target: string): string | undefined {
  * conventionally discovered one: a spec named in a pull request body has a
  * plan beside it just as often.
  */
-function planFor(repoRoot: string, specPath: string): string | null {
+function planFor(repoRoot: string, specPath: string): { plan: string | null } | { escaped: string } {
   const specStem = normalizeStem(path.basename(specPath));
   const matches = markdownFilesIn(repoRoot, PLAN_DIR).filter(
     (name) => normalizeStem(name) === specStem
   );
   const newest = matches[matches.length - 1];
-  return newest === undefined ? null : `${PLAN_DIR}/${newest}`;
+  if (newest === undefined) {
+    return { plan: null };
+  }
+  const plan = `${PLAN_DIR}/${newest}`;
+  // Held to the repository like the convention spec: a plans directory
+  // linked out of the checkout is refused, never read and never dropped.
+  return resolvesInsideRoot(repoRoot, plan) ? { plan } : { escaped: plan };
+}
+
+/** A found spec with its plan, or the refusal for a plan that escapes. */
+function withPlan(
+  repoRoot: string,
+  kind: 'flag' | 'pr-body' | 'convention',
+  spec: string
+): SpecDiscovery {
+  const found = planFor(repoRoot, spec);
+  return 'escaped' in found ? { kind: 'escaped', path: found.escaped } : { kind, spec, plan: found.plan };
 }
 
 /** Normalizes a user-supplied path to a repository-relative one. */
@@ -286,7 +309,7 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
     if (!exists(repoRoot, relative)) {
       return { kind: 'missing-flag', spec: relative };
     }
-    return { kind: 'flag', spec: relative, plan: planFor(repoRoot, relative) };
+    return withPlan(repoRoot, 'flag', relative);
   }
 
   if (options.prBody !== undefined) {
@@ -308,7 +331,7 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
       // Containment subsumes existence here, since a path that does not
       // resolve is not contained.
       if (resolvesInsideRoot(repoRoot, relative)) {
-        return { kind: 'pr-body', spec: relative, plan: planFor(repoRoot, relative) };
+        return withPlan(repoRoot, 'pr-body', relative);
       }
     }
   }
@@ -317,7 +340,13 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
     const best = bestMatch(markdownFilesIn(repoRoot, SPEC_DIR), branchSlug(options.branch));
     if (best !== undefined) {
       const relative = `${SPEC_DIR}/${best}`;
-      return { kind: 'convention', spec: relative, plan: planFor(repoRoot, relative) };
+      // The convention spec is held to the repository too: a specs directory
+      // linked out of the checkout is refused, never imported. Only --spec is
+      // exempt, as a path a person typed.
+      if (!resolvesInsideRoot(repoRoot, relative)) {
+        return { kind: 'escaped', path: relative };
+      }
+      return withPlan(repoRoot, 'convention', relative);
     }
   }
 

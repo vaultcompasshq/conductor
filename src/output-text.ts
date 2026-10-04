@@ -24,7 +24,12 @@
 
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN } from './exit-codes.js';
-import { type GateOutcome, cleanOutputLine } from './gate-runner.js';
+import {
+  CONDUCTOR_OWN_REASONS,
+  type GateOutcome,
+  cleanOutputLine,
+  conductorStatedReason,
+} from './gate-runner.js';
 import { isLegacyContractPath } from './intent-prepare.js';
 import type { RunResult } from './run.js';
 
@@ -132,6 +137,9 @@ function gateSection(gate: GateOutcome): string[] {
   const contract = contractLine(gate);
   if (contract !== null) {
     lines.push(contract);
+    if (gate.intent?.note !== undefined) {
+      lines.push(`  note: ${gate.intent.note}`);
+    }
   }
 
   if (gate.couldNotRun !== null) {
@@ -319,14 +327,18 @@ function treeUnchangedLines(result: RunResult): string[] {
  * was put into pull-request mode and could not run reported no summary the
  * umbrella reads, so its proposals are not known rather than none. The
  * sentence then names those gates and counts only what the others proposed.
+ * On a run with a trust base that includes a gate that stopped before its
+ * pull-request mode was even decided (it carries no trustBase: a preparation
+ * that failed, a git older than the floor, a missing binary), because it was
+ * meant to run in that mode and reported nothing either.
  */
 export function proposalCount(result: RunResult): string {
   const unknown = result.gates.filter(
     (gate) =>
       gate.couldNotRun !== null &&
-      gate.trustBase !== undefined &&
-      gate.trustBase.withheld === null &&
-      gate.trustBase.refused === null
+      (gate.trustBase === undefined
+        ? result.trustBase !== null
+        : gate.trustBase.withheld === null && gate.trustBase.refused === null)
   );
   if (unknown.length === 0) {
     return `${result.proposals.length} control change(s) proposed in this pull request`;
@@ -339,14 +351,16 @@ export function proposalCount(result: RunResult): string {
 }
 
 /**
- * The gates the umbrella could not put into pull-request mode.
+ * The gates the umbrella did not hand the trust base to.
  *
- * This is the loud half and it must never be silent. A gate here read its own
- * contract, config or baseline out of the tree being judged, which is exactly
- * the hole pull-request mode exists to close, so a run where one gate is
- * still exposed must not read like a run where none is. It is a statement
- * about coverage rather than about anybody's code, so it is a line and a
- * notification rather than a finding, and it never reaches the exit code.
+ * This is the loud half and it must never be silent: a run where one gate was
+ * not handed the base ref must not read like a run where every gate was. A
+ * gate below its pull-request-mode minimum is never here (it is
+ * could-not-run); what is left is an intent gate judging a contract imported
+ * from the base for this run, and a product with no pull-request mode at all.
+ * It is a statement about coverage rather than about anybody's code, so it is
+ * a line and a notification rather than a finding, and it never reaches the
+ * exit code.
  */
 function withheldTrustBase(result: RunResult): Array<{ gate: GateOutcome; reason: string }> {
   return result.gates.flatMap((gate) => {
@@ -391,6 +405,9 @@ function nodeModulesSkippedLine(result: RunResult): string[] {
 function trustBaseLines(result: RunResult): string[] {
   if (result.trustBase === null) {
     return [];
+  }
+  if (result.trustBase.notGiven === true) {
+    return ['  pull-request mode: no trust base was given, so no rules were read.'];
   }
   const lines = [
     `  pull-request mode: rules from ${result.trustBase.ref}. ${proposalCount(result)}.`,
@@ -453,7 +470,9 @@ function refusalLines(result: RunResult): string[] {
     return [];
   }
   return [
-    `conductor: refused the trust base "${result.trustBase?.ref ?? ''}". Nothing was checked.`,
+    result.trustBase?.notGiven === true
+      ? 'conductor: this is a pull-request job and no trust base was given, so no rules were read. Nothing was checked.'
+      : `conductor: refused the trust base "${result.trustBase?.ref ?? ''}". Nothing was checked.`,
     `  ${refusal}`,
   ];
 }
@@ -486,7 +505,9 @@ function refusalLines(result: RunResult): string[] {
 export function jobLogSummary(result: RunResult): string {
   const refusal = result.trustBase?.refusal;
   if (refusal !== undefined && refusal !== null) {
-    return `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
+    return result.trustBase?.notGiven === true
+      ? `pull-request job with no trust base, no rules read: ${refusal.replace(/\.+\s*$/, '')}`
+      : `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
   }
   return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
 }
@@ -499,7 +520,9 @@ export function jobLogSummary(result: RunResult): string {
  *
  * Outcomes, in the words the lines use: `ok`, `findings (N, M blocking)`,
  * `could-not-run (reason)` with the gate's own stated reason when it gave
- * one, `missing (reason)` for a gate that was not found, and `skipped (why)`
+ * one, or conductor's own reason when the refusal was conductor's (both
+ * cleaned, one line, capped and quoted), `missing (reason)` for a gate that
+ * was not found, and `skipped (why)`
  * for a gate that was enabled and never spawned (deferred by stage, left out
  * by --gate, no contract, tree unchanged). A gate with no process behind it
  * says `no exit code`, never a made-up one.
@@ -525,10 +548,20 @@ export function gateLogLines(result: RunResult): string[] {
       outcome =
         total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
     }
+    // conductor's own refusals (a git below the floor, a path list it cannot
+    // pass, a PATH or git-directory failure, a gate below its minimum) carry
+    // their reason the same way, since no gate said anything for them.
+    const conductorSaid =
+      gate.couldNotRun !== null &&
+      gate.couldNotRun.gateSaid === undefined &&
+      CONDUCTOR_OWN_REASONS.has(gate.couldNotRun.reason)
+        ? conductorStatedReason(gate.couldNotRun.detail)
+        : null;
     lines.push(
       `conductor: gate ${gate.role} (${gate.product} ${version}): ${outcome}, ${exit}` +
         (gate.enforce ? '' : ', not enforced') +
-        (gate.couldNotRun?.gateSaid === undefined ? '' : `, gate said: "${gate.couldNotRun.gateSaid}"`)
+        (gate.couldNotRun?.gateSaid === undefined ? '' : `, gate said: "${gate.couldNotRun.gateSaid}"`) +
+        (conductorSaid === null ? '' : `, conductor said: "${conductorSaid}"`)
     );
   }
   const notRun = (role: string, product: string, why: string): string =>
@@ -659,10 +692,11 @@ function verdict(result: RunResult, advisory: boolean): string {
     // them would describe a different run from the one that happened. A
     // refusal is a could-not-run outcome (exit 2), which --advisory never
     // touches, so this branch reads advisory or not exactly the same.
-    return (
-      `verdict: exit 2, the trust base "${result.trustBase?.ref ?? ''}" could not be used, ` +
-      'so no gate ran and nothing here is a result of any kind.'
-    );
+    return result.trustBase?.notGiven === true
+      ? 'verdict: exit 2, this is a pull-request job and no trust base was given, so no rules ' +
+          'were read, no gate ran and nothing here is a result of any kind.'
+      : `verdict: exit 2, the trust base "${result.trustBase?.ref ?? ''}" could not be used, ` +
+          'so no gate ran and nothing here is a result of any kind.';
   }
   return verdictForRun(result, advisory);
 }
@@ -896,6 +930,9 @@ function isFullyClean(result: RunResult): boolean {
       gate.couldNotRun === null &&
       (gate.exitCode ?? 0) === 0 &&
       gate.diagnostics.length === 0 &&
+      // A note about an input this run did not use is never folded into the
+      // one-line summary, where nobody would see it.
+      gate.intent?.note === undefined &&
       !gate.findings.some((finding) => finding.blocking)
   );
 }

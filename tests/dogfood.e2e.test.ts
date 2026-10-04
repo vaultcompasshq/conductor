@@ -18,6 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TRUST_BASE_MIN_VERSION } from '../src/gate-runner.js';
 import { NATIVE_CONTRACT_PATHS } from '../src/intent-prepare.js';
 import { atLeastVersion } from '../src/trust-base.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
@@ -321,9 +322,11 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     // Fabricated. Matches the shape of a GitHub token and no real account.
+    // Split in this source so the repository's own secrets scan does not
+    // match it; the file written is the whole token.
     writeFileSync(
       path.join(clone, 'leak.js'),
-      "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+      "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
     );
 
     git(['add', 'package.json', 'leak.js']);
@@ -528,7 +531,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
       // Fabricated. The shape of a GitHub token and no real account.
       writeFileSync(
         path.join(clone, 'leak.js'),
-        "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+        "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
       );
       // And the contract's approval rewritten to name the pull request.
       const contractPath = frozenContractIn(clone);
@@ -585,25 +588,30 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
 
       // Every gate here is whatever this machine has installed or has built
       // beside this repository, which is the whole point of this suite, so
-      // the assertion is about the RULE and not about a version number: at
-      // or above its floor a gate is inside the boundary and silent, below
-      // it the line is there. BOTH directions have to hold, or the withheld
-      // line is decoration that nothing would notice the loss of.
-      const floors: Array<[string, string, string]> = [
-        ['dependencies', 'dep-guard', '0.6.0'],
-        ['secrets', 'vault-guard', '1.7.0'],
-        ['intent', 'intent-guard', '1.4.0'],
-      ];
+      // the assertion is about the RULE and not about a version number: no
+      // family gate is ever run outside pull-request mode on this run; at or
+      // above its minimum it is inside the boundary, and below it it is
+      // could-not-run. BOTH directions have to hold.
+      const gates = [
+        ['dependencies', 'dep-guard'],
+        ['secrets', 'vault-guard'],
+        ['intent', 'intent-guard'],
+      ] as const;
 
-      for (const [role, product, floor] of floors) {
+      for (const [role, product] of gates) {
+        const floor = TRUST_BASE_MIN_VERSION[product] as string;
         const version =
           new RegExp(`${role}\\s+${product}\\s+(\\S+)`).exec(result.stdout)?.[1] ?? null;
         const withheld = new RegExp(
           `NOT in pull-request mode\\s+${role}\\s+${product}`
         ).test(result.stdout);
-        expect({ role, inBoundary: !withheld }).toEqual({
+        const refused = new RegExp(
+          `gate ${role} \\(${product} [^)]*\\): could-not-run \\((gate-version-unsupported|trust-base-unverified)\\)`
+        ).test(result.stderr);
+        expect({ role, withheld, refused }).toEqual({
           role,
-          inBoundary: atLeastVersion(version, floor),
+          withheld: false,
+          refused: !atLeastVersion(version, floor),
         });
       }
     });
@@ -811,7 +819,7 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
 
         writeFileSync(
           path.join(clone, 'leak.js'),
-          "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
+          "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\nmodule.exports = token;\n"
         );
         // The pull request's own muting: ignore the file it just added.
         //
@@ -926,9 +934,9 @@ function onPath(name: string): string | null {
 
 const PATH_VERSIONS = pathVersions();
 const PATH_READY =
-  atLeastVersion(PATH_VERSIONS['dep-guard'], '0.6.0') &&
-  atLeastVersion(PATH_VERSIONS['vault-guard'], '1.7.0') &&
-  atLeastVersion(PATH_VERSIONS['intent-guard'], '1.4.0');
+  atLeastVersion(PATH_VERSIONS['dep-guard'], TRUST_BASE_MIN_VERSION['dep-guard'] as string) &&
+  atLeastVersion(PATH_VERSIONS['vault-guard'], TRUST_BASE_MIN_VERSION['vault-guard'] as string) &&
+  atLeastVersion(PATH_VERSIONS['intent-guard'], TRUST_BASE_MIN_VERSION['intent-guard'] as string);
 
 const composedMissing = [
   ...missing,
@@ -1060,7 +1068,7 @@ describeComposed('the composed test: a pull request that tries to mute all three
       'tools/nice-gate.sh',
       [
         '#!/bin/sh',
-        'if [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi',
+        'if [ "$1" = "--version" ]; then echo "1.9.1"; exit 0; fi',
         `printf 'ran\\n' > ${JSON.stringify(marker)}`,
         `echo '{"version":"1","summary":{"files":0,"secrets":0},"run":{"files_scanned":0,"patterns_active":0,"fail_on":"medium","blocking_matches":0},"results":[]}'`,
         'exit 0',

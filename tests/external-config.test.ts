@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -165,6 +165,54 @@ describe('materializeExternalConfig', () => {
     })!;
     expect(readFileSync(path.join(out.cwd, 'baseline.json'), 'utf8')).toBe('[]\n');
     expect(out.extendProposals).toEqual([expect.stringMatching(/^baseline\.json differs/)]);
+  });
+
+  it('reads the base config when the working tree holds a file named like the revision and path', () => {
+    // The base copy is what the tool gets, whatever the working tree holds.
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[[rules]]\nid = "acme"\nregex = "ACME_[A-Z]{8}"\n');
+    commitAll(repo, 'base config');
+    const base = git(repo, 'rev-parse', 'HEAD').trim();
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    writeFileSync(path.join(repo, `${base}:.gitleaks.toml`), 'planted\n');
+    commitAll(repo, 'plant');
+    const out = materializeExternalConfig({ repoRoot: repo, trustBase: base, profile: profileFor('gitleaks'), tempRoot: tempDir() })!;
+    expect(out.source).toBe('base');
+    expect(readFileSync(out.path, 'utf8')).toMatch(/ACME_/);
+  });
+
+  it('refuses, and never falls back to the neutral config, when the base config cannot be read', () => {
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, 'real.toml'), '[[rules]]\nid = "acme"\n');
+    symlinkSync('real.toml', path.join(repo, '.gitleaks.toml'));
+    commitAll(repo, 'base config is a link');
+    expect(() =>
+      materializeExternalConfig({ repoRoot: repo, trustBase: 'HEAD', profile: profileFor('gitleaks'), tempRoot: tempDir() })
+    ).toThrow(/\.gitleaks\.toml could not be read from the base ref/);
+    expect(() =>
+      materializeExternalConfig({ repoRoot: repo, trustBase: 'HEAD', profile: profileFor('gitleaks'), tempRoot: tempDir() })
+    ).toThrow(
+      /To clear it, make \.gitleaks\.toml a regular file on the base branch.*merged by someone allowed to merge without this check passing/
+    );
+  });
+
+  it('refuses when the base ignore file cannot be read, rather than writing an empty one', () => {
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, 'real-ignore'), 'fingerprint\n');
+    symlinkSync('real-ignore', path.join(repo, '.gitleaksignore'));
+    commitAll(repo, 'base ignore is a link');
+    expect(() =>
+      materializeExternalConfig({ repoRoot: repo, trustBase: 'HEAD', profile: profileFor('gitleaks'), tempRoot: tempDir() })
+    ).toThrow(ExternalConfigError);
+  });
+
+  it('says the neutral stand-in was used, not the base copy, when the base has none', () => {
+    const repo = tempGitRepo();
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    writeFileSync(path.join(repo, '.gitleaks.toml'), '[allowlist]\npaths = ["src/"]\n');
+    const out = materializeExternalConfig({ repoRoot: repo, trustBase: 'main', profile: profileFor('gitleaks'), tempRoot: tempDir() })!;
+    expect(out.proposal).toMatch(/not on the base ref; conductor's neutral stand-in was used/);
+    expect(out.proposal).not.toMatch(/base's copy/);
   });
 
   it('has no ignore file for osv-scanner', () => {
