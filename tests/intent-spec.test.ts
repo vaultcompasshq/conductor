@@ -527,3 +527,44 @@ describe('Spec: none, the explicit waiver', () => {
     expect(found).toEqual({ kind: 'waived' });
   });
 });
+
+describe('a spec or plan directory that leads out of the repository', () => {
+  it('refuses a convention spec reached through a symlinked specs directory, naming it', () => {
+    const root = tempDir();
+    const outside = tempDir();
+    writeFileSync(path.join(outside, '2026-09-03-widget-cache-design.md'), '# outside\n');
+    mkdirSync(path.join(root, 'docs', 'superpowers'), { recursive: true });
+    symlinkSync(outside, path.join(root, 'docs', 'superpowers', 'specs'));
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/widget-cache' });
+
+    expect(found).toEqual({
+      kind: 'escaped',
+      path: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+    });
+  });
+
+  it('refuses a plan reached through a symlinked plans directory, rather than dropping it', () => {
+    const root = repoWith(['2026-09-03-widget-cache-design.md']);
+    const outside = tempDir();
+    writeFileSync(path.join(outside, '2026-09-03-widget-cache.md'), '# outside plan\n');
+    rmSync(path.join(root, 'docs', 'superpowers', 'plans'), { recursive: true, force: true });
+    symlinkSync(outside, path.join(root, 'docs', 'superpowers', 'plans'));
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/widget-cache' });
+
+    expect(found).toEqual({ kind: 'escaped', path: 'docs/superpowers/plans/2026-09-03-widget-cache.md' });
+  });
+
+  it('still uses a specs directory linked to a place inside the repository', () => {
+    const root = tempDir();
+    mkdirSync(path.join(root, 'design'), { recursive: true });
+    writeFileSync(path.join(root, 'design', '2026-09-03-widget-cache-design.md'), '# inside\n');
+    mkdirSync(path.join(root, 'docs', 'superpowers'), { recursive: true });
+    symlinkSync(path.join(root, 'design'), path.join(root, 'docs', 'superpowers', 'specs'));
+
+    const found = discoverSpec({ repoRoot: root, branch: 'feat/widget-cache' });
+
+    expect(found.kind).toBe('convention');
+  });
+});

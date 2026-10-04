@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { Diagnostic, Finding, RunSummary } from './envelope.js';
+import { runGit } from './git.js';
 import { NormalizeError } from './envelope.js';
 import {
   normalizeDepGuard,
@@ -85,8 +86,12 @@ export type CouldNotRunReason =
   | 'gate-program-refused'
   /**
    * The installed build is older than the oldest version whose command line
-   * the umbrella speaks (`minVersion` in src/products.ts). Only the external
-   * tools have a floor; nothing was run beyond the version probe.
+   * the umbrella speaks (`minVersion` in src/products.ts, which only the
+   * external tools have), or, on a run with a trust base, older than the
+   * first version that takes its rules from the base ref
+   * (`TRUST_BASE_MIN_VERSION`). The gate's check was not run. For an intent
+   * gate with an imported contract the preparation that stages that contract
+   * from the base ref has already run by then.
    */
   | 'gate-version-unsupported'
   /**
@@ -162,6 +167,28 @@ export function breakWorkflowMarkers(text: string): string {
 }
 
 /**
+ * The could-not-run reasons that are conductor's OWN decision, made before
+ * the gate was spawned (or instead of spawning it), as opposed to something
+ * the gate itself said or did.
+ */
+export const CONDUCTOR_OWN_REASONS: ReadonlySet<CouldNotRunReason> = new Set<CouldNotRunReason>([
+  'preparation-failed',
+  'trust-base-unverified',
+  'gate-program-refused',
+  'gate-version-unsupported',
+  'history-shallow',
+]);
+
+/**
+ * conductor's own reason for a could-not-run, as a job-log excerpt: cleaned,
+ * one line, capped and with double quotes replaced, exactly like a gate's
+ * stated reason. Null when there is nothing to print.
+ */
+export function conductorStatedReason(detail: string): string | null {
+  return sanitizeGateSaid(detail);
+}
+
+/**
  * One line of raw gate output, made safe to print: control characters (escape
  * included) become spaces and workflow-command markers are broken up. The
  * content is otherwise left as it was.
@@ -229,10 +256,11 @@ export function gateStatedReason(
  * against every combination in the meantime. A product missing from this
  * table has no pull-request mode yet and is never handed the flag; a product
  * in it is handed the flag only when the installed build says it is at least
- * this version. Both directions matter: handing an older build a flag it does
- * not parse makes it exit non-zero with no JSON, which the umbrella correctly
- * reports as could-not-run, so a wrong guess here turns a working repository's
- * pull requests red rather than merely leaving a gate un-hardened.
+ * this version, and on a run with a trust base a build below it is
+ * could-not-run rather than run without the flag, since without the flag it
+ * would take its rules from the tree being judged. The entries are the
+ * minimum the umbrella requires on a pull-request run, which can be later
+ * than the release the flag first appeared in.
  *
  * The umbrella is deliberately NOT the place a version pin lives otherwise
  * (nothing here imports any gate's package), and this is the one exception:
@@ -240,9 +268,9 @@ export function gateStatedReason(
  * this package has to those tools.
  */
 export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
-  'intent-guard': '1.4.0',
-  'vault-guard': '1.7.0',
-  'dep-guard': '0.6.0',
+  'intent-guard': '1.8.1',
+  'vault-guard': '1.9.1',
+  'dep-guard': '0.10.1',
   // The two external tools have no --trust-base and are never handed one.
   // For them the umbrella itself provides pull-request mode: it scopes the
   // history to base..HEAD and hands over the config (and gitleaks' ignore
@@ -259,6 +287,57 @@ export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
 };
 
 /**
+ * The first intent-guard whose own `--base` can carry any change set: it
+ * reads the paths from git NUL-separated (1.8.0) and lists a moved submodule
+ * pointer with --ignore-submodules=none and ends the range with "--" (the
+ * release after 1.8.0). For a native contract on this version or later the
+ * runner hands the gate `--base` instead of `--paths`, so a changed path
+ * that `--paths` cannot carry (a comma, a backslash, edge whitespace, a
+ * leading "-") is judged rather than refused.
+ *
+ * It equals the intent-guard entry in `TRUST_BASE_MIN_VERSION`, so on a run
+ * with a trust base every intent gate that runs is new enough, and the
+ * `--paths` refusal for a native contract is reached only on a run without
+ * one (an explicit `--base`). Kept as its own constant because the two
+ * answer different questions and the floor may move without it.
+ */
+export const INTENT_BASE_CHANNEL_MIN_VERSION = '1.8.1';
+
+/**
+ * How the intent gate is handed the change set on a prepared run: its own
+ * `--base` (native contract, gate new enough), `--paths`, or not at all,
+ * with the reason, when `--paths` cannot carry it and `--base` is not
+ * available.
+ */
+function intentChangeChannel(
+  gate: GatePolicy,
+  intent: IntentPreparation | undefined,
+  version: string | null
+): { kind: 'base'; ref: string } | { kind: 'paths' } | { kind: 'refused'; detail: string } {
+  if (gate.product !== 'intent-guard' || intent === undefined || intent.paths === null) {
+    return { kind: 'paths' };
+  }
+  if (
+    intent.contractSource.kind === 'native' &&
+    intent.baseRef !== null &&
+    atLeastVersion(version, INTENT_BASE_CHANNEL_MIN_VERSION)
+  ) {
+    return { kind: 'base', ref: intent.baseRef };
+  }
+  if (intent.pathsRefusal !== undefined) {
+    return {
+      kind: 'refused',
+      detail:
+        `${intent.pathsRefusal} intent-guard ${version ?? 'of an unreadable version'} takes the ` +
+        'change set only as that list, so nothing was checked by this gate. To clear it, ' +
+        `upgrade intent-guard to ${INTENT_BASE_CHANNEL_MIN_VERSION} or later, which reads the ` +
+        'change set from git itself for a contract frozen in the repository.',
+    };
+  }
+  return { kind: 'paths' };
+}
+
+/**
  * Pull-request mode as it applied to ONE gate.
  *
  * Carried on the outcome rather than worked out again by each reporter,
@@ -266,24 +345,27 @@ export const TRUST_BASE_MIN_VERSION: Partial<Record<Product, string>> = {
  * from the other: whether this gate was actually put into pull-request mode,
  * and what it said about the control inputs the head proposes to change.
  *
- * `withheld` is the half that must never be silent. A gate the umbrella could
- * not put into pull-request mode read its own control inputs out of the tree
- * under judgment, which is the whole hole this release exists to close, and a
- * run where that happened must not look like a run where it did not.
+ * `withheld` is the half that must never be silent. A gate the umbrella did
+ * not put into pull-request mode was not handed the base ref, and a run where
+ * that happened must not look like a run where it did not.
  */
 export interface GateTrustBase {
   /** The ref the umbrella took its own policy from, and offered to this gate. */
   ref: string;
   /**
-   * Null when the flag was passed; otherwise the reason it was not, for a
-   * gate that was never going to be inside the boundary in the first place.
-   * The run continues: that gate read its own control inputs from the tree
-   * being judged, and the report says so.
+   * Null when the flag was passed; otherwise the reason it was not. Only two
+   * cases withhold: a product with no pull-request mode at all (none today,
+   * every product is in `TRUST_BASE_MIN_VERSION`), and an intent gate judging
+   * a contract imported for this run, whose project is a temporary directory
+   * with no repository in it (the contract itself was read from the base).
+   * A gate below its minimum is never withheld; it is `refused`.
    */
   withheld: string | null;
   /**
    * Set when the umbrella could not ESTABLISH that this gate would be in
-   * pull-request mode, which is could-not-run rather than a downgrade.
+   * pull-request mode (its version did not read), or established that it
+   * would not be (its version is below the minimum), which is could-not-run
+   * rather than a downgrade.
    *
    * The distinction is the whole point and it is not symmetry with
    * `withheld`. A gate outside the table was never going to get the flag, so
@@ -334,14 +416,6 @@ export function decideTrustBase(
     proposals: [],
   });
 
-  if (intent !== undefined && intent.contractSource.kind !== 'native') {
-    return withheld(
-      'the intent gate is running against a contract imported for this run, which lives in a ' +
-        'temporary directory with no repository in it, so there is no ref there to read control ' +
-        'inputs from. The contract it is judging against came from a spec in the head tree.'
-    );
-  }
-
   const minimum = TRUST_BASE_MIN_VERSION[gate.product];
   if (minimum === undefined) {
     return withheld(
@@ -366,11 +440,30 @@ export function decideTrustBase(
     );
   }
 
+  // A version BELOW the minimum is refused too, never withheld: running it
+  // without the flag would let it take its rules from the tree being judged
+  // on a run whose whole promise is that every rule comes from the base ref.
   if (!atLeastVersion(productVersion, minimum)) {
+    return refused(
+      `${gate.product} did not run: the installed ${productVersion} is older than ${minimum}, the ` +
+        'first version that takes its rules from the base ref on a pull-request run, so nothing ' +
+        `was checked by it. Fix: install ${gate.product} ${minimum} or newer, or remove an ` +
+        'explicit older version pin.'
+    );
+  }
+
+  // AFTER the version checks, so an imported contract cannot let an older
+  // gate run: this withholding is about where --project points, not about
+  // what the gate understands, and the contract itself came from the base.
+  if (intent !== undefined && intent.contractSource.kind !== 'native') {
+    const from =
+      intent.contractSource.kind === 'imported' && intent.contractSource.ref !== undefined
+        ? `came from the spec on "${intent.contractSource.ref}"`
+        : 'came from a spec in the head tree';
     return withheld(
-      `${gate.product} ${productVersion} does not understand --trust-base, which arrived in ` +
-        `${minimum}, so it read its own control inputs from the tree being judged. Upgrade it to ` +
-        'put this gate into pull-request mode.'
+      'the intent gate is running against a contract imported for this run, which lives in a ' +
+        'temporary directory with no repository in it, so there is no ref there to read control ' +
+        `inputs from. The contract it is judging against ${from}.`
     );
   }
 
@@ -407,7 +500,7 @@ export interface GateOutcome {
    * Where its contract came from and what the change set was measured
    * against: the two facts that decide what the gate's verdict is even about.
    */
-  intent?: { contractSource: ContractSource; baseRef: string | null };
+  intent?: { contractSource: ContractSource; baseRef: string | null; note?: string };
   /**
    * Present only on a pull-request run. Whether this gate was put into
    * pull-request mode, and what it said was proposed.
@@ -627,7 +720,12 @@ export function gateArgs(
    */
   trustBase?: string,
   /** Paths the runner owns for an external tool; the npm gates ignore them. */
-  external: ExternalArgs = {}
+  external: ExternalArgs = {},
+  /**
+   * For the intent gate on a prepared run: hand it this base with its own
+   * `--base` in place of `--paths`. Decided by `intentChangeChannel`.
+   */
+  intentBase?: string
 ): string[] {
   const passthrough = renderOptionFlags(gate.options);
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
@@ -695,7 +793,9 @@ export function gateArgs(
           ? staged
             ? ['--staged']
             : []
-          : ['--paths', intent.paths.join(',')]),
+          : intentBase !== undefined
+            ? ['--base', intentBase]
+            : ['--paths', intent.paths.join(',')]),
         // Beside --paths on purpose, and they are independent: --trust-base
         // says where the RULES come from, --paths says which paths are
         // judged. A pull-request run passes both.
@@ -936,6 +1036,7 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
           intent: {
             contractSource: options.intent.contractSource,
             baseRef: options.intent.baseRef,
+            ...(options.intent.note === undefined ? {} : { note: options.intent.note }),
           },
         }
       : options.intentContract === undefined
@@ -980,12 +1081,22 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
  * than a clear "true" (no git, an old git that does not know the flag) is
  * not shallow: those runs have their own failure paths.
  */
+/** The oldest git a history gate runs under on a pull-request run. */
+export const HISTORY_GIT_FLOOR = '2.31.0';
+
+/** git's own version ("git version 2.39.3 (Apple Git-145)" reads 2.39.3), or null. */
+function probeGitVersion(repoRoot: string): string | null {
+  const probe = runGit(repoRoot, ['--version']);
+  if (probe.error !== undefined || probe.status !== 0) {
+    return null;
+  }
+  const match = /git version (\d+\.\d+\.\d+)/.exec(probe.stdout);
+  return match === null ? null : match[1]!;
+}
+
 function isShallowRepository(repoRoot: string): boolean {
-  const probe = spawnSync('git', ['rev-parse', '--is-shallow-repository'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  return probe.status === 0 && typeof probe.stdout === 'string' && probe.stdout.trim() === 'true';
+  const probe = runGit(repoRoot, ['rev-parse', '--is-shallow-repository']);
+  return probe.status === 0 && probe.stdout.trim() === 'true';
 }
 
 function runGateInner(
@@ -1083,6 +1194,37 @@ function runGateInner(
     }
   }
 
+  // THE GIT FLOOR, on a pull-request run, for a gate that reads history. The
+  // newest git option this umbrella relies on is the one it hands gitleaks,
+  // "git log --diff-merges=first-parent" (git 2.31, per git's release notes);
+  // every other option conductor itself passes is older (rev-parse
+  // --is-shallow-repository is git 2.15). An older git would make that gate
+  // log a git error rather than say why, so the version is asked once, here,
+  // and an older one is a named could-not-run. Only where the option is used:
+  // a run with no history gate never pays for the probe or meets the floor.
+  if (profileFor(gate.product).readsHistory && options.trustBase !== undefined) {
+    const gitVersion = probeGitVersion(options.repoRoot);
+    if (gitVersion === null || !atLeastVersion(gitVersion, HISTORY_GIT_FLOOR)) {
+      const found =
+        gitVersion === null
+          ? `the git version could not be read, so git is not known to be ${HISTORY_GIT_FLOOR} or later`
+          : `git ${gitVersion} is older than ${HISTORY_GIT_FLOOR}`;
+      const detail =
+        `${found}, which ${gate.product} needs on a pull-request run: conductor hands it ` +
+        '"git log --diff-merges=first-parent", which arrived in git 2.31. Upgrade git, then run ' +
+        'again. Nothing was checked by this gate.';
+      return {
+        ...base,
+        enforce: true,
+        durationMs: Date.now() - started,
+        couldNotRun: { reason: 'preparation-failed', detail },
+        findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+  }
+
   // A history gate cannot vouch for history it was not given. Checked before
   // the version probe so nothing is executed for a run that cannot be honest.
   if (profileFor(gate.product).readsHistory && isShallowRepository(options.repoRoot)) {
@@ -1152,9 +1294,8 @@ function runGateInner(
 
   // AFTER the version probe and BEFORE the command line is built, because the
   // decision reads the version. That ordering is the whole capability gate:
-  // an intent-guard older than 1.4.0 must not be handed a flag it would
-  // reject, and a gate IN the table whose version could not be read is
-  // refused rather than run outside the boundary.
+  // a gate IN the table whose version is below its minimum, or could not be
+  // read, is refused rather than run outside the boundary.
   const trustBase = decideTrustBase(gate, options.intent, options.trustBase, version);
 
   if (trustBase !== undefined && trustBase.refused !== null) {
@@ -1168,19 +1309,39 @@ function runGateInner(
       // a decision about, and this is the umbrella saying it could not
       // establish that the gate was inside the boundary.
       //
-      // Reachable now only as a PACKAGING problem, not as an attack: the
-      // program check above runs first, and with its directory-subtree rule a
-      // pull request can no longer put a program here whose version probe it
-      // controls. Before that rule it could, through the wrapper shape: a
-      // head-replaced inner script exiting 3 on --version landed exactly
-      // here, with enforce false and exit 0. A packaging quirk that
-      // fails a build loudly is the better failure: the alternative is a
-      // boundary that quietly downgrades itself on the runs where something
-      // is already wrong, which is the shape of every bug in this file.
+      // Reachable as an installation problem (a gate older than its minimum)
+      // or a packaging one (a version that does not read), not as an attack:
+      // the program check above runs first, and with its directory-subtree
+      // rule a pull request cannot put a program here whose version probe it
+      // controls. A build that fails loudly is the better failure: the
+      // alternative is a boundary that quietly downgrades itself.
       enforce: true,
       trustBase,
-      couldNotRun: { reason: 'trust-base-unverified', detail: trustBase.refused },
+      // decideTrustBase refuses for exactly two reasons: a version it could
+      // not read, and a version it read that is below the minimum.
+      couldNotRun: {
+        reason: version === null ? 'trust-base-unverified' : 'gate-version-unsupported',
+        detail: trustBase.refused,
+      },
       findings: [normalizeFailedGate(gate.role, gate.product, trustBase.refused)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
+  }
+
+  const channel = intentChangeChannel(gate, options.intent, version);
+  if (channel.kind === 'refused') {
+    return {
+      ...base,
+      productVersion: version,
+      binary,
+      durationMs: Date.now() - started,
+      // Enforced under a trust base: the gate produced nothing for
+      // enforce: false to be a decision about.
+      enforce: options.trustBase !== undefined ? true : gate.enforce,
+      ...(trustBase === undefined ? {} : { trustBase }),
+      couldNotRun: { reason: 'preparation-failed', detail: channel.detail },
+      findings: [normalizeFailedGate(gate.role, gate.product, channel.detail)],
       run: EMPTY_RUN,
       diagnostics: [],
     };
@@ -1257,12 +1418,8 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   const nestedProposals: string[] = [];
   if (profile.lockfileNames !== null) {
     const names = new Set(profile.lockfileNames);
-    const listing = spawnSync('git', ['ls-files', '-z'], {
-      cwd: options.repoRoot,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (listing.status !== 0 || typeof listing.stdout !== 'string') {
+    const listing = runGit(options.repoRoot, ['ls-files', '-z'], { maxBuffer: 64 * 1024 * 1024 });
+    if (listing.error !== undefined || listing.status !== 0) {
       const detail =
         `the repository's tracked files could not be listed, so ${gate.product} had no ` +
         'lockfiles to be handed.';
@@ -1280,9 +1437,26 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     }
     const tracked = listing.stdout.split('\0').filter((file) => file !== '');
     if (decidedRef !== undefined && profile.configFile !== null) {
-      nestedProposals.push(
-        ...nestedConfigProposals(options.repoRoot, decidedRef, tracked, profile.configFile)
-      );
+      try {
+        nestedProposals.push(
+          ...nestedConfigProposals(options.repoRoot, decidedRef, tracked, profile.configFile)
+        );
+      } catch (err) {
+        if (!(err instanceof ExternalConfigError)) {
+          throw err;
+        }
+        return {
+          ...base,
+          productVersion: version,
+          binary,
+          durationMs: Date.now() - started,
+          ...(trustBase === undefined ? {} : { trustBase }),
+          couldNotRun: { reason: 'preparation-failed', detail: err.message },
+          findings: [normalizeFailedGate(gate.role, gate.product, err.message)],
+          run: EMPTY_RUN,
+          diagnostics: [],
+        };
+      }
     }
     external.lockfiles = tracked
       // Never a vendored copy under node_modules: that is a dependency's own
@@ -1368,11 +1542,8 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       }
     }
     if (profile.ignoreFile?.alsoLoadedFromScanRoot === true) {
-      const gitDir = spawnSync('git', ['rev-parse', '--absolute-git-dir'], {
-        cwd: options.repoRoot,
-        encoding: 'utf8',
-      });
-      const resolved = typeof gitDir.stdout === 'string' ? gitDir.stdout.trim() : '';
+      const gitDir = runGit(options.repoRoot, ['rev-parse', '--absolute-git-dir']);
+      const resolved = gitDir.stdout.trim();
       if (gitDir.status !== 0 || resolved === '') {
         // No git directory means no history to scan and nowhere safe to scan
         // it from. Not a clean result.
@@ -1399,9 +1570,20 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       ? trustBase
       : { ...trustBase, proposals: [...trustBase.proposals, ...configProposals] };
 
+  // Decided again here from the same inputs rather than threaded through:
+  // intentChangeChannel is pure, and runGateInner already returned on the one
+  // outcome that does not spawn.
+  const channel = intentChangeChannel(gate, options.intent, version);
   const argv = [
     ...binary.argvPrefix,
-    ...gateArgs(gate, options.staged, options.intent, decidedRef, external),
+    ...gateArgs(
+      gate,
+      options.staged,
+      options.intent,
+      decidedRef,
+      external,
+      channel.kind === 'base' ? channel.ref : undefined
+    ),
   ];
 
   const child = spawnSync(binary.command, argv, {
@@ -1430,8 +1612,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     // Carried on every return path below, the failures included: WHETHER
     // this gate was in pull-request mode is exactly as interesting when it
     // could not run as when it could, and the withheld reason is the only
-    // place a report can say a gate read its own rules out of the tree under
-    // judgment.
+    // place a report can say a gate was not handed the base ref.
     ...(trustBaseOut === undefined ? {} : { trustBase: trustBaseOut }),
   };
   // Keep the backstop's view current, so an unexpected throw below still

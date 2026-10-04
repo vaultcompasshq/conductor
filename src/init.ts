@@ -68,14 +68,18 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   realpathSync,
   rmSync,
   rmdirSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import path from 'node:path';
 
@@ -780,6 +784,33 @@ function finishPlanWithoutHook(
   });
 }
 
+/** The conflict for a manifest path that resolves outside the repository. */
+function manifestOutsideConflict(): InitConflict {
+  return {
+    path: MANIFEST_RELATIVE_PATH,
+    reason: 'manifest-path-outside-repository',
+    guidance:
+      `${MANIFEST_RELATIVE_PATH} resolves outside this repository (it, or .guardrails, is a ` +
+      'symbolic link pointing out of the checkout), so nothing was written. Replace the link ' +
+      'with a real directory or file inside the repository and re-run.',
+  };
+}
+
+/**
+ * Writes the manifest without following a symbolic link at its own path:
+ * O_NOFOLLOW where the platform has it, so a link swapped in after the
+ * containment check is refused by the kernel rather than followed.
+ */
+function writeManifestFile(target: string, body: string): void {
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollow, 0o666);
+  try {
+    writeSync(fd, body);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function applyInit(plan: InitResult, options: InitOptions): InitResult {
   if (!plan.ok || plan.dryRun || plan.alreadyInstalled) {
     return plan;
@@ -810,6 +841,11 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
   // but the adopted record is carried forward from the committed manifest, and
   // a write that lands outside the repository is a write apply should refuse
   // whatever produced the path.
+  // The manifest's own path first, and before any write at all, so the
+  // manifest is written inside the repository or nothing is written.
+  if (!manifestPathInsideRepo(plan.repoRoot, path.join(plan.repoRoot, MANIFEST_RELATIVE_PATH))) {
+    return { ...plan, ok: false, conflicts: [...plan.conflicts, manifestOutsideConflict()] };
+  }
   const escaping = [
     ...plan.writes.map((write) => write.path),
     ...(manifest.adopted === null ? [] : [manifest.adopted.path]),
@@ -870,7 +906,7 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
 
     const manifestPath = path.join(plan.repoRoot, MANIFEST_RELATIVE_PATH);
     mkdirSync(path.dirname(manifestPath), { recursive: true });
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    writeManifestFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   } catch (err) {
     return {
       ...plan,
@@ -952,6 +988,13 @@ export function revertInit(options: InitOptions): RevertResult {
   }
 
   const manifestPath = path.join(root, MANIFEST_RELATIVE_PATH);
+  // The manifest itself is contained like every path it names: revert
+  // rewrites or removes it, and a symlinked .guardrails (or manifest) would
+  // land that write outside the repository.
+  if (!manifestPathInsideRepo(root, manifestPath)) {
+    conflicts.push(manifestOutsideConflict());
+    return { ok: false, actions, conflicts, dryRun };
+  }
   const raw = readIfExists(manifestPath);
   if (raw === undefined) {
     conflicts.push({
@@ -1169,10 +1212,9 @@ export function revertInit(options: InitOptions): RevertResult {
 
   // Something is left, so the manifest stays and keeps describing it.
   if (!dryRun) {
-    writeFileSync(
+    writeManifestFile(
       manifestPath,
-      `${JSON.stringify({ ...manifest, files: remaining, adopted }, null, 2)}\n`,
-      'utf8'
+      `${JSON.stringify({ ...manifest, files: remaining, adopted }, null, 2)}\n`
     );
   }
   actions.push({

@@ -162,6 +162,13 @@ export interface RunTrustBase {
    * instead of being spawned.
    */
   treeUnchanged?: boolean;
+  /**
+   * True on the refusal for a pull-request job that gave no trust base at
+   * all (GITHUB_ACTIONS and GITHUB_BASE_REF set, no --trust-base). `ref` is
+   * then empty, and the reports say no trust base was given and no rules
+   * were read, rather than naming a ref.
+   */
+  notGiven?: boolean;
 }
 
 export interface RunResult {
@@ -247,15 +254,21 @@ export interface RunOptions {
 /**
  * Whether this run is the pull-request shaped one.
  *
- * The whole intent-at-pull-request flow engages on a resolved base ref or an
- * explicit `--spec`, and on nothing else. Without one of those, the intent
- * gate keeps exactly the command line v0.1 gave it: a developer running
- * `conductor run` on their own machine has not asked for a contract to be
- * imported, and importing one anyway would change what a local run means
- * without anybody having written that down.
+ * The whole intent-at-pull-request flow engages on a trust base, a resolved
+ * base ref or an explicit `--spec`, and on nothing else. Without one of
+ * those, the intent gate keeps exactly the command line v0.1 gave it: a
+ * developer running `conductor run` on their own machine has not asked for a
+ * contract to be imported, and importing one anyway would change what a
+ * local run means without anybody having written that down.
+ *
+ * A TRUST BASE ALWAYS MAKES THE RUN PULL-REQUEST SHAPED, with or without a
+ * base ref or GITHUB_BASE_REF (merge_group, workflow_dispatch and any CLI
+ * run that passes --trust-base alone). A run with a trust base is always
+ * judged as a pull request against that base: the change set is measured
+ * from it.
  */
 function isPullRequestShaped(options: RunOptions, env: NodeJS.ProcessEnv): boolean {
-  if (options.spec !== undefined) {
+  if (options.spec !== undefined || options.trustBase !== undefined) {
     return true;
   }
   return resolveBaseRef({ ...(options.base === undefined ? {} : { base: options.base }), env }) !== null;
@@ -349,7 +362,7 @@ export function refusedTrustBase(
   policy: Policy,
   ref: string,
   detail: string,
-  options: { stage?: GateStage; now?: () => Date }
+  options: { stage?: GateStage; now?: () => Date; notGiven?: boolean }
 ): RunResult {
   const { gates, deferred, excluded } = partitionGates(policy, options.stage);
   const outcomes = gates.map((gate) =>
@@ -379,7 +392,12 @@ export function refusedTrustBase(
     // thing that could not be read. False rather than a third state, because
     // no proposal is reported on a run where nothing was judged. The refusal
     // itself is carried, and it is what both renderers lead with.
-    trustBase: { ref, policyChanged: false, refusal: detail },
+    trustBase: {
+      ref,
+      policyChanged: false,
+      refusal: detail,
+      ...(options.notGiven === true ? { notGiven: true } : {}),
+    },
     proposals: [],
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
@@ -400,12 +418,20 @@ export function refusedTrustBase(
  */
 function collectProposals(
   outcomes: GateOutcome[],
-  trustBase: RunTrustBase | undefined
+  trustBase: RunTrustBase | undefined,
+  /**
+   * The intent gate's own control files this pull request adds or changes,
+   * observed while preparing it from the base ref (a contract or spec the
+   * base does not carry yet, an edit to the imported spec). They arrive here
+   * whether the gate then ran or was skipped.
+   */
+  preparation: ControlProposal[] = []
 ): ControlProposal[] {
   const proposals: ControlProposal[] = [];
   if (trustBase?.policyChanged === true) {
     proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
   }
+  proposals.push(...preparation);
   for (const outcome of outcomes) {
     for (const line of outcome.trustBase?.proposals ?? []) {
       proposals.push({ product: outcome.product, role: outcome.role, line });
@@ -490,6 +516,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
 
   const env = options.env ?? {};
   const skipped: SkippedGate[] = [];
+  const preparationProposals: ControlProposal[] = [];
   const cleanups: Array<() => void> = [];
 
   // Sequential, not concurrent. Three Node process starts is real overhead
@@ -533,7 +560,18 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
             ...(options.spec === undefined ? {} : { spec: options.spec }),
             ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
             ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
+            ...(trustBaseRef === undefined ? {} : { trustBase: trustBaseRef }),
           });
+
+          const proposed =
+            prepared.kind === 'skip'
+              ? prepared.proposals
+              : prepared.kind === 'ready'
+                ? prepared.preparation.proposals
+                : undefined;
+          for (const line of proposed ?? []) {
+            preparationProposals.push({ product: gate.product, role: gate.role, line });
+          }
 
           if (prepared.kind === 'skip') {
             skipped.push({
@@ -579,9 +617,9 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
           ...(intent !== undefined || gate.role !== 'intent'
             ? {}
             : nativeContractOption(options.repoRoot)),
-          // Offered to every child. runGate decides which ones can take it,
-          // so a gate with no pull-request mode yet is not handed a flag it
-          // would reject, and the reason it was withheld is on the outcome.
+          // Offered to every child. runGate decides which ones take it: a
+          // gate below its pull-request-mode minimum is could-not-run, and a
+          // gate it is withheld from carries the reason on the outcome.
           ...(options.trustBase === undefined ? {} : { trustBase: options.trustBase.ref }),
           // Where an external gate's working directory goes (its report file,
           // its config from the base ref). The runner removes what it makes.
@@ -628,7 +666,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     treeUnchanged,
     findings,
     trustBase: options.trustBase ?? null,
-    proposals: collectProposals(outcomes, options.trustBase),
+    proposals: collectProposals(outcomes, options.trustBase, preparationProposals),
     summary: {
       blocking: findings.filter((finding) => finding.blocking).length,
       byProduct,

@@ -7,7 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
+  rmSync, symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -19,8 +19,10 @@ import {
   NATIVE_CONTRACT_PATH,
   TEMP_PREFIX,
 } from '../src/intent-prepare.js';
+import { TRUST_BASE_MIN_VERSION } from '../src/gate-runner.js';
 import { renderSarif } from '../src/output-sarif.js';
-import { renderText } from '../src/output-text.js';
+import { gateLogLines, renderText } from '../src/output-text.js';
+import { atLeastVersion } from '../src/trust-base.js';
 import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
 import { runAll } from '../src/run.js';
 import type { RunResult } from '../src/run.js';
@@ -121,12 +123,13 @@ function repo(options: { spec?: boolean; changed?: string[] } = {}): string {
   return root;
 }
 
-function binWith(check: string, exit = 0): string {
+function binWith(check: string, exit = 0, version?: string): string {
   const bin = tempDir();
   stubIntentGuard(bin, {
     importSpec: { stdout: IMPORT_DRY_RUN },
     freeze: { stdout: FREEZE },
     check: { stdout: check, exit },
+    ...(version === undefined ? {} : { version }),
   });
   return bin;
 }
@@ -716,7 +719,7 @@ describe('a pull-request run whose intent gate is vendored in the tree', () => {
       importSpec: { stdout: IMPORT_DRY_RUN },
       freeze: { stdout: FREEZE },
       check: { stdout: CHECK_PASSING },
-      version: '1.4.0',
+      version: '1.9.0',
     });
     commit(root, 'base');
 
@@ -732,7 +735,7 @@ describe('a pull-request run whose intent gate is vendored in the tree', () => {
         [
           '#!/bin/sh',
           `printf '%s\\n' "$1" >> ${JSON.stringify(marker)}`,
-          'if [ "$1" = "--version" ]; then echo "1.4.0"; exit 0; fi',
+          'if [ "$1" = "--version" ]; then echo "1.9.0"; exit 0; fi',
           `cat ${JSON.stringify(command)}."$1".stdout`,
           'exit 0',
         ].join('\n') + '\n'
@@ -899,10 +902,12 @@ describe('a pull-request run and the intent gate the head installed', () => {
     );
     chmodSync(planted, 0o755);
 
+    // The PATH copy is above every pull-request-mode minimum, so the only
+    // thing this run can trip over is the node_modules copy.
     const result = runAll(INTENT_ONLY, {
       repoRoot: root,
       staged: false,
-      pathValue: binWith(CHECK_PASSING),
+      pathValue: binWith(CHECK_PASSING, 0, '1.9.0'),
       env: {},
       base: 'main',
       trustBase: { ref: 'main', policyChanged: false, refusal: null },
@@ -913,5 +918,348 @@ describe('a pull-request run and the intent gate the head installed', () => {
     expect(result.gates[0].binary?.source).toBe('path');
     expect(result.gates[0].intent?.contractSource.kind).toBe('imported');
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('a trust base alone makes the run pull-request shaped', () => {
+  const FROZEN = 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n';
+
+  /** main carries a frozen contract; the branch changes the given files. */
+  function frozenOnMain(changed: string[]): { root: string; mainSha: string } {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    write(root, NATIVE_CONTRACT_PATH, FROZEN);
+    commit(root, 'base');
+    const mainSha = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    for (const relative of changed) {
+      write(root, relative, 'export const x = 1;\n');
+    }
+    commit(root, 'branch work');
+    return { root, mainSha };
+  }
+
+  function trustBaseRun(root: string, ref: string, argvLog: string): RunResult {
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, version: '1.8.1', argvLog });
+    return runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: {},
+      trustBase: { ref, policyChanged: false, refusal: null },
+    });
+  }
+
+  it('judges the branch change set against the trust base with no --base and no GITHUB_BASE_REF', () => {
+    const { root, mainSha } = frozenOnMain(['elsewhere/a.ts', 'elsewhere/b.ts']);
+    const log = path.join(tempDir(), 'argv.log');
+
+    const result = trustBaseRun(root, mainSha, log);
+
+    // Every intent gate that runs on a trust-base run is new enough to read
+    // the change set from git itself, so a native contract hands it --base.
+    const argv = result.gates[0].argv;
+    expect(argv[argv.indexOf('--base') + 1]).toBe(mainSha);
+    expect(argv).not.toContain('--paths');
+    expect(argv).toContain('--trust-base');
+    expect(argv).not.toContain('--staged');
+    expect(result.gates[0].intent?.baseRef).toBe(mainSha);
+  });
+
+  it('measures the change set from the trust base when no other base is given', () => {
+    const { root, mainSha } = frozenOnMain(['src/widget/cache.ts']);
+    const log = path.join(tempDir(), 'argv.log');
+
+    const result = trustBaseRun(root, mainSha, log);
+
+    expect(result.gates[0].intent?.baseRef).toBe(mainSha);
+    expect(readFileSync(log, 'utf8')).toContain(`--base ${mainSha}`);
+  });
+
+  it('skips a first adoption, and reports the contract it adds as a proposal of the intent gate', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    commit(root, 'base');
+    const mainSha = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    write(root, NATIVE_CONTRACT_PATH, FROZEN);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    commit(root, 'adopt the native flow');
+
+    const result = trustBaseRun(root, mainSha, path.join(tempDir(), 'argv.log'));
+
+    expect(result.gates).toEqual([]);
+    expect(result.skipped.map((gate) => gate.reason)).toEqual(['no-contract']);
+    expect(result.exitCode).toBe(0);
+    expect(result.proposals).toEqual([
+      {
+        product: 'intent-guard',
+        role: 'intent',
+        line: expect.stringMatching(/^\.intent-guard\/intent-contract\.yaml is in this pull request/),
+      },
+    ]);
+  });
+
+  it('says in one line, even on a clean run, that --spec was not used because the base has a frozen contract', () => {
+    const { root, mainSha } = frozenOnMain(['src/widget/cache.ts']);
+    write(root, 'docs/superpowers/specs/2026-09-03-widget-cache-design.md', SPEC_BODY);
+    commit(root, 'a spec in the pull request');
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, version: '1.8.1' });
+
+    const result = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: {},
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      trustBase: { ref: mainSha, policyChanged: false, refusal: null },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.gates[0].intent?.contractSource.kind).toBe('native');
+    const text = renderText(result);
+    expect(text).toMatch(
+      /note: the spec named by --spec \(docs\/superpowers\/specs\/2026-09-03-widget-cache-design\.md\) was not used: .* has a frozen intent contract/
+    );
+  });
+
+  it('prints no such line when --spec was used', () => {
+    const root = repo();
+    const mainSha = git(root, ['rev-parse', 'main']).trim();
+
+    const result = run(root, binWith(CHECK_PASSING), {
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+    });
+    const withTrust = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: binWith(CHECK_PASSING),
+      env: {},
+      spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
+      trustBase: { ref: mainSha, policyChanged: false, refusal: null },
+    });
+
+    expect(renderText(result, { verbose: true })).not.toMatch(/was not used/);
+    expect(withTrust.gates[0].intent?.contractSource.kind).toBe('imported');
+    expect(renderText(withTrust, { verbose: true })).not.toMatch(/was not used/);
+  });
+});
+
+describe('a change set --paths cannot carry stays clearable', () => {
+  const FROZEN = 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n';
+
+  /**
+   * main carries a frozen contract and `baseFiles`; the branch then runs
+   * `head` in the repository. Returns the base commit.
+   */
+  function nativeRepo(baseFiles: Record<string, string>, head: (root: string) => void): { root: string; base: string } {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, NATIVE_CONTRACT_PATH, FROZEN);
+    for (const [relative, body] of Object.entries(baseFiles)) {
+      write(root, relative, body);
+    }
+    commit(root, 'base');
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'fix/rename']);
+    head(root);
+    commit(root, 'the pull request');
+    return { root, base };
+  }
+
+  /**
+   * A trust-base run for a gate at or above the pull-request-mode minimum.
+   * Below it the gate is could-not-run on a trust-base run before any change
+   * set is handed over, so the --paths channel for an older gate is driven
+   * on a run with an explicit --base and no trust base.
+   */
+  function nativeRun(root: string, base: string, version: string): RunResult {
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, version });
+    return runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: {},
+      ...(atLeastVersion(version, TRUST_BASE_MIN_VERSION['intent-guard'] as string)
+        ? { trustBase: { ref: base, policyChanged: false, refusal: null } }
+        : { base }),
+    });
+  }
+
+  /** A dash-leading file renamed: the change set lists both names. */
+  function renamedDashFile() {
+    return nativeRepo({ '-notes.md': 'n\n' }, (root) => {
+      git(root, ['mv', '--', '-notes.md', 'notes.md']);
+    });
+  }
+
+  it("hands a native contract to intent-guard's own --base from 1.8.1, so a dash-leading path is judged", () => {
+    const { root, base } = renamedDashFile();
+
+    const result = nativeRun(root, base, '1.8.1');
+
+    const argv = result.gates[0].argv;
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(argv[argv.indexOf('--base') + 1]).toBe(base);
+    expect(argv).not.toContain('--paths');
+  });
+
+  it('below 1.8.1, leads the --paths list with a path that does not start with a dash', () => {
+    const { root, base } = renamedDashFile();
+
+    const result = nativeRun(root, base, '1.8.0');
+
+    const argv = result.gates[0].argv;
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(argv[argv.indexOf('--paths') + 1]).toBe('notes.md,-notes.md');
+    expect(argv).not.toContain('--base');
+  });
+
+  it('below 1.8.1, refuses only when every path starts with a dash, and says how to clear it', () => {
+    const { root, base } = nativeRepo({}, (r) => {
+      write(r, '-only.md', 'x\n');
+    });
+
+    const result = nativeRun(root, base, '1.8.0');
+
+    expect(result.exitCode).toBe(2);
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/every changed path starts with "-"/);
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/upgrade intent-guard to 1\.8\.1 or later/);
+  });
+
+  it('judges a comma in a path through --base from 1.8.1, where --paths would split it', () => {
+    const { root, base } = nativeRepo({}, (r) => {
+      write(r, 'src/a,b.ts', 'x\n');
+    });
+
+    const result = nativeRun(root, base, '1.8.1');
+
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(result.gates[0].argv).toContain('--base');
+  });
+
+  it('refuses a comma in a path for an imported contract, saying how to clear it', () => {
+    const root = repo({ changed: ['src/a,b.ts'] });
+
+    const result = run(root, binWith(CHECK_PASSING), { base: 'main' });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/contains a comma/);
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/freeze the contract and commit it to the base branch/);
+  });
+
+  it('never reports a bare zero proposals when the path list refusal stopped the intent gate on a trust-base run', () => {
+    // An imported contract, the one shape where the path list refusal is
+    // still reached on a trust-base run: its only channel is --paths.
+    const root = repo({ changed: ['src/a,b.ts'] });
+    const mainSha = git(root, ['rev-parse', 'main']).trim();
+
+    const result = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: binWith(CHECK_PASSING, 0, '1.9.0'),
+      env: {},
+      trustBase: { ref: mainSha, policyChanged: false, refusal: null },
+    });
+    const text = renderText(result, { verbose: true });
+
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/contains a comma/);
+    expect(text).toMatch(/intent \(intent-guard\) could not run, so the proposals of that gate are not known/);
+    expect(text).not.toMatch(/0 control change\(s\) proposed in this pull request/);
+  });
+});
+
+describe('the proposal count when the intent preparation fails on a trust-base run', () => {
+  it('names the intent gate as not known rather than counting zero', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'real.yaml', 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n');
+    mkdirSync(path.join(root, '.intent-guard'), { recursive: true });
+    symlinkSync('../real.yaml', path.join(root, NATIVE_CONTRACT_PATH));
+    commit(root, 'base contract is a link');
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    commit(root, 'the pull request');
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, version: '1.8.0' });
+
+    const result = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: {},
+      trustBase: { ref: base, policyChanged: false, refusal: null },
+    });
+    const text = renderText(result, { verbose: true });
+
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+    expect(text).toMatch(/intent \(intent-guard\) could not run, so the proposals of that gate are not known/);
+    expect(text).not.toMatch(/0 control change\(s\) proposed in this pull request/);
+    // The job log line says the gate could not run and was never spawned.
+    const lines = gateLogLines(result);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /^conductor: gate intent \(intent-guard version unknown\): could-not-run \(preparation-failed\), no exit code, conductor said: "the intent gate could not be prepared at the contract-source step: /
+    );
+  });
+
+  it('logs the path list refusal as could-not-run with the gate version it read', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, NATIVE_CONTRACT_PATH, 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n');
+    commit(root, 'base');
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'fix/x']);
+    write(root, '-only.md', 'x\n');
+    commit(root, 'the pull request');
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, version: '1.8.0' });
+
+    // An explicit --base and no trust base: on a trust-base run an
+    // intent-guard below 1.8.1 is could-not-run before the path list is
+    // built, so this refusal is reached only on a run like this one.
+    const result = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: {},
+      base,
+    });
+
+    const lines = gateLogLines(result);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /^conductor: gate intent \(intent-guard 1\.8\.0\): could-not-run \(preparation-failed\), no exit code, conductor said: "/
+    );
+  });
+
+  it('logs a first adoption as skipped, never as a gate that ran', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    commit(root, 'base');
+    const base = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    write(root, NATIVE_CONTRACT_PATH, 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n');
+    commit(root, 'adopt');
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, version: '1.8.0' });
+
+    const result = runAll(INTENT_ONLY, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: {},
+      trustBase: { ref: base, policyChanged: false, refusal: null },
+    });
+
+    expect(gateLogLines(result)).toHaveLength(1);
+    expect(gateLogLines(result)[0]).toMatch(/^conductor: gate intent \(intent-guard\): skipped \(/);
   });
 });

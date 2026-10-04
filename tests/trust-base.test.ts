@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -15,8 +15,10 @@ import {
   atLeastVersion,
   headTreeEqualsBase,
   policyDiffers,
-  readPolicyAtRef,
+  readFileAtRef,
+  treeEntryAt,
   refuseAmbiguousRef,
+  refuseHeadControlledProgram,
   refuseTrustBaseForPullRequest,
   refuseTrustBaseRef,
   resolveRev,
@@ -208,7 +210,7 @@ describe('reading the policy file at a ref', () => {
     commit(repo, { '.guardrails.yaml': 'version: 1\ngates: {}\n' }, 'head rewrites it');
     writeFileSync(path.join(repo, '.guardrails.yaml'), 'version: 1\n# and an uncommitted edit\n');
 
-    expect(readPolicyAtRef(repo, 'base')).toBe(BASE_POLICY);
+    expect(readFileAtRef(repo, 'base', '.guardrails.yaml')).toEqual({ kind: 'file', text: BASE_POLICY });
   });
 
   it('reads the head commit rather than the working tree for the head side', () => {
@@ -217,14 +219,138 @@ describe('reading the policy file at a ref', () => {
     writeFileSync(path.join(repo, '.guardrails.yaml'), 'version: 1\ngates: {}\n');
 
     // An uncommitted local edit is not something a pull request proposes.
-    expect(readPolicyAtRef(repo, 'HEAD')).toBe(BASE_POLICY);
+    expect(readFileAtRef(repo, 'HEAD', '.guardrails.yaml')).toEqual({ kind: 'file', text: BASE_POLICY });
   });
 
-  it('answers null when the ref carries no policy file at all', () => {
+  it('answers absent when the ref carries no policy file at all', () => {
     const repo = emptyRepo();
     commit(repo, { 'app.js': 'const x = 1;\n' }, 'no policy here');
 
-    expect(readPolicyAtRef(repo, 'HEAD')).toBeNull();
+    expect(readFileAtRef(repo, 'HEAD', '.guardrails.yaml')).toEqual({ kind: 'absent' });
+  });
+});
+
+describe('readFileAtRef keeps absent, file and error apart', () => {
+  /** A base commit holding `files`, and a second commit on top of it. */
+  function baseAndHead(files: Record<string, string>): { repo: string; base: string } {
+    const repo = emptyRepo();
+    for (const name of Object.keys(files)) {
+      mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+    }
+    const base = commit(repo, files, 'base');
+    commit(repo, { 'later.txt': 'later\n' }, 'head');
+    return { repo, base };
+  }
+
+  /** Commits a tree entry of any mode at `name`, with no file on disk behind it. */
+  function commitEntry(repo: string, mode: string, sha: string, name: string): string {
+    git(repo, ['update-index', '--add', '--info-only', '--cacheinfo', `${mode},${sha},${name}`]);
+    const tree = git(repo, ['write-tree', '--missing-ok']).trim();
+    const parent = git(repo, ['rev-parse', 'HEAD']).trim();
+    const made = git(repo, ['commit-tree', tree, '-p', parent, '-m', `entry ${name}`]).trim();
+    git(repo, ['update-ref', 'refs/heads/entry', made]);
+    return made;
+  }
+
+  it('reads a regular file', () => {
+    const { repo, base } = baseAndHead({ 'conf/a.yaml': 'a: 1\n' });
+    expect(readFileAtRef(repo, base, 'conf/a.yaml')).toEqual({ kind: 'file', text: 'a: 1\n' });
+  });
+
+  it('answers absent for a path the ref does not carry, including under a missing directory', () => {
+    const { repo, base } = baseAndHead({ 'a.yaml': 'a: 1\n' });
+    expect(readFileAtRef(repo, base, 'b.yaml')).toEqual({ kind: 'absent' });
+    expect(readFileAtRef(repo, base, 'no/such/dir/b.yaml')).toEqual({ kind: 'absent' });
+  });
+
+  it('reads the right file when the working tree holds a file named like the revision and path', () => {
+    // The path is looked up in the ref's tree and the blob read by id, so a
+    // working-tree file of any name cannot change what is read.
+    const { repo, base } = baseAndHead({ '.guardrails.yaml': BASE_POLICY });
+    mkdirSync(path.join(repo, `${base}:.`));
+    writeFileSync(path.join(repo, `${base}:.`, '.guardrails.yaml'), 'version: 1\ngates: {}\n');
+    expect(readFileAtRef(repo, base, '.guardrails.yaml')).toEqual({ kind: 'file', text: BASE_POLICY });
+  });
+
+  it('answers error, never absent or empty, for a symlink entry', () => {
+    const { repo } = baseAndHead({ 'real.yaml': 'a: 1\n' });
+    symlinkSync('real.yaml', path.join(repo, 'link.yaml'));
+    const ref = commit(repo, {}, 'add a link');
+    const read = readFileAtRef(repo, ref, 'link.yaml');
+    expect(read.kind).toBe('error');
+    expect(read.kind === 'error' ? read.detail : '').toMatch(/not a regular file/);
+  });
+
+  it('answers error for a directory and for a submodule entry at the path', () => {
+    const { repo } = baseAndHead({ 'dir/inner.yaml': 'a: 1\n' });
+    const head = git(repo, ['rev-parse', 'HEAD']).trim();
+    expect(readFileAtRef(repo, head, 'dir').kind).toBe('error');
+    const withGitlink = commitEntry(repo, '160000', head, 'vendored');
+    expect(readFileAtRef(repo, withGitlink, 'vendored').kind).toBe('error');
+  });
+
+  it('answers error when the tree lists a blob git does not have', () => {
+    const { repo } = baseAndHead({ 'a.yaml': 'a: 1\n' });
+    const missing = 'ab'.repeat(20);
+    const ref = commitEntry(repo, '100644', missing, 'gone.yaml');
+    const read = readFileAtRef(repo, ref, 'gone.yaml');
+    expect(read.kind).toBe('error');
+  });
+
+  it('answers error, never absent, for a path below a symlinked or submodule directory', () => {
+    const { repo } = baseAndHead({ 'realdir/a.yaml': 'a: 1\n' });
+    symlinkSync('realdir', path.join(repo, 'linked'));
+    const ref = commit(repo, {}, 'a linked directory');
+    const linked = readFileAtRef(repo, ref, 'linked/a.yaml');
+    expect(linked.kind).toBe('error');
+    expect(linked.kind === 'error' ? linked.detail : '').toMatch(/linked is a symbolic link/);
+    const withGitlink = commitEntry(repo, '160000', ref, 'vendored');
+    const below = readFileAtRef(repo, withGitlink, 'vendored/a.yaml');
+    expect(below.kind === 'error' ? below.detail : below.kind).toMatch(/vendored is a submodule/);
+    expect(readFileAtRef(repo, ref, 'realdir/a.yaml')).toEqual({ kind: 'file', text: 'a: 1\n' });
+    expect(readFileAtRef(repo, ref, 'nowhere/a.yaml')).toEqual({ kind: 'absent' });
+  });
+
+  it('answers error for a ref that does not resolve', () => {
+    const { repo } = baseAndHead({ 'a.yaml': 'a: 1\n' });
+    expect(readFileAtRef(repo, 'origin/nope', 'a.yaml').kind).toBe('error');
+  });
+
+  it('refuses a dash-leading ref inside the function, before git sees it', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { 'conductor.yml': 'a: 1\n' }, 'base');
+    git(repo, ['update-ref', 'refs/tags/--output=pwned', base]);
+    const read = readFileAtRef(repo, '--output=pwned', 'conductor.yml');
+    expect(read.kind).toBe('error');
+    expect(read.kind === 'error' ? read.detail : '').toMatch(/starts with "-"/);
+    expect(readdirSync(repo)).not.toContain('pwned');
+  });
+});
+
+describe('treeEntryAt keeps absent and error apart', () => {
+  it('answers absent for a path the ref does not carry, and error for a ref that does not resolve', () => {
+    const repo = emptyRepo();
+    const base = commit(repo, { 'a.txt': 'a\n' }, 'base');
+    expect(treeEntryAt(repo, base, 'b.txt')).toEqual({ kind: 'absent' });
+    expect(treeEntryAt(repo, 'origin/nope', 'a.txt').kind).toBe('error');
+    expect(treeEntryAt(repo, '--output=x', 'a.txt').kind).toBe('error');
+    const entry = treeEntryAt(repo, base, 'a.txt');
+    expect(entry.kind).toBe('entry');
+  });
+});
+
+describe('every revision handed to git is ended with a double dash', () => {
+  it('keeps the first-parent exception when the base carries a file named HEAD', () => {
+    // HEAD is read as a revision whatever files the tree holds, so the
+    // equal-tree exception for a merge whose first parent is the base holds.
+    const repo = emptyRepo();
+    const base = commit(repo, { '.guardrails.yaml': BASE_POLICY, HEAD: 'a file named HEAD\n' }, 'base');
+    git(repo, ['checkout', '--quiet', '-b', 'feature']);
+    commit(repo, { 'secret.txt': 'a-planted-secret-value\n' }, 'add a secret');
+    removeAndCommit(repo, 'secret.txt', 'back it out');
+    git(repo, ['checkout', '--quiet', 'main']);
+    git(repo, ['merge', '--quiet', '--no-ff', '-m', 'merge feature', 'feature']);
+    expect(refuseTrustBaseRef(repo, base)).toBeNull();
   });
 });
 
@@ -652,7 +778,7 @@ describe('a dash-leading trust base never reaches git as an option', () => {
     );
   });
 
-  it('readPolicyAtRef with a dash-leading ref never writes a file', () => {
+  it('readFileAtRef with a dash-leading ref never writes a file', () => {
     const repo = emptyRepo();
     const base = commit(repo, { 'conductor.yml': 'a: 1\n' }, 'base');
     git(repo, ['update-ref', 'refs/tags/--output=pwned', base]);
@@ -660,7 +786,58 @@ describe('a dash-leading trust base never reaches git as an option', () => {
     // the directory it would write into has to exist for the bug to show.
     const sink = path.join(repo, 'pwned:.');
     mkdirSync(sink);
-    expect(readPolicyAtRef(repo, '--output=pwned')).toBeNull();
+    expect(readFileAtRef(repo, '--output=pwned', 'conductor.yml').kind).toBe('error');
     expect(readdirSync(sink)).toEqual([]);
+  });
+
+  it('resolveRev refuses a dash-leading revision inside the function', () => {
+    const repo = emptyRepo();
+    commit(repo, { 'a.txt': 'a\n' }, 'base');
+    expect(resolveRev(repo, '--output=x', 'commit')).toBeNull();
+    expect(readdirSync(repo)).not.toContain('x');
+  });
+});
+
+describe('vetting a program spelled through a symlinked repository root', () => {
+  /**
+   * A repository at <real>/repo, where <real> is fully resolved, plus <via>,
+   * a symlink to <real> made by the test itself. Built this way on every
+   * platform, so the symlinked spelling exists whatever the temporary
+   * directory looks like on the machine running it. The base and head both
+   * carry vendor/real-gate unchanged; the head working tree adds an
+   * untracked link at node_modules/.bin/vault-guard pointing at it.
+   */
+  function linkedRoot(): { realRepo: string; viaRepo: string; base: string } {
+    const real = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-real-')));
+    temps.push(real);
+    const holder = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-via-'));
+    temps.push(holder);
+    const via = path.join(holder, 'via');
+    symlinkSync(real, via);
+    const realRepo = path.join(real, 'repo');
+    mkdirSync(path.join(realRepo, 'vendor'), { recursive: true });
+    git(realRepo, ['init', '--quiet', '-b', 'main']);
+    git(realRepo, ['config', 'user.email', 'test@example.com']);
+    git(realRepo, ['config', 'user.name', 'Test']);
+    const base = commit(realRepo, { 'vendor/real-gate': '#!/bin/sh\nexit 0\n' }, 'base');
+    commit(realRepo, { 'app.js': 'const x = 1;\n' }, 'head');
+    mkdirSync(path.join(realRepo, 'node_modules', '.bin'), { recursive: true });
+    symlinkSync(path.join(realRepo, 'vendor', 'real-gate'), path.join(realRepo, 'node_modules', '.bin', 'vault-guard'));
+    return { realRepo, viaRepo: path.join(via, 'repo'), base };
+  }
+
+  it('refuses the untracked link on its own entry, whichever spelling of the root it arrives in', () => {
+    const { realRepo, viaRepo, base } = linkedRoot();
+    for (const spelling of [viaRepo, realRepo]) {
+      const refusal = refuseHeadControlledProgram(
+        realRepo,
+        base,
+        path.join(spelling, 'node_modules', '.bin', 'vault-guard')
+      );
+      expect([spelling === viaRepo ? 'via' : 'real', refusal]).toEqual([
+        spelling === viaRepo ? 'via' : 'real',
+        expect.stringMatching(/does not track the gate program at node_modules\/\.bin\/vault-guard/),
+      ]);
+    }
   });
 });

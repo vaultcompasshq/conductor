@@ -779,7 +779,9 @@ function trustBaseRefusedNotifications(result: RunResult): Notification[] {
       id: 'conductor/trust-base-refused',
       level: 'error',
       message:
-        `conductor refused the trust base "${result.trustBase?.ref ?? ''}", so no gate ran and ` +
+        (result.trustBase?.notGiven === true
+          ? 'this is a pull-request job and no trust base was given, so no rules were read, no gate ran and '
+          : `conductor refused the trust base "${result.trustBase?.ref ?? ''}", so no gate ran and `) +
         `NOTHING WAS CHECKED by this run. ${refusal}`,
       details: { ref: result.trustBase?.ref ?? null, reason: refusal },
     },
@@ -825,17 +827,15 @@ function programRefusedNotifications(result: RunResult): Notification[] {
 }
 
 /**
- * The gates the umbrella could not put into pull-request mode.
+ * The gates the umbrella did not hand the trust base to.
  *
  * The loud half of the same mode, and by the discriminator below it is a
- * close call that lands on notification: nothing went wrong with the run, and
- * the fact is true of the configuration (an older gate is installed) rather
- * than of this change, so it is identical on every run until somebody
- * upgrades. What it says is how much of the pull-request boundary this run
- * actually had, which is a coverage statement.
- *
- * It is still the most important notification in the log. A gate here read
- * its own control inputs out of the tree under judgment.
+ * close call that lands on notification: nothing went wrong with the run.
+ * What it says is how much of the pull-request boundary this run actually
+ * had, which is a coverage statement. A gate below its pull-request-mode
+ * minimum never lands here: it is could-not-run. What is left is an intent
+ * gate judging a contract imported for this run from the base, and a
+ * product with no pull-request mode at all (none today).
  */
 function trustBaseWithheldNotifications(result: RunResult): Notification[] {
   return result.gates.flatMap((gate) => {
@@ -847,9 +847,8 @@ function trustBaseWithheldNotifications(result: RunResult): Notification[] {
       {
         id: 'conductor/trust-base-not-passed',
         message:
-          `The ${gate.role} gate (${gate.product}) did NOT run in pull-request mode, so it read ` +
-          `its own control inputs from the tree being judged rather than from ` +
-          `${gate.trustBase?.ref ?? 'the base ref'}. ${withheld}`,
+          `The ${gate.role} gate (${gate.product}) did NOT run in pull-request mode: it was not ` +
+          `handed --trust-base ${gate.trustBase?.ref ?? 'the base ref'}. ${withheld}`,
         details: {
           role: gate.role,
           product: gate.product,

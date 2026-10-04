@@ -9,17 +9,40 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { GATE_SAID_MAX_CHARS, decideTrustBase, runGate } from '../src/gate-runner.js';
+import {
+  GATE_SAID_MAX_CHARS,
+  TRUST_BASE_MIN_VERSION,
+  decideTrustBase,
+  runGate,
+} from '../src/gate-runner.js';
+import { useGitProgram } from '../src/git.js';
+import { gateLogLines, proposalCount } from '../src/output-text.js';
 import type { GatePolicy } from '../src/policy.js';
 import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+
+/** The intent-guard pull-request-mode minimum, read from the table itself. */
+const INTENT_MIN = TRUST_BASE_MIN_VERSION['intent-guard'] as string;
+
+/** A version just below the given one: the previous patch, or the minor before at patch 99. */
+function versionBelow(version: string): string {
+  const [major, minor, patch] = version.split('.').map(Number);
+  if (patch > 0) {
+    return `${major}.${minor}.${patch - 1}`;
+  }
+  if (minor > 0) {
+    return `${major}.${minor - 1}.99`;
+  }
+  return `${major - 1}.99.99`;
+}
 
 const temps: string[] = [];
 
@@ -322,14 +345,11 @@ describe('running one gate', () => {
 /**
  * The capability gate on --trust-base.
  *
- * Two failures are possible here and they are opposite, which is why the
- * decision is its own function rather than a condition inside gateArgs.
- * Handing the flag to a gate that does not parse it makes that gate exit
- * non-zero with no JSON, which the umbrella correctly reports as
- * could-not-run: a wrong guess turns a working repository's pull requests
- * red. WITHHOLDING it silently leaves that gate reading its own control
- * inputs out of the tree under judgment, which is the hole pull-request mode
- * exists to close. So every withholding carries a reason, and the reason is
+ * A gate in the version table at or above its minimum is handed the flag. A
+ * gate below its minimum, or whose version does not read, is could-not-run on
+ * a run with a trust base: running it without the flag would let it take its
+ * rules from the tree being judged. Withholding is left only for an intent
+ * gate judging an imported contract, and it always carries a reason that is
  * printed and put in the log.
  */
 describe('deciding whether a gate can be put into pull-request mode', () => {
@@ -344,20 +364,22 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
   };
 
   it('says nothing at all when the run is not in pull-request mode', () => {
-    expect(decideTrustBase(intentGate, nativeIntent, undefined, '1.4.0')).toBeUndefined();
+    expect(decideTrustBase(intentGate, nativeIntent, undefined, INTENT_MIN)).toBeUndefined();
   });
 
   it('puts both external products in pull-request mode at their floors instead of withholding', () => {
     const gl = gate({ role: 'secrets-history', product: 'gitleaks' });
     expect(decideTrustBase(gl, undefined, 'origin/main', '8.30.1')?.withheld).toBeNull();
-    expect(decideTrustBase(gl, undefined, 'origin/main', '8.18.4')?.withheld).toMatch(/8\.19\.0/);
+    const old = decideTrustBase(gl, undefined, 'origin/main', '8.18.4');
+    expect(old?.withheld).toBeNull();
+    expect(old?.refused).toMatch(/8\.19\.0/);
     const osv = gate({ role: 'vulnerabilities', product: 'osv-scanner' });
     expect(decideTrustBase(osv, undefined, 'origin/main', '2.6.0')?.withheld).toBeNull();
     expect(decideTrustBase(osv, undefined, 'origin/main', null)?.refused).not.toBeNull();
   });
 
-  it('passes the flag to an intent-guard at the version it arrived in', () => {
-    expect(decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.4.0')).toEqual({
+  it('passes the flag to an intent-guard at its pull-request-mode minimum', () => {
+    expect(decideTrustBase(intentGate, nativeIntent, 'origin/main', INTENT_MIN)).toEqual({
       ref: 'origin/main',
       withheld: null,
       refused: null,
@@ -365,11 +387,65 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     });
   });
 
-  it('withholds it from an intent-guard below that version, and says which', () => {
-    const decision = decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.3.1');
-    expect(decision?.withheld).toMatch(/1\.3\.1 does not understand --trust-base/);
-    expect(decision?.withheld).toMatch(/1\.4\.0/);
-    expect(decision?.withheld).toMatch(/tree being judged/);
+  const familyRoles = {
+    'intent-guard': 'intent',
+    'vault-guard': 'secrets',
+    'dep-guard': 'dependencies',
+  } as const;
+  for (const product of ['intent-guard', 'vault-guard', 'dep-guard'] as const) {
+    const minimum = TRUST_BASE_MIN_VERSION[product] as string;
+    const older = versionBelow(minimum);
+    const role = familyRoles[product];
+
+    it(`refuses ${product} below its pull-request-mode minimum rather than withholding the flag`, () => {
+      const decision = decideTrustBase(
+        gate({ role, product }),
+        product === 'intent-guard' ? nativeIntent : undefined,
+        'origin/main',
+        older
+      );
+
+      expect(decision?.withheld).toBeNull();
+      expect(decision?.refused).toBe(
+        `${product} did not run: the installed ${older} is older than ${minimum}, the first ` +
+          'version that takes its rules from the base ref on a pull-request run, so nothing was ' +
+          `checked by it. Fix: install ${product} ${minimum} or newer, or remove an explicit ` +
+          'older version pin.'
+      );
+    });
+
+    it(`passes the flag to ${product} at exactly its minimum`, () => {
+      const decision = decideTrustBase(
+        gate({ role, product }),
+        product === 'intent-guard' ? nativeIntent : undefined,
+        'origin/main',
+        minimum
+      );
+
+      expect(decision).toEqual({ ref: 'origin/main', withheld: null, refused: null, proposals: [] });
+    });
+
+    it(`changes nothing for ${product} below its minimum when there is no trust base`, () => {
+      expect(decideTrustBase(gate({ role, product }), undefined, undefined, older)).toBeUndefined();
+    });
+  }
+
+  it('refuses an intent-guard below the minimum even when the contract was imported', () => {
+    // The imported-contract withholding is about where --project points, not
+    // about the gate's version, so it must not let an older gate run.
+    const decision = decideTrustBase(
+      intentGate,
+      {
+        ...nativeIntent,
+        projectDir: '/tmp/conductor-intent-abc',
+        contractSource: { kind: 'imported', spec: 'docs/spec.md', plan: null, ref: 'origin/main' },
+      },
+      'origin/main',
+      versionBelow(INTENT_MIN)
+    );
+
+    expect(decision?.withheld).toBeNull();
+    expect(decision?.refused).toMatch(/did not run: the installed/);
   });
 
   it('REFUSES rather than withholds when the version could not be read at all', () => {
@@ -388,44 +464,11 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     // The old sentence read "intent-guard reported no version does not
     // understand --trust-base", which is not a sentence and reads as a claim
     // about a version called "reported no version".
-    const below = decideTrustBase(intentGate, nativeIntent, 'origin/main', '1.3.1');
+    const below = decideTrustBase(intentGate, nativeIntent, 'origin/main', versionBelow(INTENT_MIN));
     const unreadable = decideTrustBase(intentGate, nativeIntent, 'origin/main', null);
 
-    expect(below?.withheld).toBe(
-      'intent-guard 1.3.1 does not understand --trust-base, which arrived in 1.4.0, so it read ' +
-        'its own control inputs from the tree being judged. Upgrade it to put this gate into ' +
-        'pull-request mode.'
-    );
+    expect(below?.refused).toMatch(new RegExp(`older than ${INTENT_MIN.replace(/\./g, '\\.')}`));
     expect(unreadable?.refused).not.toMatch(/reported no version does not understand/);
-  });
-
-  it('passes the flag to a dep-guard at the version it arrived in', () => {
-    const decision = decideTrustBase(
-      gate({ role: 'dependencies', product: 'dep-guard' }),
-      undefined,
-      'origin/main',
-      '0.6.0'
-    );
-
-    expect(decision).toEqual({
-      ref: 'origin/main',
-      withheld: null,
-      refused: null,
-      proposals: [],
-    });
-  });
-
-  it('withholds it from a dep-guard below that version', () => {
-    const decision = decideTrustBase(
-      gate({ role: 'dependencies', product: 'dep-guard' }),
-      undefined,
-      'origin/main',
-      '0.5.0'
-    );
-
-    expect(decision?.withheld).toMatch(/dep-guard 0\.5\.0 does not understand --trust-base/);
-    expect(decision?.withheld).toMatch(/0\.6\.0/);
-    expect(decision?.refused).toBeNull();
   });
 
   it('refuses a dep-guard whose version could not be read, like the other two', () => {
@@ -444,34 +487,6 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     expect(decision?.withheld).toBeNull();
   });
 
-  it('passes the flag to a vault-guard at the version it arrived in', () => {
-    const decision = decideTrustBase(
-      gate({ role: 'secrets', product: 'vault-guard' }),
-      undefined,
-      'origin/main',
-      '1.7.0'
-    );
-
-    expect(decision).toEqual({
-      ref: 'origin/main',
-      withheld: null,
-      refused: null,
-      proposals: [],
-    });
-  });
-
-  it('withholds it from a vault-guard below that version', () => {
-    const decision = decideTrustBase(
-      gate({ role: 'secrets', product: 'vault-guard' }),
-      undefined,
-      'origin/main',
-      '1.6.0'
-    );
-
-    expect(decision?.withheld).toMatch(/vault-guard 1\.6\.0 does not understand --trust-base/);
-    expect(decision?.withheld).toMatch(/1\.7\.0/);
-  });
-
   it('withholds it when the contract was imported into a temporary directory', () => {
     // The flag names a git ref and the gate resolves it against its own
     // --project. On an imported run that directory is one the umbrella made,
@@ -485,13 +500,13 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
         contractSource: { kind: 'imported', spec: 'docs/spec.md', plan: null },
       },
       'origin/main',
-      '1.4.0'
+      INTENT_MIN
     );
     expect(decision?.withheld).toMatch(/temporary directory with no repository in it/);
   });
 
   it('passes it on a plain run with no prepared contract, where --project is the repository', () => {
-    expect(decideTrustBase(intentGate, undefined, 'origin/main', '1.4.0')?.withheld).toBeNull();
+    expect(decideTrustBase(intentGate, undefined, 'origin/main', INTENT_MIN)?.withheld).toBeNull();
   });
 });
 
@@ -516,7 +531,7 @@ describe('the trust base on the command line and on the outcome', () => {
   it('writes --trust-base for a gate at the floor, and carries what it proposed', () => {
     const bin = tempDir();
     const log = path.join(tempDir(), 'argv.txt');
-    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT, argvLog: log, version: '1.4.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT, argvLog: log, version: INTENT_MIN });
 
     const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
       repoRoot: tempDir(),
@@ -536,54 +551,66 @@ describe('the trust base on the command line and on the outcome', () => {
     });
   });
 
-  it('writes no such flag for a gate below the floor, and says so on the outcome', () => {
+  for (const [role, product] of [
+    ['intent', 'intent-guard'],
+    ['secrets', 'vault-guard'],
+    ['dependencies', 'dep-guard'],
+  ] as const) {
+    it(`is could-not-run for ${product} below its pull-request-mode minimum on a trust-base run`, () => {
+      const minimum = TRUST_BASE_MIN_VERSION[product] as string;
+      const older = versionBelow(minimum);
+      const bin = tempDir();
+      const log = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, product, { stdout: '{}', argvLog: log, version: older });
+
+      // enforce: false on purpose: the gate produced nothing for that setting
+      // to be a decision about, so the refusal is enforced.
+      const outcome = runGate(gate({ role, product, enforce: false }), {
+        repoRoot: tempDir(),
+        staged: false,
+        pathValue: bin,
+        trustBase: 'origin/main',
+      });
+
+      expect(outcome.couldNotRun?.reason).toBe('gate-version-unsupported');
+      expect(outcome.couldNotRun?.detail).toMatch(
+        new RegExp(`^${product} did not run: the installed ${older.replace(/\./g, '\\.')} is older`)
+      );
+      expect(outcome.couldNotRun?.detail).toMatch(
+        /Fix: install .* or newer, or remove an explicit older version pin\.$/
+      );
+      expect(outcome.enforce).toBe(true);
+      expect(outcome.trustBase?.withheld).toBeNull();
+      // Nothing was spawned beyond the version probe.
+      expect(existsSync(log)).toBe(false);
+    });
+  }
+
+  it('runs a gate below the minimum exactly as before when there is no trust base', () => {
     const bin = tempDir();
     const log = path.join(tempDir(), 'argv.txt');
     stubGate(bin, 'intent-guard', {
       stdout: '{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}',
       argvLog: log,
-      version: '1.3.1',
+      version: versionBelow(INTENT_MIN),
     });
 
     const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
       repoRoot: tempDir(),
       staged: true,
       pathValue: bin,
-      trustBase: 'origin/main',
     });
 
     expect(readFileSync(log, 'utf8').trim()).toBe('check --project . --staged --json');
-    expect(outcome.trustBase?.withheld).toMatch(/1\.3\.1/);
+    expect(outcome.trustBase).toBeUndefined();
     expect(outcome.couldNotRun).toBeNull();
-  });
-
-  it('keeps the withheld reason rather than replacing it with an empty proposal list', () => {
-    // A gate that was not in pull-request mode reports no proposals. Reading
-    // that as "nothing was proposed" would let the loudest fact in the log,
-    // that this gate read its own rules out of the tree being judged, be
-    // replaced by silence.
-    const bin = tempDir();
-    stubGate(bin, 'intent-guard', {
-      stdout: '{"status":"ok","exitCode":0,"reasons":[],"contractFound":true,"contractFrozen":true}',
-      version: '1.3.1',
-    });
-
-    const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
-      repoRoot: tempDir(),
-      staged: false,
-      pathValue: bin,
-      trustBase: 'origin/main',
-    });
-
-    expect(outcome.trustBase?.withheld).not.toBeNull();
-    expect(outcome.trustBase?.proposals).toEqual([]);
   });
 
   it('carries the decision on a gate that could not run at all', () => {
     // Which contract a gate WOULD have judged against is exactly as
     // interesting when it broke as when it did not.
     const bin = tempDir();
-    stubGate(bin, 'intent-guard', { stdout: 'not json', exit: 1, version: '1.4.0' });
+    stubGate(bin, 'intent-guard', { stdout: 'not json', exit: 1, version: INTENT_MIN });
 
     const outcome = runGate(gate({ role: 'intent', product: 'intent-guard' }), {
       repoRoot: tempDir(),
@@ -844,11 +871,11 @@ describe('a pull-request run and the file the version probe would spawn', () => 
     mkdirSync(path.dirname(command), { recursive: true });
     writeFileSync(command, `#!/bin/sh\necho '${CLEAN_INTENT_GUARD.replace(/'/g, "'\\''")}'\n`);
     chmodSync(command, 0o755);
-    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.4.0');
+    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.9.0');
     commit(root, 'base');
 
     git(root, ['checkout', '--quiet', '-b', 'feat/work']);
-    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.4.1');
+    probeSibling(path.join(toolsDir, 'intent-guard'), marker, '1.9.1');
     commit(root, 'branch work');
 
     return { root, command, toolsDir, marker };
@@ -878,7 +905,7 @@ describe('a pull-request run and the file the version probe would spawn', () => 
     // The direction that keeps the rule usable. Same fixture, with the
     // branch commit reverted to the bytes the base approved.
     const fixture = vendored();
-    probeSibling(path.join(fixture.toolsDir, 'intent-guard'), fixture.marker, '1.4.0');
+    probeSibling(path.join(fixture.toolsDir, 'intent-guard'), fixture.marker, '1.9.0');
     commit(fixture.root, 'put it back');
 
     const outcome = runGate(
@@ -893,7 +920,7 @@ describe('a pull-request run and the file the version probe would spawn', () => 
 
     expect(existsSync(fixture.marker)).toBe(true);
     expect(outcome.couldNotRun).toBeNull();
-    expect(outcome.productVersion).toBe('1.4.0');
+    expect(outcome.productVersion).toBe('1.9.0');
   });
 });
 
@@ -994,7 +1021,10 @@ describe('external gate exit semantics', () => {
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
     const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
     expect(out.couldNotRun).toBeNull();
-    expect(out.trustBase?.proposals.some((p) => /^web\/osv-scanner\.toml differs/.test(p))).toBe(true);
+    // The base carries no nested file, so the line says what was used instead.
+    expect(
+      out.trustBase?.proposals.some((p) => /^web\/osv-scanner\.toml is not on the base ref; the root config was used/.test(p))
+    ).toBe(true);
     // Overridden for this run by the base-ref --config.
     expect(out.argv).toContain('--config');
   });
@@ -1025,6 +1055,23 @@ describe('external gate exit semantics', () => {
     const out = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
     expect(out.couldNotRun?.reason).toBe('preparation-failed');
     expect(out.couldNotRun?.detail).toContain('gl-extra.toml');
+  });
+
+  it('is could-not-run, and never spawns gitleaks, when the base config exists but cannot be read', () => {
+    // Only an ABSENT base config selects the neutral stand-in. A link at the
+    // config path is a file the base carries that cannot be read as one.
+    const repo = tempGitRepo();
+    writeFileSync(path.join(repo, 'real.toml'), '[[rules]]\nid = "acme"\nregex = "ACME_[A-Z]{8}"\n');
+    symlinkSync('real.toml', path.join(repo, '.gitleaks.toml'));
+    execFileSync('git', ['add', '-f', 'real.toml', '.gitleaks.toml'], { cwd: repo });
+    commitFiles(repo, {}, 'base config is a link');
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.log');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', argvLog: log });
+    const out = runGate(gl(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
+    expect(out.couldNotRun?.reason).toBe('preparation-failed');
+    expect(out.couldNotRun?.detail).toMatch(/\.gitleaks\.toml could not be read from the base ref/);
+    expect(existsSync(log)).toBe(false);
   });
 
   it('treats osv-scanner exit 127 as an error', () => {
@@ -1259,6 +1306,124 @@ describe('a gate that reads history, in a shallow checkout (C2)', () => {
     stubGate(bin2, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
     const full = runGate(gl(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin2, tempRoot: tempDir() });
     expect(full.couldNotRun).toBeNull();
+  });
+});
+
+describe('the git floor for a history gate on a pull-request run', () => {
+  const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+
+  /** A git that reports `version` and otherwise is the real one. */
+  /** A git that reports `version`, and appends to `probeLog` each time it is asked. */
+  function gitReporting(version: string, probeLog = path.join(tempDir(), 'probe.log')): string {
+    const bin = tempDir();
+    const file = path.join(bin, 'git');
+    writeFileSync(
+      file,
+      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo probed >> ${JSON.stringify(probeLog)}; echo "git version ${version}"; exit 0; fi\nexec ${REAL_GIT} "$@"\n`
+    );
+    chmodSync(file, 0o755);
+    return file;
+  }
+
+  function historyRun(options: { trustBase?: string; git: string }) {
+    const repo = tempGitRepo();
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'argv.log');
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', argvLog: log });
+    useGitProgram(options.git);
+    try {
+      const out = runGate(gate({ role: 'secrets-history', product: 'gitleaks', stage: 'ci' }), {
+        repoRoot: repo,
+        staged: false,
+        pathValue: bin,
+        tempRoot: tempDir(),
+        ...(options.trustBase === undefined ? {} : { trustBase: options.trustBase }),
+      });
+      return { out, spawned: existsSync(log) };
+    } finally {
+      useGitProgram('git');
+    }
+  }
+
+  it('is a named could-not-run, enforced, when git is older than 2.31, and gitleaks is never spawned', () => {
+    const { out, spawned } = historyRun({ trustBase: 'main', git: gitReporting('2.25.1') });
+
+    expect(out.couldNotRun?.reason).toBe('preparation-failed');
+    expect(out.couldNotRun?.detail).toMatch(/git 2\.25\.1 is older than 2\.31\.0/);
+    expect(out.couldNotRun?.detail).toMatch(/--diff-merges/);
+    expect(out.enforce).toBe(true);
+    expect(spawned).toBe(false);
+    const result = {
+      trustBase: { ref: 'main', policyChanged: false, refusal: null },
+      gates: [out],
+      proposals: [],
+    } as unknown as Parameters<typeof proposalCount>[0];
+    expect(proposalCount(result)).toMatch(/secrets-history \(gitleaks\) could not run, so the proposals of that gate are not known/);
+    // conductor's own reason is carried into the job log line, cleaned, on
+    // one line, capped and quoted, the way a gate's stated reason is.
+    const [line] = gateLogLines({ ...result, deferred: [], skipped: [], excluded: [], treeUnchanged: [] });
+    expect(line).toMatch(
+      /^conductor: gate secrets-history \(gitleaks version unknown\): could-not-run \(preparation-failed\), no exit code, conductor said: "git 2\.25\.1 is older than 2\.31\.0, which gitleaks needs on a pull-request run: /
+    );
+    const said = /conductor said: "(.*)"$/.exec(line ?? '')?.[1] ?? '';
+    expect(said.length).toBeLessThanOrEqual(GATE_SAID_MAX_CHARS);
+    expect(said).toMatch(/\.\.\.$/);
+    expect(said).not.toMatch(/"/);
+  });
+
+  it('carries a refusal of its own into the job log line with markers broken and newlines flattened', () => {
+    const result = {
+      trustBase: { ref: 'main', policyChanged: false, refusal: null },
+      gates: [
+        {
+          role: 'intent',
+          product: 'intent-guard',
+          stage: 'pre-push',
+          enforce: true,
+          productVersion: '1.8.1',
+          argv: [],
+          binary: null,
+          exitCode: null,
+          durationMs: 0,
+          stderr: '',
+          couldNotRun: { reason: 'preparation-failed', detail: 'line one\n::error::"two"' },
+          findings: [],
+          run: { suppressed: 0, ignored: 0, details: {} },
+          diagnostics: [],
+        },
+      ],
+      proposals: [],
+      deferred: [],
+      skipped: [],
+      excluded: [],
+      treeUnchanged: [],
+    } as unknown as Parameters<typeof gateLogLines>[0];
+
+    expect(gateLogLines(result)).toEqual([
+      "conductor: gate intent (intent-guard 1.8.1): could-not-run (preparation-failed), no exit code, conductor said: \"line one : :error: :'two'\"",
+    ]);
+  });
+
+  it('runs as usual at the floor', () => {
+    const { out, spawned } = historyRun({ trustBase: 'main', git: gitReporting('2.31.0') });
+
+    expect(out.couldNotRun).toBeNull();
+    expect(spawned).toBe(true);
+  });
+
+  it('does not probe on a run without a trust base', () => {
+    const probeLog = path.join(tempDir(), 'probe.log');
+    const { out } = historyRun({ git: gitReporting('2.25.1', probeLog) });
+
+    expect(out.couldNotRun).toBeNull();
+    expect(existsSync(probeLog)).toBe(false);
+  });
+
+  it('asks git for its version once on a trust-base run', () => {
+    const probeLog = path.join(tempDir(), 'probe.log');
+    historyRun({ trustBase: 'main', git: gitReporting('2.31.0', probeLog) });
+
+    expect(readFileSync(probeLog, 'utf8')).toBe('probed\n');
   });
 });
 

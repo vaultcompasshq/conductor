@@ -1513,20 +1513,19 @@ describe('pull-request mode in the text report', () => {
   });
 
   it('names a gate that was NOT put into pull-request mode, on the clean line too', () => {
-    // The loudest fact this report can carry: that gate read its own control
-    // inputs out of the tree being judged. A clean run must not hide it.
+    // That gate was not handed the base ref. A clean run must not hide it.
     const text = renderText(
       pullRequest({
         gates: [
           outcome({
             role: 'intent',
             product: 'intent-guard',
-            productVersion: '1.3.1',
+            productVersion: '1.8.1',
             exitCode: 0,
             run: { ...cleanIntent, failOn: 'medium' },
             trustBase: {
               ref: 'origin/main',
-              withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              withheld: 'the intent gate is running against a contract imported for this run.',
               refused: null,
               proposals: [],
             },
@@ -1545,12 +1544,12 @@ describe('pull-request mode in the text report', () => {
           outcome({
             role: 'intent',
             product: 'intent-guard',
-            productVersion: '1.3.1',
+            productVersion: '1.8.1',
             exitCode: 0,
             run: { ...cleanIntent, failOn: 'medium' },
             trustBase: {
               ref: 'origin/main',
-              withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+              withheld: 'the intent gate is running against a contract imported for this run.',
               refused: null,
               proposals: [],
             },
@@ -1561,7 +1560,7 @@ describe('pull-request mode in the text report', () => {
     );
 
     expect(text).toMatch(
-      /NOT in pull-request mode\s+intent\s+intent-guard\s+intent-guard 1\.3\.1 does not understand/
+      /NOT in pull-request mode\s+intent\s+intent-guard\s+the intent gate is running against a contract imported/
     );
   });
 });

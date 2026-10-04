@@ -333,23 +333,30 @@ describe('a repository with a spec and no frozen contract', () => {
   });
 
   it('freezes the temporary contract, attributing it to the spec and the commit', () => {
+    // Each argument logged on its own line, so the approved-by value is read
+    // whole and compared exactly: repository-relative spec path, short
+    // commit, nothing else.
     const bin = tempDir();
-    const log = path.join(bin, 'argv.log');
-    stubIntentGuard(bin, {
-      argvLog: log,
-      importSpec: { stdout: IMPORT_DRY_RUN },
-      freeze: { stdout: FREEZE },
-    });
+    const log = path.join(bin, 'freeze-args.log');
+    const real = path.join(bin, 'intent-guard-real');
+    stubIntentGuard(bin, { importSpec: { stdout: IMPORT_DRY_RUN }, freeze: { stdout: FREEZE } });
+    writeFileSync(real, readFileSync(path.join(bin, 'intent-guard'), 'utf8'), { mode: 0o755 });
+    writeFileSync(
+      path.join(bin, 'intent-guard'),
+      `#!/bin/sh\nif [ "$1" = "freeze" ]; then for a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(log)}; done; fi\nexec ${JSON.stringify(real)} "$@"\n`,
+      { mode: 0o755 }
+    );
     const root = repoWithSpec();
     const sha = git(root, ['rev-parse', '--short', 'HEAD']).trim();
 
     prepare(root, bin);
 
-    const freezeLine = argvLines(log).find((line) => line.startsWith('freeze')) ?? '';
-    expect(freezeLine).toMatch(/--yes/);
-    expect(freezeLine).toMatch(/--json/);
-    expect(freezeLine).toContain('docs/superpowers/specs/2026-09-03-widget-cache-design.md');
-    expect(freezeLine).toContain(sha);
+    const args = readFileSync(log, 'utf8').split('\n');
+    expect(args).toContain('--yes');
+    expect(args).toContain('--json');
+    expect(args[args.indexOf('--approved-by') + 1]).toBe(
+      `conductor: docs/superpowers/specs/2026-09-03-widget-cache-design.md at ${sha}`
+    );
   });
 
   it('removes the temporary directory when the caller cleans up', () => {
@@ -918,4 +925,350 @@ describe('the intent-guard state directory, under both of its names', () => {
     chmodSync(file, 0o755);
     return bin;
   }
+});
+
+describe('on a run with a trust base, the contract decision comes from the base only', () => {
+  const FROZEN_A = 'contract_id: ic-base\nfrozen_by: user\napproval:\n  approved_by: a person\n';
+  const FROZEN_B = 'contract_id: ic-head\nfrozen_by: user\napproval:\n  approved_by: the author\n';
+  const SPEC_PATH = 'docs/superpowers/specs/2026-09-03-widget-cache-design.md';
+  const SH_CAT = execFileSync('sh', ['-c', 'command -v cat'], { encoding: 'utf8' }).trim();
+
+  function commitAll(root: string, message: string): string {
+    git(root, ['add', '-A']);
+    git(root, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', message]);
+    return git(root, ['rev-parse', 'HEAD']).trim();
+  }
+
+  /**
+   * main holds `baseFiles`; the feature branch then applies `head`. Returns
+   * the base commit, which every test passes as the trust base.
+   */
+  function trustRepo(
+    baseFiles: Record<string, string>,
+    head: (root: string) => void
+  ): { root: string; base: string } {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    for (const [relative, body] of Object.entries(baseFiles)) {
+      write(root, relative, body);
+    }
+    const base = commitAll(root, 'base');
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    head(root);
+    commitAll(root, 'the pull request');
+    return { root, base };
+  }
+
+  /**
+   * An intent-guard stub that logs each subcommand's argv, and on import-spec
+   * copies the file named after --spec to `specLog`, so a test can see which
+   * bytes the importer was actually given.
+   */
+  function loggingBin(argvLog: string, specLog: string): string {
+    const bin = tempDir();
+    const file = path.join(bin, 'intent-guard');
+    const importPayload = path.join(bin, 'import.json');
+    const freezePayload = path.join(bin, 'freeze.json');
+    writeFileSync(importPayload, IMPORT_DRY_RUN);
+    writeFileSync(freezePayload, FREEZE);
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo "1.8.0"; exit 0; fi',
+        `printf '%s\\n' "$*" >> ${JSON.stringify(argvLog)}`,
+        'case "$1" in',
+        '  import-spec)',
+        '    prev=""',
+        `    for a in "$@"; do if [ "$prev" = "--spec" ]; then ${SH_CAT} "$a" > ${JSON.stringify(specLog)}; fi; prev="$a"; done`,
+        `    ${SH_CAT} ${JSON.stringify(importPayload)}; exit 0 ;;`,
+        `  freeze) ${SH_CAT} ${JSON.stringify(freezePayload)}; exit 0 ;;`,
+        '  *) exit 2 ;;',
+        'esac',
+        '',
+      ].join('\n')
+    );
+    chmodSync(file, 0o755);
+    return bin;
+  }
+
+  function prepareTB(
+    root: string,
+    base: string,
+    options: { spec?: string; env?: NodeJS.ProcessEnv } = {}
+  ): { result: IntentPrepareResult; argvLog: string; specLog: string } {
+    const argvLog = path.join(tempDir(), 'argv.log');
+    const specLog = path.join(tempDir(), 'spec.log');
+    const bin = loggingBin(argvLog, specLog);
+    const binary = resolveGateBinary(INTENT_GATE, root, bin);
+    const result = prepareIntent({
+      repoRoot: root,
+      binary,
+      env: options.env ?? {},
+      trustBase: base,
+      ...(options.spec === undefined ? {} : { spec: options.spec }),
+    });
+    if (result.kind === 'ready') {
+      cleanups.push(result.preparation.cleanup);
+    }
+    return { result, argvLog, specLog };
+  }
+
+  function prBodyEnv(body: string): NodeJS.ProcessEnv {
+    const eventPath = path.join(tempDir(), 'event.json');
+    writeFileSync(eventPath, JSON.stringify({ pull_request: { body } }));
+    return { GITHUB_EVENT_PATH: eventPath };
+  }
+
+  it('uses the base frozen contract, native, when the pull request deletes it', () => {
+    const { root, base } = trustRepo({ [NATIVE_CONTRACT_PATH]: FROZEN_A }, (r) => {
+      rmSync(path.join(r, NATIVE_CONTRACT_PATH));
+    });
+
+    const { result, argvLog } = prepareTB(root, base);
+
+    expect(result.kind).toBe('ready');
+    if (result.kind !== 'ready') throw new Error('unreachable');
+    expect(result.preparation.contractSource).toEqual({ kind: 'native', path: NATIVE_CONTRACT_PATH });
+    expect(result.preparation.projectDir).toBe('.');
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('uses the base frozen contract over --spec, a Spec: line and a matching spec in the head', () => {
+    const { root, base } = trustRepo({ [NATIVE_CONTRACT_PATH]: FROZEN_A }, (r) => {
+      write(r, SPEC_PATH, SPEC_BODY);
+    });
+
+    const { result, argvLog } = prepareTB(root, base, {
+      spec: SPEC_PATH,
+      env: prBodyEnv(`Spec: ${SPEC_PATH}\n`),
+    });
+
+    expect(result.kind === 'ready' ? result.preparation.contractSource : result).toEqual({
+      kind: 'native',
+      path: NATIVE_CONTRACT_PATH,
+    });
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('uses the base contract path when the head carries a different frozen contract elsewhere', () => {
+    // The base keeps its contract at the pre-1.3 path; the pull request moves
+    // to the canonical path with a contract of its own. The base decides.
+    const { root, base } = trustRepo({ [LEGACY_NATIVE_CONTRACT_PATH]: FROZEN_A }, (r) => {
+      rmSync(path.join(r, '.conductor'), { recursive: true, force: true });
+      write(r, NATIVE_CONTRACT_PATH, FROZEN_B);
+    });
+
+    const { result } = prepareTB(root, base);
+
+    expect(result.kind === 'ready' ? result.preparation.contractSource : result).toEqual({
+      kind: 'native',
+      path: LEGACY_NATIVE_CONTRACT_PATH,
+    });
+  });
+
+  it('never lets a frozen contract the head adds become the contract: a skip, with the addition as a proposal', () => {
+    const { root, base } = trustRepo({}, (r) => {
+      write(r, NATIVE_CONTRACT_PATH, FROZEN_B);
+    });
+
+    const { result, argvLog } = prepareTB(root, base);
+
+    expect(result.kind).toBe('skip');
+    if (result.kind !== 'skip') throw new Error('unreachable');
+    expect(result.reason).toBe('no-contract');
+    expect(result.detail).toMatch(/^No contract on the base/);
+    expect(result.proposals).toEqual([expect.stringMatching(new RegExp(`^${NATIVE_CONTRACT_PATH.replace('.', '\\.')} is in this pull request`))]);
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('imports the base copy of a spec the pull request edits, from a temporary project', () => {
+    const { root, base } = trustRepo({ [SPEC_PATH]: SPEC_BODY }, (r) => {
+      write(r, SPEC_PATH, SPEC_BODY.replace(/src\/widget\/\*\*/g, '**'));
+    });
+
+    const { result, argvLog, specLog } = prepareTB(root, base);
+
+    expect(result.kind).toBe('ready');
+    if (result.kind !== 'ready') throw new Error('unreachable');
+    expect(result.preparation.contractSource).toEqual({
+      kind: 'imported',
+      spec: SPEC_PATH,
+      plan: null,
+      ref: base,
+    });
+    expect(readFileSync(specLog, 'utf8')).toBe(SPEC_BODY);
+    const importLine = argvLines(argvLog).find((line) => line.startsWith('import-spec')) ?? '';
+    expect(importLine).not.toMatch(/--project \. /);
+    expect(importLine).not.toContain(root);
+    expect(result.preparation.proposals).toEqual([
+      expect.stringMatching(new RegExp(`^${SPEC_PATH} changed in this pull request`)),
+    ]);
+  });
+
+  it('imports the base copy of the spec named by --spec when the pull request edits it', () => {
+    const { root, base } = trustRepo({ [SPEC_PATH]: SPEC_BODY }, (r) => {
+      write(r, SPEC_PATH, SPEC_BODY.replace(/max_files: \d+/g, 'max_files: 50'));
+    });
+
+    const { result, specLog } = prepareTB(root, base, { spec: SPEC_PATH });
+
+    expect(result.kind === 'ready' ? result.preparation.contractSource.kind : result.kind).toBe('imported');
+    expect(readFileSync(specLog, 'utf8')).toBe(SPEC_BODY);
+  });
+
+  it('skips with a proposal when only the head carries a spec, however it is named', () => {
+    for (const options of [{}, { spec: SPEC_PATH }, { env: prBodyEnv(`Spec: ${SPEC_PATH}\n`) }]) {
+      const { root, base } = trustRepo({}, (r) => {
+        write(r, SPEC_PATH, SPEC_BODY);
+      });
+
+      const { result, argvLog } = prepareTB(root, base, options);
+
+      expect([JSON.stringify(options), result.kind]).toEqual([JSON.stringify(options), 'skip']);
+      if (result.kind !== 'skip') throw new Error('unreachable');
+      expect(result.proposals).toEqual([
+        expect.stringMatching(new RegExp(`^${SPEC_PATH} is a spec in this pull request but not on`)),
+      ]);
+      expect(existsSync(argvLog)).toBe(false);
+    }
+  });
+
+  it('still reports a --spec that names a file on neither side', () => {
+    const { root, base } = trustRepo({}, () => undefined);
+
+    const { result } = prepareTB(root, base, { spec: 'docs/superpowers/specs/nope.md' });
+
+    expect(result.kind === 'failed' ? result.step : result.kind).toBe('spec');
+  });
+
+  it('is could-not-run at contract-source when the base contract is a symlink, a directory, a submodule or a missing blob', () => {
+    const shapes: Array<[string, (root: string) => string]> = [
+      [
+        'symlink',
+        (r) => {
+          write(r, 'real.yaml', FROZEN_A);
+          mkdirSync(path.join(r, '.intent-guard'), { recursive: true });
+          symlinkSync('../real.yaml', path.join(r, NATIVE_CONTRACT_PATH));
+          return commitAll(r, 'base contract is a link');
+        },
+      ],
+      [
+        'directory',
+        (r) => {
+          write(r, `${NATIVE_CONTRACT_PATH}/inner.yaml`, FROZEN_A);
+          return commitAll(r, 'base contract is a directory');
+        },
+      ],
+      [
+        'submodule',
+        (r) => {
+          const head = git(r, ['rev-parse', 'HEAD']).trim();
+          git(r, ['update-index', '--add', '--cacheinfo', `160000,${head},${NATIVE_CONTRACT_PATH}`]);
+          git(r, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'gitlink']);
+          return git(r, ['rev-parse', 'HEAD']).trim();
+        },
+      ],
+      [
+        'missing blob',
+        (r) => {
+          git(r, ['update-index', '--add', '--info-only', '--cacheinfo', `100644,${'cd'.repeat(20)},${NATIVE_CONTRACT_PATH}`]);
+          const tree = git(r, ['write-tree', '--missing-ok']).trim();
+          const made = git(r, ['commit-tree', tree, '-p', 'HEAD', '-m', 'missing blob']).trim();
+          git(r, ['reset', '--quiet', '--soft', made]);
+          return made;
+        },
+      ],
+    ];
+    for (const [shape, makeBase] of shapes) {
+      const root = tempDir();
+      git(root, ['init', '--quiet', '-b', 'main']);
+      write(root, 'README.md', '# scratch\n');
+      commitAll(root, 'init');
+      const base = makeBase(root);
+      git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+      git(root, ['rm', '-r', '--quiet', '--cached', '--ignore-unmatch', '.intent-guard']);
+      rmSync(path.join(root, '.intent-guard'), { recursive: true, force: true });
+      write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+      commitAll(root, 'the pull request');
+
+      const { result, argvLog } = prepareTB(root, base);
+
+      expect([shape, result.kind === 'failed' ? result.step : result.kind]).toEqual([shape, 'contract-source']);
+      expect(result.kind === 'failed' ? result.detail.replace(/\s+/g, ' ') : '').toMatch(
+        /To clear it, make \.intent-guard\/intent-contract\.yaml a regular file on the base branch.*merged by someone allowed to merge without this check passing/
+      );
+      expect(existsSync(argvLog)).toBe(false);
+    }
+  });
+
+  it('is could-not-run at contract-source, with the remedy, when the base state directory is a symlinked directory', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'realdir/intent-contract.yaml', FROZEN_A);
+    symlinkSync('realdir', path.join(root, '.intent-guard'));
+    const base = commitAll(root, 'base keeps its state directory behind a link');
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    commitAll(root, 'the pull request');
+
+    const { result, argvLog } = prepareTB(root, base);
+
+    expect(result.kind === 'failed' ? result.step : result.kind).toBe('contract-source');
+    expect(result.kind === 'failed' ? result.detail : '').toMatch(/\.intent-guard is a symbolic link at/);
+    expect(result.kind === 'failed' ? result.detail.replace(/\s+/g, ' ') : '').toMatch(
+      /To clear it, make \.intent-guard\/intent-contract\.yaml a regular file on the base branch/
+    );
+    expect(existsSync(argvLog)).toBe(false);
+  });
+});
+
+describe('a specs directory linked out of the repository', () => {
+  it('is could-not-run at the spec step, and the importer is never spawned', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    git(root, ['add', '-A']);
+    git(root, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base']);
+    git(root, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+    const outside = tempDir();
+    writeFileSync(path.join(outside, '2026-09-03-widget-cache-design.md'), SPEC_BODY);
+    mkdirSync(path.join(root, 'docs', 'superpowers'), { recursive: true });
+    symlinkSync(outside, path.join(root, 'docs', 'superpowers', 'specs'));
+    const log = path.join(tempDir(), 'argv.log');
+
+    const result = prepare(root, stubbedBin({ argvLog: log }), { base: 'main' });
+
+    expect(result.kind === 'failed' ? result.step : result.kind).toBe('spec');
+    expect(result.kind === 'failed' ? result.detail : '').toMatch(/resolves outside the repository/);
+    expect(existsSync(log)).toBe(false);
+  });
+});
+
+describe('the commit a freeze is attributed to, in a repository with no commit yet', () => {
+  it('says an unknown commit rather than leaving the attribution empty', () => {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'docs/superpowers/specs/2026-09-03-widget-cache-design.md', SPEC_BODY);
+    const bin = tempDir();
+    const log = path.join(bin, 'freeze-args.log');
+    const real = path.join(bin, 'intent-guard-real');
+    stubIntentGuard(bin, { importSpec: { stdout: IMPORT_DRY_RUN }, freeze: { stdout: FREEZE } });
+    writeFileSync(real, readFileSync(path.join(bin, 'intent-guard'), 'utf8'), { mode: 0o755 });
+    writeFileSync(
+      path.join(bin, 'intent-guard'),
+      `#!/bin/sh\nif [ "$1" = "freeze" ]; then for a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(log)}; done; fi\nexec ${JSON.stringify(real)} "$@"\n`,
+      { mode: 0o755 }
+    );
+
+    const result = prepare(root, bin, { spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md' });
+
+    expect(result.kind).toBe('ready');
+    const args = readFileSync(log, 'utf8').split('\n');
+    expect(args[args.indexOf('--approved-by') + 1]).toBe(
+      'conductor: docs/superpowers/specs/2026-09-03-widget-cache-design.md at an unknown commit'
+    );
+  });
 });

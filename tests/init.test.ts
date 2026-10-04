@@ -2698,3 +2698,70 @@ describe('what init prints', () => {
     expect(renderInitHuman(result)).not.toContain('pre-commit hook uses');
   });
 });
+
+describe('the manifest is never written outside the repository', () => {
+  const outsideConflict = (result: { conflicts: Array<{ reason: string }> }) =>
+    result.conflicts.some((c) => c.reason === 'manifest-path-outside-repository');
+
+  it('refuses a symlinked manifest file, writes nothing, and leaves the target alone', () => {
+    const repo = gitRepo();
+    const outside = path.join(tempDir(), 'outside-file.txt');
+    writeFileSync(outside, 'not a manifest\n');
+    mkdirSync(path.join(repo, '.guardrails'));
+    symlinkSync(outside, path.join(repo, MANIFEST_RELATIVE_PATH));
+
+    const result = applyInit(planInit({ cwd: repo, pathValue: '' }), { cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(outsideConflict(result)).toBe(true);
+    expect(readFileSync(outside, 'utf8')).toBe('not a manifest\n');
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('refuses a symlinked .guardrails directory, and creates nothing behind it', () => {
+    const repo = gitRepo();
+    const outsideDir = tempDir();
+    symlinkSync(outsideDir, path.join(repo, '.guardrails'));
+
+    const result = applyInit(planInit({ cwd: repo, pathValue: '' }), { cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(outsideConflict(result)).toBe(true);
+    expect(existsSync(path.join(outsideDir, 'manifest.json'))).toBe(false);
+    expect(existsSync(path.join(repo, POLICY_FILE_NAME))).toBe(false);
+  });
+
+  it('refuses a revert that would rewrite a manifest reached through a symlinked directory', () => {
+    const repo = gitRepo();
+    const outsideDir = tempDir();
+    writeFileSync(path.join(repo, POLICY_FILE_NAME), 'version: 1\n# edited since init\n');
+    const outsideManifest = `${JSON.stringify(
+      {
+        version: 1,
+        files: [{ path: POLICY_FILE_NAME, sha256: createHash('sha256').update('other').digest('hex'), kind: 'policy' }],
+        adopted: null,
+      },
+      null,
+      2
+    )}\n`;
+    writeFileSync(path.join(outsideDir, 'manifest.json'), outsideManifest);
+    symlinkSync(outsideDir, path.join(repo, '.guardrails'));
+
+    const result = revertInit({ cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(false);
+    expect(outsideConflict(result)).toBe(true);
+    expect(readFileSync(path.join(outsideDir, 'manifest.json'), 'utf8')).toBe(outsideManifest);
+  });
+
+  it('still writes through a .guardrails link that stays inside the repository', () => {
+    const repo = gitRepo();
+    mkdirSync(path.join(repo, 'meta'));
+    symlinkSync('meta', path.join(repo, '.guardrails'));
+
+    const result = applyInit(planInit({ cwd: repo, pathValue: '' }), { cwd: repo, pathValue: '' });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(path.join(repo, 'meta', 'manifest.json'))).toBe(true);
+  });
+});

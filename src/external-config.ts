@@ -16,11 +16,11 @@
 // reported as a proposal, which takes effect once it merges and the base
 // carries it.
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import type { ProductProfile } from './products.js';
+import { readFileAtRef, unreadableBaseRemedy } from './trust-base.js';
 
 export interface MaterializedIgnore {
   /** A directory holding the base's ignore file (or an empty one). */
@@ -90,16 +90,22 @@ export function extendPath(config: string): string | null {
   return null;
 }
 
-/** A file's contents at a ref, or null when the ref does not have it. */
-function showAtRef(repoRoot: string, ref: string, file: string): string | null {
-  if (ref.startsWith('-')) {
-    return null;
+/**
+ * A file's contents at the base ref, or null when the base does not carry
+ * it. A read git could not make THROWS: it is never null, because null
+ * selects the neutral config, and a trusted file that exists but could not
+ * be read must not be replaced by a default (src/trust-base.ts,
+ * readFileAtRef).
+ */
+function baseCopy(repoRoot: string, ref: string, file: string): string | null {
+  const read = readFileAtRef(repoRoot, ref, file);
+  if (read.kind === 'error') {
+    throw new ExternalConfigError(
+      `${file} could not be read from the base ref: ${read.detail}. Nothing was checked by this ` +
+        `gate. ${unreadableBaseRemedy(file)}`
+    );
   }
-  const child = spawnSync('git', ['show', '--end-of-options', `${ref}:${file}`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  return child.status === 0 && typeof child.stdout === 'string' ? child.stdout : null;
+  return read.kind === 'file' ? read.text : null;
 }
 
 function headCopy(repoRoot: string, file: string): string | null {
@@ -107,11 +113,24 @@ function headCopy(repoRoot: string, file: string): string | null {
   return existsSync(full) ? readFileSync(full, 'utf8') : null;
 }
 
-function differs(file: string, base: string | null, head: string | null): string | null {
+/**
+ * The proposal line for a head-side difference, or null. It says which copy
+ * was actually used: the base's own, or, when the base carries none, the
+ * stand-in the umbrella wrote. Saying "the base's copy" for a stand-in would
+ * claim a file the base does not have.
+ */
+function differs(
+  file: string,
+  base: string | null,
+  head: string | null,
+  standIn = "conductor's neutral stand-in"
+): string | null {
   if (head === null || head === base) {
     return null;
   }
-  return `${file} differs from the base ref; the base's copy was used and this change takes effect after merge.`;
+  return base === null
+    ? `${file} is not on the base ref; ${standIn} was used and this file takes effect after merge.`
+    : `${file} differs from the base ref; the base's copy was used and this change takes effect after merge.`;
 }
 
 /**
@@ -134,7 +153,7 @@ function materializeRelative(
         'the base ref; name it relative to the repository root.'
     );
   }
-  const base = showAtRef(repoRoot, trustBase, path.relative(cwd, target).split(path.sep).join('/'));
+  const base = baseCopy(repoRoot, trustBase, path.relative(cwd, target).split(path.sep).join('/'));
   if (base === null) {
     throw new ExternalConfigError(
       `${what} ${file} does not exist on the base ref ${trustBase}, so there is no approved copy ` +
@@ -154,7 +173,8 @@ function materializeRelative(
  * a nested file added or edited by the pull request has no effect on the run
  * (measured against 2.6.0: a nested file ignoring lodash passes without
  * --config and blocks with it). It is still a change to how the tool behaves
- * once merged, so it is reported the way the root config is.
+ * once merged, so it is reported the way the root config is. A base copy git
+ * could not read throws ExternalConfigError, like every other base read here.
  */
 export function nestedConfigProposals(
   repoRoot: string,
@@ -164,7 +184,9 @@ export function nestedConfigProposals(
 ): string[] {
   return trackedFiles
     .filter((file) => file !== configFile && path.posix.basename(file) === configFile)
-    .map((file) => differs(file, showAtRef(repoRoot, trustBase, file), headCopy(repoRoot, file)))
+    .map((file) =>
+      differs(file, baseCopy(repoRoot, trustBase, file), headCopy(repoRoot, file), 'the root config')
+    )
     .filter((proposal): proposal is string => proposal !== null);
 }
 
@@ -181,7 +203,9 @@ export function materializeExternalConfig(args: {
     return null;
   }
 
-  const base = showAtRef(repoRoot, trustBase, profile.configFile);
+  // Only an ABSENT base config selects the neutral one. An unreadable one has
+  // already thrown, so the tool never runs under a default in its place.
+  const base = baseCopy(repoRoot, trustBase, profile.configFile);
   const ext = path.extname(profile.configFile) || '.toml';
   const out = path.join(tempRoot, `${profile.product}-config${ext}`);
   writeFileSync(out, base ?? profile.neutralConfig ?? '');
@@ -218,13 +242,13 @@ export function materializeExternalConfig(args: {
   let ignore: MaterializedIgnore | null = null;
   if (profile.ignoreFile !== null) {
     const name = profile.ignoreFile.name;
-    const baseIgnore = showAtRef(repoRoot, trustBase, name);
+    const baseIgnore = baseCopy(repoRoot, trustBase, name);
     const dir = path.join(tempRoot, `${profile.product}-ignore`);
     mkdirSync(dir, { recursive: true });
     // An empty file when the base has none, for the reason the neutral
     // config exists: pointing the tool anywhere else lets it find the head's.
     writeFileSync(path.join(dir, name), baseIgnore ?? '');
-    ignore = { dir, proposal: differs(name, baseIgnore, headCopy(repoRoot, name)) };
+    ignore = { dir, proposal: differs(name, baseIgnore, headCopy(repoRoot, name), 'an empty one') };
   }
 
   return {

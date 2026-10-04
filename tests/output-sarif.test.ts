@@ -1949,11 +1949,11 @@ describe('pull-request mode in the SARIF log', () => {
         outcome({
           role: 'intent',
           product: 'intent-guard',
-          productVersion: '1.3.1',
+          productVersion: '1.8.1',
           exitCode: 0,
           trustBase: {
             ref: 'origin/main',
-            withheld: 'intent-guard 1.3.1 does not understand --trust-base.',
+            withheld: 'the intent gate is running against a contract imported for this run.',
             refused: null,
             proposals: [],
           },
@@ -1968,11 +1968,11 @@ describe('pull-request mode in the SARIF log', () => {
 
     expect(withheld).toBeDefined();
     expect(String((withheld?.message as Record<string, unknown>).text)).toMatch(
-      /read its own control inputs from the tree being judged/
+      /did NOT run in pull-request mode: it was not handed --trust-base origin\/main\. the intent gate/
     );
     const details = (withheld?.properties as Record<string, Record<string, unknown>>).details;
     expect(details.product).toBe('intent-guard');
-    expect(details.productVersion).toBe('1.3.1');
+    expect(details.productVersion).toBe('1.8.1');
     expect(details.ref).toBe('origin/main');
   });
 

@@ -6,7 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
+  readFileSync, readdirSync, realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1643,6 +1643,50 @@ describe('pull-request mode through the CLI', () => {
     expect(result.stdout).toMatch(/policy changed in this pull request/);
   });
 
+  it('reads the base policy when the working tree holds a file named like the revision and path', () => {
+    // The reader looks the path up in the base tree and reads the blob by id,
+    // so whatever the working tree holds, the base policy is read and used.
+    const { repo, bin, marker } = attackRepo();
+    const baseSha = spawnSync('git', ['rev-parse', 'base'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+    mkdirSync(path.join(repo, `${baseSha}:.`));
+    writeFileSync(path.join(repo, `${baseSha}:.`, '.guardrails.yaml'), 'version: 1\ngates: {}\n');
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', baseSha, '--verbose'], bin);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
+    expect(result.stdout).not.toMatch(/conductor init/);
+  });
+
+  it('refuses with the true reason when the base policy cannot be read, never as absent', () => {
+    const repo = tempDir();
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    writeFileSync(path.join(repo, 'policy.yaml'), BASE_POLICY);
+    symlinkSync('policy.yaml', path.join(repo, '.guardrails.yaml'));
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base keeps its policy behind a link']);
+    git(repo, ['branch', 'base']);
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 2;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/cannot read \.guardrails\.yaml at "base"/);
+    expect(result.stdout).toMatch(/not a regular file/);
+    expect(result.stdout.replace(/\s+/g, ' ')).toMatch(
+      /To clear it, make \.guardrails\.yaml a regular file on the base branch.*merged by someone allowed to merge without this check passing/
+    );
+    expect(result.stdout).not.toMatch(/conductor init/);
+  });
+
   it('reports the policy change on the one-line summary of a clean run', () => {
     const { repo, bin } = attackRepo();
 
@@ -2246,8 +2290,11 @@ describe('the program a pull-request run is allowed to execute', () => {
     /** Repository-relative path for the policy's `command:`, or null. */
     commandRelative?: string | null;
     enforce?: boolean;
+    /** Where to make the repository, when the spelling of its path matters. */
+    root?: string;
   }): { repo: string; bin: string; marker: string; program: string } {
-    const repo = tempDir();
+    const repo = options.root ?? tempDir();
+    mkdirSync(repo, { recursive: true });
     const bin = tempDir();
     const marker = path.join(tempDir(), 'planted-ran.txt');
 
@@ -2281,7 +2328,7 @@ describe('the program a pull-request run is allowed to execute', () => {
         ],
       }),
       exit: 1,
-      version: '1.7.0',
+      version: '1.9.1',
     });
 
     const program = path.join(repo, options.programPath);
@@ -2299,7 +2346,7 @@ describe('the program a pull-request run is allowed to execute', () => {
     ].join('\n');
 
     const stub = (body: string): string =>
-      ['#!/bin/sh', 'if [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi', body, 'exit 0'].join(
+      ['#!/bin/sh', 'if [ "$1" = "--version" ]; then echo "1.9.1"; exit 0; fi', body, 'exit 0'].join(
         '\n'
       ) + '\n';
 
@@ -2326,7 +2373,9 @@ describe('the program a pull-request run is allowed to execute', () => {
     // there is none.
     writeFileSync(
       path.join(repo, 'leak.js'),
-      "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n"
+      // Split in this source so the repository's own secrets scan does not
+      // match it; the file written is the whole fabricated token.
+      "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n"
     );
     if (options.headBody !== null) {
       writeProgram(options.headBody);
@@ -2465,7 +2514,7 @@ describe('the program a pull-request run is allowed to execute', () => {
           ],
         }),
         exit: 1,
-        version: '1.7.0',
+        version: '1.9.1',
       });
 
       const dir = options.atRoot === true ? repo : path.join(repo, 'vendor');
@@ -2485,7 +2534,7 @@ describe('the program a pull-request run is allowed to execute', () => {
       const helperBody = (kind: 'honest' | 'plant'): string =>
         [
           '#!/bin/sh',
-          'if [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi',
+          'if [ "$1" = "--version" ]; then echo "1.9.1"; exit 0; fi',
           ...(kind === 'plant' ? [`printf 'ran\\n' > ${JSON.stringify(marker)}`] : []),
           `echo ${JSON.stringify(CLEAN_VAULT_GUARD)}`,
           'exit 0',
@@ -2512,7 +2561,9 @@ describe('the program a pull-request run is allowed to execute', () => {
 
       writeFileSync(
         path.join(repo, 'leak.js'),
-        "const token = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n"
+        // Split in this source so the repository's own secrets scan does
+        // not match it; the file written is the whole fabricated token.
+        "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n"
       );
       if (options.headHelper === 'plant') {
         writeFileSync(helper, helperBody('plant'));
@@ -2652,7 +2703,7 @@ describe('the program a pull-request run is allowed to execute', () => {
 
     it('never asks the planted program for its version, since the probe runs it', () => {
       // The probe RUNS the binary. Checking provenance after it would already
-      // have executed the plant, and a stub answering "1.7.0" is the cheapest
+      // have executed the plant, and a stub answering "1.9.1" is the cheapest
       // version of this attack.
       const { repo, bin, marker, program } = plantedRepo({
         programPath: 'node_modules/.bin/vault-guard',
@@ -2664,7 +2715,7 @@ describe('the program a pull-request run is allowed to execute', () => {
       // irrelevant here, what matters is that nothing executes this one.
       writeFileSync(
         program,
-        `#!/bin/sh\nprintf 'ran\\n' > ${JSON.stringify(marker)}\nif [ "$1" = "--version" ]; then echo "1.7.0"; exit 0; fi\necho ${JSON.stringify(CLEAN_SECRETS)}\nexit 0\n`
+        `#!/bin/sh\nprintf 'ran\\n' > ${JSON.stringify(marker)}\nif [ "$1" = "--version" ]; then echo "1.9.1"; exit 0; fi\necho ${JSON.stringify(CLEAN_SECRETS)}\nexit 0\n`
       );
       chmodSync(program, 0o755);
 
@@ -2767,11 +2818,19 @@ describe('the program a pull-request run is allowed to execute', () => {
       // and was skipped silently. Only the target was vetted, and a link
       // whose target was fine sailed through. Asserted as a property of the
       // refusal rather than of the path: the LINK is what is named.
+      //
+      // The symlinked root is built here, so the test holds on every
+      // platform whatever the temporary directory looks like. The repository, the policy's command: and the working directory are
+      // all spelled through `via`; git reports the resolved root.
+      const real = realpathSync(tempDir());
+      const via = path.join(tempDir(), 'via');
+      symlinkSync(real, via);
       const { repo, bin, program } = plantedRepo({
         programPath: 'vendor/real-gate',
         commandRelative: 'node_modules/.bin/vault-guard',
         baseBody: 'honest',
         headBody: 'honest',
+        root: path.join(via, 'repo'),
       });
       const link = path.join(repo, 'node_modules', '.bin', 'vault-guard');
       mkdirSync(path.dirname(link), { recursive: true });
@@ -2836,6 +2895,389 @@ describe('a gate that refuses its own state directory', () => {
     // place a reader learns the fix is on disk rather than in their diff.
     expect(result.stdout).toMatch(/it is a symlink/);
     expect(result.stdout).not.toMatch(/drift/);
+  });
+});
+
+describe('PATH on a run with a trust base', () => {
+  const POLICY = ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', ''].join('\n');
+
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  /**
+   * A base with a policy, and a pull request that commits its own "git" at
+   * the repository root and under node_modules/.bin, each appending to
+   * `marker` and then running the real git.
+   */
+  function plantedGitRepo(): { repo: string; bin: string; marker: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+    const marker = path.join(tempDir(), 'planted-git-ran.txt');
+    // A gate that runs git itself, found through PATH, the way the family
+    // gates do: so the test covers the environment handed to a child, not
+    // only the umbrella's own git calls.
+    const cat = spawnSync('sh', ['-c', 'command -v cat'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(path.join(bin, 'vault-guard.json'), CLEAN_VAULT_GUARD);
+    writeFileSync(
+      path.join(bin, 'vault-guard'),
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo 1.9.1; exit 0; fi',
+        'git rev-parse HEAD > /dev/null 2>&1',
+        `${cat} ${JSON.stringify(path.join(bin, 'vault-guard.json'))}`,
+        '',
+      ].join('\n')
+    );
+    chmodSync(path.join(bin, 'vault-guard'), 0o755);
+    shimGit(bin);
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), POLICY);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base']);
+    const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    for (const planted of [path.join(repo, 'git'), path.join(repo, 'node_modules', '.bin', 'git')]) {
+      mkdirSync(path.dirname(planted), { recursive: true });
+      writeFileSync(planted, `#!/bin/sh\necho ran >> ${JSON.stringify(marker)}\nexec ${realGit} "$@"\n`);
+      chmodSync(planted, 0o755);
+    }
+    git(repo, ['add', '-f', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    return { repo, bin, marker };
+  }
+
+  function runWithPath(cwd: string, args: string[], pathValue: string) {
+    const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
+      cwd,
+      encoding: 'utf8',
+      env: childEnv(pathValue),
+    });
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  }
+
+  it('never runs a git the pull request committed through an empty PATH entry, and says what it removed', () => {
+    const { repo, bin, marker } = plantedGitRepo();
+
+    const result = runWithPath(repo, ['run', '--trust-base', 'base'], `:${bin}`);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toMatch(/removed 1 PATH entr/);
+    expect(result.stderr).toContain('""');
+  });
+
+  it('never runs a git the pull request committed through a relative PATH entry, run from elsewhere', () => {
+    const { repo, bin, marker } = plantedGitRepo();
+    const tools = tempDir();
+
+    const result = runWithPath(tools, ['run', '--project', repo, '--trust-base', 'base'], `node_modules/.bin:${bin}`);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('"node_modules/.bin"');
+  });
+
+  it('leaves PATH alone on a run without a trust base', () => {
+    const { repo, bin, marker } = plantedGitRepo();
+
+    const result = runWithPath(repo, ['run'], `:${bin}`);
+
+    // Local hooks rely on relative entries, and outside pull-request mode the
+    // tree is the user's own: the empty entry still means the working
+    // directory, exactly as the shell would read it.
+    expect(existsSync(marker)).toBe(true);
+    expect(result.stderr).not.toMatch(/removed .* PATH entr/);
+  });
+
+  it('pins the first git outside the repository, skipping one an absolute PATH entry finds inside it', () => {
+    // conductor's own git calls only: this gate stub runs no git, so the
+    // marker can only come from the program conductor pinned.
+    const { repo, marker } = plantedGitRepo();
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, version: '1.9.1' });
+    shimGit(bin);
+
+    const result = runWithPath(
+      repo,
+      ['run', '--trust-base', 'base'],
+      `${repo}:${path.join(repo, 'node_modules', '.bin')}:${bin}`
+    );
+
+    expect(existsSync(marker)).toBe(false);
+    expect(result.status).toBe(0);
+  });
+
+  it('is could-not-run, saying how to clear it, when the only git on PATH is inside the repository', () => {
+    const { repo, marker } = plantedGitRepo();
+    const gateOnly = tempDir();
+    stubGate(gateOnly, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, version: '1.9.1' });
+
+    const result = runWithPath(repo, ['run', '--trust-base', 'base'], `${repo}:${gateOnly}`);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/no git outside the repository was found on PATH/);
+    expect(result.stderr).toMatch(/Put the directory that holds your git installation on PATH/);
+  });
+
+  describe('the private git directory first on every gate PATH', () => {
+    const tool = (name: string): string =>
+      spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+
+    /**
+     * A gate that looks git up by name through PATH and records, into
+     * `record`, which git it found, what that git's directory holds, where
+     * that git points, and what it answered for HEAD. Every other program is
+     * named by absolute path, because the PATH under test holds only stubs.
+     */
+    function recordingGate(bin: string, record: string, out: { stdout: string; exit?: number }): void {
+      writeFileSync(path.join(bin, 'vault-guard.json'), out.stdout);
+      const r = JSON.stringify(record);
+      writeFileSync(
+        path.join(bin, 'vault-guard'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "--version" ]; then echo 1.9.1; exit 0; fi',
+          'g=$(command -v git)',
+          `echo "git=$g" >> ${r}`,
+          `echo "entries=$(${tool('ls')} -A "$(${tool('dirname')} "$g")" | ${tool('tr')} '\\n' ' ')" >> ${r}`,
+          `echo "target=$(${tool('readlink')} "$g")" >> ${r}`,
+          `echo "head=$(git rev-parse HEAD)" >> ${r}`,
+          `${tool('cat')} ${JSON.stringify(path.join(bin, 'vault-guard.json'))}`,
+          `exit ${out.exit ?? 0}`,
+          '',
+        ].join('\n')
+      );
+      chmodSync(path.join(bin, 'vault-guard'), 0o755);
+      shimGit(bin);
+    }
+
+    function runIn(cwd: string, args: string[], pathValue: string, tmp: string) {
+      const result = spawnSync(process.execPath, [CONDUCTOR_CLI, ...args], {
+        cwd,
+        encoding: 'utf8',
+        env: { ...childEnv(pathValue), TMPDIR: tmp },
+      });
+      return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+    }
+
+    function readRecord(record: string): Record<string, string> {
+      const fields: Record<string, string> = {};
+      for (const line of readFileSync(record, 'utf8').split('\n')) {
+        const at = line.indexOf('=');
+        if (at > 0) {
+          fields[line.slice(0, at)] = line.slice(at + 1).trim();
+        }
+      }
+      return fields;
+    }
+
+    function headOf(repo: string): string {
+      return spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+    }
+
+    it('runs the pinned git for a gate that looks git up through PATH, never one an absolute in-tree entry finds first', () => {
+      const { repo, marker } = plantedGitRepo();
+      const bin = tempDir();
+      const tmp = realpathSync(tempDir());
+      const record = path.join(tempDir(), 'record.txt');
+      recordingGate(bin, record, { stdout: CLEAN_VAULT_GUARD });
+
+      const result = runIn(
+        repo,
+        ['run', '--trust-base', 'base'],
+        `${path.join(repo, 'node_modules', '.bin')}:${bin}`,
+        tmp
+      );
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.status).toBe(0);
+      const seen = readRecord(record);
+      // The gate found git in a private directory under the temp directory,
+      // holding git and nothing else, pointing at the git conductor pinned.
+      expect(path.dirname(path.dirname(seen.git))).toBe(tmp);
+      expect(seen.entries).toBe('git');
+      expect(seen.target).toBe(realpathSync(path.join(bin, 'git')));
+      expect(seen.head).toBe(headOf(repo));
+      // And the directory is gone once the run is over.
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    it('leaves PATH unchanged for a gate on a run without a trust base', () => {
+      const { repo, marker } = plantedGitRepo();
+      const bin = tempDir();
+      const tmp = realpathSync(tempDir());
+      const record = path.join(tempDir(), 'record.txt');
+      recordingGate(bin, record, { stdout: CLEAN_VAULT_GUARD });
+      const inTree = path.join(repo, 'node_modules', '.bin');
+
+      runIn(repo, ['run'], `${inTree}:${bin}`, tmp);
+
+      // Today's behaviour, kept: outside pull-request mode the tree is the
+      // user's own, and the first git on PATH is the one a gate runs.
+      expect(readRecord(record).git).toBe(path.join(inTree, 'git'));
+      expect(existsSync(marker)).toBe(true);
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    it('removes the private git directory when a gate fails', () => {
+      const { repo } = plantedGitRepo();
+      const bin = tempDir();
+      const tmp = realpathSync(tempDir());
+      const record = path.join(tempDir(), 'record.txt');
+      recordingGate(bin, record, { stdout: 'not json', exit: 3 });
+
+      const result = runIn(
+        repo,
+        ['run', '--trust-base', 'base'],
+        `${path.join(repo, 'node_modules', '.bin')}:${bin}`,
+        tmp
+      );
+
+      expect(result.status).toBe(2);
+      const seen = readRecord(record);
+      expect(path.dirname(path.dirname(seen.git))).toBe(tmp);
+      expect(seen.entries).toBe('git');
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    it('removes the private git directory when the intent preparation fails', () => {
+      const repo = tempDir();
+      const bin = tempDir();
+      const tmp = realpathSync(tempDir());
+      const record = path.join(tempDir(), 'record.txt');
+      const fixtures = path.join(CONDUCTOR_ROOT, 'tests', 'fixtures', 'superpowers');
+      const write = (relative: string, body: string): void => {
+        mkdirSync(path.dirname(path.join(repo, relative)), { recursive: true });
+        writeFileSync(path.join(repo, relative), body);
+      };
+      git(repo, ['init', '--quiet', '-b', 'main']);
+      git(repo, ['config', 'user.email', 'test@example.com']);
+      git(repo, ['config', 'user.name', 'Test']);
+      write('.guardrails.yaml', 'version: 1\ngates:\n  intent:\n    product: intent-guard\n');
+      for (const relative of ['specs/2026-09-03-widget-cache-design.md', 'plans/2026-09-03-widget-cache.md']) {
+        write(path.join('docs', 'superpowers', relative), readFileSync(path.join(fixtures, relative), 'utf8'));
+      }
+      git(repo, ['add', '-A']);
+      git(repo, ['commit', '--quiet', '-m', 'base']);
+      git(repo, ['checkout', '--quiet', '-b', 'feat/widget-cache']);
+      write('src/widget/cache.ts', 'export const x = 1;\n');
+      git(repo, ['add', '-A']);
+      git(repo, ['commit', '--quiet', '-m', 'branch work']);
+      // An intent gate whose every preparation step records the git it
+      // would run, then fails.
+      const r = JSON.stringify(record);
+      writeFileSync(
+        path.join(bin, 'intent-guard'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "--version" ]; then echo 1.4.0; exit 0; fi',
+          'g=$(command -v git)',
+          `echo "git=$g" >> ${r}`,
+          `echo "entries=$(${tool('ls')} -A "$(${tool('dirname')} "$g")" | ${tool('tr')} '\\n' ' ')" >> ${r}`,
+          'echo "no." >&2',
+          'exit 2',
+          '',
+        ].join('\n')
+      );
+      chmodSync(path.join(bin, 'intent-guard'), 0o755);
+      shimGit(bin);
+
+      const result = runIn(repo, ['run', '--trust-base', 'main'], bin, tmp);
+
+      expect(result.status).toBe(2);
+      const seen = readRecord(record);
+      expect(path.dirname(path.dirname(seen.git))).toBe(tmp);
+      expect(seen.entries).toBe('git');
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    it('is could-not-run, saying what to set, when the temp directory is inside the repository', () => {
+      const { repo, marker } = plantedGitRepo();
+      const bin = tempDir();
+      const record = path.join(tempDir(), 'record.txt');
+      recordingGate(bin, record, { stdout: CLEAN_VAULT_GUARD });
+      const inside = path.join(repo, 'scratch-tmp');
+      mkdirSync(inside);
+
+      const result = runIn(repo, ['run', '--trust-base', 'base'], bin, inside);
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/temporary directory .* is inside the repository/);
+      expect(result.stderr).toMatch(/Set TMPDIR/);
+      expect(result.stderr).toMatch(/Nothing was checked/);
+      expect(existsSync(record)).toBe(false);
+      expect(existsSync(marker)).toBe(false);
+      expect(readdirSync(inside)).toEqual([]);
+    });
+  });
+});
+
+describe('a pull-request job with no trust base', () => {
+  const HEAD_POLICY = ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', '    enabled: false', ''].join('\n');
+
+  /** A repository whose own (head) policy switches its only gate off. */
+  function headPolicyRepo(): { repo: string; bin: string } {
+    const repo = repoWithPolicy(HEAD_POLICY);
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    spawnSync('git', ['add', '-A'], { cwd: repo });
+    spawnSync('git', ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'x'], { cwd: repo });
+    return { repo, bin };
+  }
+
+  it('is refused, exit 2, in GitHub Actions, naming how to clear it', () => {
+    const { repo, bin } = headPolicyRepo();
+
+    const result = runCli(repo, ['run'], bin, { env: { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: 'main' } });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/GITHUB_BASE_REF is set to "main", so this is a pull-request job/);
+    expect(result.stdout).toMatch(/--trust-base refs\/remotes\/origin\/main/);
+    // Says what happened, and never names a trust base that was not given.
+    expect(result.stdout).toMatch(/this is a pull-request job and no trust base was given, so no rules were read/);
+    expect(result.stdout).not.toMatch(/refused the trust base/);
+    expect(result.stdout).not.toMatch(/rules from /);
+    expect(result.stdout).not.toMatch(/control change\(s\) proposed/);
+  });
+
+  it('is refused for a staged run too, and names the pre-commit-in-CI case', () => {
+    const { repo, bin } = headPolicyRepo();
+
+    const result = runCli(repo, ['run', '--staged'], bin, { env: { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: 'main' } });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/skip the hook in CI, or pass --trust-base to it/);
+  });
+
+  it('only prints a notice outside Actions, and the run goes on as before', () => {
+    // GITHUB_ACTIONS counts only when it is exactly "true", the value Actions
+    // sets; unset or any other value is a run outside Actions.
+    for (const actions of [undefined, 'false', '1', '']) {
+      const { repo, bin } = headPolicyRepo();
+
+      const result = runCli(repo, ['run'], bin, {
+        env: { GITHUB_BASE_REF: 'main', ...(actions === undefined ? {} : { GITHUB_ACTIONS: actions }) },
+      });
+
+      expect([actions, result.status]).toEqual([actions, 0]);
+      expect(result.stderr).toMatch(/GITHUB_BASE_REF is set to "main"/);
+    }
+  });
+
+  it('changes nothing when GITHUB_BASE_REF is empty, as on a push', () => {
+    const { repo, bin } = headPolicyRepo();
+
+    const result = runCli(repo, ['run'], bin, { env: { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: '' } });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toMatch(/GITHUB_BASE_REF/);
   });
 });
 
@@ -2933,5 +3375,36 @@ describe('the per-gate log lines when the report cannot be written', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).not.toContain('conductor: gate ');
+  });
+});
+
+describe('the version-skew warning on a trust-base run', () => {
+  it('names the binary found on the cleaned PATH, never one a removed relative entry held', () => {
+    const repo = tempDir();
+    const g = (args: string[]) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    g(['init', '--quiet', '-b', 'main']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', ''].join('\n'));
+    g(['add', '-A']);
+    g(['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base']);
+    g(['branch', 'base']);
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+    g(['add', '-A']);
+    g(['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'head']);
+
+    const tools = tempDir();
+    stubGate(path.join(tools, 'rel'), 'vault-guard', { stdout: CLEAN_VAULT_GUARD, version: '1.0.0' });
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, version: '1.8.0' });
+    shimGit(bin);
+
+    const result = spawnSync(process.execPath, [CONDUCTOR_CLI, 'run', '--project', repo, '--trust-base', 'base'], {
+      cwd: tools,
+      encoding: 'utf8',
+      env: { ...childEnv(`rel:${bin}`), CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: '1.9.0' },
+    });
+
+    expect(result.stderr).toContain(`reports version 1.8.0`);
+    expect(result.stderr).toContain(`found at ${path.join(bin, 'vault-guard')}`);
+    expect(result.stderr).not.toContain('1.0.0');
   });
 });

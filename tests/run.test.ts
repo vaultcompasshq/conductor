@@ -678,12 +678,12 @@ describe('pull-request mode through a whole run', () => {
     stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
     stubGate(bin, 'intent-guard', {
       stdout: PROPOSING_INTENT,
-      version: '1.4.0',
+      version: '1.8.1',
       argvLog: lastArgvLog,
     });
 
     return runAll(ALL_THREE, {
-      repoRoot: tempDir(),
+      repoRoot: prRepo(),
       staged: true,
       pathValue: bin,
       trustBase: { ref: 'origin/main', policyChanged, refusal: null },
@@ -705,29 +705,32 @@ describe('pull-request mode through a whole run', () => {
     }
   });
 
-  it('hands it to no gate the table does not name', () => {
-    // The whole boundary rests on the table rather than on a count of
-    // products, and the count is now all of them, so this is the only place
-    // left that the withholding half is exercised through a real run. A
-    // stub below the floor stands in for a gate the table does not cover.
+  it('runs no gate below its minimum through a whole run, and exits 2 for it', () => {
+    // A gate below its pull-request-mode minimum is could-not-run on a run
+    // with a trust base, never run without the flag. The other two, above
+    // their minimums, still run in pull-request mode.
     const bin = tempDir();
     const log = path.join(tempDir(), 'argv.txt');
     stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, argvLog: log, version: '0.5.0' });
-    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: log, version: '1.7.0' });
-    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, argvLog: log, version: '1.4.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: log });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, argvLog: log });
 
     const result = runAll(ALL_THREE, {
-      repoRoot: tempDir(),
+      repoRoot: prRepo(),
       staged: true,
       pathValue: bin,
       trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
     });
     const lines = readFileSync(log, 'utf8').trim().split('\n');
 
-    expect(lines[0]).not.toContain('--trust-base');
-    expect(lines[1]).toContain('--trust-base origin/main');
-    expect(lines[2]).toContain('--trust-base origin/main');
-    expect(result.gates[0].trustBase?.withheld).toMatch(/dep-guard 0\.5\.0/);
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line).toContain('--trust-base origin/main');
+    }
+    expect(result.gates[0].couldNotRun?.reason).toBe('gate-version-unsupported');
+    expect(result.gates[0].couldNotRun?.detail).toMatch(/^dep-guard did not run: the installed 0\.5\.0/);
+    expect(result.gates[0].trustBase?.withheld).toBeNull();
+    expect(result.exitCode).toBe(2);
   });
 
   it('sums a proposal raised by the secrets gate alongside the intent gate own', () => {
@@ -752,12 +755,12 @@ describe('pull-request mode through a whole run', () => {
         },
         results: [],
       }),
-      version: '1.7.0',
+      version: '1.9.1',
     });
-    stubGate(bin, 'intent-guard', { stdout: PROPOSING_INTENT, version: '1.4.0' });
+    stubGate(bin, 'intent-guard', { stdout: PROPOSING_INTENT, version: '1.8.1' });
 
     const result = runAll(ALL_THREE, {
-      repoRoot: tempDir(),
+      repoRoot: prRepo(),
       staged: true,
       pathValue: bin,
       trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
@@ -900,7 +903,9 @@ describe('the equal-tree exception (issue #69)', () => {
       staged: false,
       pathValue: bin,
       tempRoot: tempDir(),
-      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null, treeUnchanged: true },
+      // A ref that exists in the repository: the base config is read from it,
+      // and a ref that cannot be read is could-not-run, never the neutral one.
+      trustBase: { ref: 'HEAD', policyChanged: false, refusal: null, treeUnchanged: true },
     });
   }
 
@@ -958,7 +963,7 @@ describe('the equal-tree exception (issue #69)', () => {
     });
 
     const result = runAll(fivePolicy(), {
-      repoRoot: lockfileRepo(),
+      repoRoot: prRepo(),
       staged: false,
       pathValue: bin,
       tempRoot: tempDir(),
@@ -969,3 +974,29 @@ describe('the equal-tree exception (issue #69)', () => {
     expect(result.treeUnchanged).toEqual([]);
   });
 });
+
+/**
+ * A repository a trust base can be read from: main carries a frozen intent
+ * contract and a lockfile, refs/remotes/origin/main points at it, and a
+ * branch commit sits on top. A trust base makes the intent gate's run
+ * pull-request shaped, so the contract decision and the change set are read
+ * from origin/main and need a real ref to read them from.
+ */
+function prRepo(): string {
+  const repo = tempDir();
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repo });
+  git('init', '--quiet', '-b', 'main');
+  mkdirSync(path.join(repo, '.intent-guard'), { recursive: true });
+  writeFileSync(
+    path.join(repo, '.intent-guard', 'intent-contract.yaml'),
+    'frozen_by: user\napproval:\n  approved_by: a human\n'
+  );
+  writeFileSync(path.join(repo, 'package-lock.json'), '{}\n');
+  git('add', '-A');
+  git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+  git('add', '-A');
+  git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'branch');
+  return repo;
+}

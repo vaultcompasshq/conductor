@@ -1198,10 +1198,10 @@ describe('action.yml installs the gates without trusting them first', () => {
     // the install; they are not what makes the check cover the right thing.
     // Naming a package that is not installed is the quiet case: the audit
     // skips it and still exits 0.
-    expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.9.0');
-    expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.8.0');
-    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.8.0');
-    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.10.0');
+    expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.9.1');
+    expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.8.1');
+    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.8.1');
+    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.10.1');
   });
 
   it('carries a version override into the manifest as well as the install', () => {
@@ -1233,10 +1233,10 @@ describe('action.yml installs the gates outside the tree', () => {
     for (const input of VERSION_INPUTS) {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
-    expect(action.inputs?.['conductor-version']?.default).toBe('0.8.0');
-    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.10.0');
-    expect(action.inputs?.['vault-guard-version']?.default).toBe('1.9.0');
-    expect(action.inputs?.['intent-guard-version']?.default).toBe('1.8.0');
+    expect(action.inputs?.['conductor-version']?.default).toBe('0.8.1');
+    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.10.1');
+    expect(action.inputs?.['vault-guard-version']?.default).toBe('1.9.1');
+    expect(action.inputs?.['intent-guard-version']?.default).toBe('1.8.1');
   });
 
   it('accepts an exact version', () => {
@@ -1280,10 +1280,10 @@ describe('action.yml installs the gates outside the tree', () => {
       'install',
       '-g',
       '--ignore-scripts',
-      '@vaultcompass/conductor@0.8.0',
-      '@vaultcompass/dep-guard@0.10.0',
-      '@vaultcompass/vault-guard@1.9.0',
-      '@vaultcompass/intent-guard@1.8.0',
+      '@vaultcompass/conductor@0.8.1',
+      '@vaultcompass/dep-guard@0.10.1',
+      '@vaultcompass/vault-guard@1.9.1',
+      '@vaultcompass/intent-guard@1.8.1',
       'audit',
       'signatures',
     ]);
@@ -1292,7 +1292,7 @@ describe('action.yml installs the gates outside the tree', () => {
   it('carries an overridden version through to the package specifier', () => {
     const { argv } = runInstall({ VAULT_GUARD_VERSION: '1.9.2' });
     expect(argv).toContain('@vaultcompass/vault-guard@1.9.2');
-    expect(argv).not.toContain('@vaultcompass/vault-guard@1.9.0');
+    expect(argv).not.toContain('@vaultcompass/vault-guard@1.9.1');
   });
 
   it('prepends the install bin directory to PATH rather than calling it by path', () => {
@@ -1529,10 +1529,13 @@ function tagVersion(prefix: string): string {
  *
  * Every one of the four inputs has published versions under its constant, so
  * the shipped step refuses real pins today and these cases can drive the
- * unmodified step text. Counted off the registry on 2026-09-30: 13 conductor
- * below 0.8.0 (0.2.0 through 0.7.0), 13 dep-guard below 0.10.0, 27 vault-guard
- * below 1.9.0, 10 intent-guard below 1.8.0. Sixty-three pins in all that a
- * consumer could write today and this tag now refuses on a pull request.
+ * unmodified step text. Counted off the registry on 2026-10-04: 13 conductor
+ * below 0.8.0 (0.2.0 through 0.7.0), 12 dep-guard below 0.10.0, 27 vault-guard
+ * below 1.9.0, 10 intent-guard below 1.8.0. Each constant has since moved one
+ * patch past the version it named then, which adds that version to each
+ * count: 14 conductor below 0.8.1, 13 dep-guard below 0.10.1, 28 vault-guard
+ * below 1.9.1, 11 intent-guard below 1.8.1. Sixty-six pins in all that a
+ * consumer could write and this tag refuses on a pull request.
  *
  * Each value here is a version somebody could really have pinned, not a number
  * invented to be low. A raised constant leaves them valid, since they only have
@@ -1566,25 +1569,6 @@ function scriptWithFutureTag(prefix: string): string {
   const future = validateScript.replace(
     new RegExp(`^(\\s*)${prefix}_MINOR=([0-9]+)$`, 'm'),
     (_all, indent: string, digits: string) => `${indent}${prefix}_MINOR=${Number(digits) + 1}`,
-  );
-  expect([prefix, future === validateScript]).toEqual([prefix, false]);
-  return future;
-}
-
-/**
- * The same device as scriptWithFutureTag, advancing PATCH instead of MINOR.
- *
- * As of this tag every one of the four TAG constants ends in patch 0 (0.8.0,
- * 0.10.0, 1.9.0, 1.8.0), so pin_not_backward's third arm -- pin_major ==
- * tag_major, pin_minor == tag_minor, pin_patch below tag_patch -- has no real
- * published version left that can drive it: a patch below zero does not
- * exist. This copy bumps one constant's PATCH by one so the arm still has a
- * pin to refuse, on the shipped comparison logic rather than a rewritten one.
- */
-function scriptWithFuturePatch(prefix: string): string {
-  const future = validateScript.replace(
-    new RegExp(`^(\\s*)${prefix}_PATCH=([0-9]+)$`, 'm'),
-    (_all, indent: string, digits: string) => `${indent}${prefix}_PATCH=${Number(digits) + 1}`,
   );
   expect([prefix, future === validateScript]).toEqual([prefix, false]);
   return future;
@@ -1676,29 +1660,27 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     const run = runValidate({ INTENT_GUARD_VERSION: '1.4.0' }, { GITHUB_BASE_REF: 'main' });
     expect(run.status).toBe(1);
     expect(run.stderr).toContain('1.4.0');
-    expect(run.stderr).toContain('1.8.0');
+    expect(run.stderr).toContain(tagVersion(TAG_CONSTANTS['intent-guard-version']));
   });
 
   it('refuses a same-minor pin with a lower patch than the tag ships', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag every one of the
-    // four TAG constants ends in patch 0 (0.8.0, 0.10.0, 1.9.0, 1.8.0), so no
-    // real published pin can reach this arm any more -- a patch below zero
-    // does not exist. This test used to pin against TAG_INTENT_GUARD's own
-    // patch of 2 (1.5.2), which release 0.5.1 retired along with the rest of
-    // that old intent-guard default. Driven here instead through a
-    // future-patch copy of the step, the same device scriptWithFutureTag uses
-    // to prove the comparison follows the constant rather than a number
-    // frozen into this file.
-    const prefix = TAG_CONSTANTS['intent-guard-version'];
-    const pin = tagVersion(prefix);
-    const script = scriptWithFuturePatch(prefix);
-    const bumpedShipped = `${tagPart(prefix, 'MAJOR')}.${tagPart(prefix, 'MINOR')}.${Number(tagPart(prefix, 'PATCH')) + 1}`;
-    const run = runValidateScript(script, { INTENT_GUARD_VERSION: pin }, { GITHUB_BASE_REF: 'main' });
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain(pin);
-    expect(run.stderr).toContain(bumpedShipped);
+    // four TAG constants ends in patch 1 (0.8.1, 0.10.1, 1.9.1, 1.8.1), so the
+    // patch-0 release of each (0.8.0, 0.10.0, 1.9.0, 1.8.0), a real published
+    // version, reaches this arm on the UNMODIFIED step.
+    for (const input of VERSION_INPUTS) {
+      const prefix = TAG_CONSTANTS[input];
+      const shipped = tagVersion(prefix);
+      const patch = Number(tagPart(prefix, 'PATCH'));
+      expect([input, patch > 0]).toEqual([input, true]);
+      const pin = `${tagPart(prefix, 'MAJOR')}.${tagPart(prefix, 'MINOR')}.${patch - 1}`;
+      const run = runValidate({ [VERSION_VARS[input]]: pin }, { GITHUB_BASE_REF: 'main' });
+      expect([input, run.status]).toEqual([input, 1]);
+      expect(run.stderr).toContain(pin);
+      expect(run.stderr).toContain(shipped);
+    }
   });
 
   it('leaves push runs alone, where GITHUB_BASE_REF is not set', () => {
