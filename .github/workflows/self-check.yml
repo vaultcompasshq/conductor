@@ -1,0 +1,50 @@
+name: Self-check
+
+# conductor runs its own gates on itself. Advisory: a finding is reported and
+# does not fail the job, so this is not a required check. A gate that could not
+# run still fails it, which is what --advisory is for (see the advisory input
+# in action.yml).
+#
+# THIS IS THE ONE PLACE THIS REPOSITORY REFERENCES THE ACTION WITH ./. A
+# local-path reference reads action.yml out of the pull request's own tree, so
+# the version-pin protection in the validate step protects nothing here, which
+# is acceptable only because the job is advisory, holds a read-only token and
+# no secrets, and judges this repository's own changes. Every consumer should
+# name the action by owner and tag instead (see the README).
+#
+# What it runs is the PUBLISHED conductor version from the action's own
+# default (the conductor-version input), against this repository's pull
+# requests. It does not build or run the pull request's own src.
+#
+# The policy it reads is .guardrails.yaml on the BASE branch, so the first pull
+# request that introduces that file has no policy to read and the run reports
+# could-not-run, once.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        # History gates need the whole history, and the base branch has to be
+        # in the checkout (see the README on fetch-depth).
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: 22.x
+
+    - name: Run conductor on this repository
+      uses: ./
+      with:
+        advisory: 'true'

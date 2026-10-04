@@ -124,10 +124,10 @@ export function resolveBaseRefInRepo(
     return {
       ok: false,
       detail:
-        `neither ${PRIVATE_TRUST_BASE_REF} (the composite action's fetch of the base branch) nor ` +
-        `${remoteRef} exists in this repository, so there is no base to measure the intent gate ` +
-        'against. Nothing was checked. In CI, check out with fetch-depth: 0, or fetch the base ' +
-        'ref before the run.',
+        `the base branch is not in this repository: neither ${PRIVATE_TRUST_BASE_REF} (the ` +
+        `composite action's fetch of the base branch) nor ${remoteRef} exists, so there is no base ` +
+        'to measure the intent gate against and nothing was checked. Fix: in CI, check out with ' +
+        'fetch-depth: 0, or fetch the base ref before the run.',
     };
   }
   return { ok: true, base: { ref: chosen, source: 'github' } };
@@ -211,8 +211,8 @@ export function changedPathsSince(repoRoot: string, base: string): ChangedPaths 
       detail:
         `git could not resolve "${base}...HEAD" (exit ${child.status ?? -1})` +
         `${stderr === '' ? '' : `: ${stderr}`}. ` +
-        'In Actions this is usually a shallow checkout with no merge base; ' +
-        'check out with fetch-depth: 0, or fetch the base ref before the run.',
+        'In Actions this is usually a shallow checkout with no merge base. ' +
+        'Fix: check out with fetch-depth: 0, or fetch the base ref before the run.',
     };
   }
 
