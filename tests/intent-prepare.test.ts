@@ -1176,7 +1176,7 @@ describe('on a run with a trust base, the contract decision comes from the base 
         (r) => {
           git(r, ['update-index', '--add', '--info-only', '--cacheinfo', `100644,${'cd'.repeat(20)},${NATIVE_CONTRACT_PATH}`]);
           const tree = git(r, ['write-tree', '--missing-ok']).trim();
-          const made = git(r, ['commit-tree', tree, '-p', 'HEAD', '-m', 'missing blob']).trim();
+          const made = git(r, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit-tree', tree, '-p', 'HEAD', '-m', 'missing blob']).trim();
           git(r, ['reset', '--quiet', '--soft', made]);
           return made;
         },
