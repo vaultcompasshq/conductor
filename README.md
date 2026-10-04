@@ -1107,7 +1107,8 @@ provenance even though all four packages publish it.
 > sigstore outage has the same effect. The audit is retried once after a short
 > pause before the step fails, to absorb a one-off registry hiccup. It fails
 > closed on purpose, so that is a red gate rather than a skipped check; pin to
-> `@v0.4.0`, which does not verify, if it blocks you.
+> `45d2ecc2213244408495c22d0b8da1dc0f1ed288` (v0.4.0), which does not verify,
+> if it blocks you.
 
 `--base` is passed only when the `base-ref` input names one; left empty, the
 umbrella reads `GITHUB_BASE_REF` itself and treats an empty value as "not a
@@ -1140,14 +1141,15 @@ event the workflow file itself runs from the pull request's own ref, so an
 opt-out here would be settable by the very pull request the mode exists to
 judge: the knob and the thing it protects against would be the same file.
 
-**The normal way to use this is by tag, not by path.** `uses: ./` reads
+**Pin the action by full commit SHA, with the version in a trailing comment, not by tag and not by path.** `uses: ./` reads
 `action.yml` out of whichever tree the workflow runs against, which is
 correct only for this repository's own workflows testing themselves; on a
 pull request from anywhere else it would read `action.yml` out of the pull
 request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
-validate step's own comment in `action.yml` says so in those words). Name
-this action by owner and tag instead:
+validate step's own comment in `action.yml` says so in those words). A tag
+moves when someone pushes it. Name this action by owner and the full commit
+SHA instead:
 
 ```yaml
 name: guardrails
@@ -1162,12 +1164,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # From 0.8.0 a shallow checkout on a pull-request run is
+          # could-not-run for the history gate.
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.8.0
+        uses: vaultcompasshq/conductor@566c7604b60137a7370a42a161f59b934aa1ad6d # v0.8.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1177,6 +1181,10 @@ jobs:
           sarif_file: ${{ steps.conductor.outputs.sarif }}
 ```
 
+The job has `permissions: contents: read`. Add `pull-requests: write` only
+where the recipe posts a comment. `security-events: write` is there because
+the upload step publishes the SARIF log.
+
 The examples leave the trigger unnarrowed on purpose, so the job runs for a
 pull request into any branch. If you narrow it with a `branches:` filter,
 include every branch whose merges reach users, release branches and the
@@ -1185,11 +1193,20 @@ production]`. The pull request that promotes a release is where a bad
 dependency or a leaked secret actually ships, and a job that is not triggered
 leaves no red check and no report to notice.
 
-No version inputs there at all: left out, the four gates run at the versions
-this tag ships, which is the intended default. The fully spelled-out example
-below adds explicit version pins and comments explaining each one, for a
-workflow that wants that transparency; the four lines can still be left out
-entirely to take the tag's own versions, exactly as the form above does.
+A job marked `continue-on-error` always concludes green, so a crash of the
+action is invisible unless someone opens the log. A workflow triggered only
+on pull requests to main never runs on a stacked pull request whose base is
+another branch, and no comment on such a pull request does not mean clean.
+
+Omit `conductor-version`. Left unset, the action installs the default in the
+pinned `action.yml`, which is the version that commit ships, so the installed
+umbrella follows the pin and a Dependabot bump is the one `uses` line. If the
+input is set and is older than the constants in that pinned action.yml, a
+pull request run is refused and the validate step says to remove the input. A
+newer value is accepted and is what gets installed. The three gate version
+inputs can be left out too: each one then takes the default in the pinned
+action.yml. The spelled-out example below names them when a workflow wants
+that transparency.
 
 ```yaml
 name: guardrails
@@ -1204,11 +1221,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Required, for two reasons now. Without it there is no merge base
-          # to diff against, and the intent gate fails closed rather than
-          # checking an empty set. And the base ref itself has to be in the
-          # clone, because on a pull request the rules are read from it: a
-          # base ref that will not resolve is exit 2 for every enabled gate.
+          # Required. From 0.8.0 a shallow checkout on a pull-request run is
+          # could-not-run for the history gate. Without a full history there
+          # is no merge base to diff against, and the intent gate fails closed
+          # rather than checking an empty set. And the base ref itself has to
+          # be in the clone, because on a pull request the rules are read from
+          # it: a base ref that will not resolve is exit 2 for every enabled
+          # gate.
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
@@ -1224,20 +1243,20 @@ jobs:
       # policy is read from, before the gates ever start. Your own
       # dependencies, build and tests belong in a separate job (see below).
       # The gates are not among the things that job has to install: the action
-      # installs those itself, globally, at the versions pinned below.
+      # installs those itself, globally. Leave conductor-version unset so the
+      # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.8.0
+        uses: vaultcompasshq/conductor@566c7604b60137a7370a42a161f59b934aa1ad6d # v0.8.0
         with:
           output: conductor.sarif
-          # Exact versions, never a range and never "latest". These four
-          # lines decide which programs judge a pull request, so a pull
+          # Exact versions, never a range and never "latest". These three
+          # lines decide which gate programs judge a pull request, so a pull
           # request's own lockfile no longer does. They are only as protected
           # as this file is: require review on .github/workflows in your
           # branch protection. Bump them like any other pin, in a pull
-          # request of their own. Forward only on a pull request: the action
-          # refuses a pin below what its tag ships, and the four lines can be
-          # left out entirely to take that tag's own versions.
-          conductor-version: 0.8.0
+          # request of their own. On a pull request the action refuses a pin
+          # below what the pinned action.yml ships, and the three lines can
+          # be left out entirely to take that action's own versions.
           dep-guard-version: 0.10.0
           vault-guard-version: 1.9.0
           intent-guard-version: 1.8.0
@@ -1290,12 +1309,12 @@ because the pull request supplies them, not the workflow file. Branch
 protection on the workflow directory does not stop them, so the gates must
 not share a job with head code that runs first.
 
-**With gitleaks enabled the checkout must be `fetch-depth: 0`.** At the default
+**With gitleaks enabled the checkout must be `fetch-depth: 0`.** From 0.8.0 a
+shallow checkout on a pull-request run is could-not-run for the history gate,
+naming `fetch-depth: 0` (exit 2, whatever `enforce` says). At the default
 depth of 1 the checkout is shallow, the range from the base to HEAD holds one
 grafted commit, and a secret added and then removed inside the pull request
-would never be seen. conductor detects a shallow checkout and reports the
-history gate as could-not-run, naming `fetch-depth: 0` (exit 2 on a pull
-request, whatever `enforce` says). It does not deepen the checkout for you.
+would never be seen. conductor does not deepen the checkout for you.
 
 **The two external gates are installed by your workflow, not by the
 Action.** The Action still installs exactly its four npm packages and has no
@@ -1370,13 +1389,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # From 0.8.0 a shallow checkout on a pull-request run is
+          # could-not-run for the history gate.
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
         timeout-minutes: 5
-        uses: vaultcompasshq/conductor@v0.8.0
+        uses: vaultcompasshq/conductor@566c7604b60137a7370a42a161f59b934aa1ad6d # v0.8.0
         with:
           pr-comment: true
           advisory: true
@@ -1512,7 +1533,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.8.0
+        uses: vaultcompasshq/conductor@566c7604b60137a7370a42a161f59b934aa1ad6d # v0.8.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1584,12 +1605,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.8.0
+        uses: vaultcompasshq/conductor@566c7604b60137a7370a42a161f59b934aa1ad6d # v0.8.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.8.0
+        uses: vaultcompasshq/conductor@566c7604b60137a7370a42a161f59b934aa1ad6d # v0.8.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
