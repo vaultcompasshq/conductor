@@ -1874,3 +1874,40 @@ describe('the per-gate job log lines', () => {
     expect(text).toContain('error');
   });
 });
+
+describe('the proposal count when a gate in pull-request mode could not run', () => {
+  const inMode = { ref: 'origin/main', withheld: null, refused: null, proposals: [] };
+  const base = { ref: 'origin/main', policyChanged: false, refusal: null };
+
+  it('names the gate instead of stating a bare zero', () => {
+    const run = {
+      ...result(
+        [
+          outcome({ exitCode: 0, trustBase: inMode }),
+          outcome({
+            role: 'secrets',
+            product: 'vault-guard',
+            exitCode: 2,
+            trustBase: inMode,
+            couldNotRun: { reason: 'gate-error', detail: 'd' },
+          }),
+        ],
+        2
+      ),
+      trustBase: base,
+    };
+
+    const text = renderText(run);
+
+    expect(text).not.toContain('0 control change(s) proposed in this pull request');
+    expect(text).toContain(
+      '0 control change(s) proposed by the gates that ran; secrets (vault-guard) could not run, so the proposals of that gate are not known'
+    );
+  });
+
+  it('still prints the plain count when every gate ran', () => {
+    const run = { ...result([outcome({ exitCode: 0, trustBase: inMode })], 0), trustBase: base };
+
+    expect(renderText(run, { verbose: true })).toContain('0 control change(s) proposed in this pull request.');
+  });
+});

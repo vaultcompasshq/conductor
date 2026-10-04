@@ -314,9 +314,28 @@ function treeUnchangedLines(result: RunResult): string[] {
  * answer to "did this pull request also try to change the rules", and leaving
  * it out when the answer is none makes a run in pull-request mode
  * indistinguishable from a run that was never in it.
+ *
+ * NEVER A COUNT THAT TREATS A GATE THAT COULD NOT RUN AS ZERO. A gate that
+ * was put into pull-request mode and could not run reported no summary the
+ * umbrella reads, so its proposals are not known rather than none. The
+ * sentence then names those gates and counts only what the others proposed.
  */
-function proposalCount(result: RunResult): string {
-  return `${result.proposals.length} control change(s) proposed in this pull request`;
+export function proposalCount(result: RunResult): string {
+  const unknown = result.gates.filter(
+    (gate) =>
+      gate.couldNotRun !== null &&
+      gate.trustBase !== undefined &&
+      gate.trustBase.withheld === null &&
+      gate.trustBase.refused === null
+  );
+  if (unknown.length === 0) {
+    return `${result.proposals.length} control change(s) proposed in this pull request`;
+  }
+  const names = unknown.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+  return (
+    `${result.proposals.length} control change(s) proposed by the gates that ran; ` +
+    `${names} could not run, so the proposals of ${unknown.length === 1 ? 'that gate are' : 'those gates are'} not known`
+  );
 }
 
 /**

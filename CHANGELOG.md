@@ -45,6 +45,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   version from the action's default against this repository's pull requests,
   not the pull request's own source. The repository gains a `.guardrails.yaml` (dependencies and
   secrets) for it to read from the base branch.
+- The report no longer states a bare "0 control change(s) proposed" when a gate
+  that was in pull-request mode could not run: it counts what the gates that
+  ran proposed and names the gate whose proposals are not known. SARIF emits no
+  statement about proposals for that gate. Reporting only.
 - Refusal wording now leads with what happened and ends on the one fix: a pull
   request pinning a gate backward, a base branch that could not be fetched, a
   base branch missing from the checkout (intent gate), a shallow checkout for a
