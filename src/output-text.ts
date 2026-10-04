@@ -24,7 +24,7 @@
 
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN } from './exit-codes.js';
-import type { GateOutcome } from './gate-runner.js';
+import { type GateOutcome, cleanOutputLine } from './gate-runner.js';
 import { isLegacyContractPath } from './intent-prepare.js';
 import type { RunResult } from './run.js';
 
@@ -136,9 +136,12 @@ function gateSection(gate: GateOutcome): string[] {
 
   if (gate.couldNotRun !== null) {
     lines.push(`    ${gate.couldNotRun.detail}`);
+    if (gate.couldNotRun.gateSaid !== undefined) {
+      lines.push(`    gate said: "${gate.couldNotRun.gateSaid}"`);
+    }
     if (gate.stderr.trim().length > 0) {
       for (const line of gate.stderr.trim().split('\n')) {
-        lines.push(`    | ${line}`);
+        lines.push(`    | ${cleanOutputLine(line)}`);
       }
     }
   }
@@ -311,9 +314,28 @@ function treeUnchangedLines(result: RunResult): string[] {
  * answer to "did this pull request also try to change the rules", and leaving
  * it out when the answer is none makes a run in pull-request mode
  * indistinguishable from a run that was never in it.
+ *
+ * NEVER A COUNT THAT TREATS A GATE THAT COULD NOT RUN AS ZERO. A gate that
+ * was put into pull-request mode and could not run reported no summary the
+ * umbrella reads, so its proposals are not known rather than none. The
+ * sentence then names those gates and counts only what the others proposed.
  */
-function proposalCount(result: RunResult): string {
-  return `${result.proposals.length} control change(s) proposed in this pull request`;
+export function proposalCount(result: RunResult): string {
+  const unknown = result.gates.filter(
+    (gate) =>
+      gate.couldNotRun !== null &&
+      gate.trustBase !== undefined &&
+      gate.trustBase.withheld === null &&
+      gate.trustBase.refused === null
+  );
+  if (unknown.length === 0) {
+    return `${result.proposals.length} control change(s) proposed in this pull request`;
+  }
+  const names = unknown.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+  return (
+    `${result.proposals.length} control change(s) proposed by the gates that ran; ` +
+    `${names} could not run, so the proposals of ${unknown.length === 1 ? 'that gate are' : 'those gates are'} not known`
+  );
 }
 
 /**
@@ -467,6 +489,86 @@ export function jobLogSummary(result: RunResult): string {
     return `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
   }
   return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
+}
+
+/**
+ * One plain line per gate, for the job log: which gate, which version, what
+ * happened, and the exit code. Written to stderr by cli.ts on EVERY run, so
+ * an adopter reading the log learns which gate did what without opening a
+ * report (the SARIF log, the text report file or the pull request comment).
+ *
+ * Outcomes, in the words the lines use: `ok`, `findings (N, M blocking)`,
+ * `could-not-run (reason)` with the gate's own stated reason when it gave
+ * one, `missing (reason)` for a gate that was not found, and `skipped (why)`
+ * for a gate that was enabled and never spawned (deferred by stage, left out
+ * by --gate, no contract, tree unchanged). A gate with no process behind it
+ * says `no exit code`, never a made-up one.
+ *
+ * Describes, decides nothing: every word is read off the outcomes the exit
+ * code was already composed from. Same plain ASCII as the rest of this file.
+ */
+export function gateLogLines(result: RunResult): string[] {
+  const lines: string[] = [];
+  for (const gate of result.gates) {
+    const version = gate.productVersion === null ? 'version unknown' : gate.productVersion;
+    const exit = gate.exitCode === null ? 'no exit code' : `exit ${gate.exitCode}`;
+    let outcome: string;
+    if (gate.couldNotRun !== null) {
+      const reason = gate.couldNotRun.reason;
+      outcome =
+        reason === 'binary-missing' || reason === 'configured-command-missing'
+          ? `missing (${reason})`
+          : `could-not-run (${reason})`;
+    } else {
+      const total = gate.findings.length;
+      const blocking = gate.findings.filter((finding) => finding.blocking).length;
+      outcome =
+        total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
+    }
+    lines.push(
+      `conductor: gate ${gate.role} (${gate.product} ${version}): ${outcome}, ${exit}` +
+        (gate.enforce ? '' : ', not enforced') +
+        (gate.couldNotRun?.gateSaid === undefined ? '' : `, gate said: "${gate.couldNotRun.gateSaid}"`)
+    );
+  }
+  const notRun = (role: string, product: string, why: string): string =>
+    `conductor: gate ${role} (${product}): skipped (${why}), no exit code`;
+  for (const gate of result.deferred) {
+    lines.push(notRun(gate.role, gate.product, `deferred to stage ${gate.stage}`));
+  }
+  for (const gate of result.skipped) {
+    lines.push(notRun(gate.role, gate.product, skipWording(gate.reason).line));
+  }
+  for (const gate of result.excluded) {
+    lines.push(notRun(gate.role, gate.product, '--gate did not name it'));
+  }
+  for (const gate of result.treeUnchanged) {
+    lines.push(notRun(gate.role, gate.product, 'head tree equals the base tree'));
+  }
+  return lines;
+}
+
+/**
+ * One warning per gate that was found on PATH at a version other than the one
+ * this run expected (the Action's pin).
+ *
+ * For the job log only: it names where the binary was found, and an absolute
+ * path has no business in a published SARIF log or a pull request comment, so
+ * this is never part of either report. A warning and nothing more. Resolution
+ * is unchanged and the gate ran (or was refused) exactly as it would have
+ * without it.
+ */
+export function versionSkewWarnings(result: RunResult): string[] {
+  return result.gates.flatMap((gate) =>
+    gate.versionSkew === undefined
+      ? []
+      : [
+          `conductor: warning: ${gate.product} resolved from PATH reports version ${gate.versionSkew.found}, ` +
+            `but this run expects ${gate.versionSkew.expected} (the version the action pinned). ` +
+            `It was found at ${gate.versionSkew.path}. Resolution is unchanged and that binary was used. ` +
+            `Fix: remove the other ${gate.product} from PATH, or install ${gate.versionSkew.expected}.`,
+        ]
+  );
 }
 
 /**

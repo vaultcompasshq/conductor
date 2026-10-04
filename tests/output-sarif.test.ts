@@ -2128,3 +2128,26 @@ describe('the node_modules candidate a pull-request run skipped', () => {
     expect(ids).not.toContain('conductor/node-modules-skipped');
   });
 });
+
+describe('a gate that could not run says nothing about proposals in the SARIF log', () => {
+  it('emits no control-change notification and no statement that none were proposed', () => {
+    const failed = outcome({
+      role: 'secrets',
+      product: 'vault-guard',
+      exitCode: 2,
+      couldNotRun: { reason: 'gate-error', detail: 'the gate exited 2, which it uses for "could not run".' },
+      findings: [normalizeFailedGate('secrets', 'vault-guard', 'the gate exited 2')],
+      trustBase: { ref: 'origin/main', withheld: null, refused: null, proposals: [] },
+    });
+    const run = {
+      ...result([failed]),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
+      exitCode: 2,
+    };
+
+    const text = renderSarif(run, '0.8.0');
+
+    expect(text).not.toContain('conductor/control-change-proposed');
+    expect(text).not.toMatch(/none proposed|no control change|0 control change/i);
+  });
+});

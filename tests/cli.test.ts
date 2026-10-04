@@ -2838,3 +2838,100 @@ describe('a gate that refuses its own state directory', () => {
     expect(result.stdout).not.toMatch(/drift/);
   });
 });
+
+describe('the per-gate job log lines on stderr', () => {
+  it('prints one line per gate on a clean run and leaves stdout as it was', () => {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.9.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('conductor: gate dependencies (dep-guard 0.10.0): ok, exit 0');
+    expect(result.stderr).toContain('conductor: gate secrets (vault-guard 1.9.0): ok, exit 0');
+    expect(result.stderr).toContain('conductor: gate intent (intent-guard 1.8.0): ok, exit 0');
+    expect(result.stdout.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('says why a gate could not run, in the gate own words, with its exit code', () => {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', {
+      stdout: '',
+      stderr: 'INCOMPLETE: 1 file could not be read\nmore detail\n',
+      exit: 2,
+      version: '1.9.0',
+    });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      'conductor: gate secrets (vault-guard 1.9.0): could-not-run (gate-error), exit 2, gate said: "INCOMPLETE: 1 file could not be read"'
+    );
+  });
+});
+
+describe('the PATH version-skew warning', () => {
+  function stubbed(vaultVersion: string): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: vaultVersion });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+    return bin;
+  }
+  const EXPECTED = {
+    CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.0',
+    CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: '1.9.0',
+    CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: '1.8.0',
+  };
+
+  it('names both versions and where the binary was found, and changes nothing else', () => {
+    const bin = stubbed('1.8.5');
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], bin, { env: EXPECTED });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('conductor: warning: vault-guard resolved from PATH reports version 1.8.5');
+    expect(result.stderr).toContain('expects 1.9.0');
+    expect(result.stderr).toContain(path.join(bin, 'vault-guard'));
+    expect(result.stderr).not.toContain('warning: dep-guard');
+    expect(result.stdout).toMatch(/clean, nothing blocked/);
+  });
+
+  it('says nothing when the versions match, or when nothing says what to expect', () => {
+    const matching = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.9.0'), { env: EXPECTED });
+    const unset = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.8.5'));
+
+    expect(matching.stderr).not.toContain('warning:');
+    expect(unset.stderr).not.toContain('warning:');
+  });
+
+  it('ignores an expected version that is not an exact x.y.z', () => {
+    const result = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.8.5'), {
+      env: { ...EXPECTED, CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: 'latest' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain('warning:');
+  });
+});
+
+describe('the per-gate log lines when the report cannot be written', () => {
+  it('prints none: the run exits 2 on the write failure before the lines are written', () => {
+    // Pinned as the code behaves: the lines are written after the report, so a
+    // run that fails on writing it reports only the one-line error.
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.9.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+    const missingDir = path.join(tempDir(), 'no-such-dir', 'out.sarif');
+
+    const result = runCli(repoWithPolicy(), ['run', '--staged', '--format', 'sarif', '--output', missingDir], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).not.toContain('conductor: gate ');
+  });
+});

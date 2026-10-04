@@ -435,10 +435,12 @@ export function normalizeVaultGuard(raw: unknown, version: string | null): Norma
     run: {
       failOn: threshold,
       suppressed: typeof run.baseline_suppressed === 'number' ? run.baseline_suppressed : 0,
-      // vault-guard does not report an ignore count separately; ignored
-      // files never reach the output at all. Reporting 0 here would claim a
-      // fact the gate did not state, so the report says "not reported"
-      // instead, driven by this null.
+      // This normalizer reads no ignore count out of vault-guard's run object
+      // (which does carry config_ignored_files; it is not mapped here), so 0
+      // is a placeholder and not a claim that nothing was ignored. What makes
+      // the report say "ignored not reported" is not this number: it is
+      // `ignoredReported: false` in `details` below, which output-text.ts and
+      // the summary line read in its place.
       ignored: 0,
       // vault-guard's diagnostics carry a context object rather than a
       // message, so the context is rendered as one. Validated the same way
