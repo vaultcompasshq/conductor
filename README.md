@@ -1226,7 +1226,7 @@ jobs:
         with:
           node-version: '22.11.0'
       - id: conductor
-        uses: vaultcompasshq/conductor@c5bdd381cb9e9838b3d708110518fb435ae0ef97 # v0.8.1
+        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1301,7 +1301,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@c5bdd381cb9e9838b3d708110518fb435ae0ef97 # v0.8.1
+        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These three
@@ -1452,7 +1452,7 @@ jobs:
           node-version: '22.11.0'
       - id: conductor
         timeout-minutes: 5
-        uses: vaultcompasshq/conductor@c5bdd381cb9e9838b3d708110518fb435ae0ef97 # v0.8.1
+        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
         with:
           pr-comment: true
           advisory: true
@@ -1588,7 +1588,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@c5bdd381cb9e9838b3d708110518fb435ae0ef97 # v0.8.1
+        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1660,12 +1660,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@c5bdd381cb9e9838b3d708110518fb435ae0ef97 # v0.8.1
+        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@c5bdd381cb9e9838b3d708110518fb435ae0ef97 # v0.8.1
+        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
