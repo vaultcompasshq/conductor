@@ -613,10 +613,10 @@ Five properties, each load-bearing:
   gate conductor runs on a pull-request run, however it was installed; a
   build below it is could-not-run there. The TAG constants are the tested
   versions this TAG ships. One constant serving both is how raising one
-  silently raises the other. As of 0.8.1 they hold the same numbers for all
-  three gates (intent-guard 1.8.1, vault-guard 1.9.1, dep-guard 0.10.1); a
-  later tag that ships a newer gate raises the TAG constants and need not
-  raise the floor.
+  silently raises the other. As of v0.8.2 the two differ for dep-guard: the
+  TAG constant is 0.11.1 and the floor stays 0.10.1. intent-guard (1.8.1) and
+  vault-guard (1.9.1) still hold the same numbers in both; a tag that ships a
+  newer gate raises the TAG constants and need not raise the floor.
 - The comparison is against those hardcoded constants, never against anything
   derived from an input. An input looks identical whether a consumer pinned the
   current version or the default supplied it, so the step cannot tell a pin from
@@ -692,11 +692,11 @@ below its constant, so the UNMODIFIED step refuses real pins today and the cases
 say so with real numbers: `conductor-version: 0.3.0`, `dep-guard-version: 0.5.0`,
 `vault-guard-version: 1.6.0` and `intent-guard-version: 1.4.0` are each driven
 through the shipped step text and refused on a pull-request run, and accepted
-with `GITHUB_BASE_REF` unset. There are 66 such pins: the registry count of
+with `GITHUB_BASE_REF` unset. There are 68 such pins: the registry count of
 2026-10-04 (13 conductor versions below 0.8.0, 12 dep-guard below 0.10.0, 27
-vault-guard below 1.9.0 and 10 intent-guard below 1.8.0) plus the one version
-each that the 0.8.0 constants named and the 0.8.1 constants sit one patch
-above, giving 14, 13, 28 and 11. Because every constant now ends in patch 1,
+vault-guard below 1.9.0 and 10 intent-guard below 1.8.0) plus the versions each
+constant has since passed (0.8.0; 0.10.0, 0.10.1 and the withdrawn 0.11.0;
+1.9.0; 1.8.0), giving 14, 15, 28 and 11. Because every constant ends in patch 1,
 the same-minor lower-patch arm of the comparison is driven on the unmodified
 step by each gate's patch-0 release.
 

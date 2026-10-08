@@ -69,7 +69,7 @@ inputs:
     description: >-
       The exact version of the dependency gate this action installs. Same
       rule as conductor-version.
-    default: 0.10.1
+    default: 0.11.1
   vault-guard-version:
     description: >-
       The exact version of the secrets gate this action installs. Same rule
@@ -240,13 +240,13 @@ runs:
         # one that predates the rule that would have caught it, clear the shape
         # check, and be judged by the rule set it chose for itself. That is not
         # hypothetical, and not only for one input: EVERY ONE of the four has
-        # published versions below its constant here. 66 of them: the registry
+        # published versions below its constant here. 68 of them: the registry
         # count of 2026-10-04 (conductor 13 below 0.8.0, dep-guard 12 below
         # 0.10.0, vault-guard 27 below 1.9.0, intent-guard 10 below 1.8.0)
-        # plus the one version each that the previous constants named and the
-        # current ones sit above (conductor 0.8.0, dep-guard 0.10.0,
-        # vault-guard 1.9.0, intent-guard 1.8.0), so conductor 14 below 0.8.1,
-        # dep-guard 13 below 0.10.1, vault-guard 28 below 1.9.1 and
+        # plus the versions each constant has since passed (conductor 0.8.0,
+        # vault-guard 1.9.0, intent-guard 1.8.0, and for dep-guard 0.10.0,
+        # 0.10.1 and the withdrawn 0.11.0), so conductor 14 below 0.8.1,
+        # dep-guard 15 below 0.11.1, vault-guard 28 below 1.9.1 and
         # intent-guard 11 below 1.8.1, intent-guard 1.4.0 among them.
         #
         # This is the same class of hole as an input that turns pull-request
@@ -270,9 +270,9 @@ runs:
         # run on a pull-request run, wherever it was installed from. These are
         # THE TESTED VERSIONS THIS TAG SHIPS, and they move with the pins
         # above. One constant serving both is how raising one silently raises
-        # the other. As of this tag the two hold the same numbers for all three
-        # gates; a later tag that ships a newer gate raises these and need not
-        # raise the floor.
+        # the other. As of this tag dep-guard shows the difference: its constant
+        # here is 0.11.1 while its floor stays 0.10.1. The other two gates still
+        # hold the same numbers in both; raising a constant need not raise the floor.
         #
         # COMPARED AGAINST THESE HARDCODED CONSTANTS, never against anything
         # derived from an input. An input looks identical whether the consumer
@@ -293,7 +293,7 @@ runs:
         TAG_CONDUCTOR_MINOR=8
         TAG_CONDUCTOR_PATCH=1
         TAG_DEP_GUARD_MAJOR=0
-        TAG_DEP_GUARD_MINOR=10
+        TAG_DEP_GUARD_MINOR=11
         TAG_DEP_GUARD_PATCH=1
         TAG_VAULT_GUARD_MAJOR=1
         TAG_VAULT_GUARD_MINOR=9

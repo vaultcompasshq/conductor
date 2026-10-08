@@ -14,6 +14,45 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-07
+
+**An action-only release. The tag moves; the npm package does not.**
+`@vaultcompass/conductor` stays at 0.8.1 on npm and the action's
+`conductor-version` default stays `0.8.1`.
+
+### Changed
+
+- **The umbrella now installs `dep-guard` 0.11.1 by default, up from
+  0.10.1.** dep-guard 0.11.1 resolves manifests and lockfiles below the
+  repository root (a `frontend/` plus `backend/` layout with nothing at the
+  root, a `dashboard/package.json` beside its own `pnpm-lock.yaml`), judges
+  lockfile coverage per directory, and names the lockfile a finding is
+  about. It replaces 0.11.0, which was withdrawn and deprecated on npm the
+  same day it shipped: its skip list dropped workspace members and lockfiles
+  under build, dist, vendor and venv names, and its pyproject reader was
+  broken. The umbrella never shipped 0.11.0; this release moves straight
+  from 0.10.1 to 0.11.1. The `TAG_DEP_GUARD_*` constants in `action.yml`
+  move in lockstep with the default, since those constants are what the
+  pull-request backward-pin rule measures a pin against. The dep-guard
+  pull-request-mode floor (`TRUST_BASE_MIN_VERSION` in `src/gate-runner.ts`)
+  stays at 0.10.1: a locally installed 0.10.1 still runs. `vault-guard-version`
+  stays at `1.9.1`, `intent-guard-version` at `1.8.1` and `conductor-version`
+  at `0.8.1`.
+
+  **What can newly turn a run red.** dep-guard 0.11.1 reads manifests it
+  used to ignore, so a repository whose only manifests sit below the root
+  gets dependency findings for the first time, and a deleted lockfile below
+  the root is a `lockfile-downgrade` (exit 2) when its manifest still
+  declares dependencies, with a root lockfile not standing in for it. See
+  dep-guard's own 0.11.1 changelog for the full list and the new note codes.
+
+  **The consumer cost.** On a pull request, the backward-pin rule now
+  refuses `dep-guard-version` below `0.11.1`, which includes `0.10.1` and
+  the withdrawn `0.11.0`. A workflow carrying that line pinned explicitly to
+  the old default is refused rather than run. The migration is to remove
+  the input, whose default is the version this tag ships, or to raise it to
+  `0.11.1` or newer. Outside a pull request an explicit pin is unaffected.
+
 ## [0.8.1] - 2026-10-04
 
 **A patch package release that can turn a green run red.**
