@@ -1201,7 +1201,7 @@ describe('action.yml installs the gates without trusting them first', () => {
     expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.9.1');
     expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.8.1');
     expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.8.1');
-    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.10.1');
+    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.11.1');
   });
 
   it('carries a version override into the manifest as well as the install', () => {
@@ -1234,7 +1234,7 @@ describe('action.yml installs the gates outside the tree', () => {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
     expect(action.inputs?.['conductor-version']?.default).toBe('0.8.1');
-    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.10.1');
+    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.11.1');
     expect(action.inputs?.['vault-guard-version']?.default).toBe('1.9.1');
     expect(action.inputs?.['intent-guard-version']?.default).toBe('1.8.1');
   });
@@ -1281,7 +1281,7 @@ describe('action.yml installs the gates outside the tree', () => {
       '-g',
       '--ignore-scripts',
       '@vaultcompass/conductor@0.8.1',
-      '@vaultcompass/dep-guard@0.10.1',
+      '@vaultcompass/dep-guard@0.11.1',
       '@vaultcompass/vault-guard@1.9.1',
       '@vaultcompass/intent-guard@1.8.1',
       'audit',
@@ -1531,10 +1531,10 @@ function tagVersion(prefix: string): string {
  * the shipped step refuses real pins today and these cases can drive the
  * unmodified step text. Counted off the registry on 2026-10-04: 13 conductor
  * below 0.8.0 (0.2.0 through 0.7.0), 12 dep-guard below 0.10.0, 27 vault-guard
- * below 1.9.0, 10 intent-guard below 1.8.0. Each constant has since moved one
- * patch past the version it named then, which adds that version to each
- * count: 14 conductor below 0.8.1, 13 dep-guard below 0.10.1, 28 vault-guard
- * below 1.9.1, 11 intent-guard below 1.8.1. Sixty-six pins in all that a
+ * below 1.9.0, 10 intent-guard below 1.8.0. Each constant has since moved
+ * past the version it named then: 14 conductor below 0.8.1, 28 vault-guard
+ * below 1.9.1, 11 intent-guard below 1.8.1, and 15 dep-guard below 0.11.1,
+ * which counts 0.10.1 and the withdrawn 0.11.0. Sixty-eight pins in all that a
  * consumer could write and this tag refuses on a pull request.
  *
  * Each value here is a version somebody could really have pinned, not a number
@@ -1667,8 +1667,8 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag every one of the
-    // four TAG constants ends in patch 1 (0.8.1, 0.10.1, 1.9.1, 1.8.1), so the
-    // patch-0 release of each (0.8.0, 0.10.0, 1.9.0, 1.8.0), a real published
+    // four TAG constants ends in patch 1 (0.8.1, 0.11.1, 1.9.1, 1.8.1), so the
+    // patch-0 release of each (0.8.0, 0.11.0, 1.9.0, 1.8.0), a real published
     // version, reaches this arm on the UNMODIFIED step.
     for (const input of VERSION_INPUTS) {
       const prefix = TAG_CONSTANTS[input];
@@ -1724,8 +1724,8 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
       ['INTENT_GUARD_VERSION', '1.10.0'],
       ['INTENT_GUARD_VERSION', '2.0.0'],
       ['INTENT_GUARD_VERSION', '10.0.0'],
-      ['DEP_GUARD_VERSION', '0.10.1'],
-      ['DEP_GUARD_VERSION', '0.11.0'],
+      ['DEP_GUARD_VERSION', '0.11.1'],
+      ['DEP_GUARD_VERSION', '0.12.0'],
       ['VAULT_GUARD_VERSION', '1.9.1'],
       ['VAULT_GUARD_VERSION', '1.10.0'],
       ['CONDUCTOR_VERSION', '0.8.1'],

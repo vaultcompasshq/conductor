@@ -1312,7 +1312,7 @@ jobs:
           # request of their own. On a pull request the action refuses a pin
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
-          dep-guard-version: 0.10.1
+          dep-guard-version: 0.11.1
           vault-guard-version: 1.9.1
           intent-guard-version: 1.8.1
       - uses: github/codeql-action/upload-sarif@v3
