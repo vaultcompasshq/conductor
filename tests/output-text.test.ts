@@ -196,7 +196,7 @@ describe('the vulnerabilities line tells a clean scan from nothing to scan (issu
             diagnostics: [
               {
                 code: 'conductor/nothing-to-scan',
-                message: 'osv-scanner found nothing to scan (no tracked lockfile); treated as clean.',
+                message: 'osv-scanner read no lockfile, so nothing was scanned. Tracked manifests not handed to osv-scanner: pyproject.toml.',
               },
             ],
           }),
@@ -206,7 +206,7 @@ describe('the vulnerabilities line tells a clean scan from nothing to scan (issu
     );
     expect(text).not.toMatch(/lockfiles /);
     expect(text).not.toMatch(/sources-with-findings/);
-    expect(text).toMatch(/conductor\/nothing-to-scan/);
+    expect(text).toMatch(/conductor\/nothing-to-scan: .*Tracked manifests not handed to osv-scanner: pyproject\.toml/);
   });
 });
 
@@ -827,7 +827,7 @@ describe('the advisory option maps a blocking verdict to exit 0 in the text repo
     // below so the pair cannot drift apart.
     const text = renderText(blocked);
     expect(text).toMatch(/BLOCKING/);
-    expect(text).toMatch(/^verdict: exit 1, 2 blocking finding\(s\) across 1 gate\(s\)\.$/m);
+    expect(text).toMatch(/^verdict: exit 1, 2 blocking finding\(s\) in 1 of 1 enforced gate\(s\)\.$/m);
     expect(text.toLowerCase()).not.toMatch(/advisory/);
   });
 
@@ -840,7 +840,7 @@ describe('the advisory option maps a blocking verdict to exit 0 in the text repo
     const text = renderText(blocked, { advisory: true });
     expect(text).toMatch(/BLOCKING/);
     expect(text).toMatch(/dep-guard\/typosquat/);
-    expect(text).toMatch(/^verdict: exit 0, 2 blocking finding\(s\) across 1 gate\(s\)\. Findings were advisory and did not block/m);
+    expect(text).toMatch(/^verdict: exit 0, 2 blocking finding\(s\) in 1 of 1 enforced gate\(s\)\. Findings were advisory and did not block/m);
   });
 
   it('leaves exit 2 alone: advisory only maps exit 1, never a could-not-run verdict', () => {
@@ -1010,8 +1010,8 @@ describe('the verdict when enforced and unenforced gates are mixed', () => {
     const last = text.trimEnd().split('\n').pop() as string;
 
     expect(last).toMatch(/exit 1/);
-    expect(last).toMatch(/2 blocking finding\(s\) across 1 gate\(s\)/);
-    expect(last).not.toMatch(/across 2 gate\(s\)/);
+    expect(last).toMatch(/2 blocking finding\(s\) in 1 of 1 enforced gate\(s\)/);
+    expect(last).not.toMatch(/of 2 enforced gate\(s\)/);
   });
 
   it('lets the header count everything on screen while the verdict counts what failed', () => {
@@ -1030,7 +1030,7 @@ describe('the verdict when enforced and unenforced gates are mixed', () => {
     );
 
     expect(text).toMatch(/^conductor run: 2 gate\(s\), 3 finding\(s\)/m);
-    expect(text).toMatch(/verdict: exit 1, 2 blocking finding\(s\) across 1 gate\(s\)/);
+    expect(text).toMatch(/verdict: exit 1, 2 blocking finding\(s\) in 1 of 1 enforced gate\(s\)/);
   });
 
   it('still says the unenforced gate broke, in the same exit 1 verdict', () => {
@@ -1908,5 +1908,104 @@ describe('the proposal count when a gate in pull-request mode could not run', ()
     const run = { ...result([outcome({ exitCode: 0, trustBase: inMode })], 0), trustBase: base };
 
     expect(renderText(run, { verbose: true })).toContain('0 control change(s) proposed in this pull request.');
+  });
+});
+
+describe('the exit 0 verdict does not claim more than was checked (dogfood F10)', () => {
+  const cleanDeps = (): GateOutcome => outcome({ exitCode: 0, findings: [] });
+  const lastLine = (text: string): string => text.trimEnd().split('\n').pop() as string;
+
+  it('still says every enabled gate ran when each one did and none blocked', () => {
+    const text = renderText(result([cleanDeps()], 0), { verbose: true });
+    expect(lastLine(text)).toBe('verdict: exit 0, every enabled gate ran and none blocked.');
+  });
+
+  it('does not say every enabled gate ran when one was skipped for want of a contract', () => {
+    const text = renderText(
+      result(
+        [cleanDeps()],
+        0,
+        [],
+        [{ role: 'intent', product: 'intent-guard', reason: 'no-contract', detail: 'No contract.' }]
+      ),
+      { verbose: true }
+    );
+    const last = lastLine(text);
+    expect(last).not.toMatch(/every enabled gate ran/);
+    expect(last).toMatch(/^verdict: exit 0, no gate blocked, but not every enabled gate checked something/);
+    expect(last).toMatch(/intent had no contract to check against/);
+  });
+
+  it('does not say every enabled gate ran when a gate had nothing to scan', () => {
+    const scanless = outcome({
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      exitCode: 0,
+      findings: [],
+      diagnostics: [{ code: 'conductor/nothing-to-scan', message: 'osv-scanner read no lockfile.' }],
+    });
+    const last = lastLine(renderText(result([cleanDeps(), scanless], 0), { verbose: true }));
+    expect(last).not.toMatch(/every enabled gate ran/);
+    expect(last).toMatch(/vulnerabilities had nothing to scan/);
+  });
+
+  it('does not say every enabled gate ran when a gate was deferred or left out', () => {
+    const last = lastLine(
+      renderText(
+        result(
+          [cleanDeps()],
+          0,
+          [{ role: 'secrets-history', product: 'gitleaks', stage: 'ci' }],
+          [],
+          [{ role: 'vulnerabilities', product: 'osv-scanner' }]
+        ),
+        { verbose: true }
+      )
+    );
+    expect(last).not.toMatch(/every enabled gate ran/);
+    expect(last).toMatch(/secrets-history deferred to stage ci/);
+    expect(last).toMatch(/vulnerabilities left out by --gate/);
+  });
+
+  it('does not say every enabled gate ran when the intent gate ran with no contract to check', () => {
+    const intent = outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      exitCode: 0,
+      findings: [],
+      run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { contractFound: false } },
+    });
+    const last = lastLine(renderText(result([cleanDeps(), intent], 0), { verbose: true }));
+    expect(last).not.toMatch(/every enabled gate ran/);
+    expect(last).toMatch(/intent ran but found no contract to check against/);
+    const withContract = outcome({
+      role: 'intent',
+      product: 'intent-guard',
+      exitCode: 0,
+      findings: [],
+      run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { contractFound: true } },
+    });
+    expect(lastLine(renderText(result([cleanDeps(), withContract], 0), { verbose: true }))).toMatch(
+      /every enabled gate ran and none blocked/
+    );
+  });
+
+  it('counts the gates that blocked, not the gates that were enforced', () => {
+    const blocker = outcome({ exitCode: 1, findings: depGuard.findings, run: depGuard.run });
+    const other = outcome({ role: 'secrets', product: 'vault-guard', exitCode: 0, findings: [] });
+    const last = lastLine(renderText(result([blocker, other], 1)));
+    expect(last).toBe('verdict: exit 1, 2 blocking finding(s) in 1 of 2 enforced gate(s).');
+  });
+
+  it('lists the gates switched off with enabled: false, in the full report and the one-line summary', () => {
+    const run: RunResult = {
+      ...result([cleanDeps()], 0),
+      disabled: [{ role: 'secrets-history', product: 'gitleaks' }],
+    };
+    const full = renderText(run, { verbose: true });
+    expect(full).toMatch(/^ {2}disabled {2}secrets-history {2}gitleaks {2}enabled: false in \.guardrails\.yaml/m);
+    const summary = renderText(run);
+    expect(summary).toMatch(/Disabled \(enabled: false in \.guardrails\.yaml\): secrets-history \(gitleaks\)\./);
+    expect(renderText(result([cleanDeps()], 0))).not.toMatch(/Disabled/);
   });
 });

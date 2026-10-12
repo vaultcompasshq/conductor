@@ -1180,6 +1180,50 @@ describe('external gate exit semantics', () => {
     expect(existsSync(log)).toBe(false);
   });
 
+  it('names the tracked manifests not handed to osv-scanner when it has nothing to scan, and stays clean', () => {
+    const repo = tempGitRepo();
+    commitFiles(
+      repo,
+      {
+        'pyproject.toml': '[project]\nname = "x"\n',
+        'go.sum': 'example.com/m v1.0.0 h1:abc=\n',
+        Dockerfile: 'FROM scratch\n',
+        'svc/Dockerfile.prod': 'FROM scratch\n',
+        '.github/workflows/ci.yml': 'on: push\n',
+        'node_modules/pkg/pyproject.toml': '',
+        'third_party/vendor/lib/go.sum': '',
+        'pkg/testdata/sample/requirements.txt': '',
+        'README.md': 'hello\n',
+      },
+      'manifests'
+    );
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: '' });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+    const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
+    expect(note?.message).not.toMatch(/no tracked lockfile; treated as clean/);
+    expect(note?.message).toMatch(/read no lockfile/);
+    expect(note?.message).toMatch(
+      /Tracked manifests not handed to osv-scanner: \.github\/workflows\/ci\.yml, Dockerfile, go\.sum, pyproject\.toml, svc\/Dockerfile\.prod\./
+    );
+    expect(note?.message).not.toMatch(/no gate read/);
+    expect(note?.message).not.toMatch(/node_modules|vendor|testdata/);
+    expect(note?.message).not.toMatch(/README/);
+  });
+
+  it('says only that nothing was read when no manifest of any kind is tracked', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { 'README.md': 'hello\n' }, 'docs only');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: '' });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
+    expect(note?.message).toMatch(/read no lockfile/);
+    expect(note?.message).not.toMatch(/Tracked manifests/);
+  });
+
   it('is could-not-run when the tracked lockfiles cannot be listed', () => {
     const bin = tempDir();
     stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });

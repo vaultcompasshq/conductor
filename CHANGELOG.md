@@ -14,6 +14,38 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Changed
+
+- **The vulnerabilities gate no longer says "no tracked lockfile; treated
+  as clean".** With nothing to scan it now says that nothing was scanned and
+  that the verdict is clean because there was nothing to read, and names the
+  tracked manifests that were not handed to osv-scanner (`pyproject.toml`,
+  `requirements*.txt`, `go.mod`, `go.sum`, `Dockerfile`, compose files,
+  workflows and similar; vendor and testdata directories are skipped). It
+  makes no claim about what other gates read. The verdict and exit code are
+  unchanged.
+- **The exit 0 verdict no longer says "every enabled gate ran and none
+  blocked" when a gate was deferred, left out by `--gate`, skipped, had
+  nothing to scan, or (intent) ran with no contract to check against.** It says no gate blocked and names what was not checked.
+- **The exit 1 verdict counts gates that blocked.** "N blocking finding(s)
+  across M gate(s)" counted enforced gates; it now reads "N blocking
+  finding(s) in K of M enforced gate(s)".
+- **Gates switched off with `enabled: false` are listed** in the full report
+  and on the one-line clean summary, as a new optional `disabled` list on the
+  run result.
+- **`conductor init` writes `require-frozen: false` under the intent gate's
+  `options` when it writes `enforce: false`**, so a full run with no contract
+  does not print a blocking critical finding. It also writes the `options`
+  comment per gate: gitleaks and osv-scanner no longer get a `fail-on`
+  example, since neither has a severity floor, and point at `.gitleaks.toml`
+  and `osv-scanner.toml` instead.
+
+### Documentation
+
+- An "Adoption ramp" section in the README: advisory first, each gate's own
+  baseline or config file, a `.gitleaksignore` recipe for an old history
+  finding, and the switch to enforce.
+
 ## [0.8.2] - 2026-10-07
 
 **An action-only release. The tag moves; the npm package does not.**

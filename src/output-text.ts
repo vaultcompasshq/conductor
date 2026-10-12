@@ -300,6 +300,17 @@ function excludedLines(result: RunResult): string[] {
 }
 
 /**
+ * One line per gate the policy file switches off with enabled: false, so an
+ * adopter sees what is not running at all. Absent when none is.
+ */
+function disabledLines(result: RunResult): string[] {
+  return (result.disabled ?? []).map(
+    (gate) =>
+      `  disabled  ${gate.role}  ${gate.product}  enabled: false in .guardrails.yaml; it did not run`
+  );
+}
+
+/**
  * One line per gate skipped because the head tree equals the trust base's
  * (issue #69).
  *
@@ -816,7 +827,12 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
         ? `verdict: exit 0, ${base} This run was advisory, so exit 1 became exit 0.`
         : `verdict: exit 1, ${base}`;
     }
-    const base = `${blocking} blocking finding(s) across ${enforcedGates.length} gate(s).${aside}`;
+    // Gates that blocked out of gates that could have, not a bare count of
+    // the enforced ones, which read as if every one of them had blocked.
+    const blockedGates = enforcedGates.filter((gate) => blockingCount(gate) > 0).length;
+    const base =
+      `${blocking} blocking finding(s) in ${blockedGates} of ${enforcedGates.length} ` +
+      `enforced gate(s).${aside}`;
     return advisory
       ? `verdict: exit 0, ${base} Findings were advisory and did not block, so this run exits 0 rather than 1.`
       : `verdict: exit 1, ${base}`;
@@ -829,6 +845,30 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
     return (
       `verdict: exit 0, but ${clauses.join(' and ')}. ` +
       'Those gates have enforce: false in .guardrails.yaml, so nothing here failed the run.'
+    );
+  }
+
+  // "Every enabled gate ran" is only true when each one actually checked
+  // something. A gate that was held back, left out, skipped, or found nothing
+  // to scan did not, and the sentence a reader reads alone must say so.
+  const unchecked: string[] = [
+    ...result.deferred.map((gate) => `${gate.role} deferred to stage ${gate.stage}`),
+    ...result.excluded.map((gate) => `${gate.role} left out by --gate`),
+    ...result.treeUnchanged.map((gate) => `${gate.role} skipped, head tree equals the base tree`),
+    ...result.skipped.map((gate) => `${gate.role} ${skipWording(gate.reason).verdict}`),
+    ...result.gates
+      .filter((gate) => gate.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan'))
+      .map((gate) => `${gate.role} had nothing to scan`),
+    // The intent gate with require-frozen: false runs and exits 0 when there
+    // is no contract, having checked nothing against anything.
+    ...result.gates
+      .filter((gate) => gate.role === 'intent' && gate.run.details.contractFound === false)
+      .map((gate) => `${gate.role} ran but found no contract to check against`),
+  ];
+  if (unchecked.length > 0) {
+    return (
+      'verdict: exit 0, no gate blocked, but not every enabled gate checked something: ' +
+      `${unchecked.join('; ')}.`
     );
   }
 
@@ -1036,6 +1076,14 @@ function summaryLine(result: RunResult): string {
     parts.push('0 gate(s) not enforced.');
   }
 
+  // Gates the policy file switches off. Only when there are some: a count of
+  // zero here would be noise on the line a hook prints on every commit.
+  const disabled = result.disabled ?? [];
+  if (disabled.length > 0) {
+    const names = disabled.map((gate) => `${gate.role} (${gate.product})`).join(', ');
+    parts.push(`Disabled (enabled: false in .guardrails.yaml): ${names}.`);
+  }
+
   // Non-blocking findings are counted rather than hidden, for the same reason
   // the full report prints the suppressed and ignored counts at zero: they
   // are things the gates actually said, and a summary that omitted them would
@@ -1160,6 +1208,7 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     ...skippedLines(result),
     ...excludedLines(result),
     ...treeUnchangedLines(result),
+    ...disabledLines(result),
   ];
   if (aside.length > 0) {
     lines.push('', ...aside);

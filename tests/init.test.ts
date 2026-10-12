@@ -384,6 +384,26 @@ describe('what init writes', () => {
     expect(intent).toMatch(/enforce: false/);
   });
 
+  it('writes an options comment per gate: no fail-on example for gitleaks or osv-scanner, which have no severity floor', () => {
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const block = (role: string, next: string): string =>
+      policy.slice(policy.indexOf(`  ${role}:\n`), policy.indexOf(`  ${next}:\n`));
+    const history = block('secrets-history', 'vulnerabilities');
+    const vulns = policy.slice(policy.indexOf('  vulnerabilities:\n'));
+
+    expect(history).not.toMatch(/fail-on/);
+    expect(history).toMatch(/\.gitleaks\.toml/);
+    expect(vulns).not.toMatch(/fail-on/);
+    expect(vulns).toMatch(/osv-scanner\.toml/);
+    // The gates that do have a threshold keep the example.
+    expect(block('dependencies', 'secrets')).toMatch(/fail-on: high/);
+    expect(block('secrets', 'intent')).toMatch(/fail-on: high/);
+    // And the file still loads.
+    expect(() => parsePolicy(policy, POLICY_FILE_NAME)).not.toThrow();
+  });
+
   it('writes a policy file that still validates against the shipped schema', () => {
     const repo = gitRepo();
     init(repo);
@@ -604,6 +624,29 @@ describe("init and the intent gate's enforce default", () => {
     expect(intent).toMatch(/# No frozen contract yet \(\.intent-guard\/intent-contract\.yaml\)/);
     const parsed = parsePolicy(policy, POLICY_FILE_NAME);
     expect(parsed.gates.intent?.enforce).toBe(false);
+  });
+
+  it('writes require-frozen: false beside enforce: false, so the gate runs and does not block when no contract exists', () => {
+    // intent-guard blocks on a missing contract when require-frozen is true,
+    // its default. An init-written gate with no contract must not print a
+    // BLOCKING critical finding on every full run.
+    const repo = gitRepo();
+    init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const parsed = parsePolicy(policy, POLICY_FILE_NAME);
+
+    expect(parsed.gates.intent?.enforce).toBe(false);
+    expect(parsed.gates.intent?.options).toEqual({ 'require-frozen': false });
+  });
+
+  it('leaves require-frozen at its default once a contract is frozen', () => {
+    const repo = gitRepo();
+    freezeIntentContract(repo);
+    init(repo);
+    const parsed = parsePolicy(readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8'), POLICY_FILE_NAME);
+
+    expect(parsed.gates.intent?.enforce).toBe(true);
+    expect(parsed.gates.intent?.options).toEqual({});
   });
 
   it('does not enforce on an unfrozen draft: frozen_by alone, with no approval, is not frozen', () => {

@@ -171,10 +171,24 @@ export interface RunTrustBase {
   notGiven?: boolean;
 }
 
+/**
+ * A gate the policy file declares with `enabled: false`. Listed so an adopter
+ * sees what is off; it is not a GateOutcome, nothing was looked for or run.
+ */
+export interface DisabledGate {
+  role: GateRole;
+  product: Product;
+}
+
 export interface RunResult {
   schemaVersion: 1;
   generatedAt: string;
   gates: GateOutcome[];
+  /**
+   * Gates the policy file declares with `enabled: false`. A gate the --gate
+   * flag left out is in `excluded` instead. Absent counts as none.
+   */
+  disabled?: DisabledGate[];
   /** Enabled gates the requested stage held back. Empty with no --stage. */
   deferred: DeferredGate[];
   /** Enabled gates that ran at this stage and found nothing to check. */
@@ -333,6 +347,13 @@ function partitionGates(
     .map((gate) => ({ role: gate.role, product: gate.product }));
 
   return { gates, deferred, excluded };
+}
+
+/** Declared in the policy file with enabled: false, in role order. */
+function disabledGates(policy: Policy): DisabledGate[] {
+  return GATE_ROLES.map((role) => policy.gates[role])
+    .filter((gate): gate is GatePolicy => gate !== undefined && !gate.enabled && !gate.excludedByCli)
+    .map((gate) => ({ role: gate.role, product: gate.product }));
 }
 
 /**
@@ -660,6 +681,9 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     schemaVersion: 1,
     generatedAt: (options.now?.() ?? new Date()).toISOString(),
     gates: outcomes,
+    // Absent rather than empty when nothing is disabled, so a run with every
+    // gate on serialises exactly as it did before this field existed.
+    ...(disabledGates(policy).length === 0 ? {} : { disabled: disabledGates(policy) }),
     deferred,
     skipped,
     excluded,

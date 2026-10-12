@@ -46,6 +46,7 @@ import {
   nestedConfigProposals,
 } from './external-config.js';
 import { profileFor } from './products.js';
+import { unreadManifestsNote } from './unread-manifests.js';
 import type { ProductProfile } from './products.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
 import {
@@ -1466,7 +1467,9 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       .sort();
     if (external.lockfiles.length === 0) {
       // Nothing to scan, reported the same way as osv-scanner's own 128 below,
-      // without spawning it.
+      // without spawning it. The verdict is unchanged (clean); what changes is
+      // what is said: which tracked manifests were not handed to this scanner.
+      const unread = unreadManifestsNote(tracked, names, gate.product);
       return {
         ...base,
         productVersion: version,
@@ -1480,7 +1483,10 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
         diagnostics: [
           {
             code: 'conductor/nothing-to-scan',
-            message: `${gate.product} found nothing to scan (no tracked lockfile); treated as clean.`,
+            message:
+              `${gate.product} read no lockfile, so nothing was scanned; the verdict is clean ` +
+              `because there was nothing to read, not because a scan found nothing.` +
+              (unread === null ? '' : ` ${unread}`),
           },
         ],
       };
@@ -1658,7 +1664,9 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
             }
           : {
               code: 'conductor/nothing-to-scan',
-              message: `${gate.product} found nothing to scan (exit ${exitCode}); treated as clean.`,
+              message:
+                `${gate.product} read no lockfile (exit ${exitCode}), so nothing was scanned; the ` +
+                `verdict is clean because there was nothing to read, not because a scan found nothing.`,
             },
       ],
     };

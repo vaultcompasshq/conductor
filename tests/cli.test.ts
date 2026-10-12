@@ -1628,7 +1628,10 @@ describe('pull-request mode through the CLI', () => {
     const result = runCli(repo, ['run', '--staged'], bin);
 
     expect(existsSync(marker)).toBe(true);
-    expect(result.stdout).not.toMatch(/dep-guard/);
+    // dep-guard is switched off in this policy: it did not run, and the report
+    // now says so under Disabled instead of saying nothing.
+    expect(result.stdout).toMatch(/1 gate\(s\) ran: secrets \(vault-guard\)/);
+    expect(result.stdout).toMatch(/Disabled \(enabled: false in \.guardrails\.yaml\): dependencies \(dep-guard\)/);
   });
 
   it('takes the policy from the base ref, so the attacker script never runs', () => {
