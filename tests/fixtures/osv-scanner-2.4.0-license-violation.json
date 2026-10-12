@@ -1,0 +1,39 @@
+{
+  "results": [
+    {
+      "source": {
+        "path": "/tmp/conductor-osv-fixture/requirements.txt",
+        "type": "lockfile"
+      },
+      "packages": [
+        {
+          "package": {
+            "name": "click",
+            "version": "8.1.7",
+            "ecosystem": "PyPI"
+          },
+          "licenses": [
+            "BSD-3-Clause"
+          ],
+          "license_violations": [
+            "BSD-3-Clause"
+          ]
+        }
+      ]
+    }
+  ],
+  "experimental_config": {
+    "licenses": {
+      "summary": true,
+      "allowlist": [
+        "Apache-2.0"
+      ]
+    }
+  },
+  "license_summary": [
+    {
+      "name": "BSD-3-Clause",
+      "count": 1
+    }
+  ]
+}

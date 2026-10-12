@@ -367,6 +367,7 @@ gates:
     enabled: true
     stage: ci
     enforce: true
+    present-on-base: report
 
 report:
   format: text
@@ -402,6 +403,7 @@ blocking findings do not raise it, and its failing to run at all does not
 make the run exit 2. That is the adoption ramp, so a gate can be switched on
 and read for a few weeks before it is allowed to refuse anybody's commit.
 `init` writes it out for every gate. For the intent gate it writes `true`
+(and see `present-on-base` below for the vulnerabilities gate)
 when a frozen contract already exists at init time
 (`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
 `.conductor/intent-contract.yaml`), since the ramp is already climbed by
@@ -428,7 +430,25 @@ gitleaks, and
 `--format`, `--config` and `--lockfile` to osv-scanner, so those are
 reserved too. Narrow what either
 tool reports in its own config file (`.gitleaks.toml`, `osv-scanner.toml`)
-instead.
+instead. Two osv-scanner flags are written without being reserved: a run
+that scans a requirements file always gets `--no-resolve`, and a
+`no-resolve` key here is dropped from that run with a note; and a
+pull-request run gets `--no-call-analysis=all` unless this block names
+`call-analysis` or `no-call-analysis`, in which case that value is used.
+
+**`present-on-base`** (the `vulnerabilities` gate only, beside `enforce`,
+never under `options`) is `block` or `report`. On a pull-request run whose
+osv-scanner scan blocked, the umbrella also scans the base branch copies of
+the lockfiles that carry findings and labels each finding `introduced` or
+`present-on-base`. `block` blocks on every finding; `report` reports the
+present-on-base ones without blocking and blocks only on what the pull
+request introduced. A policy without the key blocks on every finding, so no
+existing policy is loosened; `init` writes `report` for a new repository.
+On a pull request the key is read from the base branch's policy like every
+other key, so a pull request cannot set it for itself. A run with no base (a
+local run, a push) has no labels, and every finding blocks. The key on any
+other gate is an error, and an older conductor rejects it, so move the
+Action first.
 
 **There is no shared severity threshold, on purpose.** One top-level
 `failOn` would read as one decision and mean five different things, so
@@ -585,21 +605,35 @@ as well as for a leak, so the umbrella hands it `--exit-code 3`: 3 is a leak
 when git itself fails (a base ref the checkout never fetched), so a clean
 exit that logged an `ERR` line is could-not-run too, never a pass. A
 gitleaks exit with no report file behind it is could-not-run. osv-scanner is
-handed every tracked lockfile by name (`package-lock.json`,
-`npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, at any
-depth, never under `node_modules`); when the repository tracks none, it is
-not spawned at all and the gate is reported clean with a
-`conductor/nothing-to-scan` note, so a docs-only repository is not red on
-every pull request. The note says that nothing was scanned and names the
-tracked manifests that were not handed to osv-scanner (a `pyproject.toml`, a
-`go.sum`, a `Dockerfile`, a workflow), so a green gate is not read as a scan
-of them. It says nothing about what other gates read.
-Its 1 is blocked. Its own 128 ("no package sources
-found") on lockfiles it WAS handed means they parsed to no packages; that is
-clean too, with a distinct `conductor/lockfiles-empty` note naming the
-files. Only those npm-family names are handed over today: a repository
-whose only lockfile belongs to another ecosystem gets nothing-to-scan from
-this gate. Lockfiles inside git submodules are never listed. In a sparse
+handed every tracked lockfile by name, at any depth, never under
+`node_modules`: `package-lock.json`, `npm-shrinkwrap.json`,
+`pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `go.mod`, `poetry.lock`,
+`Pipfile.lock`, `uv.lock`, `pdm.lock`, `Cargo.lock`, `Gemfile.lock`,
+`composer.lock`, `gradle.lockfile` and `packages.lock.json`, and pip
+requirements files (`requirements.txt`, `requirements-dev.txt`,
+`requirements_test.txt`, `requirements.prod.txt`, `dev-requirements.txt`)
+whose every requirement, includes followed, is pinned with `==`. `go.sum`
+is never handed over: osv-scanner reads `go.mod` for Go. A requirements
+file with an unpinned line, or an include that is missing, untracked or
+outside the repository, is not scanned and is named in a
+`conductor/requirements-not-scanned` note with the line that stopped it,
+because any version osv-scanner reported for it would be a guess.
+Requirements files are scanned with `--no-resolve`: direct requirements
+only, as written, and the report says so per file. On a pull request a
+requirements file that is pinned on the base stays scanned even when the
+pull request adds an unpinned line to it. When the repository tracks none
+of these, osv-scanner is not spawned at all and the gate is reported clean
+with a `conductor/nothing-to-scan` note, so a docs-only repository is not
+red on every pull request. The note says that nothing was scanned and names
+the tracked manifests that were not handed to osv-scanner (a
+`pyproject.toml`, a `go.sum`, a `Dockerfile`, a workflow, or a requirements
+file the pin check left out), so a green gate is not read as a scan of
+them. A `go.mod` or a pinned requirements file is handed over and so is
+never on that list. It says nothing about what other gates read. Its 1 is
+blocked. Its own 128 ("no package sources found") on lockfiles it WAS
+handed means they parsed to no packages; that is clean too, with a distinct
+`conductor/lockfiles-empty` note naming the files. Lockfiles inside git
+submodules are never listed. In a sparse
 checkout a tracked lockfile that is not on disk is still handed over and
 osv-scanner exits 127 on it, a false could-not-run that fails closed. Any other osv-scanner exit
 (127 is its error code) is could-not-run. A gitleaks older than 8.19 or an
@@ -620,7 +654,11 @@ It decides nothing and never overrules a gate: it is derived from the exit
 code and the `enforce` flags the run already had.
 
 - `pass`: exit 0, and no gate, enforced or not, has a blocking finding or
-  could not run.
+  could not run. Under `present-on-base: report` a `pass` can carry known
+  vulnerabilities already on the base branch, reported and not blocking;
+  the report's third line then says `present-on-base: N reported, not
+  blocking`, the verdict sentence says the same, and the Action copies that
+  line to the job summary under the token.
 - `nothing-checked`: exit 0, but no gate ran at all (none is enabled, or
   every enabled one was deferred to a later stage, had nothing to judge, or
   was skipped). The exit status is unchanged, since nothing failed, but this

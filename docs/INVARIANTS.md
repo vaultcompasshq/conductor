@@ -179,7 +179,7 @@ blocked. 1 means every enabled gate ran and at least one blocked. 2 means
 an enabled gate could not run, so nothing in the report is a clean result.
 2 outranks 1 and 1 outranks 0, and the composition is written as two
 ordered predicates rather than as an arithmetic maximum
-(`composeExitCode`, src/exit-codes.ts:76-85).
+(`composeExitCode`, src/exit-codes.ts:148-157).
 
 The maximum is the obvious implementation and it is wrong, which is why
 the function is shaped to make it hard to write. The three products do not
@@ -212,11 +212,52 @@ gitleaks exit whose stderr carries an `ERR` log line is could-not-run
 failure as exit 0 with an empty report.
 
 The per-finding `blocking` flag can only ADD to the answer, never subtract
-from it: the second predicate is `(gate.exitCode ?? 0) !== 0 ||
-gate.hasBlockingFinding` (src/exit-codes.ts:77). A gate that exited
-non-zero produces a non-zero composed code whatever the umbrella made of
-its output. The flag exists only so a gate whose exit code somehow said
-clean while its own report carried a blocking finding still fails the run.
+from it: the second predicate is `gate.exitBlocks ||
+gate.hasBlockingFinding` (src/exit-codes.ts:153), where `exitBlocks` is
+`gateExitBlocks(outcome)` (src/exit-codes.ts:98-112), a REQUIRED field of
+`ExitInput` in place of the raw exit code (src/exit-codes.ts:128). A gate
+that exited non-zero produces a non-zero composed code whatever the
+umbrella made of its output, with ONE exception since the osv design
+(docs/superpowers/specs, 2026-10-11, section 4.3): `gateExitBlocks` returns
+false for a non-zero exit only when all six of these hold. (a) The gate is
+the vulnerabilities gate, osv-scanner in that role. (b) Its policy, read
+from the base ref on a pull request, says `present-on-base: report`. (c) A
+base comparison ran, which is the only time `baseComparison` is on the
+outcome. (d) At least one finding was parsed. (e) Every finding is labelled
+present-on-base; this one is redundant by construction, since under report
+an introduced finding stays blocking and blocks through
+`hasBlockingFinding` whatever the predicate says, and it is kept so the
+predicate states the whole rule. (f) The head run's raw output carried no
+verdict that is not an advisory: no `license_violations`, no deprecated
+package (`package.deprecated`, inside the package object in osv-scanner
+2.4.0), and no other non-empty package-level key the normalizer does not
+map. The flag exists only so a gate whose exit code somehow said clean while
+its own report carried a blocking finding still fails the run.
+
+Every other reader of "the child exited non-zero" goes through the same
+predicate, or the verdict token and the verdict sentence would disagree
+with the exit code: the not-enforced note, `unenforcedClauses`,
+`blockingCount` (the token's count), the mismatch sentence on an exit 1
+with nothing marked blocking, and the SARIF `gate-not-enforced`
+notification. Two readers keep the raw exit on purpose, because they ask
+"did this gate say anything at all": the job-log outcome in `gateLogLines`
+and `isFullyClean`. A report-mode run with present-on-base findings has
+findings and a non-zero child exit, so it is never "ok" and never folded
+into the one-line summary. Pinned by tests/osv-exit.test.ts ("finds no
+reader of a gate exit code compared with 0 outside gateExitBlocks and the
+two allowlisted sites"), a source-text test over src/ that names those two
+sites and fails on any other `exitCode` compared with 0; by
+tests/osv-exit.test.ts ("counts the token over the gate that blocked, not
+the report-mode osv gate"); condition (d) by tests/osv-exit.test.ts
+("blocks on exit 1 with no parsed finding, which is the at-least-one guard
+(d)"), the role half of (a) by tests/osv-exit.test.ts ("blocks an
+osv-scanner outcome filed under another role") and its product half by
+tests/osv-exit.test.ts ("blocks a vulnerabilities-role outcome whose product
+is not osv-scanner"), and (f) by tests/osv-exit.test.ts ("still blocks on a
+licence violation") and tests/osv-exit.test.ts ("still blocks on a
+deprecated package"). Dropping (e) turns only tests/osv-exit.test.ts
+("blocks when any finding is introduced (e), and says nothing about an exit
+of 0") red, as the redundancy above says it should.
 
 Pinned by the twelve cases in tests/exit-codes.test.ts, of which the ones
 that matter are tests/exit-codes.test.ts:43 ("does not take the numeric
@@ -230,14 +271,14 @@ drives a gate whose output has drifted shape and asserts the composed code
 is 2 and not 1.
 
 `ExitInput.enforce` is REQUIRED rather than defaulted
-(src/exit-codes.ts:69), so a call site that has not thought about
+(src/exit-codes.ts:145), so a call site that has not thought about
 enforcement does not compile. That is a compile-time property and no test
 pins it; a test could not.
 
 ## An unenforced gate is filtered out, and nothing else about it changes
 
 `enforce: false` in the policy file removes a gate from the exit-code
-composition entirely (src/exit-codes.ts:73). It is not a downgrade. The
+composition entirely (src/exit-codes.ts:149). It is not a downgrade. The
 gate still runs, its findings keep their own severities, their `blocking`
 flags are untouched, and both output formats report it exactly as they
 report an enforced gate, with one added sentence saying its verdict did
@@ -261,8 +302,13 @@ a frozen contract's protected paths produce findings that never failed the
 check on the public demo repository.
 
 The rule that makes it safe is that nothing reads a gate's output and
-decides to ignore it. The umbrella reads a line somebody wrote in their
-own policy file, and the line changes exactly one number.
+decides on its own judgment to ignore it. The umbrella reads a line
+somebody wrote in their own policy file, and the line changes exactly one
+number. The vulnerabilities gate's `present-on-base: report` is the one
+other written decision of this kind (see "The exit code is composed"
+above): it is a set difference of two runs of the same tool, under a line
+in the BASE policy, not a judgment about any finding, and every finding it
+leaves unblocked is still printed with its label.
 
 Two consequences are worth stating because they look like bugs:
 
@@ -3315,6 +3361,14 @@ deferred" and "nothing had a contract to check" are three distinct states
 with three distinct verdict sentences, and a summary line naming no gates
 would be the exact confusion this family exists to prevent.
 
+`isFullyClean` keeps reading the raw child exit (it is one of the two
+allowlisted readers in "The exit code is composed"). A report-mode osv run
+whose findings are all present-on-base exits 0 but is never fully clean:
+its child exit is non-zero and it has findings, so the full report, the
+present-on-base line and the verdict clause are always printed. Pinned by
+tests/osv-output.test.ts ("never folds that run into the one-line clean
+summary").
+
 Pinned by tests/output-text.test.ts:277, 288 and 295 (one line, none of
 the per-gate detail, and how to see the rest), 299 (`--verbose` prints
 the full report anyway), 416 (an unenforced gate that blocked forces the
@@ -3416,6 +3470,17 @@ ahead of it) and 879 (that stderr is capped too).
 
 No invented version. A gate whose version could not be read gets no
 `version` field rather than a placeholder (src/output-sarif.ts:459-462).
+
+`baselineState` is set only on osv results from a compared pull-request
+run, `new` for introduced and `unchanged` for present-on-base, and never on
+a run with no base comparison, where the umbrella has no baseline to
+support it. A comparison that was unavailable for a lockfile yields `new`
+for its results, matching the introduced label. It is read off the
+finding's own `details.baseline`, which only the comparison sets
+(`toResult`, src/output-sarif.ts). Pinned by tests/osv-output.test.ts
+("marks SARIF results new and unchanged, and carries the comparison on the
+run") and tests/osv-output.test.ts ("sets no baselineState and no
+comparison details in SARIF").
 
 `%SRCROOT%` is attached only to a path genuinely under the source root
 (`placeArtifact`, src/output-sarif.ts:170-211). An absolute path is
@@ -3576,9 +3641,13 @@ own ladder and then CHECKED against that count
 When the two disagree, every flag drops to false and a diagnostic says
 why. The umbrella reporting "blocking" about a finding the tool that
 blocks commits disagrees with is the failure the rule exists to prevent.
-Nothing about the composed exit code depends on this field either way;
-that comes from the child's own exit code, which is the only number the
-gate actually decided.
+For every gate but one, nothing about the composed exit code depends on
+this field; it comes from the child's own exit code. The exception is the
+vulnerabilities gate on a compared pull-request run under
+`present-on-base: report`, where `gateExitBlocks` reads the present-on-base
+labels, conditions (a) to (f) in the osv design, and a non-zero exit with
+every parsed finding present-on-base and no licence or deprecation output
+does not block.
 
 `run.blocking_matches` is the COUNT of findings at or above the threshold,
 not the threshold. The threshold is `run.fail_on` for the secret gate
@@ -4124,7 +4193,8 @@ section still allowed to name the setting it replaced.
 
 Added in 0.5.0 (spec docs/superpowers/specs/2026-09-26-one-required-check-program-design.md,
 section 3 decisions 2 to 4). Every claim below was checked against gitleaks
-8.30.1 and osv-scanner 2.6.0 running for real; the observations are in
+8.30.1 and osv-scanner 2.6.0 running for real, and the osv coverage and base
+comparison claims against osv-scanner 2.4.0; the observations are in
 tests/fixtures/README.md.
 
 CONDUCTOR DOWNLOADS NO THIRD-PARTY BINARY. The external gates are resolved
@@ -4213,9 +4283,34 @@ beside it in tests/gate-runner.test.ts; checked against the real binary
 (tests/fixtures/README.md).
 
 OSV-SCANNER IS HANDED TRACKED LOCKFILES, NEVER A DIRECTORY. The runner
-lists tracked files with `git ls-files` and passes each whose base name is
-in `OSV_LOCKFILE_NAMES` (src/products.ts) with `--lockfile`, skipping
-anything under `node_modules` (src/gate-runner.ts:1108-1170). osv-scanner's
+lists tracked files with `git ls-files` and passes each whose base name
+`osvLockfileKind` accepts (src/products.ts) with `--lockfile`, skipping
+anything under `node_modules` (`selectOsvInputs`, src/osv-coverage.ts).
+Since the osv design (docs/superpowers/specs, 2026-10-11) the exact names
+are the npm family plus go.mod, poetry.lock, Pipfile.lock, uv.lock,
+pdm.lock, Cargo.lock, Gemfile.lock, composer.lock, gradle.lockfile and
+packages.lock.json, each handed as a bare path, and go.sum is never handed
+over (osv-scanner 2.4.0 exits 127 on it; it reads go.mod for Go). pip
+requirements files (requirements.txt, requirements-dev.txt and its `_` and
+`.` spellings, dev-requirements.txt) are handed only when they pass the PIN
+CHECK (`checkRequirementsPins`, src/requirements-pin.ts): every
+requirement, in the file and in every file it includes with `-r` (followed
+relative to the including file, at most 8 deep, each file once, a cycle
+fine), is pinned with `==`; an include that is absent, untracked, not a
+regular file, absolute, outside the repository or a URL leaves the top file
+out. A variant is handed in the parse-as form `requirements.txt:<path>`,
+requirements.txt itself bare. An invocation carrying a requirements file
+gets `--no-resolve`, on the base run exactly when on the head run, and a
+policy `no-resolve` is dropped from it with `conductor/option-overridden`.
+A requirements file left out is named in `conductor/requirements-not-scanned`
+with the line that stopped it and counted in the `not-scanned` run detail;
+the pin check SELECTS and raises no finding of its own. On a pull request
+it is a RATCHET: a file whose base copy and base include closure pass is
+handed over whatever its head copy says, with the head's unpinned lines in
+`conductor/requirements-not-pinned`, so adding one `foo>=1` line cannot take
+a pinned file out of the scan. Pinned by tests/requirements-pin.test.ts,
+tests/products.test.ts ("matches every osv lockfile basename and the three
+requirements shapes, and nothing else") and tests/osv-coverage.test.ts. osv-scanner's
 own walk skips `.gitignore`d files even when they are tracked, which was
 measured: a tracked, ignored `package-lock.json` gave exit 128 to the walk.
 On a pull request the list is the head's index, deliberately not a base-ref
@@ -4316,11 +4411,67 @@ as a proposal like the root one (`nestedConfigProposals`,
 src/external-config.ts), since it takes effect once merged and the run
 never sees it.
 
+THE VULNERABILITIES GATE COMPARES A PULL REQUEST WITH ITS BASE (osv
+design, item 1.3). On a decided trust base, when the head run exited
+blocked with at least one finding, osv-scanner also scans the BASE copies
+of the lockfiles carrying findings, and each finding is labelled
+`introduced` or `present-on-base` (`compareWithBase` and
+`labelAgainstBase`, src/osv-baseline.ts). Seven rules hold it together:
+
+- (1) Base copies come only through the one reader on the trust base:
+  a lockfile byte-exact through `readFileAtRefBytes` (src/trust-base.ts),
+  and a requirements file and its include closure through `baseReader`
+  (src/osv-coverage.ts) on that same reader. What is pinned is narrower
+  than the rule. For a lockfile, tests/osv-base-comparison.test.ts
+  ("copies the base blob byte for byte, never the HEAD commit, the index or
+  the working tree") pins that the copy is the base blob and not the HEAD
+  commit, the index or the working tree, invalid UTF-8 byte included. For a
+  requirements file, tests/osv-base-comparison.test.ts ("copies the base
+  requirements blob, so a pin the pull request adds is introduced, not
+  present-on-base") pins that the TOP file is the base blob, not any of
+  those three; no test pins where an INCLUDED file's base copy comes from,
+  or byte exactness for a requirements file. The copies go into the gate's
+  work directory outside the repository, removed on every path by the
+  `finally` that already removed it, and a work directory whose real path
+  is inside the repository makes the comparison unavailable; pinned by the
+  tests under tests/osv-base-comparison.test.ts ("the work directory (test
+  13)").
+- (2) The base run never makes the gate could-not-run, and every failure
+  (an unreadable base, an exit other than 0, 1 or 128, a timeout, output
+  that is not JSON, a command line that differs from the head's in anything
+  but the lockfile arguments) labels the lockfile's findings `introduced`
+  with `conductor/base-comparison-unavailable`. Pinned by
+  tests/osv-base-comparison.test.ts ("a base that cannot be compared (test
+  11)").
+- (3) The comparison key is advisory id, ecosystem, package, installed
+  version and repository-relative lockfile path, with no rename mapping: a
+  renamed or moved lockfile is all introduced. Pinned by
+  tests/osv-base-comparison.test.ts ("the rename attack (test 8)") and
+  tests/osv-base-comparison.test.ts ("the comparison key (tests 9 and 10)").
+- (4) The unchanged shortcut compares object ids with filters off, never
+  decoded text, over the whole include closure of a requirements file.
+  Pinned by tests/osv-base-comparison.test.ts ("the unchanged shortcut
+  (test 14)").
+- (5) `present-on-base` comes from the base policy, and an absent key means
+  `block`. Pinned by tests/policy.test.ts ("present-on-base on the
+  vulnerabilities gate") and tests/osv-base-comparison.test.ts ("ignores
+  present-on-base: report added by the pull request itself, and reports the
+  change as a proposal").
+- (6) The pin check is a ratchet on a pull request (above).
+- (7) Every "child exited non-zero" decision goes through `gateExitBlocks`
+  (see "The exit code is composed").
+
+On a pull-request run both osv-scanner invocations also get
+`--no-call-analysis=all` unless the base policy names `call-analysis` or
+`no-call-analysis`: the base copies carry no source, so call analysis could
+hide on the head what the base reports.
+
 Known open, each a limit rather than a bypass on a pull request:
 
-1. KNOWN-OPEN: only npm-family lockfile names are listed
-   (`OSV_LOCKFILE_NAMES`), so a repository whose only lockfile is another
-   ecosystem's gets nothing-to-scan from this gate.
+1. KNOWN-OPEN: unpinned requirements files are named, not scanned; go.sum
+   is never handed over (go.mod is read for Go); a `.txt` under a
+   `requirements/` directory whose own base name does not match is not
+   matched.
 2. KNOWN-OPEN: lockfiles inside git submodules are never listed, because
    `git ls-files` does not descend into a submodule; a submodule's
    dependencies are not scanned by this gate.
@@ -4338,6 +4489,11 @@ Known open, each a limit rather than a bypass on a pull request:
    symbolic link, or which writes the extend as an inline table or a quoted
    key, fails closed on every pull request (`preparation-failed`, or a
    missing file for gitleaks) until it is rewritten as a plain relative path.
+7. KNOWN-OPEN: a renamed or moved lockfile compares as all introduced; a
+   deleted one is not scanned on either side, now with the note-only
+   `conductor/lockfile-no-longer-scanned`; and a second dependent of a
+   version already in the same lockfile (same package, version and path)
+   compares as present-on-base.
 
 ## The repository root comes from --project or the cwd, and is passed explicitly everywhere
 

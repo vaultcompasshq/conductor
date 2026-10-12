@@ -42,18 +42,23 @@ function isManifest(file: string): boolean {
  * Tracked manifest-like files that were not handed to `product`, sorted, as
  * one sentence fragment, or null when there are none.
  *
- * `readNames` are the basenames the gate is handed, so a file it does read is
- * never listed. Vendored and testdata directories are skipped like
- * node_modules: they are not this repository's own manifests.
+ * `handed` are the repository-relative paths the gate was actually handed,
+ * so a file it does read is never listed. By path rather than by base name,
+ * because the vulnerabilities gate hands a requirements file only when it
+ * passes the pin check (src/osv-coverage.ts): an unpinned requirements.txt
+ * is not read even when another requirements.txt is, and is listed. go.mod
+ * and a pinned requirements file are handed, so they leave this list.
+ * Vendored and testdata directories are skipped like node_modules: they are
+ * not this repository's own manifests.
  */
 export function unreadManifestsNote(
   tracked: readonly string[],
-  readNames: ReadonlySet<string>,
+  handed: ReadonlySet<string>,
   product: string
 ): string | null {
   const unread = tracked
     .filter((file) => !file.split('/').some((segment) => SKIPPED_DIRS.has(segment)))
-    .filter((file) => !readNames.has(file.slice(file.lastIndexOf('/') + 1)))
+    .filter((file) => !handed.has(file))
     .filter(isManifest)
     .sort();
   if (unread.length === 0) {

@@ -54,6 +54,10 @@
           "type": "boolean",
           "default": true
         },
+        "present-on-base": {
+          "description": "Only on the vulnerabilities gate. On a pull-request run osv-scanner also scans the base branch copies of the lockfiles that carry findings, and labels each finding introduced or present-on-base. block (the default when the key is absent) blocks on every finding; report reports present-on-base findings without blocking and blocks only on introduced ones. Read from the base branch policy on a pull request, so a pull request cannot set it for itself. Has no effect on a run without a base, where every finding blocks.",
+          "enum": ["block", "report"]
+        },
         "stage": {
           "description": "When this gate runs. Stages are cumulative in the order commit, push, ci: a gate runs at its own stage and at every later one, so a run at ci runs everything enabled. Defaults to commit for dependencies and secrets, and to ci for intent, secrets-history and vulnerabilities: the intent gate carries per-task ceremony, and a history scan or a registry lookup is pull-request work. A run with no --stage runs every enabled gate whatever its stage.",
           "enum": ["commit", "push", "ci"]

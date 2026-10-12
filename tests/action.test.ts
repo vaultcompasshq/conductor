@@ -2174,6 +2174,35 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(gatesScript.indexOf('text-report=%s')).toBeLessThan(gatesScript.indexOf('status=0\n'));
   });
 
+  // osv design, section 4.4: a pass with present-on-base advisories reported
+  // and not blocking must not read as spotless on the job summary.
+  it('copies a present-on-base line 3 to the step summary, and nothing else from line 3', () => {
+    const run = runGatesForVerdict({
+      body: 'conductor 9.9.9\nverdict-token: pass\npresent-on-base: 14 reported, not blocking\nrest\n',
+      exit: 0,
+    });
+    expect(run.status).toBe(0);
+    expect(outputLines(run)).toContain('verdict=pass');
+    expect(run.summary).toBe('conductor verdict: pass\n\npresent-on-base: 14 reported, not blocking\n\n');
+
+    for (const line3 of [
+      'present-on-base: 14 reported, not blocking ::error::x',
+      'present-on-base: x reported, not blocking',
+      ' present-on-base: 1 reported, not blocking',
+      'BLOCKING present-on-base: 1 reported, not blocking',
+      'present-on-base: 1 reported, not blocking\r::warning::y',
+    ]) {
+      const other = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: pass\n${line3}\n`, exit: 0 });
+      expect([line3, other.summary]).toEqual([line3, 'conductor verdict: pass\n\n']);
+    }
+    const blocked = runGatesForVerdict({
+      body: 'conductor 9.9.9\nverdict-token: blocked (1)\npresent-on-base: 2 reported, not blocking\n',
+      exit: 1,
+    });
+    expect(blocked.status).toBe(1);
+    expect(blocked.summary).toBe('conductor verdict: blocked (1)\n\npresent-on-base: 2 reported, not blocking\n\n');
+  });
+
   describe('against an installed conductor that predates --text-report', () => {
     it('never passes the flag, marks the fallback, and leaves conductor\'s own exit status alone', () => {
       for (const exit of [0, 1, 2]) {

@@ -1116,6 +1116,7 @@ export function normalizeOsvScanner(
   const top = needRecord(raw, product, 'the output');
   const results = needArray(top.results, product, 'results');
   const findings: Finding[] = [];
+  const otherVerdicts: string[] = [];
   for (const [ri, rawResult] of results.entries()) {
     const resultWhere = `results[${ri}]`;
     const result = needRecord(rawResult, product, resultWhere);
@@ -1132,6 +1133,7 @@ export function normalizeOsvScanner(
       const name = needString(pkg.name, product, `${packageWhere}.package.name`);
       const installed = optionalString(pkg.version, product, `${packageWhere}.package.version`) ?? '';
       const ecosystem = optionalString(pkg.ecosystem, product, `${packageWhere}.package.ecosystem`);
+      otherVerdicts.push(...osvOtherVerdicts(entry, pkg, `${name}@${installed}`));
       const groups = (
         entry.groups === undefined ? [] : needArray(entry.groups, product, `${packageWhere}.groups`)
       ).filter(isRecord);
@@ -1190,7 +1192,60 @@ export function normalizeOsvScanner(
       },
     },
     diagnostics: [],
+    otherVerdicts,
   };
+}
+
+/**
+ * The package-level keys of an osv-scanner result this normalizer knows:
+ * the package itself, its advisories, their groups, and the licences it was
+ * found to carry. `license_violations` is deliberately NOT here: it is a
+ * verdict (osv-scanner exits 1 for it, measured on 2.4.0 with --licenses).
+ */
+const OSV_KNOWN_PACKAGE_KEYS: ReadonlySet<string> = new Set(['package', 'vulnerabilities', 'groups', 'licenses']);
+
+function isEmptyValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === false || value === '') {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  return isRecord(value) && Object.keys(value).length === 0;
+}
+
+/**
+ * Every verdict on one package that is not an advisory, one line each.
+ *
+ * Two shapes, both measured on osv-scanner 2.4.0. `license_violations` beside
+ * `vulnerabilities` (--licenses), and `package.deprecated: true` INSIDE the
+ * package object (--experimental-flag-deprecated-packages; a deprecated
+ * package with no advisory exits 1 too). Beyond those, any other non-empty
+ * PACKAGE-level key this normalizer does not map counts the same, so a
+ * verdict field a later osv-scanner adds fails closed rather than open.
+ * Top-level keys (license_summary, experimental_config) and result-level ones
+ * (source) are summaries and settings, not verdicts on a package, and are
+ * not read.
+ *
+ * KNOWN GAP: inside the package object only `deprecated` is read. A future
+ * verdict field osv-scanner writes INSIDE `package` (a `yanked` flag, say)
+ * is not seen by the catch-all, which looks at package-level keys only.
+ */
+function osvOtherVerdicts(
+  entry: Record<string, unknown>,
+  pkg: Record<string, unknown>,
+  label: string
+): string[] {
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(entry)) {
+    if (!OSV_KNOWN_PACKAGE_KEYS.has(key) && !isEmptyValue(value)) {
+      out.push(`${key} (${label})`);
+    }
+  }
+  if (!isEmptyValue(pkg.deprecated)) {
+    out.push(`deprecated (${label})`);
+  }
+  return out;
 }
 
 // -- the umbrella's own findings ------------------------------------------

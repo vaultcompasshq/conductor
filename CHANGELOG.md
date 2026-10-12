@@ -14,14 +14,22 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+**A minor release.** Ecosystem coverage for the vulnerabilities gate and its
+comparison with the base branch ship together: coverage alone would turn a
+Python or Go backlog from a false "nothing to scan" into a red on every pull
+request, and the comparison is what lets those repositories enforce on new
+advisories from their first pull request.
+
 ### Changed
 
 - **The vulnerabilities gate no longer says "no tracked lockfile; treated
   as clean".** With nothing to scan it now says that nothing was scanned and
   that the verdict is clean because there was nothing to read, and names the
   tracked manifests that were not handed to osv-scanner (`pyproject.toml`,
-  `requirements*.txt`, `go.mod`, `go.sum`, `Dockerfile`, compose files,
-  workflows and similar; vendor and testdata directories are skipped). It
+  `go.sum`, a requirements file the pin check left out, `Dockerfile`,
+  compose files, workflows and similar; vendor and testdata directories are
+  skipped). A `go.mod` or a pinned requirements file is handed over (see
+  Added) and is never on that list. It
   makes no claim about what other gates read. The verdict and exit code are
   unchanged.
 - **The exit 0 verdict no longer says "every enabled gate ran and none
@@ -45,6 +53,63 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 - An "Adoption ramp" section in the README: advisory first, each gate's own
   baseline or config file, a `.gitleaksignore` recipe for an old history
   finding, and the switch to enforce.
+### Added
+
+- **What can newly turn a run red.** The vulnerabilities gate now hands
+  osv-scanner go.mod, poetry.lock, Pipfile.lock, uv.lock, pdm.lock,
+  Cargo.lock, Gemfile.lock, composer.lock, gradle.lockfile,
+  packages.lock.json and requirements files whose every requirement is
+  pinned with `==`, as well as the npm-family lockfiles it read before. A
+  Go, Python, Rust, Ruby, PHP, Java or .NET repository that used to get
+  "nothing to scan" now gets real results, and a known advisory there
+  blocks. A requirements file with an unpinned requirement is not scanned
+  and is named in the report with the line that stopped it. Requirements
+  files are scanned with osv-scanner's `--no-resolve`: direct requirements
+  only, as written, with no lookup of transitive packages, because without a
+  lockfile any transitive version would be the registry's latest rather than
+  the one installed. The report says so per file. An `options.no-resolve`
+  key in the policy is not passed on runs that scan a requirements file; a
+  note says so. Lockfiles are scanned as before.
+- **The base comparison.** On a pull-request run whose vulnerabilities scan
+  blocked, osv-scanner also scans the base branch copies of the lockfiles
+  that carry findings, and labels each finding `introduced` or
+  `present-on-base` in the text report, in SARIF (`baselineState` `new` or
+  `unchanged`) and on a base comparison line. A new gate-level policy key,
+  `present-on-base: block | report` on the vulnerabilities gate only,
+  decides whether present-on-base findings block. `conductor init` writes
+  `report`. On a pull-request run osv-scanner is also handed
+  `--no-call-analysis=all` on both runs unless the policy names a
+  call-analysis key.
+
+### The consumer cost
+
+A policy written before this release has no `present-on-base` key, so it
+blocks on every known vulnerability, including ones already on the base
+branch: no policy is loosened by the upgrade. A repository with a backlog in
+a newly scanned ecosystem sees every pull request blocked until it fixes the
+backlog, ignores advisories in osv-scanner.toml on the base branch, or adds
+`present-on-base: report` under the vulnerabilities gate on the base branch,
+after which only advisories a pull request introduces block. Move the action
+to this release first: older conductor versions reject the key and exit 2.
+A renamed or moved lockfile, and a partial upgrade still inside an
+advisory's range, count as introduced. So does every advisory in a
+requirements file that a pull request pins for the first time: under
+`report`, that good-hygiene pull request is blocked once on the file's whole
+backlog. Land the pin with the action in advisory mode, or ignore the
+specific advisories in osv-scanner.toml on the base branch first. Deleting a
+requirements file, or renaming it to a name the gate does not match, drops
+it with a note rather than a block. A pull request that changes a lockfile
+may run osv-scanner twice. When `present-on-base: report` leaves known
+advisories unblocked, the report and the job summary both say
+`present-on-base: N reported, not blocking`.
+
+On pull requests osv-scanner's call analysis is off (`--no-call-analysis=all`
+on both runs, unless the policy names `call-analysis` or `no-call-analysis`).
+For a Go repository, advisories osv-scanner would otherwise hide as
+unreachable now appear, and a local run (call analysis on, when a Go
+toolchain is present) can pass while the same tree's pull-request run
+blocks. Existing npm adopters are unaffected: npm has no call analysis, and
+Go was not scanned before.
 
 ## [0.8.2] - 2026-10-07
 

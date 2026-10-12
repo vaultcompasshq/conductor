@@ -58,18 +58,43 @@ export function useGitProgram(program: string): void {
 export function runGit(
   cwd: string,
   args: readonly string[],
-  options: { maxBuffer?: number } = {}
+  options: { maxBuffer?: number; input?: string } = {}
 ): GitResult {
   const child = spawnSync(gitProgram, [...args], {
     cwd,
     encoding: 'utf8',
     maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024,
     env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    ...(options.input === undefined ? {} : { input: options.input }),
   });
   return {
     status: child.status,
     stdout: typeof child.stdout === 'string' ? child.stdout : '',
     stderr: typeof child.stderr === 'string' ? child.stderr : '',
+    error: child.error,
+  };
+}
+
+/**
+ * Runs one git command in `cwd` and keeps stdout as BYTES. For a blob that is
+ * copied out byte for byte (the osv gate's base copies): decoding it as UTF-8
+ * would rewrite a file with invalid bytes before anything read it. Same
+ * program, same environment and same never-throws contract as runGit.
+ */
+export function runGitBytes(
+  cwd: string,
+  args: readonly string[],
+  options: { maxBuffer?: number } = {}
+): { status: number | null; stdout: Buffer; stderr: string; error: Error | undefined } {
+  const child = spawnSync(gitProgram, [...args], {
+    cwd,
+    maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+  });
+  return {
+    status: child.status,
+    stdout: Buffer.isBuffer(child.stdout) ? child.stdout : Buffer.alloc(0),
+    stderr: Buffer.isBuffer(child.stderr) ? child.stderr.toString('utf8') : '',
     error: child.error,
   };
 }

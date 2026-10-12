@@ -202,7 +202,18 @@ export interface GatePolicy {
   args?: string[];
   /** Handed to the gate unchanged. */
   options: Record<string, OptionValue>;
+  /**
+   * The vulnerabilities gate only, and always set there: whether a finding
+   * that is also on the base branch blocks (`block`, the default when the key
+   * is absent) or is reported without blocking (`report`). Gate-level beside
+   * `enforce`, never under `options`, which are a pure passthrough. Absent on
+   * every other gate; a reader of an absent value treats it as `block`.
+   */
+  presentOnBase?: PresentOnBase;
 }
+
+/** The two values of the vulnerabilities gate's present-on-base key. */
+export type PresentOnBase = 'block' | 'report';
 
 export interface Policy {
   version: 1;
@@ -428,6 +439,18 @@ export function parsePolicy(text: string, source: string): Policy {
       }
     }
 
+    // Only the vulnerabilities gate has a base comparison to apply the key to.
+    // On another gate it would read as a promise nothing keeps, so it is
+    // refused rather than ignored.
+    const presentOnBase = entry['present-on-base'] as PresentOnBase | undefined;
+    if (presentOnBase !== undefined && role !== 'vulnerabilities') {
+      throw new PolicyError(
+        `${source}: gates.${role}.present-on-base is set, but only the vulnerabilities gate ` +
+          '(osv-scanner) compares a pull request with its base, so the key has nothing to decide ' +
+          `on the ${role} gate. Remove it there.`
+      );
+    }
+
     const command = entry.command as string | undefined;
     if (command !== undefined && !path.isAbsolute(command)) {
       throw new PolicyError(
@@ -454,6 +477,9 @@ export function parsePolicy(text: string, source: string): Policy {
       ...(command === undefined ? {} : { command }),
       ...(entry.args === undefined ? {} : { args: entry.args as string[] }),
       options,
+      // Absent means block: a policy written before the key existed blocks
+      // on every known vulnerability, so no policy is loosened by an upgrade.
+      ...(role === 'vulnerabilities' ? { presentOnBase: presentOnBase ?? 'block' } : {}),
     };
   }
 

@@ -1,7 +1,7 @@
 // One run across every enabled gate.
 
 import { type Finding, compareFindings } from './envelope.js';
-import { EXIT_COULD_NOT_RUN, composeExitCode } from './exit-codes.js';
+import { EXIT_COULD_NOT_RUN, composeExitCode, gateExitBlocks } from './exit-codes.js';
 import {
   type GateOutcome,
   gateProgramRefused,
@@ -671,7 +671,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
   const exitCode = composeExitCode(
     outcomes.map((outcome) => ({
       couldNotRun: outcome.couldNotRun,
-      exitCode: outcome.exitCode,
+      exitBlocks: gateExitBlocks(outcome),
       hasBlockingFinding: outcome.findings.some((finding) => finding.blocking),
       enforce: outcome.enforce,
     }))

@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { PRODUCTS } from '../src/policy.js';
-import { NPM_VERSION_PATTERN, profileFor } from '../src/products.js';
+import { NPM_VERSION_PATTERN, osvLockfileKind, profileFor } from '../src/products.js';
 
 describe('product profiles', () => {
   it('has a profile for every product', () => {
@@ -56,8 +56,8 @@ describe('product profiles', () => {
     expect(o.neutralConfig).toBe('');
     expect(o.remedy(false)).toMatch(/install osv-scanner/i);
     expect(o.stderrError).toBeNull();
-    expect(o.lockfileNames).toEqual(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock']);
-    expect(g.lockfileNames).toBeNull();
+    expect(o.lockfileMatcher).toBe(osvLockfileKind);
+    expect(g.lockfileMatcher).toBeNull();
     expect(g.followsConfigExtend).toBe(true);
     expect(o.followsConfigExtend).toBe(false);
   });
@@ -69,6 +69,58 @@ describe('product profiles', () => {
     expect(pattern.test('6:36PM WRN leaks found: 1')).toBe(false);
     for (const product of ['dep-guard', 'vault-guard', 'intent-guard'] as const) {
       expect(profileFor(product).stderrError).toBeNull();
+    }
+  });
+
+  // osv design section 6, test 1. Kills: dropping a name from the exact set;
+  // adding go.sum (osv-scanner 2.4.0 exits 127 on it, so every Go pull request
+  // would be could-not-run).
+  it('matches every osv lockfile basename and the three requirements shapes, and nothing else', () => {
+    const bare = [
+      'package-lock.json',
+      'npm-shrinkwrap.json',
+      'pnpm-lock.yaml',
+      'yarn.lock',
+      'bun.lock',
+      'go.mod',
+      'poetry.lock',
+      'Pipfile.lock',
+      'uv.lock',
+      'pdm.lock',
+      'Cargo.lock',
+      'Gemfile.lock',
+      'composer.lock',
+      'gradle.lockfile',
+      'packages.lock.json',
+    ];
+    for (const name of bare) {
+      expect([name, osvLockfileKind(name)]).toEqual([name, 'bare']);
+    }
+    const requirements = [
+      'requirements.txt',
+      'requirements-dev.txt',
+      'requirements_test.txt',
+      'requirements.prod.txt',
+      'dev-requirements.txt',
+      'test_requirements.txt',
+    ];
+    for (const name of requirements) {
+      expect([name, osvLockfileKind(name)]).toEqual([name, 'requirements']);
+    }
+    const rejected = [
+      'go.sum',
+      'requirements.in',
+      'pyproject.toml',
+      'constraints.txt',
+      'node_modules',
+      'requirements-.txt',
+      'requirements.txt.bak',
+      'base.txt',
+      'package.json',
+      'Pipfile',
+    ];
+    for (const name of rejected) {
+      expect([name, osvLockfileKind(name)]).toEqual([name, null]);
     }
   });
 

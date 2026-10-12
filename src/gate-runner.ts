@@ -38,14 +38,28 @@ import {
   normalizeVaultGuard,
 } from './normalize.js';
 import type { ContractSource, IntentPreparation } from './intent-prepare.js';
-import type { GatePolicy, GateRole, GateStage, Product } from './policy.js';
+import type { GatePolicy, GateRole, GateStage, OptionValue, Product } from './policy.js';
 import { renderOptionFlags } from './policy.js';
+import {
+  NO_RESOLVE_OVERRIDDEN,
+  noLongerScanned,
+  nothingScannableMessage,
+  notScannedDetail,
+  selectOsvInputs,
+  type OsvSelection,
+} from './osv-coverage.js';
+import {
+  compareWithBase,
+  comparisonFailed,
+  type BaseComparison,
+  type CompareArgs,
+} from './osv-baseline.js';
 import {
   ExternalConfigError,
   materializeExternalConfig,
   nestedConfigProposals,
 } from './external-config.js';
-import { profileFor } from './products.js';
+import { osvLockfileKind, profileFor } from './products.js';
 import { unreadManifestsNote } from './unread-manifests.js';
 import type { ProductProfile } from './products.js';
 import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
@@ -526,6 +540,15 @@ export interface GateOutcome {
    * trust-base handling and the exit code are all settled without it.
    */
   versionSkew?: { expected: string; found: string; path: string };
+  /**
+   * The vulnerabilities gate only, and only when a base comparison ran (a
+   * pull-request run whose head scan blocked with at least one finding): the
+   * ref, the base policy's present-on-base value, the counts, the lockfiles
+   * the comparison was unavailable for, and any non-advisory verdict in the
+   * head output. Carried here, like `enforce`, so a report and the exit
+   * decision (gateExitBlocks) never need the policy file.
+   */
+  baseComparison?: BaseComparison;
 }
 
 export interface RunGateOptions {
@@ -691,8 +714,19 @@ export interface ExternalArgs {
    * .gitleaksignore at its root for gitleaks to load on its own.
    */
   scanRoot?: string;
-  /** The tracked lockfiles osv-scanner is handed, repository-relative. */
+  /**
+   * The files osv-scanner is handed: repository-relative on the head run,
+   * absolute copies under the work directory on the base run.
+   */
   lockfiles?: readonly string[];
+  /**
+   * Whether this invocation gets --no-resolve. Decided once, from the HEAD
+   * run's list (any requirements file), and handed to the base run as is, so
+   * the two command lines cannot differ in resolution mode because the base
+   * run scans a different subset (osv design, section 2.4). Absent means
+   * "decide from `lockfiles`".
+   */
+  noResolve?: boolean;
 }
 
 /**
@@ -856,15 +890,57 @@ export function gateArgs(
     case 'osv-scanner': {
       // JSON goes to stdout and everything else to stderr, so no report
       // file. No directory walk: each tracked lockfile is named with
-      // --lockfile (the runner lists them, src/products.ts
-      // OSV_LOCKFILE_NAMES), because osv-scanner's own walk skips anything
-      // .gitignore matches, tracked or not. With none there is nothing to
-      // hand over, and the runner reports that without spawning the tool.
+      // --lockfile (the runner lists them, src/osv-coverage.ts), because
+      // osv-scanner's own walk skips anything .gitignore matches, tracked or
+      // not. With none there is nothing to hand over, and the runner reports
+      // that without spawning the tool.
       if (external.lockfiles === undefined || external.lockfiles.length === 0) {
         throw new Error('osv-scanner needs at least one lockfile: with none, nothing is spawned');
       }
-      const lockfiles = external.lockfiles.flatMap((file) => ['--lockfile', file]);
-      return ['--format', 'json', ...config, ...lockfiles, ...passthrough];
+      const isRequirements = (file: string): boolean =>
+        osvLockfileKind(path.basename(file)) === 'requirements';
+      // A requirements variant (requirements-dev.txt) is handed in the
+      // parse-as form, because 2.4.0 does not recognise the bare name;
+      // requirements.txt itself and every exact lockfile name go bare
+      // (npm-shrinkwrap.json is not even a valid parse-as type in 2.4.0).
+      // The parse-as form splits on the first colon only, so a variant's own
+      // path is safe; a bare path with a colon is split and exits 127, which
+      // is a could-not-run, never a silent skip.
+      const lockfiles = external.lockfiles.flatMap((file) => [
+        '--lockfile',
+        isRequirements(file) && path.basename(file) !== 'requirements.txt' ? `requirements.txt:${file}` : file,
+      ]);
+      // --no-resolve on every invocation that carries a requirements file,
+      // and on the base run exactly when the head run had it (section 2.4):
+      // without a lockfile, a resolved transitive version is the registry's
+      // latest, not the installed one. Not overridable: a policy no-resolve
+      // is dropped from such an invocation (the runner says so), because
+      // no-resolve: false would render --no-no-resolve, which osv rejects.
+      const noResolve = external.noResolve ?? external.lockfiles.some(isRequirements);
+      const options: Record<string, OptionValue> = { ...gate.options };
+      if (noResolve) {
+        delete options['no-resolve'];
+      }
+      // On a pull-request run, call analysis is off for every language
+      // unless the base policy says otherwise (section 3.3, open question 6):
+      // the base copies carry no source, so call analysis could hide on the
+      // head what the base run reports, and the comparison would then not be
+      // a dependency fact. Off on both runs makes the head only gain
+      // findings. A policy that names either key keeps its own value, on
+      // both runs, through the passthrough.
+      const callAnalysis =
+        trustBase !== undefined && !('call-analysis' in options) && !('no-call-analysis' in options)
+          ? ['--no-call-analysis=all']
+          : [];
+      return [
+        '--format',
+        'json',
+        ...config,
+        ...lockfiles,
+        ...(noResolve ? ['--no-resolve'] : []),
+        ...callAnalysis,
+        ...renderOptionFlags(options),
+      ];
     }
   }
 }
@@ -1417,8 +1493,13 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // removing or renaming one is visible in the diff, so there is nothing for
   // a base-ref read to protect. A listing that fails is not "no lockfiles".
   const nestedProposals: string[] = [];
-  if (profile.lockfileNames !== null) {
-    const names = new Set(profile.lockfileNames);
+  // What the osv gate's selection said beside the list it handed over: the
+  // umbrella's own diagnostics (a requirements file left out, or scanned
+  // under the ratchet, a passthrough option dropped) and the per-file run
+  // notes. Carried onto every outcome from here on that reports a scan.
+  let selection: OsvSelection | null = null;
+  const selectionDiagnostics: Diagnostic[] = [];
+  if (profile.lockfileMatcher !== null) {
     const listing = runGit(options.repoRoot, ['ls-files', '-z'], { maxBuffer: 64 * 1024 * 1024 });
     if (listing.error !== undefined || listing.status !== 0) {
       const detail =
@@ -1459,17 +1540,26 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
         };
       }
     }
-    external.lockfiles = tracked
-      // Never a vendored copy under node_modules: that is a dependency's own
-      // lockfile, not a statement about what this repository resolves.
-      .filter((file) => !file.split('/').includes('node_modules'))
-      .filter((file) => names.has(path.posix.basename(file)))
-      .sort();
+    // The pin check reads the head copies on disk and, on a pull request, the
+    // base copies through the one reader; both are selection, not verdicts.
+    selection = selectOsvInputs({
+      repoRoot: options.repoRoot,
+      tracked,
+      ...(decidedRef === undefined ? {} : { decidedRef }),
+    });
+    external.lockfiles = selection.handed;
+    selectionDiagnostics.push(...selection.diagnostics);
+    if (decidedRef !== undefined) {
+      selectionDiagnostics.push(...noLongerScanned(options.repoRoot, decidedRef, new Set(tracked)));
+    }
     if (external.lockfiles.length === 0) {
       // Nothing to scan, reported the same way as osv-scanner's own 128 below,
       // without spawning it. The verdict is unchanged (clean); what changes is
-      // what is said: which tracked manifests were not handed to this scanner.
-      const unread = unreadManifestsNote(tracked, names, gate.product);
+      // what is said: which requirements files the pin check left out, and
+      // which tracked manifests were not handed to this scanner.
+      const unread = unreadManifestsNote(tracked, new Set(selection.handed), gate.product);
+      const cleanBecause =
+        'the verdict is clean because there was nothing to read, not because a scan found nothing.';
       return {
         ...base,
         productVersion: version,
@@ -1481,15 +1571,23 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
         findings: [],
         run: EMPTY_RUN,
         diagnostics: [
+          ...selectionDiagnostics,
           {
             code: 'conductor/nothing-to-scan',
             message:
-              `${gate.product} read no lockfile, so nothing was scanned; the verdict is clean ` +
-              `because there was nothing to read, not because a scan found nothing.` +
+              (selection.notScanned.length > 0
+                ? `${nothingScannableMessage(selection.notScanned)} T${cleanBecause.slice(1)}`
+                : `${gate.product} read no lockfile, so nothing was scanned; ${cleanBecause}`) +
               (unread === null ? '' : ` ${unread}`),
           },
         ],
       };
+    }
+    external.noResolve = external.lockfiles.some(
+      (file) => osvLockfileKind(path.posix.basename(file)) === 'requirements'
+    );
+    if (external.noResolve && 'no-resolve' in gate.options) {
+      selectionDiagnostics.push({ code: 'conductor/option-overridden', message: NO_RESOLVE_OVERRIDDEN });
     }
   }
 
@@ -1652,6 +1750,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       findings: [],
       run: EMPTY_RUN,
       diagnostics: [
+        ...selectionDiagnostics,
         // When lockfiles WERE handed over, this exit means they parsed to no
         // packages at all, which is different news from "no lockfile": a
         // lockfile the tool could not read anything from deserves a look.
@@ -1787,13 +1886,80 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       online: argv.includes('--online'),
       lockfiles: external.lockfiles ?? [],
     });
+    // The base comparison (osv design, section 3.1): only on a decided trust
+    // base, only when the head run exited blocked and produced a finding. A
+    // clean head, nothing to scan, empty lockfiles and every could-not-run
+    // returned before this, so none of them costs anything new. Its own
+    // try: a comparison that throws labels every finding introduced and is
+    // never a could-not-run, unlike the normalizer failure the catch below
+    // is for.
+    let findings = normalized.findings;
+    let baseComparison: BaseComparison | undefined;
+    const comparisonDiagnostics: Diagnostic[] = [];
+    if (
+      gate.product === 'osv-scanner' &&
+      decidedRef !== undefined &&
+      workDir !== null &&
+      blocked &&
+      findings.length > 0
+    ) {
+      const compareArgs: CompareArgs = {
+        repoRoot: options.repoRoot,
+        ref: decidedRef,
+        workDir,
+        policy: gate.presentOnBase ?? 'block',
+        version,
+        headFindings: findings,
+        headLockfiles: external.lockfiles ?? [],
+        closures: selection?.closures ?? new Map(),
+        otherVerdicts: normalized.otherVerdicts ?? [],
+        headArgv: argv,
+        baseArgv: (copies) => [
+          ...binary.argvPrefix,
+          ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: copies }),
+        ],
+        spawn: (baseArgv, cwd) => {
+          const baseChild = spawnSync(binary.command, [...baseArgv], {
+            cwd,
+            encoding: 'utf8',
+            timeout: timeoutMs,
+            maxBuffer: 64 * 1024 * 1024,
+          });
+          return { status: baseChild.status, stdout: baseChild.stdout ?? '', error: baseChild.error };
+        },
+        rootSpellings,
+      };
+      let compared;
+      try {
+        compared = compareWithBase(compareArgs);
+      } catch (err) {
+        compared = comparisonFailed(compareArgs, `the comparison failed (${messageOf(err)})`);
+      }
+      findings = compared.findings;
+      baseComparison = compared.comparison;
+      comparisonDiagnostics.push(...compared.diagnostics);
+    }
+    const run =
+      selection === null
+        ? normalized.run
+        : {
+            ...normalized.run,
+            diagnostics: [...normalized.run.diagnostics, ...selection.notes],
+            details: {
+              ...normalized.run.details,
+              ...(selection.notScanned.length === 0
+                ? {}
+                : { 'not-scanned': notScannedDetail(selection.notScanned) }),
+            },
+          };
     return {
       ...withRun,
       exitCode,
       couldNotRun: null,
-      findings: normalized.findings,
-      run: normalized.run,
-      diagnostics: normalized.diagnostics,
+      findings,
+      run,
+      diagnostics: [...normalized.diagnostics, ...selectionDiagnostics, ...comparisonDiagnostics],
+      ...(baseComparison === undefined ? {} : { baseComparison }),
       // The gate's own answer about the control inputs, folded onto the
       // decision the umbrella made before spawning it. A gate that was NOT
       // put into pull-request mode reports no proposals, and its trustBase

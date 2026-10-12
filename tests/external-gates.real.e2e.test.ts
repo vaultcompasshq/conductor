@@ -172,3 +172,92 @@ function run(repo: string, trustBase?: string) {
     expect(local.findings).toEqual([]);
   });
 });
+
+// osv-scanner, for real (osv design, test 20). Skipped when no osv-scanner is
+// available: set CONDUCTOR_OSV_SCANNER_BIN, or put one at
+// .local/bin/osv-scanner in this checkout (gitignored). These query the
+// osv.dev database over the network, which is why they are not in the
+// default suite's stubbed files. Observations are in tests/fixtures/README.md.
+const OSV = process.env.CONDUCTOR_OSV_SCANNER_BIN ?? path.join(CHECKOUT, '.local', 'bin', 'osv-scanner');
+const osvAvailable = existsSync(OSV);
+
+const osvGate: GatePolicy = {
+  role: 'vulnerabilities',
+  product: 'osv-scanner',
+  enabled: true,
+  stage: 'ci',
+  enforce: true,
+  excludedByCli: false,
+  options: {},
+};
+
+function runOsv(repo: string, trustBase?: string, presentOnBase?: 'block' | 'report') {
+  return runGate(
+    { ...osvGate, ...(presentOnBase === undefined ? {} : { presentOnBase }) },
+    {
+      repoRoot: repo,
+      staged: false,
+      pathValue: path.dirname(OSV),
+      tempRoot: tempDir(),
+      ...(trustBase === undefined ? {} : { trustBase }),
+    }
+  );
+}
+
+/** A package-lock.json (v3) resolving exactly these packages. */
+function packageLock(packages: Record<string, string>): string {
+  const entries: Record<string, unknown> = {
+    '': { name: 'fixture', version: '1.0.0', dependencies: packages },
+  };
+  for (const [name, version] of Object.entries(packages)) {
+    entries[`node_modules/${name}`] = {
+      version,
+      resolved: `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,
+    };
+  }
+  return `${JSON.stringify({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: entries }, null, 2)}\n`;
+}
+
+(osvAvailable ? describe : describe.skip)('osv-scanner, for real', () => {
+  it('reads go.mod and blocks on a known advisory, and never hands over go.sum', () => {
+    const repo = repoOnMain({
+      'go.mod': 'module example.invalid/m\n\ngo 1.20\n\nrequire golang.org/x/text v0.3.0\n',
+      'go.sum': 'golang.org/x/text v0.3.0 h1:g61tztE5qeGQ89tm6NTjjM9VPIm088od1l6aSorWRWg=\n',
+    });
+    const out = runOsv(repo);
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(1);
+    expect(out.argv).toContain('go.mod');
+    expect(out.argv.some((arg) => arg.includes('go.sum'))).toBe(false);
+    expect(out.findings.some((f) => f.subject.kind === 'package' && f.subject.name === 'golang.org/x/text')).toBe(true);
+  });
+
+  it('scans a pinned requirements-dev.txt through the parse-as form, and names an unpinned file', () => {
+    const repo = repoOnMain({ 'requirements-dev.txt': 'jinja2==2.4.1\n', 'requirements.txt': 'flask>=2.0\n' });
+    const out = runOsv(repo);
+    expect(out.couldNotRun).toBeNull();
+    expect(out.argv).toContain('requirements.txt:requirements-dev.txt');
+    expect(out.argv).toContain('--no-resolve');
+    expect(out.exitCode).toBe(1);
+    expect(
+      out.findings.every((f) => f.subject.kind === 'package' && f.subject.manifest === 'requirements-dev.txt')
+    ).toBe(true);
+    expect(out.findings.length).toBeGreaterThan(0);
+    expect(out.diagnostics.map((d) => d.code)).toContain('conductor/requirements-not-scanned');
+  });
+
+  it('labels a base advisory present-on-base and an added one introduced (test 7, for real)', () => {
+    const repo = repoOnMain({ 'package-lock.json': packageLock({ lodash: '4.17.20' }) });
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    commit(repo, { 'package-lock.json': packageLock({ lodash: '4.17.20', minimist: '1.2.0' }) }, 'add minimist');
+    const out = runOsv(repo, 'main', 'report');
+    expect(out.couldNotRun).toBeNull();
+    expect(out.baseComparison?.unavailable).toEqual([]);
+    const byName = (name: string) =>
+      out.findings.filter((f) => f.subject.kind === 'package' && f.subject.name === name);
+    expect(byName('lodash').length).toBeGreaterThan(0);
+    expect(byName('minimist').length).toBeGreaterThan(0);
+    expect(byName('lodash').every((f) => f.details.baseline === 'present-on-base' && !f.blocking)).toBe(true);
+    expect(byName('minimist').every((f) => f.details.baseline === 'introduced' && f.blocking)).toBe(true);
+  });
+});

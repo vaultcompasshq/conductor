@@ -66,11 +66,13 @@ export interface ProductProfile {
    */
   stderrError: RegExp | null;
   /**
-   * File names the tool is handed one by one, from the repository's tracked
-   * files, instead of being pointed at a directory to walk. Null for a tool
-   * that is not handed files.
+   * Which tracked files the tool is handed one by one, by base name, instead
+   * of being pointed at a directory to walk, and how: `bare` as the path
+   * itself, `requirements` as a pip requirements file that must first pass
+   * the pin check (src/requirements-pin.ts). Null for a tool that is not
+   * handed files.
    */
-  lockfileNames: readonly string[] | null;
+  lockfileMatcher: ((basename: string) => LockfileKind | null) | null;
   /**
    * The config can name another file (`[extend] path`) that the tool reads
    * relative to its working directory. On a pull request every such file is
@@ -95,18 +97,23 @@ export interface ProductProfile {
   readsHistory: boolean;
 }
 
+/** How a matched file is handed over: as its own path, or as a requirements file. */
+export type LockfileKind = 'bare' | 'requirements';
+
 /**
- * The lockfiles osv-scanner is handed, matched by base name at any depth
- * among the repository's TRACKED files (`git ls-files`).
+ * The lockfiles osv-scanner is handed as a bare path, matched by base name at
+ * any depth among the repository's TRACKED files (`git ls-files`).
  *
  * By name, not by walking the tree, for three reasons: osv-scanner's own walk
  * skips anything .gitignore matches, tracked or not, so a pull request could
  * hide a committed lockfile from it with one ignore line; the walk can reach
  * into node_modules; and an untracked lockfile is not part of what is being
- * judged. Only the npm family is listed, because that is the ecosystem this
- * family's own dependency gate knows (npm, pnpm, yarn, bun); osv-scanner
- * supports more, and a repository whose only lockfile is another ecosystem's
- * gets nothing-to-scan until a name is added here.
+ * judged.
+ *
+ * Every name here was handed to osv-scanner 2.4.0 with --lockfile and read
+ * (the 2026-10-11 osv design under docs/superpowers/specs, section 2.1). go.sum is deliberately absent: 2.4.0
+ * rejects it ("could not determine extractor", exit 127), which would make
+ * every Go pull request could-not-run, and go.mod is what it reads for Go.
  */
 export const OSV_LOCKFILE_NAMES: readonly string[] = [
   'package-lock.json',
@@ -114,7 +121,39 @@ export const OSV_LOCKFILE_NAMES: readonly string[] = [
   'pnpm-lock.yaml',
   'yarn.lock',
   'bun.lock',
+  'go.mod',
+  'poetry.lock',
+  'Pipfile.lock',
+  'uv.lock',
+  'pdm.lock',
+  'Cargo.lock',
+  'Gemfile.lock',
+  'composer.lock',
+  'gradle.lockfile',
+  'packages.lock.json',
 ];
+
+/**
+ * pip requirements files, by base name: requirements.txt itself,
+ * requirements-dev.txt and its _ and . spellings, and dev-requirements.txt.
+ * Not requirements.in (pip-tools input, unpinned by design), not constraints
+ * files, and not a file under a requirements/ directory whose own name does
+ * not match. A requirements file is handed over only when every requirement
+ * in it, and in every file it includes, is pinned with == (the pin check).
+ */
+const REQUIREMENTS_PATTERNS: readonly RegExp[] = [
+  /^requirements\.txt$/,
+  /^requirements[-_.][A-Za-z0-9._-]+\.txt$/,
+  /^[A-Za-z0-9._-]+[-_]requirements\.txt$/,
+];
+
+/** What osv-scanner is handed for a tracked file with this base name, or null. */
+export function osvLockfileKind(basename: string): LockfileKind | null {
+  if (OSV_LOCKFILE_NAMES.includes(basename)) {
+    return 'bare';
+  }
+  return REQUIREMENTS_PATTERNS.some((pattern) => pattern.test(basename)) ? 'requirements' : null;
+}
 
 /**
  * The npm gates print a bare version. No capture group on purpose: the runner
@@ -148,7 +187,7 @@ function managedProfile(product: Product): ProductProfile {
     ignoreFile: null,
     remedy: managedRemedy(product),
     stderrError: null,
-    lockfileNames: null,
+    lockfileMatcher: null,
     followsConfigExtend: false,
     readsHistory: false,
   };
@@ -188,7 +227,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     // gitleaks 8.30.1 swallows a git failure: it logs "<time> ERR [git]
     // fatal: ..." and exits 0 with an empty report (tests/fixtures/README.md).
     stderrError: /^\S+\s+ERR\s/,
-    lockfileNames: null,
+    lockfileMatcher: null,
     followsConfigExtend: true,
     // gitleaks reads git history (--log-opts), never the tree, which is
     // exactly what makes it the one gate an equal-tree pull request does not
@@ -216,7 +255,7 @@ const PROFILES: Record<Product, ProductProfile> = {
     // osv-scanner's exit codes separate an error (127) from a verdict, and
     // its stderr is progress chatter, so the exit is taken at its word.
     stderrError: null,
-    lockfileNames: OSV_LOCKFILE_NAMES,
+    lockfileMatcher: osvLockfileKind,
     followsConfigExtend: false,
     // osv-scanner reads the tracked lockfiles it is handed, which are the
     // tree being judged, not history.
