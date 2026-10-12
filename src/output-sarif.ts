@@ -119,6 +119,7 @@
 //    field were ever carried.
 
 import type { Finding, Severity } from './envelope.js';
+import { gateExitBlocks } from './exit-codes.js';
 import type { GateOutcome } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
 import { INTENT_WARNING } from './normalize.js';
@@ -356,6 +357,18 @@ function toResult(finding: Finding, fallbackUri: string): Record<string, unknown
 
   if (finding.fingerprint !== null) {
     entry.partialFingerprints = { [fingerprintKey(finding.fingerprint.scope)]: finding.fingerprint.value };
+  }
+
+  // SARIF's own baselineState, only where the umbrella has a baseline to
+  // support it: an osv result from a compared pull-request run, `new` for
+  // introduced (including every finding in a lockfile the comparison was
+  // unavailable for) and `unchanged` for present-on-base. A run with no
+  // comparison sets no label, and so no state.
+  const baseline = finding.details.baseline;
+  if (baseline === 'introduced') {
+    entry.baselineState = 'new';
+  } else if (baseline === 'present-on-base') {
+    entry.baselineState = 'unchanged';
   }
 
   // Unconditional. The old code omitted the key when there was nothing
@@ -940,10 +953,18 @@ function unenforcedNotifications(result: RunResult): Notification[] {
       const blocking = gate.findings.filter(
         (finding) => finding.blocking && finding.product !== UMBRELLA_DRIVER_NAME
       ).length;
+      // Through gateExitBlocks, like every other reader of a non-zero child
+      // exit: under present-on-base: report an osv exit of 1 can be one that
+      // does not block, and saying only "exited 1" there would read as a
+      // block the exit code never had.
+      const exitBlocks = gateExitBlocks(gate);
       const what =
         gate.couldNotRun !== null
           ? `It could not run (${gate.couldNotRun.reason}), and nothing was checked by it.`
-          : `It reported ${blocking} blocking finding(s) and exited ${gate.exitCode ?? -1}.`;
+          : `It reported ${blocking} blocking finding(s) and exited ${gate.exitCode ?? -1}` +
+            (exitBlocks || gate.baseComparison === undefined
+              ? '.'
+              : ', which does not block here: every finding was already on the base branch, under present-on-base: report.');
       return {
         id: 'conductor/gate-not-enforced',
         message:
@@ -955,9 +976,30 @@ function unenforcedNotifications(result: RunResult): Notification[] {
           enforced: false,
           couldNotRun: gate.couldNotRun === null ? null : gate.couldNotRun.reason,
           blockingFindings: blocking,
+          exitBlocks,
         },
       };
     });
+}
+
+/**
+ * A gate's run facts for its SARIF run, plus the base comparison when one
+ * ran (the vulnerabilities gate on a compared pull-request run): the ref, the
+ * two counts and the base policy's present-on-base value. not-scanned is in
+ * the gate's own run details already.
+ */
+function runDetails(gate: GateOutcome): Record<string, unknown> {
+  const comparison = gate.baseComparison;
+  if (comparison === undefined) {
+    return gate.run.details;
+  }
+  return {
+    ...gate.run.details,
+    'baseline-ref': comparison.ref,
+    introduced: comparison.introduced,
+    'present-on-base': comparison.presentOnBase,
+    'present-on-base-policy': comparison.policy,
+  };
 }
 
 /**
@@ -999,7 +1041,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
         // same bag the text report renders as scalars. Carried verbatim and
         // only when there is something in it, so a gate that reports none of
         // this keeps the properties shape it had before.
-        ...(Object.keys(gate.run.details).length === 0 ? {} : { details: gate.run.details }),
+        ...(Object.keys(runDetails(gate)).length === 0 ? {} : { details: runDetails(gate) }),
       })
     );
   }

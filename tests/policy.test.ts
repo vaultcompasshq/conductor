@@ -336,7 +336,7 @@ describe('the reserved option list against the flags the umbrella writes', () =>
       reportPath: '/dev/null',
       configPath: '/dev/null',
       ignorePath: '/dev/null',
-      lockfiles: ['package-lock.json'],
+      lockfiles: ['package-lock.json', 'requirements.txt'],
     };
     const runs = [
       gateArgs(gate, true, undefined, undefined, external),
@@ -357,7 +357,7 @@ describe('the reserved option list against the flags the umbrella writes', () =>
         // ("--diff-merges=first-parent HEAD"), a value rather than a flag of
         // the gate's; --log-opts itself is what a policy could collide with.
         if (token.startsWith('-') && argv[i - 1] !== '--log-opts') {
-          flags.add(token.replace(/^--?/, ''));
+          flags.add(token.replace(/^--?/, '').replace(/=.*$/, ''));
         }
       });
     }
@@ -390,7 +390,7 @@ describe('the reserved option list against the flags the umbrella writes', () =>
   it('reserves every flag the umbrella writes, which is the direction that can hurt', () => {
     for (const role of GATE_ROLES) {
       const product = PRODUCT_FOR_ROLE[role];
-      const reserved = new Set(RESERVED_OPTIONS[product]);
+      const reserved = new Set([...RESERVED_OPTIONS[product], ...(WRITTEN_WITHOUT_RESERVING[product] ?? [])]);
       const unreserved = [...flagsWritten(role)].filter((flag) => !reserved.has(flag)).sort();
       expect({ product, unreserved }).toEqual({ product, unreserved: [] });
     }
@@ -516,7 +516,7 @@ describe('gateArgs for the external gates', () => {
     ]);
     const pr = gateArgs(osv, false, undefined, 'origin/main', { configPath: '/tmp/o.toml', lockfiles });
     expect(pr).toEqual([
-      '--format', 'json', '--config', '/tmp/o.toml', '--lockfile', 'package-lock.json', '--lockfile', 'web/pnpm-lock.yaml',
+      '--format', 'json', '--config', '/tmp/o.toml', '--lockfile', 'package-lock.json', '--lockfile', 'web/pnpm-lock.yaml', '--no-call-analysis=all',
     ]);
     expect(pr).not.toContain('--recursive');
     expect(pr).not.toContain('.');
@@ -619,5 +619,110 @@ describe('precedence', () => {
       POLICY_FILE_NAME
     );
     expect(() => applyCliOverrides(policy, { gates: ['intent'] })).toThrow(/intent/);
+  });
+});
+
+/**
+ * Flags the umbrella writes WITHOUT reserving the key, each because the two
+ * writers can never meet: osv-scanner's no-resolve, which gateArgs drops from
+ * the passthrough whenever it writes the flag (reserving it would refuse
+ * policies that pass it today, osv design section 2.4), and no-call-analysis,
+ * which gateArgs writes only when the policy names neither call-analysis key
+ * (section 3.3). Read by the drift test above; the test below pins that the
+ * two never both reach one command line. The derived list there includes a
+ * requirements file, so --no-resolve is among the flags written.
+ */
+// osv design, test 15 (the loader half; the head-edit half runs through the
+// CLI in tests/osv-base-comparison.test.ts). Kills: an absent key read as
+// report; the key accepted on another role.
+describe('present-on-base on the vulnerabilities gate', () => {
+  const policy = (gate: string, extra: string): string =>
+    ['version: 1', 'gates:', `  ${gate}`, extra, ''].join('\n');
+
+  it('reads an absent key as block', () => {
+    const parsed = parsePolicy(policy('vulnerabilities:', '    product: osv-scanner'), POLICY_FILE_NAME);
+    expect(parsed.gates.vulnerabilities?.presentOnBase).toBe('block');
+  });
+
+  it('reads report and block as written', () => {
+    for (const value of ['report', 'block'] as const) {
+      const parsed = parsePolicy(
+        policy('vulnerabilities:', `    product: osv-scanner\n    present-on-base: ${value}`),
+        POLICY_FILE_NAME
+      );
+      expect(parsed.gates.vulnerabilities?.presentOnBase).toBe(value);
+    }
+  });
+
+  it('refuses the key on any other role, saying why', () => {
+    const roles: Array<[string, string]> = [
+      ['dependencies', 'dep-guard'],
+      ['secrets', 'vault-guard'],
+      ['intent', 'intent-guard'],
+      ['secrets-history', 'gitleaks'],
+    ];
+    for (const [role, product] of roles) {
+      expect(() =>
+        parsePolicy(policy(`${role}:`, `    product: ${product}\n    present-on-base: report`), POLICY_FILE_NAME)
+      ).toThrow(/present-on-base[\s\S]*only the vulnerabilities gate/);
+    }
+  });
+
+  it('fails the schema on any other value, and under options it is only a passthrough key', () => {
+    expect(() =>
+      parsePolicy(policy('vulnerabilities:', '    product: osv-scanner\n    present-on-base: ignore'), POLICY_FILE_NAME)
+    ).toThrow(/not a valid policy file[\s\S]*present-on-base/);
+    const underOptions = parsePolicy(
+      policy('vulnerabilities:', "    product: osv-scanner\n    options:\n      present-on-base: 'report'"),
+      POLICY_FILE_NAME
+    );
+    expect(underOptions.gates.vulnerabilities?.presentOnBase).toBe('block');
+  });
+
+  it('carries no presentOnBase on a gate that is not the vulnerabilities gate', () => {
+    const parsed = parsePolicy(policy('dependencies:', '    product: dep-guard'), POLICY_FILE_NAME);
+    expect(parsed.gates.dependencies).not.toHaveProperty('presentOnBase');
+  });
+});
+
+const WRITTEN_WITHOUT_RESERVING: Partial<Record<Product, string[]>> = {
+  'osv-scanner': ['no-call-analysis', 'no-resolve'],
+};
+
+describe('the two osv-scanner flags the umbrella writes without reserving', () => {
+  it('never puts the umbrella and a policy on the same flag', () => {
+    const osv: GatePolicy = {
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      enabled: true,
+      stage: 'ci',
+      enforce: true,
+      excludedByCli: false,
+      options: { 'no-resolve': true, 'no-call-analysis': 'go' },
+    };
+    const argv = gateArgs(osv, false, undefined, 'origin/main', { lockfiles: ['requirements.txt'] });
+    expect(argv.filter((t) => t.replace(/=.*$/, '') === '--no-resolve')).toEqual(['--no-resolve']);
+    expect(argv.filter((t) => t.replace(/=.*$/, '') === '--no-call-analysis')).toEqual(['--no-call-analysis']);
+    expect(argv.slice(-2)).toEqual(['--no-call-analysis', 'go']);
+  });
+
+  it('hands requirements variants in the parse-as form and every exact name bare', () => {
+    const osv: GatePolicy = {
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      enabled: true,
+      stage: 'ci',
+      enforce: true,
+      excludedByCli: false,
+      options: {},
+    };
+    const argv = gateArgs(osv, false, undefined, undefined, {
+      lockfiles: ['npm-shrinkwrap.json', 'requirements.txt', 'a/requirements-dev.txt', '/w/osv-base/b/dev-requirements.txt'],
+    });
+    expect(argv).toEqual([
+      '--format', 'json', '--lockfile', 'npm-shrinkwrap.json', '--lockfile', 'requirements.txt',
+      '--lockfile', 'requirements.txt:a/requirements-dev.txt', '--lockfile', 'requirements.txt:/w/osv-base/b/dev-requirements.txt',
+      '--no-resolve',
+    ]);
   });
 });

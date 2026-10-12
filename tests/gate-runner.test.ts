@@ -1192,7 +1192,10 @@ describe('external gate exit semantics', () => {
         '.github/workflows/ci.yml': 'on: push\n',
         'node_modules/pkg/pyproject.toml': '',
         'third_party/vendor/lib/go.sum': '',
-        'pkg/testdata/sample/requirements.txt': '',
+        // Not a requirements file: since the osv coverage change a tracked
+        // requirements file outside node_modules is a candidate osv-scanner
+        // is handed, so it would not leave this test at nothing-to-scan.
+        'pkg/testdata/sample/pyproject.toml': '',
         'README.md': 'hello\n',
       },
       'manifests'

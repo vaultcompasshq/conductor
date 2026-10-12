@@ -145,6 +145,17 @@ export function renderPolicy(
     } else {
       lines.push('    enforce: true');
     }
+    // Only the vulnerabilities gate compares a pull request with its base.
+    // Written as report for a fresh repository, so an existing backlog does
+    // not block every pull request from the first one; a parser default of
+    // block keeps every policy written before the key existed as strict as
+    // it was.
+    if (role === 'vulnerabilities') {
+      lines.push('    # On a pull request, findings already on the base branch are reported');
+      lines.push('    # and do not block; only advisories the pull request introduces do.');
+      lines.push('    # Set present-on-base: block to block on every known vulnerability.');
+      lines.push('    present-on-base: report');
+    }
     lines.push('    # Handed to this gate unchanged. Keys are its own long flags,');
     lines.push('    # without the leading dashes.');
     if (role === 'secrets-history') {

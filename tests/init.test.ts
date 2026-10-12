@@ -2808,3 +2808,35 @@ describe('the manifest is never written outside the repository', () => {
     expect(existsSync(path.join(repo, 'meta', 'manifest.json'))).toBe(true);
   });
 });
+
+// osv design, test 16. Kills: init writing present-on-base: block (or the key
+// under any other gate).
+describe('init and the vulnerabilities gate present-on-base key', () => {
+  it('writes present-on-base: report with its comment under the vulnerabilities gate only', () => {
+    const repo = gitRepo();
+    const result = init(repo);
+    const policy = readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8');
+    const vulnerabilities = policy.slice(policy.indexOf('  vulnerabilities:'), policy.indexOf('report:'));
+
+    expect(result.ok).toBe(true);
+    expect(vulnerabilities).toContain(
+      [
+        '    # On a pull request, findings already on the base branch are reported',
+        '    # and do not block; only advisories the pull request introduces do.',
+        '    # Set present-on-base: block to block on every known vulnerability.',
+        '    present-on-base: report',
+      ].join('\n')
+    );
+    expect(policy.match(/present-on-base:/g)).toHaveLength(2);
+    expect(policy.slice(0, policy.indexOf('  vulnerabilities:'))).not.toContain('present-on-base: ');
+    expect(parsePolicy(policy, POLICY_FILE_NAME).gates.vulnerabilities?.presentOnBase).toBe('report');
+  });
+
+  it('never rewrites an existing policy to add the key', () => {
+    const repo = gitRepo();
+    const existing = 'version: 1\ngates:\n  vulnerabilities:\n    product: osv-scanner\n';
+    writeFileSync(path.join(repo, POLICY_FILE_NAME), existing);
+    init(repo);
+    expect(readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8')).toBe(existing);
+  });
+});

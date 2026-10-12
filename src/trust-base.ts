@@ -76,7 +76,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
-import { gitComplaint, runGit } from './git.js';
+import { gitComplaint, runGit, runGitBytes } from './git.js';
 
 /**
  * The private, fully spelled ref the composite action fetches the base branch
@@ -611,6 +611,43 @@ export function readFileAtRef(repoRoot: string, ref: string, relativePath: strin
     };
   }
   return { kind: 'file', text: blob.stdout };
+}
+
+/** One file at a ref as bytes: not there, its exact bytes, or a read this run could not make. */
+export type BytesAtRef =
+  | { kind: 'absent' }
+  | { kind: 'file'; bytes: Buffer }
+  | { kind: 'error'; detail: string };
+
+/**
+ * `readFileAtRef`, byte-exact. The same lookup (the same tree listing, the
+ * same refusal of a symlink, directory or submodule at the path or above it,
+ * the same blob read by the id the listing named), with the blob kept as
+ * bytes rather than decoded as UTF-8. For a file that is copied out and read
+ * by another program (the vulnerabilities gate's base copies): decoding would
+ * rewrite a lockfile with invalid bytes before that program saw it.
+ */
+export function readFileAtRefBytes(repoRoot: string, ref: string, relativePath: string): BytesAtRef {
+  const listed = treeEntryAt(repoRoot, ref, relativePath);
+  if (listed.kind !== 'entry') {
+    return listed;
+  }
+  if (listed.type !== 'blob' || !isRegularFileMode(listed.mode)) {
+    return {
+      kind: 'error',
+      detail:
+        `${relativePath} is not a regular file at "${ref}" (git lists it with mode ${listed.mode}), ` +
+        'so there is no file to read there',
+    };
+  }
+  const blob = runGitBytes(repoRoot, ['cat-file', 'blob', listed.sha]);
+  if (blob.error !== undefined || blob.status !== 0) {
+    return {
+      kind: 'error',
+      detail: `${relativePath} is listed at "${ref}" but its contents could not be read: ${gitComplaint({ ...blob, stdout: '' })}`,
+    };
+  }
+  return { kind: 'file', bytes: blob.stdout };
 }
 
 /**

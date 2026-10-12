@@ -1371,3 +1371,52 @@ describe('osv-scanner 2.6.0 normalization', () => {
     });
   });
 });
+
+// The run-level fact condition (f) of the osv design reads: did any package in
+// the raw output carry a verdict that is not an advisory. Both fixtures are
+// real osv-scanner 2.4.0 captures (tests/fixtures/README.md): exit 1 with
+// zero vulnerabilities, so a normalizer reading only `vulnerabilities` sees
+// nothing there at all.
+describe('osv-scanner output that is a verdict but not an advisory', () => {
+  it('records a non-empty license_violations, from the real 2.4.0 capture', () => {
+    const out = normalizeOsvScanner(fixture('osv-scanner-2.4.0-license-violation.json'), '2.4.0', true);
+    expect(out.findings).toEqual([]);
+    expect(out.otherVerdicts).toEqual(['license_violations (click@8.1.7)']);
+  });
+
+  it('records a deprecated package, which 2.4.0 reports inside the package object', () => {
+    const out = normalizeOsvScanner(fixture('osv-scanner-2.4.0-deprecated.json'), '2.4.0', true);
+    expect(out.otherVerdicts).toEqual(['deprecated (querystring@0.2.1)']);
+  });
+
+  it('fails closed on any other non-empty package-level key it does not map', () => {
+    const raw = {
+      results: [
+        {
+          source: { path: '/r/package-lock.json' },
+          packages: [
+            { package: { name: 'a', version: '1.0.0' }, licenses: ['MIT'], groups: [], vulnerabilities: [] },
+            { package: { name: 'b', version: '2.0.0' }, some_future_verdict: [{ reason: 'x' }] },
+            { package: { name: 'c', version: '3.0.0' }, empty_one: [], empty_two: {}, null_one: null, no: false, blank: '' },
+          ],
+        },
+      ],
+      license_summary: [{ name: 'MIT', count: 1 }],
+      experimental_config: { licenses: { summary: true } },
+    };
+    const out = normalizeOsvScanner(raw, '2.4.0', true);
+    expect(out.otherVerdicts).toEqual(['some_future_verdict (b@2.0.0)']);
+  });
+
+  it('records nothing for an ordinary advisory-only run, whatever sits at the top level or on a result', () => {
+    const out = normalizeOsvScanner(fixture('osv-scanner-2.6.0-blocking.json'), '2.6.0', true);
+    expect(out.findings.length).toBeGreaterThan(0);
+    expect(out.otherVerdicts).toEqual([]);
+    const withTop = normalizeOsvScanner(
+      { results: [{ source: { path: '/r/x', type: 'lockfile', extra: 1 }, packages: [] }], license_summary: [{}] },
+      '2.4.0',
+      false
+    );
+    expect(withTop.otherVerdicts).toEqual([]);
+  });
+});

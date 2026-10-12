@@ -255,6 +255,60 @@ Two exit observations the runner depends on:
 - A `--config` path that does not exist prints `Failed to read config
   file` on stderr and exits **127**.
 
+## osv-scanner 2.4.0
+
+Taken for the osv design (docs/superpowers/specs, 2026-10-11): ecosystem
+coverage and the base comparison. The binary is the Homebrew build; its
+probe prints no commit:
+
+    $ osv-scanner --version
+    osv-scanner version: 2.4.0
+    osv-scalibr version: 0.4.5
+    commit: n/a
+    built at: n/a
+
+The notes above were taken against 2.6.0; everything in this section was
+taken against 2.4.0. Paths in the two captures were replaced with
+`/tmp/conductor-osv-fixture` for the reason given above.
+
+`osv-scanner-2.4.0-license-violation.json`:
+
+    osv-scanner scan source --format json --no-resolve --licenses=Apache-2.0 \
+      --lockfile <dir>/requirements.txt
+
+over a `requirements.txt` holding only `click==8.1.7`. Exit **1** with no
+`vulnerabilities` anywhere: the package carries `licenses` and a
+non-empty `license_violations` beside `package`, and the top level carries
+`license_summary` and `experimental_config`. A normalizer that reads only
+`vulnerabilities` sees a clean scan of a run that exited 1.
+
+`osv-scanner-2.4.0-deprecated.json`:
+
+    osv-scanner scan source --format json --experimental-flag-deprecated-packages \
+      --lockfile <dir>/package-lock.json
+
+over a `package-lock.json` resolving only `querystring@0.2.1`, which npm
+marks deprecated. Exit **1**, again with no vulnerability. The flag is NOT a
+package-level key beside `vulnerabilities`: it is `"deprecated": true`
+INSIDE the `package` object. The same run over `request@2.88.2` (also
+deprecated, also carrying GHSA-p8p7-x288-28g6) printed the same field on
+that package beside its advisory.
+
+Observed through the real-binary tests in
+tests/external-gates.real.e2e.test.ts ("osv-scanner, for real"):
+
+- `go.mod` handed bare with `--lockfile`, requiring `golang.org/x/text
+  v0.3.0`, exits 1 with advisories on that module. `go.sum` is never handed
+  over (2.4.0 exits 127 on it: "could not determine extractor").
+- `requirements.txt:requirements-dev.txt` (the parse-as form) with
+  `jinja2==2.4.1` and `--no-resolve` exits 1 with advisories reported under
+  `requirements-dev.txt`; an unpinned `requirements.txt` beside it is not
+  handed over and is named in a diagnostic.
+- A base `package-lock.json` resolving `lodash@4.17.20` and a pull request
+  adding `minimist@1.2.0`: the base run over the copy reports the same
+  lodash advisory ids, so every lodash finding is present-on-base and every
+  minimist finding introduced.
+
 ## intent-guard 1.7.0 (advisory-capped constraint findings, issue #34)
 
     intent-guard check --project . --paths src/billing/export.ts \

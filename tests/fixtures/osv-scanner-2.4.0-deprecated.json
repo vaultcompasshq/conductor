@@ -1,0 +1,26 @@
+{
+  "results": [
+    {
+      "source": {
+        "path": "/tmp/conductor-osv-fixture/package-lock.json",
+        "type": "lockfile"
+      },
+      "packages": [
+        {
+          "package": {
+            "name": "querystring",
+            "version": "0.2.1",
+            "ecosystem": "npm",
+            "deprecated": true
+          }
+        }
+      ]
+    }
+  ],
+  "experimental_config": {
+    "licenses": {
+      "summary": false,
+      "allowlist": null
+    }
+  }
+}

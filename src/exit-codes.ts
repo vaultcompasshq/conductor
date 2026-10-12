@@ -30,20 +30,87 @@
 // maximum of the children's, and that is deliberate.
 //
 // The umbrella never overrules a gate's own blocking decision. A gate that
-// exited non-zero produces a non-zero composed code, full stop. The
-// per-finding `blocking` flag can only ADD to that, never subtract: it
-// exists so a gate whose exit code somehow said clean while its own report
-// carried a blocking finding still fails the run.
+// exited non-zero produces a non-zero composed code, with exactly one
+// exception, below. The per-finding `blocking` flag can only ADD to that,
+// never subtract: it exists so a gate whose exit code somehow said clean
+// while its own report carried a blocking finding still fails the run.
 //
-// The ONE exception, and it is the repository's own written decision rather
-// than a judgment made here: a gate carrying `enforce: false` in the policy
-// file is left out of this composition entirely. That is the adoption ramp,
-// so a gate can be switched on and read for a few weeks before it is
-// allowed to refuse anybody's commit. It is not a downgrade: the gate still
-// runs, its findings keep their own levels, its blocking flags are
-// untouched, and both output formats say plainly that it blocked and was
-// not enforced. Nothing here reads a gate's output and decides to ignore
-// it; it reads a line somebody wrote in their own policy file.
+// Two written decisions change what reaches this composition, and both are
+// the repository's own lines in its policy file rather than a judgment made
+// here.
+//
+// First, a gate carrying `enforce: false` is left out of this composition
+// entirely. That is the adoption ramp, so a gate can be switched on and read
+// for a few weeks before it is allowed to refuse anybody's commit. It is not
+// a downgrade: the gate still runs, its findings keep their own levels, its
+// blocking flags are untouched, and both output formats say plainly that it
+// blocked and was not enforced. Nothing here reads a gate's output and
+// decides on its own judgment to ignore it.
+//
+// Second, the vulnerabilities gate under `present-on-base: report` (osv
+// design, section 4.3): a non-zero osv-scanner exit does not block when ALL
+// of (a) to (f) in `gateExitBlocks` hold, which is a compared pull-request
+// run whose every parsed finding is also on the base branch, under a key the
+// BASE policy wrote, with no non-advisory verdict in the output. That is a
+// set difference of two runs of the same tool, not a judgment about any one
+// finding, and the findings still print with their labels.
+
+/**
+ * The fields of a gate's outcome `gateExitBlocks` reads. A structural type
+ * rather than an import of GateOutcome, so this file stays free of the
+ * runner and any caller with these fields can ask.
+ */
+export interface ExitBlocksInput {
+  role: string;
+  product: string;
+  /** The child's own exit code, or null when there was no child. */
+  exitCode: number | null;
+  couldNotRun: unknown;
+  findings: ReadonlyArray<{ details: Record<string, unknown> }>;
+  baseComparison?: { policy: 'block' | 'report'; otherVerdicts: readonly string[] };
+}
+
+/**
+ * Whether this gate's own child exit blocks the run.
+ *
+ * Every "the child exited non-zero" decision goes through here: the composed
+ * exit code, the verdict token's count, the verdict sentence, the
+ * not-enforced note and the SARIF gate-not-enforced notification. A reader
+ * that compares the raw exit with 0 instead would say "blocked" on a run
+ * that exits 0 (tests/osv-exit.test.ts holds every reader to this).
+ *
+ * False for an exit of 0 (or no child). For a non-zero exit, true unless ALL
+ * of these hold:
+ *   (a) the gate is the vulnerabilities gate, osv-scanner in that role;
+ *   (b) its base policy said present-on-base: report;
+ *   (c) a base comparison ran (it is carried on the outcome only then);
+ *   (d) at least one finding was parsed, since exit 1 with nothing parsed
+ *       is a verdict this umbrella cannot read;
+ *   (e) every finding is labelled present-on-base. Redundant by
+ *       construction: under report an introduced finding stays blocking,
+ *       which blocks the run through `hasBlockingFinding` whatever this
+ *       returns. Kept so the predicate states the whole rule;
+ *   (f) the head output carried no verdict that is not an advisory: no
+ *       license_violations, no deprecated package, no other unmapped
+ *       package-level field. osv-scanner exits 1 for those too, and none of
+ *       them is a finding here.
+ */
+export function gateExitBlocks(gate: ExitBlocksInput): boolean {
+  if ((gate.exitCode ?? 0) === 0) {
+    return false;
+  }
+  const comparison = gate.baseComparison;
+  const reportedNotBlocking =
+    gate.role === 'vulnerabilities' &&
+    gate.product === 'osv-scanner' &&
+    comparison !== undefined &&
+    comparison.policy === 'report' &&
+    gate.couldNotRun === null &&
+    gate.findings.length > 0 &&
+    gate.findings.every((finding) => finding.details.baseline === 'present-on-base') &&
+    comparison.otherVerdicts.length === 0;
+  return !reportedNotBlocking;
+}
 
 export const EXIT_OK = 0;
 export const EXIT_BLOCKED = 1;
@@ -52,8 +119,13 @@ export const EXIT_COULD_NOT_RUN = 2;
 export interface ExitInput {
   /** Non-null when this gate did not produce a usable result. */
   couldNotRun: { reason: string } | null;
-  /** The child's own exit code, or null when there was no child. */
-  exitCode: number | null;
+  /**
+   * Whether the child's own exit blocks: `gateExitBlocks(outcome)`, never the
+   * raw exit code compared with 0. REQUIRED, like `enforce`, so a caller
+   * that has not thought about the present-on-base exception does not
+   * compile.
+   */
+  exitBlocks: boolean;
   /** Whether any finding from this gate is one the gate itself blocks on. */
   hasBlockingFinding: boolean;
   /**
@@ -78,7 +150,7 @@ export function composeExitCode(gates: ExitInput[]): number {
   if (enforced.some((gate) => gate.couldNotRun !== null)) {
     return EXIT_COULD_NOT_RUN;
   }
-  if (enforced.some((gate) => (gate.exitCode ?? 0) !== 0 || gate.hasBlockingFinding)) {
+  if (enforced.some((gate) => gate.exitBlocks || gate.hasBlockingFinding)) {
     return EXIT_BLOCKED;
   }
   return EXIT_OK;

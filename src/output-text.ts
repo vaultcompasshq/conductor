@@ -23,7 +23,7 @@
 // everywhere is worth more here than a nicer-looking terminal.
 
 import { type Finding, compareFindings } from './envelope.js';
-import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN } from './exit-codes.js';
+import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, gateExitBlocks } from './exit-codes.js';
 import {
   CONDUCTOR_OWN_REASONS,
   type GateOutcome,
@@ -53,10 +53,47 @@ function findingLines(finding: Finding): string[] {
   const marker = finding.blocking ? 'BLOCKING' : '  report';
   const severity = finding.severityIsDerived ? `${finding.severity}*` : finding.severity;
   const subject = subjectLabel(finding);
+  // The vulnerabilities gate's base-comparison label, on a compared
+  // pull-request run only: the label is set nowhere else.
+  const baseline = finding.details.baseline;
+  const label = baseline === 'introduced' || baseline === 'present-on-base' ? `  ${baseline}` : '';
   const head = `  ${marker}  ${severity.padEnd(9)} ${finding.ruleId}${
     subject === '' ? '' : `  ${subject}`
-  }`;
+  }${label}`;
   return [head, `      ${finding.message}`];
+}
+
+/**
+ * The base comparison under the vulnerabilities gate's threshold line: the
+ * ref, the two counts, the base policy and what it means here, then one line
+ * per lockfile the comparison was unavailable for. Nothing on a run with no
+ * comparison.
+ */
+function baseComparisonLines(gate: GateOutcome): string[] {
+  const comparison = gate.baseComparison;
+  if (comparison === undefined) {
+    return [];
+  }
+  const meaning = comparison.policy === 'report' ? 'report (not blocking)' : 'block (blocking)';
+  return [
+    `  base comparison  ${comparison.ref}  introduced ${comparison.introduced}  ` +
+      `present-on-base ${comparison.presentOnBase}  present-on-base: ${meaning}`,
+    ...comparison.unavailable.map(
+      (entry) => `  base comparison unavailable for ${entry.path}: ${entry.reason}; counted as introduced`
+    ),
+  ];
+}
+
+/**
+ * How many present-on-base findings were reported and NOT blocking, across
+ * the gates: the vulnerabilities gate under present-on-base: report. The
+ * number on the report's third line and in the exit-0 verdict clause.
+ */
+function presentOnBaseReported(result: RunResult): number {
+  return result.gates
+    .filter((gate) => gate.baseComparison?.policy === 'report')
+    .flatMap((gate) => gate.findings)
+    .filter((finding) => finding.details.baseline === 'present-on-base' && !finding.blocking).length;
 }
 
 function header(gate: GateOutcome): string {
@@ -90,7 +127,7 @@ function enforcementNote(gate: GateOutcome): string | null {
     );
   }
   const blocking = gate.findings.filter((finding) => finding.blocking).length;
-  if (blocking > 0 || (gate.exitCode ?? 0) !== 0) {
+  if (blocking > 0 || gateExitBlocks(gate)) {
     return (
       `  not enforced: this gate reported ${blocking} blocking finding(s) and exited ` +
       `${gate.exitCode ?? '?'}, and enforce is false for it in .guardrails.yaml, so the commit ` +
@@ -172,6 +209,7 @@ function gateSection(gate: GateOutcome): string[] {
         ? 'ignored not reported'
         : `ignored ${gate.run.ignored}`;
     lines.push(`  ${threshold}   suppressed ${gate.run.suppressed}   ${ignored}`);
+    lines.push(...baseComparisonLines(gate));
 
     // The gate's own run facts: what it scanned, with what, against what.
     // These were being collected and then dropped.
@@ -450,7 +488,7 @@ function unenforcedClauses(result: RunResult): string[] {
   const blocked = unenforced.filter(
     (gate) =>
       gate.couldNotRun === null &&
-      ((gate.exitCode ?? 0) !== 0 || gate.findings.some((finding) => finding.blocking))
+      (gateExitBlocks(gate) || gate.findings.some((finding) => finding.blocking))
   );
   const broken = unenforced.filter((gate) => gate.couldNotRun !== null);
 
@@ -630,7 +668,7 @@ function blockingCount(gate: RunResult['gates'][number]): number {
     return 0;
   }
   const blocking = gate.findings.filter((finding) => finding.blocking).length;
-  return blocking === 0 && (gate.exitCode ?? 0) !== 0 ? 1 : blocking;
+  return blocking === 0 && gateExitBlocks(gate) ? 1 : blocking;
 }
 
 /**
@@ -816,7 +854,7 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
       // explicitly says there is none of, so it gets its own, narrower
       // wording that is true here and says nothing about findings at all.
       const names = enforcedGates
-        .filter((gate) => (gate.exitCode ?? 0) !== 0)
+        .filter((gate) => gateExitBlocks(gate))
         .map((gate) => `${gate.role} (exit ${gate.exitCode ?? '?'})`)
         .join(', ');
       const base =
@@ -838,12 +876,22 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
       : `verdict: exit 1, ${base}`;
   }
 
+  // Known advisories already on the base branch, reported and not blocking
+  // (the vulnerabilities gate under present-on-base: report). Said on the
+  // exit-0 verdict, so a pass that carries them never reads as spotless.
+  const reported = presentOnBaseReported(result);
+  const presentClause =
+    reported === 0
+      ? ''
+      : `; ${reported} known ${reported === 1 ? 'vulnerability' : 'vulnerabilities'} already on the ` +
+        `base ${reported === 1 ? 'was' : 'were'} reported, not blocking (vulnerabilities: present-on-base: report)`;
+
   // Exit 0 with red on the screen above it. The verdict is the one line
   // somebody reads when they read nothing else, so it is the line that has
   // to carry the reason rather than leaving it to the sections.
   if (clauses.length > 0) {
     return (
-      `verdict: exit 0, but ${clauses.join(' and ')}. ` +
+      `verdict: exit 0, but ${clauses.join(' and ')}${presentClause}. ` +
       'Those gates have enforce: false in .guardrails.yaml, so nothing here failed the run.'
     );
   }
@@ -868,11 +916,11 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
   if (unchecked.length > 0) {
     return (
       'verdict: exit 0, no gate blocked, but not every enabled gate checked something: ' +
-      `${unchecked.join('; ')}.`
+      `${unchecked.join('; ')}${presentClause}.`
     );
   }
 
-  return `verdict: exit 0, every enabled gate ran and none blocked.`;
+  return `verdict: exit 0, every enabled gate ran and none blocked${presentClause}.`;
 }
 
 export interface TextOptions {
@@ -1192,8 +1240,14 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // question, what failed the run, and that one is enforced gates only. Two
   // different questions, so two numbers, and the section headers and the
   // "not enforced" lines are what connect them.
+  // The fixed third line (osv design, section 4.4), printed only when known
+  // advisories were reported and not blocking. The Action copies it to the
+  // job summary when, and only when, line 3 is exactly this shape, so a pass
+  // that carries them does not read as spotless there either.
+  const reported = presentOnBaseReported(result);
   const lines: string[] = [
     ...headerLines(result, options),
+    ...(reported === 0 ? [] : [`present-on-base: ${reported} reported, not blocking`]),
     ...refusal,
     ...(refusal.length === 0 ? [] : ['']),
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,

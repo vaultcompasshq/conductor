@@ -1136,6 +1136,19 @@ runs:
             if [ "$verdict_token" = "nothing-checked" ]; then
               printf 'No gate ran, so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
             fi
+            # Line 3 of the report, and ONLY when it is exactly the
+            # present-on-base line and the token above was accepted: a pass
+            # with known advisories reported and not blocking (the
+            # vulnerabilities gate under present-on-base: report) must not
+            # read as spotless here. Anything else on line 3 is ignored; the
+            # report can carry text from the scanned repository, so the line
+            # is matched whole rather than searched for.
+            if [ "$token_valid" -eq 1 ] && [ -f "$TEXT_REPORT" ]; then
+              present_line="$(sed -n '3p' "$TEXT_REPORT")"
+              if [[ "$present_line" =~ ^present-on-base:\ [0-9]+\ reported,\ not\ blocking$ ]]; then
+                printf '%s\n\n' "$present_line" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
           fi
         fi
         exit "$status"

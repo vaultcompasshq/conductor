@@ -143,6 +143,14 @@ export interface NormalizedGateOutput {
     /** One line per control input the head proposes to change. */
     proposals: string[];
   };
+  /**
+   * osv-scanner only: every package that carried a verdict which is not an
+   * advisory, one line each ("license_violations (click@8.1.7)"). osv-scanner
+   * exits 1 for those as well as for an advisory, and none of them is a
+   * finding here, so the exit-code exception for present-on-base findings
+   * (src/exit-codes.ts, gateExitBlocks, condition f) reads this instead.
+   */
+  otherVerdicts?: string[];
 }
 
 export class NormalizeError extends Error {

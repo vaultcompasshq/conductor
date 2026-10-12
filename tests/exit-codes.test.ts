@@ -2,8 +2,8 @@ import { describe, expect, it } from '@jest/globals';
 
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, EXIT_OK, composeExitCode } from '../src/exit-codes.js';
 
-function gate(overrides: Partial<Parameters<typeof composeExitCode>[0][number]> = {}) {
-  return { couldNotRun: null, exitCode: 0, hasBlockingFinding: false, enforce: true, ...overrides };
+function gate(overrides: Partial<Parameters<typeof composeExitCode>[0][number]> & { exitCode?: number | null } = {}) {
+  const { exitCode = 0, ...rest } = overrides; return { couldNotRun: null, exitBlocks: (exitCode ?? 0) !== 0, hasBlockingFinding: false, enforce: true, ...rest };
 }
 
 describe('exit code composition', () => {
