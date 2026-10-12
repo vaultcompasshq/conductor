@@ -183,7 +183,7 @@ required.
 
      deferred  intent  intent-guard  did not run here; it runs from stage ci onwards
 
-   verdict: exit 1, 1 blocking finding(s) across 2 gate(s).
+   verdict: exit 1, 1 blocking finding(s) in 1 of 2 enforced gate(s).
    ```
 
    The `mode`, `corpusBuiltAt`, `lockfileFormat` and `online-flag` line under
@@ -242,6 +242,47 @@ There is deliberately no mode in which the pull request's own policy file
 decides the run, not even as a preview: step 1's preview gives you the same
 report without putting a file the pull request controls behind a verdict on
 the pull request page.
+
+## Adoption ramp
+
+A repository with history will not start clean, and a gate that is red on its
+first pull request gets switched off. The order that works:
+
+1. **Advisory first.** The first pull request runs with `advisory: true` and
+   `pr-comment: true`, as in "Adopting conductor" above. Findings print and
+   are commented, and none of them fails the run.
+
+2. **Record what is already there, in each gate's own file.** conductor does
+   not write these and does not read them for the gates; each tool does.
+   - vault-guard keeps its own baseline of accepted findings. See the
+     [vault-guard documentation](https://github.com/vaultcompasshq/vault-guard)
+     for the file and how it is produced.
+   - osv-scanner reads `osv-scanner.toml` for ignored advisories, each with a
+     reason and an optional expiry. See the
+     [osv-scanner configuration docs](https://google.github.io/osv-scanner/configuration/).
+   - gitleaks reads `.gitleaks.toml` for rule tuning. Generic rules such as
+     `generic-api-key` are the usual noise on test fixtures and doc
+     placeholders; allowlist those paths there. See the
+     [gitleaks documentation](https://github.com/gitleaks/gitleaks).
+
+3. **Accept an old history finding.** A secret that is already in history and
+   already rotated stays in every history scan. Put its fingerprint on its own
+   line in a `.gitleaksignore` file at the repository root. gitleaks' own
+   report carries the fingerprint, in the form `commit:path:rule:line`:
+
+   ```
+   0a1b2c3d4e5f60718293a4b5c6d7e8f901234567:docs/example.md:generic-api-key:12
+   ```
+
+   conductor reads `.gitleaksignore` from the base branch on a pull request,
+   so adding the line takes effect after its own merge, like any other
+   control change.
+
+4. **Switch to enforce.** When a few ordinary pull requests report only what
+   you expect, remove `advisory: true`, and set `enforce: true` on the gates
+   you want to be able to refuse a merge. `conductor init` writes the intent
+   gate with `enforce: false` and `require-frozen: false` until a contract is
+   frozen, so a repository with no contract is not blocked by that gate.
 
 ## Why
 
@@ -367,7 +408,11 @@ when a frozen contract already exists at init time
 then, and leaving it unenforced would silently let a frozen contract's
 protected paths produce findings that never fail the check. It writes
 `false`, with a comment explaining why, when there is no contract yet to
-enforce against.
+enforce against, and in that case it also writes `require-frozen: false`
+under `options`, since intent-guard otherwise blocks on a missing contract.
+The `options` comment is written per gate: gitleaks and osv-scanner have no
+severity floor, so their comments point at `.gitleaks.toml` and
+`osv-scanner.toml` rather than at `fail-on`.
 
 **`options`** is handed to that gate unchanged. Each key is one of that
 gate's own long flags with the leading dashes stripped: `fail-on: high`
@@ -545,7 +590,11 @@ handed every tracked lockfile by name (`package-lock.json`,
 depth, never under `node_modules`); when the repository tracks none, it is
 not spawned at all and the gate is reported clean with a
 `conductor/nothing-to-scan` note, so a docs-only repository is not red on
-every pull request. Its 1 is blocked. Its own 128 ("no package sources
+every pull request. The note says that nothing was scanned and names the
+tracked manifests that were not handed to osv-scanner (a `pyproject.toml`, a
+`go.sum`, a `Dockerfile`, a workflow), so a green gate is not read as a scan
+of them. It says nothing about what other gates read.
+Its 1 is blocked. Its own 128 ("no package sources
 found") on lockfiles it WAS handed means they parsed to no packages; that is
 clean too, with a distinct `conductor/lockfiles-empty` note naming the
 files. Only those npm-family names are handed over today: a repository

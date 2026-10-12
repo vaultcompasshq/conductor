@@ -126,6 +126,7 @@ export function renderPolicy(
     // ramp is already climbed and enforcing from the start is what stops a
     // frozen contract's protected paths from producing findings that never
     // fail the check (issue #57).
+    let unfrozenIntent = false;
     if (role === 'intent') {
       if (frozenContractPath !== null) {
         lines.push(
@@ -134,6 +135,7 @@ export function renderPolicy(
         lines.push('    # enforces from the start rather than only reporting.');
         lines.push('    enforce: true');
       } else {
+        unfrozenIntent = true;
         lines.push(`    # No frozen contract yet (${NATIVE_CONTRACT_PATH}), so this gate runs`);
         lines.push('    # and reports without failing the run. Once a contract is frozen,');
         lines.push('    # set this to true by hand: conductor init never rewrites this file');
@@ -144,8 +146,27 @@ export function renderPolicy(
       lines.push('    enforce: true');
     }
     lines.push('    # Handed to this gate unchanged. Keys are its own long flags,');
-    lines.push('    # without the leading dashes. Example: fail-on: high');
-    lines.push('    options: {}');
+    lines.push('    # without the leading dashes.');
+    if (role === 'secrets-history') {
+      lines.push('    # gitleaks has no severity floor. Tune its rules in .gitleaks.toml and');
+      lines.push('    # accept an old finding in .gitleaksignore, not here.');
+    } else if (role === 'vulnerabilities') {
+      lines.push('    # osv-scanner has no severity floor. Tune what it reports in');
+      lines.push('    # osv-scanner.toml, not here.');
+    } else if (role === 'intent') {
+      lines.push('    # require-frozen: false lets the gate run and not block when no contract exists.');
+    } else {
+      lines.push('    # Example: fail-on: high');
+    }
+    if (unfrozenIntent) {
+      // intent-guard blocks on a missing contract when require-frozen is true,
+      // its default. Without this key a full run prints a BLOCKING critical
+      // finding for the very state the unenforced ramp above exists for.
+      lines.push('    options:');
+      lines.push('      require-frozen: false');
+    } else {
+      lines.push('    options: {}');
+    }
   }
 
   lines.push('', 'report:', '  format: text', '');
