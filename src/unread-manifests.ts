@@ -22,6 +22,15 @@ const EXACT_NAMES = new Set([
   'Podfile',
   'compose.yml',
   'compose.yaml',
+  // Added 2026-10-13 (audit finding F3). Podfile.lock and deno.lock are
+  // lockfiles osv-scanner 2.4.0 rejects with --lockfile (exit 127,
+  // measured), so they are never handed over and must be named here; mix.exs
+  // and pubspec.yaml are the manifests beside two lockfiles it does read
+  // (mix.lock, pubspec.lock), named when no lockfile was committed.
+  'Podfile.lock',
+  'deno.lock',
+  'mix.exs',
+  'pubspec.yaml',
 ]);
 
 const MAX_LISTED = 12;

@@ -317,7 +317,7 @@ export function compareWithBase(args: CompareArgs): CompareResult {
   const copies: string[] = [];
   const copied: string[] = [];
   for (const file of toCopy) {
-    const kind = osvLockfileKind(path.posix.basename(file));
+    const kind = osvLockfileKind(file);
     if (kind === 'requirements') {
       const bytes = new Map<string, Buffer>();
       const check = checkRequirementsPins(file, baseReader(args.repoRoot, args.ref, bytes));

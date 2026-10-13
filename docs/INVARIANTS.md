@@ -154,9 +154,11 @@ different mechanism, since neither tool has a `--trust-base`: see "External
 gates" at the end of this file. What is still open for them is listed there
 as KNOWN-OPEN: coverage limits and a local-run limit. One of them is a way
 for a pull request to silence the vulnerabilities gate, and it is visible
-rather than silent: rewriting a tracked lockfile to `{}` makes osv-scanner
-exit 128, which is reported as `conductor/lockfiles-empty` naming the file
-and treated as clean.
+rather than silent: rewriting a tracked lockfile to `{}` is reported as
+`conductor/lockfiles-empty` naming the file, whether it was the only
+lockfile (osv-scanner exits 128) or one of several (osv-scanner's own
+per-file count; until 2026-10-13 that case was silent, audit finding F2),
+and the gate's verdict over the remaining files stands.
 
 1. KNOWN-OPEN: THE INTENT GATE'S IMPORTED-CONTRACT PATH IS OUTSIDE THE
    BOUNDARY, and this one is a HOLE rather than work in flight, so it is
@@ -1660,7 +1662,7 @@ gap this entry states last and precisely.
 
 THE ACTION REFUSES AN EXPLICIT REDIRECT ON `pull_request` AND
 `pull_request_target` EVENTS, in the validate step (`action.yml`, the check
-at action.yml:432-436). Modelled on the backward-pin rule earlier in the same
+at action.yml:482-486). Modelled on the backward-pin rule earlier in the same
 step: the same event test, `GITHUB_BASE_REF` non-empty, declared in the
 step's own `env:` mapping from `github.base_ref` so it cannot come from the
 workflow file; and the same scope, `pull_request` and `pull_request_target`
@@ -1669,7 +1671,7 @@ unprotected branch runs its own author's workflow file regardless, and
 `merge_group` never sets `GITHUB_BASE_REF` at all). Off those events the
 input works exactly as before, since that is what it exists for. Refused with
 the value given and the fix, which is to remove the input: the action already
-fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1011). THE TWO EVENTS ARE
+fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1107). THE TWO EVENTS ARE
 REFUSED FOR DIFFERENT REASONS, and the validate step's own message says so:
 on `pull_request` the workflow file IS the pull request's own, so the input
 is settable by the thing it judges; on `pull_request_target` the workflow
@@ -1689,8 +1691,8 @@ everywhere else. When it is set, the given `--trust-base` is accepted only
 when it resolves to the SAME COMMIT as `origin/<githubBaseRef>`, which is
 exactly the commit the composite action fetches into
 `refs/conductor/trust-base` and then passes (`--trust-base "$TRUST_BASE_SHA"`,
-action.yml:1011; an explicit `trust-base` input is passed only when it is
-set, action.yml:993-994, and the validate step has already refused that
+action.yml:1107; an explicit `trust-base` input is passed only when it is
+set, action.yml:1088-1089, and the validate step has already refused that
 input on a pull request), so an ordinary pull-request run is unaffected. A ref naming the pull request's own branch,
 or anything else that disagrees, is refused naming both refs and both
 commits.
@@ -4002,22 +4004,58 @@ changes.
 Learned from an incident on 2026-09-22, in which an adopter's gate posted a
 red check having scanned nothing for two days and the only visible symptom
 was `conductor: command not found`. The reasoning is in
-docs/design-notes.md, "Why a failed signature check must say so". Four rules
-hold it shut, and each is pinned.
+docs/design-notes.md, "Why a failed signature check must say so". Five rules
+hold it shut, and each is pinned. The first was reversed on 2026-10-13; see
+docs/superpowers/specs/2026-10-13-action-path-after-signature-audit.md.
 
-**The PATH write precedes the signature audit.** action.yml:647 writes the
-install prefix to `GITHUB_PATH`; action.yml:673-674 is the audit. Ordered the
-other way, a failing audit left the install unreachable and the NEXT step
-reported a missing binary rather than a refusal. The PATH write grants
-nothing on its own, because the gates step does not run when the install
-step fails. Pinned by "puts the install on PATH before the signature audit,
-not after" in tests/action-hardening-drift.test.ts, which compares the two
-positions within the install step's own script and strips trailing comments
-as well as whole-line ones. Both halves were added after a reviewer defeated
-the first version by appending the phrase to an unrelated line as a trailing
-comment.
+**The PATH write follows the signature audit (audit finding F1,
+2026-10-12).** The install step writes the install prefix to `GITHUB_PATH`
+only after the audit's failure branch has exited and before
+`verification-ok` is written. It used to come first, on the claim that it
+"grants nothing on its own, because the gates step does not run when the
+install step fails". That claim was false: the render and post steps run
+`if: always()`, so they run after a failed install step, the runner honours
+the file commands a failed step wrote, and the post step holds the job
+token. An early entry put the bins of a package that FAILED verification
+(npm links bins even under `--ignore-scripts`; a bin named node, gh or bash)
+ahead of the system's own there. The 2026-09-22 reason for the old order is
+gone: conductor is invoked by absolute path, and the render step branches on
+`verification-ok`, never on whether a binary is reachable, so a failed audit
+is still reported as a refusal. Pinned by "puts the install on PATH only
+after the signature audit has passed" in
+tests/action-hardening-drift.test.ts, which compares positions within the
+install step's own script, strips trailing comments as well as whole-line
+ones, and requires exactly one GITHUB_PATH line; and by "writes nothing to
+GITHUB_PATH when the signature audit fails, so no unverified bin reaches a
+later step" in tests/action.test.ts, which runs the step.
 
-**The audit's failure carries its reason.** action.yml:675-726 captures the
+**The comment step runs node and gh by absolute path.** The first step,
+"Resolve node and gh for the comment step" (`id: tools`, no condition, no
+token), resolves both from the job's PATH before this action has installed
+or written anything, skipping any hit under the gate prefix, and the post
+step runs `"$NODE_BIN"` and hands the poster `--gh "$GH_BIN"`; an empty
+value is a warning and no comment. This guards the post step's commands,
+not the shell that runs it: the runner resolves `shell: bash` against the
+same PATH, which is why the ordering above is the fix and this is the
+second layer. Pinned by "neither the render nor the post script invokes a
+bare node or gh" and "runs the poster by NODE_BIN and hands it GH_BIN, and
+never runs the node or gh on PATH" in tests/action-pr-comment.test.ts.
+Residual: a second use of this action in one job reuses the same prefix,
+and the first use's GITHUB_PATH entry for it is live from the start of the
+second use's own install step. After the second `npm install -g` that entry
+names new, unverified bins. Inside that install step bash first looks up
+`tr`, `sed` and `sleep` after the install, so a planted one could run on a
+failed audit and append `verification-ok=true` to GITHUB_OUTPUT; the step
+therefore drops the gate prefix from its own PATH before running any
+command, pinned by "runs nothing from the gate prefix inside the install
+step, even when an earlier use put it on PATH" in tests/action.test.ts.
+What stays open, documented and accepted: the render and post steps'
+`shell: bash` (resolved by the runner through the prepended PATH) and the
+render step's `mktemp`, `rm` and `env` (its fallback run needs the prefix
+to find the gates). The fix is a per-invocation prefix, so no use inherits
+another's entry.
+
+**The audit's failure carries its reason.** action.yml:726-776 captures the
 audit through a command substitution, writes `verification-failed` and
 `verification-reason` to the step outputs, prints a workflow error naming
 that no gate ran, which audit failed (over the installed tree), and what to do
@@ -4062,7 +4100,7 @@ conductor stub leaves a marker. The test sets `VERIFICATION_FAILED` and a
 reason, asserts the marker is absent, asserts the note that was actually
 written carries the reason, and a control run with `verification-ok`
 asserts the marker appears. The case with no verification reason and an
-install-step failure is tests/action-pr-comment.test.ts:440 ("an install-step failure before the audit (npm floor, npm install) makes no outage claim either").
+install-step failure is tests/action-pr-comment.test.ts:470 ("an install-step failure before the audit (npm floor, npm install) makes no outage claim either").
 
 The redundant backstop is deliberate. scripts/pr-comment.mjs replaces an
 empty or whitespace-only report with a note saying the gate could not
@@ -4179,7 +4217,7 @@ blocking-count-mismatch branch gets the "This run was advisory" wording and
 never the "Findings were advisory" one. End to end through the CLI: "maps a blocking run to
 exit 0 with the advisory wording, and pins the same run at exit 1 without
 the flag" and "leaves a could-not-run gate at exit 2, the load-bearing case
-advisory must never touch" in tests/cli.test.ts. The Action's own wiring: tests/action.test.ts:243 ("adds --advisory to the gates invocation only when the input is exactly "true"") and tests/action-pr-comment.test.ts:699 ("adds --advisory to the render run only when the input is exactly "true", proven by running the step"), both of which run the real step script
+advisory must never touch" in tests/cli.test.ts. The Action's own wiring: tests/action.test.ts:243 ("adds --advisory to the gates invocation only when the input is exactly "true"") and tests/action-pr-comment.test.ts:894 ("adds --advisory to the render run only when the input is exactly "true", proven by running the step"), both of which run the real step script
 against a conductor stub that records its argv rather than pattern-matching
 the YAML, following the same device tests/action.test.ts already uses for
 the trust-base fetch guard (commit f32c638, "Parse action.yml instead of
@@ -4201,7 +4239,7 @@ CONDUCTOR DOWNLOADS NO THIRD-PARTY BINARY. The external gates are resolved
 from `PATH` (or an absolute `command:`) only, exactly like the family gates
 outside node_modules; their profiles say `managed: false`
 (src/products.ts:163 and 201); and the Action installs exactly its four
-npm packages and has no input for either tool (action.yml:585-589). A
+npm packages and has no input for either tool (action.yml:655-659). A
 missing external binary is `binary-missing`, could-not-run, exit 2 for an
 enforced gate, never a skip. Pinned by "exits 1 when only an external gate
 blocks, and 2 when an external binary is missing" in tests/run.test.ts.
@@ -4290,7 +4328,23 @@ Since the osv design (docs/superpowers/specs, 2026-10-11) the exact names
 are the npm family plus go.mod, poetry.lock, Pipfile.lock, uv.lock,
 pdm.lock, Cargo.lock, Gemfile.lock, composer.lock, gradle.lockfile and
 packages.lock.json, each handed as a bare path, and go.sum is never handed
-over (osv-scanner 2.4.0 exits 127 on it; it reads go.mod for Go). pip
+over (osv-scanner 2.4.0 exits 127 on it; it reads go.mod for Go). Since
+2026-10-13 (audit finding F3) also mix.lock, pubspec.lock, Package.resolved,
+conan.lock, renv.lock, packages.config, buildscript-gradle.lockfile,
+gems.locked, pylock.toml, cabal.project.freeze and stack.yaml.lock, each
+measured against 2.4.0, and gradle's verification-metadata.xml only when its
+parent directory is `gradle` (2.4.0 exits 127 on it anywhere else, so
+`osvLockfileKind` takes the repository-relative path). Podfile.lock and
+deno.lock are measured rejects (exit 127) and are never handed; the
+unread-manifests note names them (section 10.1 of the osv design), in the
+nothing-to-scan diagnostic when nothing was handed and, since the 1b.2
+review, as a `conductor/manifests-not-handed` run note when other lockfiles
+were (a note, so it never by itself pushes a clean run off the one-line
+summary; pinned by "names unread manifests even when other lockfiles were
+handed over, as a note (review of 1b.2, item 5)" in
+tests/gate-runner.test.ts). Pinned
+by "hands over mix.lock and the other formats osv-scanner reads, and gradle
+metadata only under gradle/ (audit F3)" in tests/gate-runner.test.ts. pip
 requirements files (requirements.txt, requirements-dev.txt and its `_` and
 `.` spellings, dev-requirements.txt) are handed only when they pass the PIN
 CHECK (`checkRequirementsPins`, src/requirements-pin.ts): every
@@ -4319,7 +4373,19 @@ the diff. None tracked means the tool is not spawned and the gate is clean
 with `conductor/nothing-to-scan`; a listing that fails is
 `preparation-failed`, never "none". When lockfiles WERE handed and
 osv-scanner still exits 128, they parsed to no packages, and the diagnostic
-is the distinct `conductor/lockfiles-empty` naming them.
+is the distinct `conductor/lockfiles-empty` naming them. When it exits 0 or
+1 having read packages from some handed files and none from others, the
+same diagnostic names the empty ones and the `lockfiles` fact marks each
+`[no packages read]` (audit finding F2): osv-scanner 2.4.0 prints one
+"Scanned <path> file and found N packages" line per file on stderr at its
+default verbosity, and `emptiedLockfiles` (src/osv-coverage.ts) reads it,
+matching whole paths in their written and resolved spellings. Annotation
+only: the verdict is still osv-scanner's. A file with no count line is not
+named, so a policy that lowers osv-scanner's verbosity turns this off.
+Pinned by "names an emptied lockfile beside one that was read, on a clean
+run and on a blocked one (audit F2)" in tests/gate-runner.test.ts and, against
+the real binary, "names a lockfile emptied to {} beside one that was read
+(audit F2, for real)" in tests/external-gates.real.e2e.test.ts.
 
 THE VULNERABILITIES LINE'S LOCKFILE LIST COMES FROM THE UMBRELLA'S OWN
 ARGV, NEVER FROM OSV-SCANNER'S OUTPUT (issue #72). osv-scanner 2.x prints
@@ -4481,10 +4547,21 @@ Known open, each a limit rather than a bypass on a pull request:
 4. KNOWN-OPEN: on a LOCAL run a `.gitattributes` binary mark hides a file
    from gitleaks (see above); pull requests are protected.
 5. KNOWN-OPEN: a PULL REQUEST that rewrites a tracked lockfile to `{}`
-   silences the vulnerabilities gate for that lockfile: osv-scanner exits
-   128, reported as `conductor/lockfiles-empty` naming the file and treated
-   as clean. It is the one visible exception to "a pull request cannot
-   suppress its own finding", and the rewrite is in the diff.
+   silences the vulnerabilities gate for that lockfile. It is reported as
+   `conductor/lockfiles-empty` naming the file in both shapes: when it is
+   the only lockfile (osv-scanner exits 128, the gate exits 0, and when no
+   other gate checked anything the verdict token is `nothing-checked`) and,
+   since 2026-10-13, when other lockfiles are present (osv-scanner's
+   per-file count of zero; the other files' verdict stands and the
+   `lockfiles` fact marks the file `[no packages read]`). Before that fix
+   the multi-file case was silent: the emptied file was listed as scanned
+   and its advisories vanished with no word (audit finding F2). It is the
+   one visible exception to "a pull request cannot suppress its own
+   finding", and the rewrite is in the diff. The multi-file naming depends
+   on osv-scanner's stderr count line, so a policy that lowers its
+   verbosity, or a future osv-scanner that rewords the line, turns the
+   naming off without failing anything; the real-binary test pins the
+   wording for the version it runs against.
 6. KNOWN-OPEN: a base `.gitleaks.toml` whose `[extend] path` target is a
    symbolic link, or which writes the extend as an inline table or a quoted
    key, fails closed on every pull request (`preparation-failed`, or a
@@ -4710,6 +4787,31 @@ is labelled `nothing-checked`, never `pass`, because a run where no gate ran at
 all is not clean whatever the exit code says. Pinned by tests/verdict-token.test.ts
 ("is nothing-checked, never pass, for a run with no gate at all (exit stays 0)") and tests/action.test.ts (the closed-set pair
 check).
+
+Since 2026-10-13 (audit finding F4) the same token covers a run where gates
+DID run and every one of them checked nothing: a gate with
+`conductor/nothing-to-scan`; osv-scanner whose every handed lockfile parsed
+to no packages (its exit 128, which the runner marks with the run detail
+`packages-read 0`, so a sole lockfile rewritten to `{}` is labelled exactly
+like no lockfile at all); or the intent gate with no contract to check
+against. Before, one vulnerabilities gate with no lockfile it reads printed
+`pass` beside a verdict sentence saying it had nothing to scan. The token
+and the verdict sentence share one predicate, `gateCheckedNothing`
+(src/output-text.ts), so they cannot disagree; in that state the sentence
+reads "nothing was checked" and the one-line clean summary is not used. Not
+`could-not-run`: that token is exit 2 by construction (the action's pair
+check refuses it beside status 0), and a repository with nothing to scan
+must stay exit 0, so the existing exit-0 token whose meaning is "nothing was
+verified" is the one that fits; no new token and no change to the closed
+set. The PARTIAL-empty case (audit finding F2: some handed lockfiles read,
+one parsed to nothing) shares the `conductor/lockfiles-empty` code but never
+carries `packages-read 0`, so that gate counts as having checked something;
+the marker, not the diagnostic code, is what the predicate reads. Pinned by
+"is nothing-checked, never pass, when every gate that ran scanned nothing
+(audit F4)" and "is nothing-checked when every lockfile handed over parsed
+to no packages, and pass when only some did" in tests/verdict-token.test.ts,
+and by "labels a run whose sole lockfile is {} nothing-checked, the same as
+a run with no lockfile" in tests/gate-runner.test.ts.
 
 THE ONE PLACE A SECOND RUN REMAINS, and why. The action installs whatever
 `conductor-version` says, and a version older than the one that added

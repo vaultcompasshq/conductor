@@ -822,3 +822,60 @@ what it reports. Test 13's "after a throw" is a throw inside the comparison
 turned into a file); the comparison catches it, labels introduced, and the
 existing `finally` removes the work directory.
 
+## 10. Extensions after the 2026-10-12 audit
+
+### 10.1 More formats handed over (audit finding F3)
+
+A tracked mix.lock was neither scanned nor named (reproduced by the audit on
+a public Elixir repository). Each candidate below was handed to osv-scanner
+2.4.0 (osv-scalibr 0.4.5) with `--lockfile <absolute path>` on the
+implementation machine, one minimal fixture each:
+
+| file | result | decision |
+|---|---|---|
+| mix.lock, pubspec.lock, Package.resolved, conan.lock, renv.lock, packages.config, buildscript-gradle.lockfile, gems.locked, pylock.toml, stack.yaml.lock | read, 1 package each | handed over, by base name |
+| cabal.project.freeze | read, 2 packages | handed over, by base name |
+| gradle/verification-metadata.xml | read, 1 package | handed over only when the parent directory is `gradle` |
+| verification-metadata.xml anywhere else | exit 127 | not handed |
+| Podfile.lock, deno.lock | exit 127, "could not determine extractor" | not handed; named by the unread-manifests note |
+
+Not measured and not added: pom.xml (a manifest whose read resolves
+transitive versions over the network, not a lockfile), `*.deps.json` (a
+pattern, not a name), and anything else osv-scanner reads only through its
+own directory walk. `osvLockfileKind` now takes the repository-relative path
+so the gradle parent rule can be applied; every other name still matches on
+the base name at any depth. The unread-manifests list gains Podfile.lock,
+deno.lock, mix.exs and pubspec.yaml.
+
+### 10.2 An emptied lockfile beside another (audit finding F2)
+
+Measured on 2.4.0: with `package-lock.json` rewritten to `{}` beside a
+pinned `requirements.txt`, the exit is decided by the requirements file and
+stderr carries one line per handed file at the default verbosity,
+"Scanned <absolute path> file and found 0 packages" and "... found 1
+package". The JSON lists only sources with findings, so it cannot tell an
+empty file from a clean one. `emptiedLockfiles` (src/osv-coverage.ts) reads
+those lines, and the runner adds `conductor/lockfiles-empty` naming each
+handed file with zero packages and marks it `[no packages read]` on the
+`lockfiles` fact. Annotation only; a file with no count line is not named.
+
+### 10.3 The token when every gate that ran checked nothing (audit finding F4)
+
+`verdictToken` returned `nothing-checked` only when no gate ran at all, so
+the vulnerabilities gate alone with nothing to scan printed `pass`. It now
+returns `nothing-checked` when every gate in the run checked nothing
+(`conductor/nothing-to-scan`, or the intent gate with no contract), through
+the same predicate the verdict sentence uses. `could-not-run` was rejected:
+it means exit 2, the action's pair check refuses it beside status 0, and
+making nothing-to-scan exit 2 would redden every docs-only repository, which
+section 4 and the Q rulings rule out. A distinct new token was rejected too:
+`nothing-checked` already means "exit 0, nothing was verified", and a new
+word would widen the closed set every reader validates against.
+
+Review fix (same day): the exit-128 outcome, every handed lockfile parsing
+to no packages, also counts as checked nothing, so a sole lockfile
+rewritten to `{}` is labelled like no lockfile. The runner marks that branch
+with the run detail `packages-read 0`; the partial-empty note of 10.2 shares
+the `conductor/lockfiles-empty` code but never the marker, and the
+predicate reads the marker.
+

@@ -92,10 +92,32 @@ describe('product profiles', () => {
       'composer.lock',
       'gradle.lockfile',
       'packages.lock.json',
+      // Added 2026-10-13 (audit finding F3), each handed to osv-scanner 2.4.0
+      // with --lockfile and read (one or more packages): see section 10 of
+      // the 2026-10-11 osv design under docs/superpowers/specs.
+      'mix.lock',
+      'pubspec.lock',
+      'Package.resolved',
+      'conan.lock',
+      'renv.lock',
+      'packages.config',
+      'buildscript-gradle.lockfile',
+      'gems.locked',
+      'pylock.toml',
+      'cabal.project.freeze',
+      'stack.yaml.lock',
     ];
     for (const name of bare) {
       expect([name, osvLockfileKind(name)]).toEqual([name, 'bare']);
+      // Matched by base name at any depth.
+      expect([name, osvLockfileKind(`sub/dir/${name}`)]).toEqual([name, 'bare']);
     }
+    // Read only under a gradle directory: 2.4.0 exits 127 ("could not
+    // determine extractor") on the same file anywhere else (measured).
+    expect(osvLockfileKind('gradle/verification-metadata.xml')).toBe('bare');
+    expect(osvLockfileKind('android/gradle/verification-metadata.xml')).toBe('bare');
+    expect(osvLockfileKind('verification-metadata.xml')).toBeNull();
+    expect(osvLockfileKind('config/verification-metadata.xml')).toBeNull();
     const requirements = [
       'requirements.txt',
       'requirements-dev.txt',
@@ -118,6 +140,10 @@ describe('product profiles', () => {
       'base.txt',
       'package.json',
       'Pipfile',
+      // Rejected by osv-scanner 2.4.0 with --lockfile, exit 127 (measured
+      // 2026-10-13): handing them over would make every such run could-not-run.
+      'Podfile.lock',
+      'deno.lock',
     ];
     for (const name of rejected) {
       expect([name, osvLockfileKind(name)]).toEqual([name, null]);

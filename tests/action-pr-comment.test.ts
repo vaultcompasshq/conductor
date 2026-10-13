@@ -78,7 +78,13 @@ function runPrCommentScript(
     mktempFails = false,
     textReportBody,
     emptyTextReport = false,
+    nodeBin,
+    ghBin,
   }: {
+    /** The post step's NODE_BIN; defaults to the recording shim. '' is "not resolved". */
+    nodeBin?: string;
+    /** The post step's GH_BIN; defaults to a fixed absolute path. '' is "not resolved". */
+    ghBin?: string;
     mktempFails?: boolean;
     /** Body of the report the gates step is said to have written; sets TEXT_REPORT to it. */
     textReportBody?: string;
@@ -101,6 +107,8 @@ function runPrCommentScript(
   postEnv: string;
   /** Whether the post step ran at all (it is skipped when the render step published no file). */
   posted: boolean;
+  /** Names of the PATH-resolved node or gh stand-ins that ran: always empty when the steps are right. */
+  hijacked: string[];
 } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-pr-comment-step-'));
   try {
@@ -124,7 +132,24 @@ function runPrCommentScript(
     // contract. A plain POSIX shell script, deliberately: naming it `node`
     // and having it shell out to the real `node` to do the recording would
     // resolve through this same overridden PATH and shim itself.
-    const nodeShim = path.join(bin, 'node');
+    //
+    // OFF PATH, in a directory of its own, and reached only through the
+    // NODE_BIN the post step is given: the post step runs node by the
+    // absolute path the tools step resolved before anything was installed
+    // (audit finding F1). A `node` and a `gh` that ARE on PATH, in `bin`,
+    // stand for bins linked by a gate package that failed verification; they
+    // only leave a marker, so a test can prove they never ran.
+    const tools = path.join(dir, 'tools');
+    mkdirSync(tools, { recursive: true });
+    const nodeShim = path.join(tools, 'node');
+    const hijackMarker = path.join(dir, 'hijacked');
+    for (const name of ['node', 'gh']) {
+      writeFileSync(
+        path.join(bin, name),
+        `#!/bin/sh\nprintf '%s\\n' ${name} >> ${JSON.stringify(hijackMarker)}\nexit 0\n`,
+      );
+      chmodSync(path.join(bin, name), 0o755);
+    }
     writeFileSync(
       nodeShim,
       '#!/bin/sh\n' +
@@ -221,6 +246,8 @@ function runPrCommentScript(
             PATH: pathEnv,
             REPORT_FILE: publishedReport,
             GH_TOKEN: POST_TOKEN,
+            NODE_BIN: nodeBin ?? nodeShim,
+            GH_BIN: ghBin ?? '/resolved/before/install/gh',
             ACTION_PATH: '/action',
             PR_NUMBER: '42',
             GITHUB_REPOSITORY: 'acme/widgets',
@@ -260,6 +287,9 @@ function runPrCommentScript(
       conductorEnv: readFileSync(conductorEnvFile, 'utf8'),
       postEnv: readFileSync(nodeEnvFile, 'utf8'),
       posted,
+      hijacked: existsSync(hijackMarker)
+        ? readFileSync(hijackMarker, 'utf8').split('\n').filter((line) => line.length > 0)
+        : [],
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -546,7 +576,7 @@ describe('action.yml: the pr-comment step', () => {
     // THIS action's own tree instead, which github.action_path names
     // regardless of where the caller checked out.
     expect(stepEnv('pr-post').ACTION_PATH).toBe('${{ github.action_path }}');
-    expect(postScript).toMatch(/node "\$ACTION_PATH\/scripts\/pr-comment\.mjs"/);
+    expect(postScript).toMatch(/"\$NODE_BIN" "\$ACTION_PATH\/scripts\/pr-comment\.mjs"/);
   });
 
   it('passes the report by file path, never by interpolating its content into the command', () => {
@@ -568,6 +598,169 @@ describe('action.yml: the pr-comment step', () => {
 
   it('gives gh a write-capable token by declaring GH_TOKEN from github.token, on the POST step only', () => {
     expect(stepEnv('pr-post').GH_TOKEN).toBe('${{ github.token }}');
+  });
+});
+
+/**
+ * Audit finding F1 (2026-10-12): the render and post steps run if: always(),
+ * so they run after a failed install step. The install step now writes the
+ * gate prefix to GITHUB_PATH only once the signature audit has passed (pinned
+ * in tests/action-hardening-drift.test.ts), and the post step, which holds
+ * the job token, runs node and gh by absolute paths the first step resolved
+ * before anything was installed. See
+ * docs/superpowers/specs/2026-10-13-action-path-after-signature-audit.md.
+ */
+describe('action.yml: the comment steps never run a node or gh found on PATH (F1)', () => {
+  const toolsStep = steps.find((step) => step.id === 'tools');
+  const toolsScript = toolsStep?.run ?? '';
+
+  /** The script's lines with whole-line and trailing comments removed. */
+  function executableLines(script: string): string[] {
+    return script
+      .split('\n')
+      .map((line) => line.replace(/(^|\s)#.*$/, '').trim())
+      .filter((line) => line.length > 0);
+  }
+
+  /** A bare node or gh in command position, or handed to a command runner. */
+  const BARE_TOOL =
+    /(^|[;&|(!]\s*|\b(then|do|else|exec|command|env|time|xargs)\s+(-\S+(\s+[A-Z_][A-Z0-9_]*)?\s+)*)(node|gh)(\s|$|;|\))/;
+
+  it('the pattern catches the shapes it exists for, and not the absolute form', () => {
+    expect(BARE_TOOL.test('node "$ACTION_PATH/scripts/pr-comment.mjs"')).toBe(true);
+    expect(BARE_TOOL.test('gh api repos/x')).toBe(true);
+    expect(BARE_TOOL.test('if true; then node x; fi')).toBe(true);
+    expect(BARE_TOOL.test('env -u X node x')).toBe(true);
+    expect(BARE_TOOL.test('"$NODE_BIN" "$ACTION_PATH/scripts/pr-comment.mjs"')).toBe(false);
+    expect(BARE_TOOL.test('NODE_ARGS+=(--gh "$GH_BIN")')).toBe(false);
+  });
+
+  it('neither the render nor the post script invokes a bare node or gh', () => {
+    expect(prCommentScript.length).toBeGreaterThan(0);
+    expect(postScript.length).toBeGreaterThan(0);
+    for (const line of [...executableLines(prCommentScript), ...executableLines(postScript)]) {
+      expect(line).not.toMatch(BARE_TOOL);
+    }
+  });
+
+  it('the post step reads NODE_BIN and GH_BIN from the tools step, and passes --gh to the poster', () => {
+    expect(stepEnv('pr-post').NODE_BIN).toBe('${{ steps.tools.outputs.node }}');
+    expect(stepEnv('pr-post').GH_BIN).toBe('${{ steps.tools.outputs.gh }}');
+    expect(postScript).toMatch(/--gh "\$GH_BIN"/);
+  });
+
+  it('runs the poster by NODE_BIN and hands it GH_BIN, and never runs the node or gh on PATH', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true' }, { textReportBody: 'conductor 0.8.1\nverdict-token: pass\n' });
+    expect(run.status).toBe(0);
+    expect(run.posted).toBe(true);
+    expect(run.hijacked).toEqual([]);
+    expect(run.nodeArgv[0]).toBe('/action/scripts/pr-comment.mjs');
+    const ghFlag = run.nodeArgv.indexOf('--gh');
+    expect(ghFlag).toBeGreaterThan(-1);
+    expect(run.nodeArgv[ghFlag + 1]).toBe('/resolved/before/install/gh');
+  });
+
+  it('runs nothing and warns, exit 0, when node or gh was not resolved', () => {
+    for (const missing of [{ nodeBin: '' }, { ghBin: '' }]) {
+      const run = runPrCommentScript(
+        { VERIFICATION_OK: 'true' },
+        { textReportBody: 'conductor 0.8.1\nverdict-token: pass\n', ...missing }
+      );
+      expect(run.status).toBe(0);
+      expect(run.hijacked).toEqual([]);
+      expect(run.nodeArgv).toEqual([]);
+      expect(run.stdout).toMatch(/::warning::conductor: .*skipping the pull request comment/);
+    }
+  });
+
+  it('the tools step is the first step, has no condition and holds no token', () => {
+    expect(steps[0]?.id).toBe('tools');
+    expect(toolsStep?.if).toBeUndefined();
+    expect(Object.keys(toolsStep?.env ?? {}).some((key) => /TOKEN/i.test(key))).toBe(false);
+    expect(toolsStep?.env?.GATE_PREFIX).toBe('${{ runner.temp }}/conductor-gates');
+  });
+
+  function runToolsStep(
+    pathDirs: string[],
+    prefix: string,
+    cwd?: string
+  ): { status: number | null; outputs: string } {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-tools-step-'));
+    try {
+      const githubOutput = path.join(dir, 'github-output.txt');
+      writeFileSync(githubOutput, '');
+      // bash by absolute path: the PATH handed to the script below holds only
+      // the test's own tool directories.
+      const result = spawnSync('/bin/bash', ['-c', toolsScript], {
+        encoding: 'utf8',
+        ...(cwd === undefined ? {} : { cwd }),
+        env: { PATH: pathDirs.join(path.delimiter), GATE_PREFIX: prefix, GITHUB_OUTPUT: githubOutput },
+      });
+      return { status: result.status, outputs: readFileSync(githubOutput, 'utf8') };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function makeTools(dir: string, names: string[]): string {
+    mkdirSync(dir, { recursive: true });
+    for (const name of names) {
+      writeFileSync(path.join(dir, name), '#!/bin/sh\nexit 0\n');
+      chmodSync(path.join(dir, name), 0o755);
+    }
+    return dir;
+  }
+
+  it('resolves node and gh to absolute paths, skipping any under the gate prefix', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-tools-'));
+    try {
+      const prefix = path.join(dir, 'conductor-gates');
+      const prefixBin = makeTools(path.join(prefix, 'bin'), ['node', 'gh']);
+      const system = makeTools(path.join(dir, 'system'), ['node', 'gh']);
+      // Only these two directories: the script uses shell builtins alone,
+      // and a runner image with its own gh in /usr/bin must not decide this.
+      const run = runToolsStep([prefixBin, system], prefix);
+      expect(run.status).toBe(0);
+      expect(run.outputs).toContain(`node=${path.join(system, 'node')}\n`);
+      expect(run.outputs).toContain(`gh=${path.join(system, 'gh')}\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('publishes an empty value, and still exits 0, when a tool is not found outside the prefix', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-tools-'));
+    try {
+      const prefix = path.join(dir, 'conductor-gates');
+      const prefixBin = makeTools(path.join(prefix, 'bin'), ['node', 'gh']);
+      const system = makeTools(path.join(dir, 'system'), ['node']);
+      const run = runToolsStep([prefixBin, system], prefix);
+      expect(run.status).toBe(0);
+      expect(run.outputs).toContain(`node=${path.join(system, 'node')}\n`);
+      expect(run.outputs).toContain('gh=\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never publishes a relative path, which the post step would resolve against its own directory', () => {
+    // A relative PATH entry makes `type -P` answer with a relative path. The
+    // post step runs from the runner temp, so "rel/node" there would name
+    // whatever sits at that spot, not what was found here. Only an absolute
+    // hit is taken; the first absolute one wins.
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-tools-'));
+    try {
+      const prefix = path.join(dir, 'conductor-gates');
+      makeTools(path.join(dir, 'rel'), ['node', 'gh']);
+      const system = makeTools(path.join(dir, 'system'), ['node']);
+      const run = runToolsStep(['rel', system], prefix, dir);
+      expect(run.status).toBe(0);
+      expect(run.outputs).toContain(`node=${path.join(system, 'node')}\n`);
+      expect(run.outputs).toContain('gh=\n');
+      expect(run.outputs).not.toMatch(/=rel\//);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -653,6 +846,8 @@ describe('action.yml: the render step is tokenless and the post step is the only
       '42',
       '--repo',
       'acme/widgets',
+      '--gh',
+      '/resolved/before/install/gh',
     ]);
   });
 
