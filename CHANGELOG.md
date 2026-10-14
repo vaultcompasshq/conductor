@@ -14,6 +14,8 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-14
+
 **A minor release.** Ecosystem coverage for the vulnerabilities gate and its
 comparison with the base branch ship together: coverage alone would turn a
 Python or Go backlog from a false "nothing to scan" into a red on every pull
