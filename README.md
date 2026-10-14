@@ -167,7 +167,7 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.8.0
+   conductor 0.9.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
@@ -1307,7 +1307,7 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README pin the v0.8.1 commit.
+SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.9.0.
 
 ```yaml
 name: guardrails
@@ -1329,7 +1329,7 @@ jobs:
         with:
           node-version: '22.11.0'
       - id: conductor
-        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
+        uses: vaultcompasshq/conductor@v0.9.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1404,7 +1404,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
+        uses: vaultcompasshq/conductor@v0.9.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These three
@@ -1416,7 +1416,7 @@ jobs:
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
           dep-guard-version: 0.11.1
-          vault-guard-version: 1.9.1
+          vault-guard-version: 1.10.0
           intent-guard-version: 1.8.1
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
@@ -1555,7 +1555,7 @@ jobs:
           node-version: '22.11.0'
       - id: conductor
         timeout-minutes: 5
-        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
+        uses: vaultcompasshq/conductor@v0.9.0
         with:
           pr-comment: true
           advisory: true
@@ -1691,7 +1691,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
+        uses: vaultcompasshq/conductor@v0.9.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1770,12 +1770,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
+        uses: vaultcompasshq/conductor@v0.9.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@ca5958c9f33e5416ec5bd0d7be70497345f73af5 # v0.8.2
+        uses: vaultcompasshq/conductor@v0.9.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
