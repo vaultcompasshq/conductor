@@ -5,7 +5,7 @@
 // a diagnostic, the way the basename list has always decided what is handed
 // over without judging anything. The verdict is still osv-scanner's own.
 
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import type { Diagnostic } from './envelope.js';
@@ -114,7 +114,9 @@ export function selectOsvInputs(args: {
     // Never a vendored copy under node_modules: that is a dependency's own
     // lockfile, not a statement about what this repository resolves.
     .filter((file) => !file.split('/').includes('node_modules'))
-    .filter((file) => osvLockfileKind(path.posix.basename(file)) !== null)
+    // The whole repository-relative path, not the base name: one format
+    // (gradle's verification-metadata.xml) is matched on its parent too.
+    .filter((file) => osvLockfileKind(file) !== null)
     .sort();
 
   const head = headReader(args.repoRoot, trackedSet);
@@ -127,7 +129,7 @@ export function selectOsvInputs(args: {
   const closures = new Map<string, string[] | null>();
 
   for (const file of candidates) {
-    if (osvLockfileKind(path.posix.basename(file)) === 'bare') {
+    if (osvLockfileKind(file) === 'bare') {
       handed.push(file);
       continue;
     }
@@ -191,7 +193,7 @@ export function noLongerScanned(repoRoot: string, ref: string, tracked: Readonly
   return listing.stdout
     .split('\0')
     .filter((file) => file !== '' && !file.split('/').includes('node_modules'))
-    .filter((file) => osvLockfileKind(path.posix.basename(file)) !== null && !tracked.has(file))
+    .filter((file) => osvLockfileKind(file) !== null && !tracked.has(file))
     .sort()
     .map((file) => ({
       code: 'conductor/lockfile-no-longer-scanned',
@@ -212,6 +214,60 @@ export function nothingScannableMessage(notScanned: readonly string[]): string {
 /** The run detail beside `lockfiles`: how many requirements files were left out, and which. */
 export function notScannedDetail(notScanned: readonly string[]): string {
   return `${notScanned.length} (${notScanned.join(', ')})`;
+}
+
+/**
+ * osv-scanner 2.4.0's per-file count line on stderr, at its default
+ * verbosity (measured): "Scanned <absolute path> file and found N packages",
+ * with "package" for one.
+ */
+const SCANNED_LINE = /^Scanned (.+) file and found (\d+) packages?$/;
+
+/** A path in both spellings worth comparing: as written and, when it exists, resolved. */
+function spellings(file: string): string[] {
+  const out = [file];
+  try {
+    const real = realpathSync(file);
+    if (real !== file) {
+      out.push(real);
+    }
+  } catch {
+    // Not on disk under this spelling: the written form is all there is.
+  }
+  return out;
+}
+
+/**
+ * The handed lockfiles osv-scanner said it found 0 packages in (audit
+ * finding F2). Its exit 128 covers only the case where EVERY handed file
+ * parsed to nothing, and its JSON lists only sources with findings, so a
+ * lockfile rewritten to `{}` beside a healthy one is otherwise
+ * indistinguishable from a clean one: listed as scanned, with every advisory
+ * it carried gone.
+ *
+ * Read from osv-scanner's stderr, which is annotation, never a verdict: this
+ * only adds a note. `handed` are the repository-relative paths the umbrella
+ * passed (the parse-as prefix is not part of them), and `cwd` is where the
+ * child ran. A path is compared in its written and its resolved spelling on
+ * both sides, so a temp directory reached through a symlink still matches,
+ * and by whole path, so two files with one base name never stand in for each
+ * other. A file with no count line is not named: that is a limit (a policy
+ * that lowers osv-scanner's verbosity hides every line), not a finding.
+ */
+export function emptiedLockfiles(stderr: string, handed: readonly string[], cwd: string): string[] {
+  const empty = new Set<string>();
+  for (const raw of stderr.split('\n')) {
+    const match = SCANNED_LINE.exec(raw.trim());
+    if (match !== null && Number(match[2]) === 0) {
+      for (const spelling of spellings(match[1] as string)) {
+        empty.add(spelling);
+      }
+    }
+  }
+  if (empty.size === 0) {
+    return [];
+  }
+  return handed.filter((file) => spellings(path.resolve(cwd, file)).some((spelling) => empty.has(spelling)));
 }
 
 /** The note when a policy's no-resolve was dropped from an invocation. */

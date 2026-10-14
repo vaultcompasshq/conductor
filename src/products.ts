@@ -72,7 +72,7 @@ export interface ProductProfile {
    * the pin check (src/requirements-pin.ts). Null for a tool that is not
    * handed files.
    */
-  lockfileMatcher: ((basename: string) => LockfileKind | null) | null;
+  lockfileMatcher: ((file: string) => LockfileKind | null) | null;
   /**
    * The config can name another file (`[extend] path`) that the tool reads
    * relative to its working directory. On a pull request every such file is
@@ -114,6 +114,14 @@ export type LockfileKind = 'bare' | 'requirements';
  * (the 2026-10-11 osv design under docs/superpowers/specs, section 2.1). go.sum is deliberately absent: 2.4.0
  * rejects it ("could not determine extractor", exit 127), which would make
  * every Go pull request could-not-run, and go.mod is what it reads for Go.
+ *
+ * The second group was added on 2026-10-13 (audit finding F3: a tracked
+ * mix.lock was neither scanned nor named), each measured the same way
+ * against 2.4.0 and read with one or more packages. Measured and NOT added,
+ * because 2.4.0 exits 127 on them: Podfile.lock and deno.lock (both are
+ * named by the unread-manifests note instead). gradle's
+ * verification-metadata.xml is read only inside a `gradle` directory and is
+ * matched by `osvLockfileKind` rather than listed here.
  */
 export const OSV_LOCKFILE_NAMES: readonly string[] = [
   'package-lock.json',
@@ -131,7 +139,21 @@ export const OSV_LOCKFILE_NAMES: readonly string[] = [
   'composer.lock',
   'gradle.lockfile',
   'packages.lock.json',
+  'mix.lock',
+  'pubspec.lock',
+  'Package.resolved',
+  'conan.lock',
+  'renv.lock',
+  'packages.config',
+  'buildscript-gradle.lockfile',
+  'gems.locked',
+  'pylock.toml',
+  'cabal.project.freeze',
+  'stack.yaml.lock',
 ];
+
+/** gradle's dependency verification file, which 2.4.0 reads only under a `gradle` directory. */
+const GRADLE_VERIFICATION_METADATA = 'verification-metadata.xml';
 
 /**
  * pip requirements files, by base name: requirements.txt itself,
@@ -147,8 +169,19 @@ const REQUIREMENTS_PATTERNS: readonly RegExp[] = [
   /^[A-Za-z0-9._-]+[-_]requirements\.txt$/,
 ];
 
-/** What osv-scanner is handed for a tracked file with this base name, or null. */
-export function osvLockfileKind(basename: string): LockfileKind | null {
+/**
+ * What osv-scanner is handed for a tracked file, or null. Takes the
+ * repository-relative path (a bare base name works for every name but one):
+ * gradle's verification-metadata.xml is read by osv-scanner 2.4.0 only when
+ * its parent directory is `gradle`, and anywhere else it exits 127, so the
+ * parent is part of the match for that one file.
+ */
+export function osvLockfileKind(file: string): LockfileKind | null {
+  const segments = file.split('/');
+  const basename = segments[segments.length - 1] ?? '';
+  if (basename === GRADLE_VERIFICATION_METADATA) {
+    return segments[segments.length - 2] === 'gradle' ? 'bare' : null;
+  }
   if (OSV_LOCKFILE_NAMES.includes(basename)) {
     return 'bare';
   }

@@ -1098,9 +1098,16 @@ function relativeToRoots(file: string, roots: readonly string[]): string {
  * never osv-scanner's own results[], which 2.x prints only for a source with
  * findings. A clean scan of one lockfile and a run that scanned none both
  * have results: [], and only this list tells them apart.
+ *
+ * A file in `emptied` (osv-scanner read no packages from it, audit finding
+ * F2) is marked in place, so the count never reads as that many files read.
  */
-function describeLockfiles(lockfiles: readonly string[]): string {
-  return lockfiles.length === 0 ? '0' : `${lockfiles.length} (${lockfiles.join(', ')})`;
+export function describeLockfiles(
+  lockfiles: readonly string[],
+  emptied: ReadonlySet<string> = new Set()
+): string {
+  const named = lockfiles.map((file) => (emptied.has(file) ? `${file} [no packages read]` : file));
+  return lockfiles.length === 0 ? '0' : `${lockfiles.length} (${named.join(', ')})`;
 }
 
 export function normalizeOsvScanner(

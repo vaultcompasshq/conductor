@@ -1005,6 +1005,11 @@ function runInstall(
   // How many `audit` calls fail before one passes. A counter file under the
   // temp dir carries the count across the shim's separate invocations.
   auditFailures = 0,
+  // Commands to plant in <prefix>/bin, which then goes FIRST on PATH: the
+  // shape of a second use of the action in one job, where the first use's
+  // GITHUB_PATH entry is live in this step. Each planted command only
+  // records its own name.
+  planted: string[] = [],
 ): {
   argv: string[];
   githubPath: string;
@@ -1013,10 +1018,25 @@ function runInstall(
   prefix: string;
   status: number;
   stderr: string;
+  /** Names of planted commands that ran. */
+  plantedRan: string[];
 } {
   const dir = tempDir();
   const bin = path.join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
+  const plantedBin = path.join(dir, 'prefix', 'bin');
+  const plantedRecord = path.join(dir, 'planted-ran.txt');
+  writeFileSync(plantedRecord, '');
+  if (planted.length > 0) {
+    mkdirSync(plantedBin, { recursive: true });
+    for (const name of planted) {
+      writeFileSync(
+        path.join(plantedBin, name),
+        `#!/bin/sh\nprintf '%s\\n' ${name} >> ${JSON.stringify(plantedRecord)}\nexit 0\n`,
+      );
+      chmodSync(path.join(plantedBin, name), 0o755);
+    }
+  }
   const record = path.join(dir, 'npm-argv.txt');
   const auditCount = path.join(dir, 'audit-count.txt');
   const shim = path.join(bin, 'npm');
@@ -1060,7 +1080,10 @@ function runInstall(
   const result = spawnSync('bash', ['-c', installScript], {
     encoding: 'utf8',
     env: {
-      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      PATH:
+        planted.length > 0
+          ? `${plantedBin}${path.delimiter}${bin}${path.delimiter}${process.env.PATH ?? ''}`
+          : `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
       npm_config_prefix: prefix,
       GITHUB_PATH: githubPath,
       GITHUB_STEP_SUMMARY: githubSummaryFile,
@@ -1083,6 +1106,7 @@ function runInstall(
     githubOutput: readFileSync(githubOutputFile, 'utf8'),
     githubSummary: readFileSync(githubSummaryFile, 'utf8'),
     prefix,
+    plantedRan: readFileSync(plantedRecord, 'utf8').split('\n').filter((line) => line.length > 0),
   };
 }
 
@@ -1298,6 +1322,37 @@ describe('action.yml installs the gates outside the tree', () => {
   it('prepends the install bin directory to PATH rather than calling it by path', () => {
     const { githubPath } = runInstall();
     expect(githubPath.trim()).toMatch(/[/\\]bin$/);
+  });
+
+  it('writes nothing to GITHUB_PATH when the signature audit fails, so no unverified bin reaches a later step', () => {
+    // Audit finding F1 (2026-10-12): the render and post steps run if:
+    // always(), after a failed install step, and the runner honours the file
+    // commands that step wrote before failing. An entry here would put a
+    // package that failed verification ahead of the system's node, gh and
+    // bash in the step that holds the job token.
+    const failed = runInstall({}, '10.9.2', 2);
+    expect(failed.status).not.toBe(0);
+    expect(failed.githubPath).toBe('');
+    // The control: the same harness with a passing audit does write it.
+    expect(runInstall({}, '10.9.2', 1).githubPath.trim()).toMatch(/[/\\]bin$/);
+  });
+
+  it('runs nothing from the gate prefix inside the install step, even when an earlier use put it on PATH', () => {
+    // A second use of the action in one job: the first use's GITHUB_PATH
+    // entry for the same prefix is live here, and the npm install below puts
+    // the NEW, not yet verified bins into it. bash first looks up tr, sed,
+    // sleep (and mkdir, cat) after that install, so a planted one would run
+    // in this step on a failed audit and could append verification-ok=true
+    // to GITHUB_OUTPUT. The step drops the prefix from its own PATH first.
+    const tools = ['tr', 'sed', 'sleep', 'mkdir', 'cat', 'printf', 'grep', 'head'];
+    const failed = runInstall({}, '10.9.2', 2, tools);
+    expect(failed.plantedRan).toEqual([]);
+    expect(failed.status).not.toBe(0);
+    expect(failed.githubOutput).not.toContain('verification-ok=true');
+    expect(failed.githubOutput).toContain('verification-failed=true');
+    const passed = runInstall({}, '10.9.2', 0, tools);
+    expect(passed.plantedRan).toEqual([]);
+    expect(passed.status).toBe(0);
   });
 
   it('invokes conductor by absolute path, never by bare name', () => {
@@ -2008,6 +2063,10 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(outputLines(run)).not.toContain('verdict=pass');
     expect(run.summary).toContain('conductor verdict: nothing-checked');
     expect(run.summary).toContain('Nothing was checked.');
+    // Since audit finding F4 the token also covers gates that ran and
+    // examined nothing, so the summary may not claim that no gate ran.
+    expect(run.summary).not.toContain('No gate ran,');
+    expect(run.summary).toContain('every gate that ran had nothing to check');
     expect(existsSync(run.textReport)).toBe(true);
   });
 

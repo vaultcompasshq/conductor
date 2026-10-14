@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // The CLI wrapper `action.yml`'s pull-request-comment step invokes:
 //
-//   node "$ACTION_PATH/scripts/pr-comment.mjs" \
-//     --report <file> --pr <number> --repo <owner/repo>
+//   "$NODE_BIN" "$ACTION_PATH/scripts/pr-comment.mjs" \
+//     --report <file> --pr <number> --repo <owner/repo> --gh "$GH_BIN"
+//
+// NODE_BIN and GH_BIN are absolute paths the action resolved in its first
+// step, before any gate package was installed.
 //
 // It reads conductor's own text report off disk and hands it to
 // `postReport` (scripts/lib/pr-comment.mjs) to post or update as a sticky
@@ -24,9 +27,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { postReport } from './lib/pr-comment.mjs';
 
-/** `--report <file> --pr <number> --repo <owner/repo> [--marker <text>]`. */
+/** `--report <file> --pr <number> --repo <owner/repo> [--marker <text>] [--gh <path>]`. */
 export function parseArgs(argv) {
-  const opts = { report: null, pr: null, repo: null, marker: undefined };
+  const opts = { report: null, pr: null, repo: null, marker: undefined, gh: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--report') {
@@ -40,6 +43,9 @@ export function parseArgs(argv) {
       i += 1;
     } else if (arg === '--marker') {
       opts.marker = argv[i + 1];
+      i += 1;
+    } else if (arg === '--gh') {
+      opts.gh = argv[i + 1];
       i += 1;
     }
   }
@@ -59,9 +65,15 @@ export function parseArgs(argv) {
  * `@file` form, so a regression from -F back to -f would pass every offline
  * test while breaking against a real `gh`. The smoke test is what actually
  * exercises the real binary's own file-read behavior.
+ *
+ * `ghBin` is the program to run. The action always passes an absolute path,
+ * resolved in its first step before any gate package was installed (audit
+ * finding F1), so a package that failed verification but linked a bin named
+ * gh is never the one run with the token. Run by hand without --gh, it is
+ * resolved by name as before.
  */
-export function ghRun(argv) {
-  const result = spawnSync('gh', argv, { encoding: 'utf8' });
+export function ghRun(argv, ghBin = 'gh') {
+  const result = spawnSync(ghBin, argv, { encoding: 'utf8' });
   if (result.error) {
     throw result.error;
   }
@@ -79,7 +91,7 @@ function warn(message) {
 }
 
 function main() {
-  const { report, pr, repo, marker } = parseArgs(process.argv.slice(2));
+  const { report, pr, repo, marker, gh } = parseArgs(process.argv.slice(2));
 
   if (!report || !pr || !repo) {
     warn(
@@ -124,7 +136,8 @@ function main() {
     return file;
   };
 
-  const result = postReport({ run: ghRun, repo, pr, reportText, marker, writeBodyFile });
+  const run = (argv) => ghRun(argv, gh === undefined || gh === '' ? 'gh' : gh);
+  const result = postReport({ run, repo, pr, reportText, marker, writeBodyFile });
   if (!result.posted) {
     warn(result.warning);
   }

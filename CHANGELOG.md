@@ -20,6 +20,60 @@ Python or Go backlog from a false "nothing to scan" into a red on every pull
 request, and the comparison is what lets those repositories enforce on new
 advisories from their first pull request.
 
+### Security
+
+- **The action puts the gate install on `PATH` only after the signature
+  audit passes.** The write used to come before the audit, on the claim that
+  it granted nothing because the gates step does not run after a failed
+  install. The pull request comment steps run `if: always()`, though, so on
+  a failed audit they ran with the unverified packages' bins ahead of the
+  system's own, and the post step holds the job token. npm links a
+  package's bins even under `--ignore-scripts`, so a tampered gate package
+  declaring a bin named `node` or `gh` would have run with that token. The
+  post step now also runs `node` and `gh` by absolute paths that a new
+  first step, "Resolve node and gh for the comment step", resolves before
+  anything is installed. Nothing changes for a run whose audit passes. A
+  runner with no `node` or `gh` on `PATH` when the action starts gets a
+  warning and no comment, as it effectively did before.
+
+### Fixed
+
+- **A lockfile emptied beside another lockfile is named.** A pull request
+  that rewrote one lockfile to `{}` while another was present got
+  `lockfiles 2 (...)` with the emptied file listed as scanned, no note, and
+  every advisory it carried gone; only a sole emptied lockfile was named.
+  The vulnerabilities gate now reads osv-scanner's own per-file package
+  count and names each handed file it read no packages from in a
+  `conductor/lockfiles-empty` note, and the `lockfiles` line marks it
+  `[no packages read]`. The verdict over the other files is unchanged. The
+  count is the line osv-scanner prints at its default verbosity, so a policy
+  that lowers its verbosity turns the naming off.
+- **Lockfile formats osv-scanner reads are now handed to it.** `mix.lock`,
+  `pubspec.lock`, `Package.resolved`, `conan.lock`, `renv.lock`,
+  `packages.config`, `buildscript-gradle.lockfile`, `gems.locked`,
+  `pylock.toml`, `cabal.project.freeze`, `stack.yaml.lock`, and
+  `verification-metadata.xml` inside a `gradle` directory were neither
+  scanned nor named; a repository whose only lockfile was one of them got
+  "nothing to scan". Each was measured against osv-scanner 2.4.0. **This can
+  newly turn a run red**: an Elixir, Dart, Swift, C/C++, R, .NET, Gradle,
+  Ruby, Python or Haskell repository with a known advisory in one of these
+  files now blocks on it, and on a pull request the base comparison labels
+  advisories already on the base the same way as for every other lockfile.
+  `Podfile.lock` and `deno.lock`, which osv-scanner 2.4.0 rejects, are named
+  in the not-handed note along with `mix.exs` and `pubspec.yaml`. That note
+  is now written whenever a tracked manifest was not handed over, also when
+  other lockfiles were (as a `conductor/manifests-not-handed` run note);
+  before, it appeared only when nothing at all was handed over.
+- **The verdict token is `nothing-checked`, not `pass`, when every gate
+  that ran checked nothing**: the vulnerabilities gate with no lockfile it
+  reads, or whose every lockfile parsed to no packages (a sole lockfile
+  rewritten to `{}`), or the intent gate with no contract to check against.
+  The vulnerabilities line then also carries `packages-read 0`. The verdict
+  sentence says "nothing was checked" in that state too. The exit code is
+  unchanged (0). A workflow that reads the Action's `verdict` output and
+  treats only `pass` as clean will now see `nothing-checked` for such a run,
+  which is the point.
+
 ### Changed
 
 - **The vulnerabilities gate no longer says "no tracked lockfile; treated

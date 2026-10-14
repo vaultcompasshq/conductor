@@ -128,7 +128,8 @@ outputs:
   verdict:
     description: >-
       The verdict token of the run that decided this job's exit code: one of
-      pass, nothing-checked (exit 0 but no gate ran at all), advisory-blocked
+      pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or
+      every gate that ran had nothing to scan or no contract), advisory-blocked
       (N), unenforced-findings (N), blocked (N) or
       could-not-run, spelled exactly as the second line of the text report
       carries it. It is a label for conductor's own exit decision and decides
@@ -144,6 +145,46 @@ outputs:
 runs:
   using: composite
   steps:
+    # NODE AND GH FOR THE COMMENT STEP, RESOLVED BEFORE ANYTHING IS INSTALLED.
+    #
+    # The "Post the report" step holds the job token and runs node, which runs
+    # gh. Both used to be resolved by bare name there, against a PATH that
+    # carried the gate install prefix, and that step runs if: always(), so it
+    # ran after a FAILED signature audit with whatever bins the unverified
+    # packages had linked (audit finding F1, 2026-10-12; --ignore-scripts
+    # stops lifecycle scripts, not bin links). The install step now writes the
+    # prefix to GITHUB_PATH only after the audit passes; this step is the
+    # second half: absolute paths, resolved here, first, before this action
+    # has installed or written anything, and handed to the post step as
+    # outputs.
+    #
+    # FIRST and UNCONDITIONAL, so it has run whichever later step fails, and
+    # it never fails itself: a tool that is not found is an empty output,
+    # which the post step turns into a warning and no comment. Any hit under
+    # the gate prefix is skipped, which matters only when this action runs
+    # twice in one job and the first run's PATH entry is already in place.
+    # Shell builtins only (type, case, printf), so nothing here is itself
+    # resolved from PATH. No token in its environment.
+    - name: Resolve node and gh for the comment step
+      id: tools
+      shell: bash
+      env:
+        GATE_PREFIX: ${{ runner.temp }}/conductor-gates
+      run: |
+        set -u
+        pick() {
+          local found candidate=""
+          while IFS= read -r found; do
+            case "$found" in
+              "$GATE_PREFIX"/*) ;;
+              /*) if [ -z "$candidate" ]; then candidate="$found"; fi ;;
+            esac
+          done <<< "$(type -P -a "$1" 2>/dev/null || true)"
+          printf '%s' "$candidate"
+        }
+        printf 'node=%s\n' "$(pick node)" >> "$GITHUB_OUTPUT"
+        printf 'gh=%s\n' "$(pick gh)" >> "$GITHUB_OUTPUT"
+
     # THE PROGRAMS COME FROM OUTSIDE THE TREE THEY JUDGE. Until 0.4.0 this
     # action installed nothing and ran the repository's own
     # node_modules/.bin/conductor, which put the whole family of programs
@@ -476,6 +517,26 @@ runs:
         AUDIT_RETRY_DELAY_SECONDS: '5'
       run: |
         set -eu
+        # THE GATE PREFIX OFF THIS STEP'S OWN PATH, before any command runs.
+        # A second use of this action in one job (a monorepo running it per
+        # package) installs into the same prefix, and the first use's
+        # GITHUB_PATH entry for it is live here. The npm install below puts
+        # new, not yet verified bins into that directory, and bash looks up
+        # tr, sed and sleep for the first time after it: a planted one would
+        # run here on a failed audit and could append verification-ok=true to
+        # GITHUB_OUTPUT. Dropping the entry for this step alone costs nothing,
+        # since nothing in it needs a gate (review of 1b.2, item 2). Builtins
+        # only until PATH is rebuilt.
+        conductor_clean_path=""
+        IFS=':' read -r -a conductor_path_parts <<< "$PATH"
+        for conductor_part in ${conductor_path_parts[@]+"${conductor_path_parts[@]}"}; do
+          case "$conductor_part" in
+            "$npm_config_prefix" | "$npm_config_prefix"/*) ;;
+            *) conductor_clean_path="${conductor_clean_path:+$conductor_clean_path:}$conductor_part" ;;
+          esac
+        done
+        PATH="$conductor_clean_path"
+        hash -r
         mkdir -p "$npm_config_prefix"
 
         # THE VERIFICATION BELOW NEEDS A RECENT npm, AND SAYS SOMETHING
@@ -636,24 +697,7 @@ runs:
         # EMISSINGSIGNATUREKEY, and a sigstore or TUF outage does the same to
         # everyone at once. Documented in the README rather than left to be
         # discovered from a red required check.
-        # BEFORE the signature audit, deliberately. This line is bookkeeping,
-        # not a privilege grant: the gates step does not run when this step
-        # fails, so an early PATH entry grants nothing. Ordered AFTER a
-        # fail-closed check instead, the failure mode is a later step
-        # reporting a missing binary, which is what the 2026-09-22 incident
-        # looked like from the outside and is why nobody read it as a refusal
-        # for two days. See docs/design-notes.md, "Why a failed signature
-        # check must say so".
         #
-        # The umbrella resolves each GATE by NAME, which is the reason the
-        # prefix goes on PATH at all. Conductor itself is invoked by absolute
-        # path, so this line is not what makes the umbrella reachable.
-        #
-        # THE LAYOUT ASSUMED HERE IS THE LINUX AND MACOS ONE, where a global
-        # install puts its shims in <prefix>/bin. On Windows npm puts them in
-        # the prefix directory itself, so this line would put an empty
-        # directory on PATH and every gate would then be reported missing.
-        printf '%s\n' "$npm_config_prefix/bin" >> "$GITHUB_PATH"
         # CAPTURED rather than left to die bare, and this is the whole of the
         # change: fail-closed is unchanged. The exit below is still non-zero
         # and the gates step still does not run. What is different is that the
@@ -730,6 +774,33 @@ runs:
           printf '::error::conductor: could not verify the gate packages against the registry, so no gate ran and nothing was checked. The npm signature audit (npm audit signatures) of the installed gate packages and their dependencies failed, and the npm output at the end of this line is the reason. This step already retried once; re-run the job once, and treat a repeat as real. %s\n' "$audit_reason"
           exit "$audit_status"
         fi
+        # AFTER the signature audit has passed, and only then (audit finding
+        # F1, 2026-10-12). This line used to sit before the audit, on the
+        # reasoning that the gates step does not run when this step fails, so
+        # an early entry granted nothing. That was false: the render and post
+        # steps run if: always(), so they run after a failed install step, and
+        # the runner honours the file commands a step wrote before it failed.
+        # An early entry put the bins of a package that FAILED verification
+        # (a bin named node, gh or bash, linked even under --ignore-scripts)
+        # ahead of the system's own in the step that holds the job token.
+        #
+        # The 2026-09-22 reason for the old order no longer applies: no later
+        # step reaches the umbrella by name (CONDUCTOR_BIN is an absolute
+        # path), and the render step branches on verification-ok, not on
+        # whether a binary is reachable, so a failed audit is still reported
+        # as a refusal. See docs/design-notes.md, "Why a failed signature
+        # check must say so", and the 2026-10-13 design note under
+        # docs/superpowers/specs.
+        #
+        # The umbrella resolves each GATE by NAME, which is the reason the
+        # prefix goes on PATH at all. Conductor itself is invoked by absolute
+        # path, so this line is not what makes the umbrella reachable.
+        #
+        # THE LAYOUT ASSUMED HERE IS THE LINUX AND MACOS ONE, where a global
+        # install puts its shims in <prefix>/bin. On Windows npm puts them in
+        # the prefix directory itself, so this line would put an empty
+        # directory on PATH and every gate would then be reported missing.
+        printf '%s\n' "$npm_config_prefix/bin" >> "$GITHUB_PATH"
         # ACCEPT ONLY IF PROVABLY OK, not refuse if bad. The npm floor above
         # says why, and says it was learned the hard way: a refuse-if-bad
         # shape turns any unexpected failure into permission to proceed.
@@ -1134,7 +1205,7 @@ runs:
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             printf 'conductor verdict: %s\n\n' "$verdict_token" >> "$GITHUB_STEP_SUMMARY"
             if [ "$verdict_token" = "nothing-checked" ]; then
-              printf 'No gate ran, so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
+              printf 'No gate checked anything (none ran, or every gate that ran had nothing to check), so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
             fi
             # Line 3 of the report, and ONLY when it is exactly the
             # present-on-base line and the token above was accepted: a pass
@@ -1400,13 +1471,23 @@ runs:
         # monorepo running it per package), so each run's comment stays its
         # own rather than fighting over one.
         PR_COMMENT_MARKER: ${{ inputs.pr-comment-marker }}
+        # Absolute paths from the first step, resolved before the gate
+        # packages were installed, so neither the poster nor the gh it runs
+        # with this step's token can be a bin linked by a gate package (audit
+        # finding F1). Never resolved by name in this step.
+        NODE_BIN: ${{ steps.tools.outputs.node }}
+        GH_BIN: ${{ steps.tools.outputs.gh }}
       run: |
         set -eu
 
+        if [ -z "${NODE_BIN:-}" ] || [ -z "${GH_BIN:-}" ]; then
+          echo "::warning::conductor: the comment step needs node and the GitHub CLI on PATH before this action starts, and the first step did not find one of them (node: '${NODE_BIN:-}', gh: '${GH_BIN:-}'); skipping the pull request comment. The gate's own verdict is unaffected."
+          exit 0
+        fi
         # The report reaches the poster BY FILE PATH, never by interpolating
         # its bytes into a command.
-        NODE_ARGS=(--report "$REPORT_FILE" --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY")
+        NODE_ARGS=(--report "$REPORT_FILE" --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --gh "$GH_BIN")
         if [ -n "$PR_COMMENT_MARKER" ]; then
           NODE_ARGS+=(--marker "$PR_COMMENT_MARKER")
         fi
-        node "$ACTION_PATH/scripts/pr-comment.mjs" "${NODE_ARGS[@]}"
+        "$NODE_BIN" "$ACTION_PATH/scripts/pr-comment.mjs" "${NODE_ARGS[@]}"

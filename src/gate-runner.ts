@@ -27,6 +27,7 @@ import type { Diagnostic, Finding, RunSummary } from './envelope.js';
 import { runGit } from './git.js';
 import { NormalizeError } from './envelope.js';
 import {
+  describeLockfiles,
   normalizeDepGuard,
   normalizeFailedGate,
   normalizeGitleaks,
@@ -42,6 +43,7 @@ import type { GatePolicy, GateRole, GateStage, OptionValue, Product } from './po
 import { renderOptionFlags } from './policy.js';
 import {
   NO_RESOLVE_OVERRIDDEN,
+  emptiedLockfiles,
   noLongerScanned,
   nothingScannableMessage,
   notScannedDetail,
@@ -1499,6 +1501,11 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // notes. Carried onto every outcome from here on that reports a scan.
   let selection: OsvSelection | null = null;
   const selectionDiagnostics: Diagnostic[] = [];
+  // Tracked manifests this gate was NOT handed, when it was handed others
+  // (review of 1b.2, item 5): a run note, so a Podfile.lock beside a scanned
+  // mix.lock is named without pushing a clean run off its one-line summary.
+  // The nothing-to-scan branch below names them in its own diagnostic.
+  let unreadNote: Diagnostic | null = null;
   if (profile.lockfileMatcher !== null) {
     const listing = runGit(options.repoRoot, ['ls-files', '-z'], { maxBuffer: 64 * 1024 * 1024 });
     if (listing.error !== undefined || listing.status !== 0) {
@@ -1551,6 +1558,10 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     selectionDiagnostics.push(...selection.diagnostics);
     if (decidedRef !== undefined) {
       selectionDiagnostics.push(...noLongerScanned(options.repoRoot, decidedRef, new Set(tracked)));
+    }
+    if (external.lockfiles.length > 0) {
+      const unread = unreadManifestsNote(tracked, new Set(selection.handed), gate.product);
+      unreadNote = unread === null ? null : { code: 'conductor/manifests-not-handed', message: unread };
     }
     if (external.lockfiles.length === 0) {
       // Nothing to scan, reported the same way as osv-scanner's own 128 below,
@@ -1743,12 +1754,27 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // request in a docs-only repository; read as a verdict it would claim a
   // scan that did not happen. So it is clean, and the report says why.
   if (exitCode !== null && profile.exit.nothingToScan.includes(exitCode)) {
+    const handedAll = external.lockfiles ?? [];
     return {
       ...withRun,
       exitCode: 0,
       couldNotRun: null,
       findings: [],
-      run: EMPTY_RUN,
+      // Every handed lockfile parsed to nothing: `packages-read 0` is the
+      // marker that this gate read NOTHING (the verdict token's
+      // nothing-checked rule reads it), which the partial-empty note further
+      // down shares a diagnostic code with but never carries.
+      run:
+        handedAll.length === 0
+          ? EMPTY_RUN
+          : {
+              ...EMPTY_RUN,
+              diagnostics: unreadNote === null ? [] : [unreadNote],
+              details: {
+                lockfiles: describeLockfiles(handedAll, new Set(handedAll)),
+                'packages-read': 0,
+              },
+            },
       diagnostics: [
         ...selectionDiagnostics,
         // When lockfiles WERE handed over, this exit means they parsed to no
@@ -1939,14 +1965,42 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       baseComparison = compared.comparison;
       comparisonDiagnostics.push(...compared.diagnostics);
     }
+    // A handed lockfile osv-scanner read no packages from, while it read
+    // packages from another (audit finding F2). Exit 128 above covers only
+    // the all-empty case; this is the rest, named on the coverage line and
+    // in a diagnostic, so an emptied lockfile's advisories never vanish
+    // without a word. Annotation only: the verdict is osv-scanner's.
+    const emptied =
+      gate.product === 'osv-scanner'
+        ? emptiedLockfiles(withRun.stderr, external.lockfiles ?? [], spawnCwd)
+        : [];
+    const emptyDiagnostics: Diagnostic[] =
+      emptied.length === 0
+        ? []
+        : [
+            {
+              code: 'conductor/lockfiles-empty',
+              message:
+                `${gate.product} read no packages from ${emptied.join(', ')} while it read packages ` +
+                'from the other lockfiles, so nothing in the named file(s) was checked. A lockfile ' +
+                'emptied in this change hides every advisory it carried; look at its diff.',
+            },
+          ];
     const run =
       selection === null
         ? normalized.run
         : {
             ...normalized.run,
-            diagnostics: [...normalized.run.diagnostics, ...selection.notes],
+            diagnostics: [
+              ...normalized.run.diagnostics,
+              ...selection.notes,
+              ...(unreadNote === null ? [] : [unreadNote]),
+            ],
             details: {
               ...normalized.run.details,
+              ...(emptied.length === 0
+                ? {}
+                : { lockfiles: describeLockfiles(external.lockfiles ?? [], new Set(emptied)) }),
               ...(selection.notScanned.length === 0
                 ? {}
                 : { 'not-scanned': notScannedDetail(selection.notScanned) }),
@@ -1958,7 +2012,12 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       couldNotRun: null,
       findings,
       run,
-      diagnostics: [...normalized.diagnostics, ...selectionDiagnostics, ...comparisonDiagnostics],
+      diagnostics: [
+        ...normalized.diagnostics,
+        ...selectionDiagnostics,
+        ...emptyDiagnostics,
+        ...comparisonDiagnostics,
+      ],
       ...(baseComparison === undefined ? {} : { baseComparison }),
       // The gate's own answer about the control inputs, folded onto the
       // decision the umbrella made before spawning it. A gate that was NOT

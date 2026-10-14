@@ -560,11 +560,25 @@ TUF outage. What had not been considered was what that predicted event would
 
 So the rules this section exists to state:
 
-**A fail-closed check must not sit in front of the line that makes the tool
-reachable.** The `PATH` write is bookkeeping, not a privilege grant: the gates
-step is skipped when install fails regardless. Ordering it first costs nothing
-and means no future fail-closed check added to that step inherits a
-missing-binary disguise.
+**What a later step needs in order to say "could not run" is keyed on a
+verification output, never on whether a tool is reachable, and the install
+goes on `PATH` only once it is verified.** This rule replaced an earlier one
+on 2026-10-13. The earlier rule said a fail-closed check must not sit in
+front of the line that makes the tool reachable, and called the `PATH` write
+"bookkeeping, not a privilege grant", because the gates step is skipped when
+install fails. That was false. The render and post steps run `if: always()`,
+so they run after a failed install step, and the runner honours the file
+commands that step wrote before failing; the post step holds the job token.
+An early `PATH` entry therefore put the bins of a package that had FAILED
+verification (npm links bins even under `--ignore-scripts`, so a bin named
+`node`, `gh` or `bash` is enough) ahead of the system's own in the one step
+with a write token (audit finding F1, 2026-10-12). The missing-binary
+disguise the old rule prevented is prevented differently now: conductor is
+invoked by absolute path, and the render step branches on `verification-ok`
+rather than reaching for a binary, so a failed audit still reads as a
+refusal. The comment step also runs `node` and `gh` by absolute paths
+resolved in the action's first step, before anything is installed. The
+design is in docs/superpowers/specs/2026-10-13-action-path-after-signature-audit.md.
 
 **A check that can fail must say why.** The audit is captured rather than
 allowed to die bare, and its reason is recorded and reported. Fail-closed is

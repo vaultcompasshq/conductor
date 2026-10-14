@@ -23,7 +23,7 @@ import {
   runGate,
 } from '../src/gate-runner.js';
 import { useGitProgram } from '../src/git.js';
-import { gateLogLines, proposalCount } from '../src/output-text.js';
+import { gateLogLines, proposalCount, verdictToken } from '../src/output-text.js';
 import type { GatePolicy } from '../src/policy.js';
 import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, stubGate } from './helpers/stub-gate.js';
 
@@ -1011,6 +1011,82 @@ describe('external gate exit semantics', () => {
     const diagnostic = out.diagnostics.find((d) => d.code === 'conductor/lockfiles-empty');
     expect(diagnostic?.message).toContain('package-lock.json');
     expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(false);
+    // The marker the verdict token reads: nothing at all was read (review of
+    // 1b.2, item 1). The partial-empty case never carries it.
+    expect(out.run.details['packages-read']).toBe(0);
+    expect(out.run.details.lockfiles).toBe('1 (package-lock.json [no packages read])');
+  });
+
+  it('labels a run whose sole lockfile is {} nothing-checked, the same as a run with no lockfile', () => {
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.4.0', exit: 128, stdout: '', stderr: 'No package sources found, --help for usage information.' });
+    const emptied = runGate(osv(), { repoRoot: osvRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const none = runGate(osv(), { repoRoot: tempGitRepo(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const asRun = (outcome: typeof emptied) =>
+      ({
+        schemaVersion: 1,
+        generatedAt: '2026-10-13T00:00:00.000Z',
+        gates: [{ ...outcome, stage: 'ci', enforce: true }],
+        deferred: [],
+        skipped: [],
+        excluded: [],
+        treeUnchanged: [],
+        findings: [],
+        trustBase: null,
+        proposals: [],
+        summary: { blocking: 0, byProduct: {}, bySeverity: {} },
+        exitCode: 0,
+      }) as unknown as Parameters<typeof verdictToken>[0];
+    expect(verdictToken(asRun(none), false)).toBe('nothing-checked');
+    expect(verdictToken(asRun(emptied), false)).toBe('nothing-checked');
+  });
+
+  it('names an emptied lockfile beside one that was read, on a clean run and on a blocked one (audit F2)', () => {
+    // The 128 exit above fires only when EVERY handed file parsed to nothing.
+    // One lockfile rewritten to {} beside a healthy one used to be listed as
+    // scanned, silently, with every advisory it carried gone. The count per
+    // file is osv-scanner's own stderr line, as 2.4.0 prints it.
+    const repo = tempGitRepo();
+    commitFiles(repo, { 'package-lock.json': '{}\n', 'requirements.txt': 'requests==2.32.3\n' }, 'two lockfiles');
+    const real = realpathSync(repo);
+    const stderr =
+      `Scanned ${real}/package-lock.json file and found 0 packages\n` +
+      `Scanned ${real}/requirements.txt file and found 1 package\n`;
+    for (const exit of [0, 1]) {
+      const bin = tempDir();
+      stubGate(bin, 'osv-scanner', {
+        versionLine: 'osv-scanner version: 2.4.0',
+        exit,
+        stdout: CLEAN_OSV_SCANNER,
+        stderr,
+      });
+      const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+      expect(out.couldNotRun).toBeNull();
+      const empty = out.diagnostics.filter((d) => d.code === 'conductor/lockfiles-empty');
+      expect(empty).toHaveLength(1);
+      expect(empty[0]?.message).toContain('package-lock.json');
+      expect(empty[0]?.message).not.toContain('requirements.txt');
+      // The coverage line marks it too, so "lockfiles 2" no longer reads as two files read.
+      expect(out.run.details.lockfiles).toBe('2 (package-lock.json [no packages read], requirements.txt)');
+    }
+  });
+
+  it('says nothing about empty lockfiles when every handed file had packages', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { 'package-lock.json': '{}\n', 'requirements.txt': 'requests==2.32.3\n' }, 'two lockfiles');
+    const real = realpathSync(repo);
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', {
+      versionLine: 'osv-scanner version: 2.4.0',
+      exit: 0,
+      stdout: CLEAN_OSV_SCANNER,
+      stderr:
+        `Scanned ${real}/package-lock.json file and found 3 packages\n` +
+        `Scanned ${real}/requirements.txt file and found 1 package\n`,
+    });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.diagnostics.some((d) => d.code === 'conductor/lockfiles-empty')).toBe(false);
+    expect(out.run.details.lockfiles).toBe('2 (package-lock.json, requirements.txt)');
   });
 
   it('reports a nested osv-scanner.toml the pull request adds as a proposal, like the root one', () => {
@@ -1214,6 +1290,86 @@ describe('external gate exit semantics', () => {
     expect(note?.message).not.toMatch(/no gate read/);
     expect(note?.message).not.toMatch(/node_modules|vendor|testdata/);
     expect(note?.message).not.toMatch(/README/);
+  });
+
+  it('hands over mix.lock and the other formats osv-scanner reads, and gradle metadata only under gradle/ (audit F3)', () => {
+    // The audit's elixir-plug/plug reproduction: a tracked mix.lock was
+    // neither scanned nor named, and the gate said nothing-to-scan.
+    const repo = tempGitRepo();
+    commitFiles(
+      repo,
+      {
+        'mix.lock': '%{}\n',
+        'app/pubspec.lock': 'packages: {}\n',
+        'ios/Package.resolved': '{}\n',
+        'android/gradle/verification-metadata.xml': '<verification-metadata/>\n',
+        'misc/verification-metadata.xml': '<verification-metadata/>\n',
+        'ios/Podfile.lock': 'PODS:\n',
+        'mix.exs': 'defmodule X do end\n',
+      },
+      'other ecosystems'
+    );
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.4.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.couldNotRun).toBeNull();
+    const handed = out.argv.filter((_, i) => out.argv[i - 1] === '--lockfile');
+    expect(handed).toEqual([
+      'android/gradle/verification-metadata.xml',
+      'app/pubspec.lock',
+      'ios/Package.resolved',
+      'mix.lock',
+    ]);
+    expect(out.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan')).toBe(false);
+  });
+
+  it('names a tracked Podfile.lock or deno.lock, which osv-scanner rejects, as not handed (audit F3)', () => {
+    const repo = tempGitRepo();
+    commitFiles(
+      repo,
+      { 'ios/Podfile.lock': 'PODS:\n', 'deno.lock': '{}\n', 'mix.exs': 'x\n', 'app/pubspec.yaml': 'x\n' },
+      'unread lockfiles'
+    );
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.4.0', exit: 1, stdout: '' });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
+    expect(note?.message).toMatch(
+      /Tracked manifests not handed to osv-scanner: app\/pubspec\.yaml, deno\.lock, ios\/Podfile\.lock, mix\.exs\./
+    );
+  });
+
+  it('names unread manifests even when other lockfiles were handed over, as a note (review of 1b.2, item 5)', () => {
+    // An iOS app beside an Elixir service: mix.lock and Package.resolved are
+    // scanned, and before this the Podfile.lock and deno.lock beside them
+    // were never mentioned, because the note was only written when nothing
+    // at all was handed over.
+    const repo = tempGitRepo();
+    commitFiles(
+      repo,
+      {
+        'mix.lock': '%{}\n',
+        'ios/Package.resolved': '{}\n',
+        'ios/Podfile.lock': 'PODS:\n',
+        'deno.lock': '{}\n',
+      },
+      'mixed'
+    );
+    for (const exit of [0, 1, 128]) {
+      const bin = tempDir();
+      stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.4.0', exit, stdout: CLEAN_OSV_SCANNER });
+      const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+      expect(out.couldNotRun).toBeNull();
+      expect(out.argv).toContain('mix.lock');
+      const note = out.run.diagnostics.find((d) => d.code === 'conductor/manifests-not-handed');
+      expect([exit, note?.message]).toEqual([
+        exit,
+        'Tracked manifests not handed to osv-scanner: deno.lock, ios/Podfile.lock.',
+      ]);
+      // A note, never a gate diagnostic: it does not by itself push a clean
+      // run off the one-line summary.
+      expect(out.diagnostics.some((d) => d.code === 'conductor/manifests-not-handed')).toBe(false);
+    }
   });
 
   it('says only that nothing was read when no manifest of any kind is tracked', () => {

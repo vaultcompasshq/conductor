@@ -51,6 +51,11 @@ describe('parseArgs', () => {
   it('leaves missing flags null rather than throwing', () => {
     expect(parseArgs([])).toEqual({ report: null, pr: null, repo: null, marker: undefined });
   });
+
+  it('reads --gh, the absolute path the action resolved before installing anything', () => {
+    expect(parseArgs(['--gh', '/opt/tools/gh']).gh).toBe('/opt/tools/gh');
+    expect(parseArgs([]).gh).toBeUndefined();
+  });
 });
 
 /**
@@ -206,6 +211,33 @@ describe('the pr-comment CLI', () => {
     expect(run.stdout).toMatch(/::warning::/);
     expect(run.stdout.toLowerCase()).toMatch(/could not post/);
     expect(run.stdout.toLowerCase()).toMatch(/fork/);
+  });
+
+  it('runs the gh named by --gh, never a gh found on PATH', () => {
+    // The action hands the poster an absolute gh resolved before the gate
+    // packages were installed, so a package that failed the signature audit
+    // but linked a bin named gh can never be the one run with the token.
+    const dir = tempDir();
+    const { bin: trustedBin, record } = ghShim(path.join(dir, 'trusted'));
+    const hijackBin = path.join(dir, 'hijack-bin');
+    mkdirSync(hijackBin, { recursive: true });
+    const hijackMarker = path.join(dir, 'hijacked');
+    writeFileSync(
+      path.join(hijackBin, 'gh'),
+      `#!/bin/sh\nprintf 'ran\\n' >> ${JSON.stringify(hijackMarker)}\nexit 0\n`,
+    );
+    chmodSync(path.join(hijackBin, 'gh'), 0o755);
+    const reportFile = path.join(dir, 'conductor.txt');
+    writeFileSync(reportFile, 'conductor: clean, nothing blocked.');
+
+    const run = runCli(
+      ['--report', reportFile, '--pr', '42', '--repo', 'acme/widgets', '--gh', path.join(trustedBin, 'gh')],
+      { bin: hijackBin },
+    );
+
+    expect(run.status).toBe(0);
+    expect(readArgv(record)).toHaveLength(2);
+    expect(() => readFileSync(hijackMarker, 'utf8')).toThrow();
   });
 
   it('warns and exits 0 rather than failing when required flags are missing', () => {

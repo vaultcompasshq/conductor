@@ -609,7 +609,11 @@ handed every tracked lockfile by name, at any depth, never under
 `node_modules`: `package-lock.json`, `npm-shrinkwrap.json`,
 `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `go.mod`, `poetry.lock`,
 `Pipfile.lock`, `uv.lock`, `pdm.lock`, `Cargo.lock`, `Gemfile.lock`,
-`composer.lock`, `gradle.lockfile` and `packages.lock.json`, and pip
+`composer.lock`, `gradle.lockfile`, `packages.lock.json`, `mix.lock`,
+`pubspec.lock`, `Package.resolved`, `conan.lock`, `renv.lock`,
+`packages.config`, `buildscript-gradle.lockfile`, `gems.locked`,
+`pylock.toml`, `cabal.project.freeze`, `stack.yaml.lock` and
+`verification-metadata.xml` inside a `gradle` directory, and pip
 requirements files (`requirements.txt`, `requirements-dev.txt`,
 `requirements_test.txt`, `requirements.prod.txt`, `dev-requirements.txt`)
 whose every requirement, includes followed, is pinned with `==`. `go.sum`
@@ -629,10 +633,18 @@ the tracked manifests that were not handed to osv-scanner (a
 `pyproject.toml`, a `go.sum`, a `Dockerfile`, a workflow, or a requirements
 file the pin check left out), so a green gate is not read as a scan of
 them. A `go.mod` or a pinned requirements file is handed over and so is
-never on that list. It says nothing about what other gates read. Its 1 is
+never on that list. It says nothing about what other gates read. When
+other lockfiles WERE handed over, the same list (a `Podfile.lock` beside a
+scanned `mix.lock`, say) is printed as a `conductor/manifests-not-handed`
+note under the gate instead. Its 1 is
 blocked. Its own 128 ("no package sources found") on lockfiles it WAS
 handed means they parsed to no packages; that is clean too, with a distinct
-`conductor/lockfiles-empty` note naming the files. Lockfiles inside git
+`conductor/lockfiles-empty` note naming the files. When some handed
+lockfiles had packages and one had none (a lockfile rewritten to `{}` beside
+others), the same note names the empty one and the `lockfiles` line marks it
+`[no packages read]`; the verdict over the other files is unchanged. That
+naming reads osv-scanner's own per-file count, which it prints at its
+default verbosity. Lockfiles inside git
 submodules are never listed. In a sparse
 checkout a tracked lockfile that is not on disk is still handed over and
 osv-scanner exits 127 on it, a false could-not-run that fails closed. Any other osv-scanner exit
@@ -659,11 +671,14 @@ code and the `enforce` flags the run already had.
   the report's third line then says `present-on-base: N reported, not
   blocking`, the verdict sentence says the same, and the Action copies that
   line to the job summary under the token.
-- `nothing-checked`: exit 0, but no gate ran at all (none is enabled, or
-  every enabled one was deferred to a later stage, had nothing to judge, or
-  was skipped). The exit status is unchanged, since nothing failed, but this
-  is not a pass: nothing was verified. In the Action the `verdict` output
-  carries this token, so a workflow can tell it apart from `pass`.
+- `nothing-checked`: exit 0, but nothing was checked. Either no gate ran at
+  all (none is enabled, or every enabled one was deferred to a later stage,
+  had nothing to judge, or was skipped), or every gate that ran examined
+  nothing: the vulnerabilities gate with no lockfile it reads, or the intent
+  gate with no contract to check against. The second case was `pass` in
+  0.8.x. The exit status is unchanged, since nothing failed, but this is not
+  a pass: nothing was verified. In the Action the `verdict` output carries
+  this token, so a workflow can tell it apart from `pass`.
 - `advisory-blocked (N)`: the run would have exited 1, and `--advisory` made
   it exit 0. N is the blocking findings on enforced gates.
 - `unenforced-findings (N)`: exit 0, but a gate with `enforce: false` had
@@ -674,12 +689,13 @@ code and the `enforce` flags the run already had.
 
 When several apply the order is `could-not-run`, then `blocked` or
 `advisory-blocked`, then `unenforced-findings`, then `nothing-checked` (no gate
-ran) or `pass`. A run with
+ran, or none that ran checked anything) or `pass`. A run with
 `--advisory` whose only blocking findings sit on an unenforced gate is
 `unenforced-findings`, not `advisory-blocked`, because the flag did nothing
 there. A gate skipped for want of a contract does not by itself move the token
-off `pass` when another gate ran; when no gate ran, the token is
-`nothing-checked` and the verdict sentence says "nothing was checked". A
+off `pass` when another gate ran and checked something; when no gate ran, or
+every gate that ran checked nothing, the token is `nothing-checked` and the
+verdict sentence says "nothing was checked". A
 gate that exited non-zero with no finding marked blocking counts as one in N,
 so a state that is not a pass never prints a count of zero. The one-line
 summary of a clean, non-verbose run has no token line, since it is one line by
@@ -1736,6 +1752,13 @@ marker before conductor's first run. The match requires the marker AND that
 the comment was authored by the GitHub Actions bot; a marker in anyone
 else's comment is never adopted, and conductor creates its own comment
 instead, exactly as if no marked comment existed.
+
+**The poster runs the `node` and `gh` that were on `PATH` when the Action
+started**, resolved by the Action's first step before any gate package is
+installed, and never a binary from the gate install directory. The gate
+install goes on `PATH` only after its signature audit passes. GitHub-hosted
+runners carry both; on a runner that has neither on `PATH` at that point the
+comment is skipped with a warning and the verdict is unaffected.
 
 **Running this Action more than once against the same pull request** (for
 example, once per package in a monorepo) needs its own marker per run, or

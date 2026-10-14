@@ -677,8 +677,11 @@ function blockingCount(gate: RunResult['gates'][number]): number {
  * the state without parsing the verdict sentence.
  *
  *   pass                     exit 0 and nothing was hidden by it
- *   nothing-checked          exit 0, but no gate ran at all (none enabled,
- *                            or every one deferred, tree-unchanged or skipped)
+ *   nothing-checked          exit 0, but nothing was checked: no gate ran at
+ *                            all (none enabled, or every one deferred,
+ *                            tree-unchanged or skipped), or every gate that
+ *                            ran checked nothing (nothing to scan, or no
+ *                            contract; audit finding F4)
  *   advisory-blocked (N)     exit 1 that --advisory turned into exit 0
  *   unenforced-findings (N)  exit 0, but enforce: false gates blocked or
  *                            could not run
@@ -730,7 +733,54 @@ export function verdictToken(result: RunResult, advisory: boolean): string {
   const unenforced = result.gates
     .filter((gate) => !gate.enforce)
     .reduce((total, gate) => total + (gate.couldNotRun !== null ? 1 : blockingCount(gate)), 0);
-  return unenforced > 0 ? `unenforced-findings (${unenforced})` : 'pass';
+  if (unenforced > 0) {
+    return `unenforced-findings (${unenforced})`;
+  }
+  // Exit 0 where every gate that RAN checked nothing (audit finding F4): the
+  // vulnerabilities gate with no lockfile it reads, an intent gate with no
+  // contract. Gates ran, so the rule above does not fire, but nothing was
+  // examined, and a pass here is the same false statement as a pass with no
+  // gate at all. Same token, same exit code (0), same predicate the verdict
+  // sentence uses, so the two cannot disagree.
+  return result.gates.every(gateCheckedNothing) ? 'nothing-checked' : 'pass';
+}
+
+/**
+ * A gate that ran and examined nothing: osv-scanner with nothing to scan,
+ * osv-scanner whose every handed lockfile parsed to no packages (exit 128,
+ * marked `packages-read 0`; a sole lockfile rewritten to {} is exactly the
+ * same news as no lockfile), or an intent gate that found no contract to
+ * check against. The one predicate behind both the verdict token and the
+ * verdict sentence's list of what was not checked.
+ *
+ * NOT the partial-empty case: `conductor/lockfiles-empty` is also raised
+ * when osv-scanner read packages from other lockfiles (audit finding F2),
+ * and that gate checked something. Only the `packages-read` marker, which
+ * the exit-128 branch alone writes, tells the two apart.
+ */
+function readNoPackages(gate: RunResult['gates'][number]): boolean {
+  return gate.run.details['packages-read'] === 0;
+}
+
+function gateCheckedNothing(gate: RunResult['gates'][number]): boolean {
+  if (gate.couldNotRun !== null) {
+    return false;
+  }
+  return (
+    gate.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan') ||
+    readNoPackages(gate) ||
+    (gate.role === 'intent' && gate.run.details.contractFound === false)
+  );
+}
+
+/** How the verdict sentence names a gate that ran and checked nothing. */
+function checkedNothingWording(gate: RunResult['gates'][number]): string {
+  if (gate.role === 'intent') {
+    return `${gate.role} ran but found no contract to check against`;
+  }
+  return readNoPackages(gate)
+    ? `${gate.role} read no packages from its lockfiles`
+    : `${gate.role} had nothing to scan`;
 }
 
 function verdict(result: RunResult, advisory: boolean): string {
@@ -904,15 +954,15 @@ function verdictForRun(result: RunResult, advisory: boolean): string {
     ...result.excluded.map((gate) => `${gate.role} left out by --gate`),
     ...result.treeUnchanged.map((gate) => `${gate.role} skipped, head tree equals the base tree`),
     ...result.skipped.map((gate) => `${gate.role} ${skipWording(gate.reason).verdict}`),
-    ...result.gates
-      .filter((gate) => gate.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan'))
-      .map((gate) => `${gate.role} had nothing to scan`),
-    // The intent gate with require-frozen: false runs and exits 0 when there
-    // is no contract, having checked nothing against anything.
-    ...result.gates
-      .filter((gate) => gate.role === 'intent' && gate.run.details.contractFound === false)
-      .map((gate) => `${gate.role} ran but found no contract to check against`),
+    // A gate with nothing to scan, or the intent gate with require-frozen:
+    // false running with no contract: it ran and checked nothing.
+    ...result.gates.filter(gateCheckedNothing).map(checkedNothingWording),
   ];
+  // Every gate that ran checked nothing: the token is nothing-checked (audit
+  // finding F4), and the sentence says what the token says.
+  if (result.gates.every(gateCheckedNothing)) {
+    return `verdict: exit 0, nothing was checked: ${unchecked.join('; ')}.`;
+  }
   if (unchecked.length > 0) {
     return (
       'verdict: exit 0, no gate blocked, but not every enabled gate checked something: ' +
@@ -1010,7 +1060,9 @@ export interface TextOptions {
  * confusion this family exists to prevent.
  */
 function isFullyClean(result: RunResult): boolean {
-  if (result.exitCode !== 0 || result.gates.length === 0) {
+  // Every gate that ran checked nothing is the nothing-checked token's state
+  // (audit finding F4), and a line opening "clean" would contradict it.
+  if (result.exitCode !== 0 || result.gates.length === 0 || result.gates.every(gateCheckedNothing)) {
     return false;
   }
   return result.gates.every(

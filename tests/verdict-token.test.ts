@@ -139,6 +139,63 @@ describe('verdictToken', () => {
     expect(verdictToken(onlyDeferred, false)).toBe('nothing-checked');
   });
 
+  it('is nothing-checked, never pass, when every gate that ran scanned nothing (audit F4)', () => {
+    // The audit's reproduction: the vulnerabilities gate alone, a repository
+    // with no lockfile it reads. The gate RAN (it is in result.gates), so the
+    // old "no gate at all" rule printed pass beside a sentence saying it had
+    // nothing to scan. Exit stays 0, exactly as for no gate at all.
+    const nothingToScan = gate({
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      diagnostics: [{ code: 'conductor/nothing-to-scan', message: 'osv-scanner read no lockfile' }],
+    });
+    const only = run([nothingToScan], 0);
+    expect(verdictToken(only, false)).toBe('nothing-checked');
+    expect(verdictToken(only, true)).toBe('nothing-checked');
+    expect(only.exitCode).toBe(0);
+    const text = renderText(only, { version: '9.9.9' });
+    expect(text.split('\n')[1]).toBe('verdict-token: nothing-checked');
+    expect(text.trimEnd().split('\n').pop()).toBe(
+      'verdict: exit 0, nothing was checked: vulnerabilities had nothing to scan.'
+    );
+
+    // An intent gate that ran with no contract to check against is the
+    // verdict sentence's other "checked nothing" case, and counts the same.
+    const noContract = gate({
+      role: 'intent',
+      product: 'intent-guard',
+      run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { contractFound: false } },
+    });
+    expect(verdictToken(run([nothingToScan, noContract], 0), false)).toBe('nothing-checked');
+
+    // One gate that examined something keeps the run a pass, as before.
+    expect(verdictToken(run([nothingToScan, gate({})], 0), false)).toBe('pass');
+  });
+
+  it('is nothing-checked when every lockfile handed over parsed to no packages, and pass when only some did', () => {
+    // osv-scanner's exit 128 on handed lockfiles: a sole package-lock.json
+    // rewritten to {} read nothing at all, which is the same news as no
+    // lockfile. The partial case (F2) reuses the lockfiles-empty code but
+    // other files WERE read, so it is not "nothing checked"; packages-read
+    // is the marker that tells the two apart.
+    const allEmpty = gate({
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { 'packages-read': 0 } },
+      diagnostics: [{ code: 'conductor/lockfiles-empty', message: 'osv-scanner read no packages from package-lock.json' }],
+    });
+    expect(verdictToken(run([allEmpty], 0), false)).toBe('nothing-checked');
+    expect(renderText(run([allEmpty], 0), { version: '9.9.9' }).trimEnd().split('\n').pop()).toBe(
+      'verdict: exit 0, nothing was checked: vulnerabilities read no packages from its lockfiles.'
+    );
+    const partlyEmpty = gate({
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      diagnostics: [{ code: 'conductor/lockfiles-empty', message: 'osv-scanner read no packages from package-lock.json' }],
+    });
+    expect(verdictToken(run([partlyEmpty], 0), false)).toBe('pass');
+  });
+
   it('is blocked (N) at exit 1, counting blocking findings on enforced gates only', () => {
     const gates = [
       blockedGate(),

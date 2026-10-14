@@ -37,19 +37,21 @@ describe('action.yml hardening drift check', () => {
     expect(actionYml).toContain(`SEMVER='${VERSION_SHAPE}'`);
   });
 
-  it('puts the install on PATH before the signature audit, not after', () => {
-    // Ordered the other way, a failing audit leaves the install unreachable
-    // and the next step reports a missing binary rather than a refusal. That
-    // is what the 2026-09-22 incident looked like from the outside. The PATH
-    // write grants nothing on its own: the gates step does not run when the
-    // install step fails.
+  it('puts the install on PATH only after the signature audit has passed', () => {
+    // Audit finding F1 (2026-10-12). The render and post steps run if:
+    // always(), so they run after a FAILED install step, and a file command
+    // that step wrote before failing is still honoured. Written before the
+    // audit, the PATH entry put a package that failed verification ahead of
+    // the system's own node, gh and bash in the step that holds the job
+    // token. So the write must sit after the audit's failure exit and before
+    // verification-ok, which is what later steps are allowed to act on.
     // Scoped to the install step's own script, and trailing comments are
     // stripped as well as whole-line ones. Both matter: searching the whole
     // file means any later line mentioning GITHUB_PATH makes this vacuous,
     // and a whole-line-only filter is defeated by appending
     // `# ... >> "$GITHUB_PATH" ...` to some other line.
     const stepStart = actionYml.indexOf('- name: Install the gates outside the workspace');
-    const stepEnd = actionYml.indexOf('- name: Run the gates');
+    const stepEnd = actionYml.indexOf('- name: Fetch the trust base');
     expect(stepStart).toBeGreaterThan(-1);
     expect(stepEnd).toBeGreaterThan(stepStart);
     const executable = actionYml
@@ -57,11 +59,21 @@ describe('action.yml hardening drift check', () => {
       .split('\n')
       .map((line) => line.split('#')[0].trim())
       .filter((line) => line.length > 0);
+    const pathWrites = executable.filter((line) => line.includes('GITHUB_PATH'));
     const pathIndex = executable.findIndex((line) => line.includes('>> "$GITHUB_PATH"'));
-    const auditIndex = executable.findIndex((line) => line.includes('npm audit signatures'));
+    const lastAuditIndex = executable.reduce(
+      (last, line, index) => (line.includes('npm audit signatures') ? index : last),
+      -1
+    );
+    const failExitIndex = executable.findIndex((line) => line === 'exit "$audit_status"');
+    const okIndex = executable.findIndex((line) => line.includes("'verification-ok=true\\n'"));
+    expect(pathWrites).toHaveLength(1);
     expect(pathIndex).toBeGreaterThan(-1);
-    expect(auditIndex).toBeGreaterThan(-1);
-    expect(pathIndex).toBeLessThan(auditIndex);
+    expect(lastAuditIndex).toBeGreaterThan(-1);
+    expect(failExitIndex).toBeGreaterThan(lastAuditIndex);
+    expect(okIndex).toBeGreaterThan(-1);
+    expect(pathIndex).toBeGreaterThan(failExitIndex);
+    expect(pathIndex).toBeLessThan(okIndex);
   });
 
   it('installs with --ignore-scripts and then audits signatures', () => {
