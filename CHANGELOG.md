@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Security
+
+- **The release workflow keeps the npm publish token out of the job that
+  installs dependencies.** It now installs, builds, tests and packs in a job
+  with no publish token, then publishes the packed tarball from a separate
+  job that holds the token and does not install this repository's
+  dependencies. The scope is the token only: the tarball is still built
+  where dependency install scripts run, so the split does not by itself
+  guarantee the integrity of what was built.
+
 ## [0.9.0] - 2026-10-14
 
 **A minor release.** Ecosystem coverage for the vulnerabilities gate and its

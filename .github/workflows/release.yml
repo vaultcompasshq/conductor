@@ -30,7 +30,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  # Install, build, and test live here, and this job has no id-token.
+  # GitHub permissions are per job, so a dependency install script in the
+  # same job as the publish token could request that token. The release job
+  # below is the only one that can publish, and it publishes a tarball this
+  # job already packed. It does not install this repository's dependencies.
+  # The scope of that split is the publish token only: the tarball is still
+  # built in this job, where dependency install scripts run, so the split
+  # keeps those scripts away from the token and does not by itself
+  # guarantee the integrity of the built output.
+  prepare:
     # Published so the smoke job can test the version that is actually on the
     # registry. It used to derive that from the TAG, which is correct only for
     # a package release: on an action-only tag the tag version is by
@@ -39,10 +48,10 @@ jobs:
     # that did exactly what it was supposed to.
     outputs:
       package_version: ${{ steps.kind.outputs.package_version }}
+      action_only: ${{ steps.kind.outputs.action_only }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
+      contents: read
 
     steps:
     - name: Checkout code
@@ -56,7 +65,6 @@ jobs:
       with:
         node-version: 22.14.0
         cache: 'pnpm'
-        registry-url: 'https://registry.npmjs.org'
 
     # The classifier below imports the yaml package, so node_modules has to
     # exist before it runs. This is the only reason install sits above the
@@ -175,12 +183,80 @@ jobs:
     - name: Run tests
       run: pnpm test
 
+    # Pack here, while this job still has the built tree and still has no
+    # publish token. The release job publishes this file and does not run
+    # pnpm install. Skipped on an action-only tag, which publishes nothing.
+    - name: Pack the publishable tarball
+      if: steps.kind.outputs.action_only == 'false'
+      run: |
+        mkdir -p pack-out
+        pnpm pack --pack-destination pack-out
+
+    # pack-out must hold exactly one tarball, and the package.json inside it
+    # must carry the name and version of the root package.json. A pack that
+    # silently produced nothing, or packed the wrong thing, stops here,
+    # before anything leaves this job.
+    - name: Check the packed tarball matches the package
+      if: steps.kind.outputs.action_only == 'false'
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        tarballs=(pack-out/*.tgz)
+        shopt -u nullglob
+        if [[ "${#tarballs[@]}" -ne 1 ]]; then
+          echo "::error::pack-out holds ${#tarballs[@]} tarballs, expected exactly one."
+          exit 1
+        fi
+        want="$(node -p "const p = require('./package.json'); p.name + '@' + p.version")"
+        got="$(tar -xzOf "${tarballs[0]}" package/package.json | node -p "const p = JSON.parse(require('fs').readFileSync(0, 'utf8')); p.name + '@' + p.version")"
+        if [[ "${got}" != "${want}" ]]; then
+          echo "::error::pack-out holds ${got}, expected ${want} from package.json."
+          exit 1
+        fi
+        echo "pack-out: ${got}"
+
+    - name: Upload the packed tarball
+      if: steps.kind.outputs.action_only == 'false'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: npm-pack
+        path: pack-out/*.tgz
+        if-no-files-found: error
+        retention-days: 1
+
+  release:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      package_version: ${{ needs.prepare.outputs.package_version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: 22.14.0
+        registry-url: 'https://registry.npmjs.org'
+
     # npm Trusted Publishing (OIDC): no NPM_TOKEN, auth via id-token: write
     # plus a trusted publisher configured on the package. Requires npm CLI
     # >= 11.5.1 (Node >= 22.14.0). Pin major 11 -- npm@12 needs a newer Node
-    # than this job runs. Mirrors dep-guard and vault-guard's release.yml.
+    # than this job runs. This installs npm itself, not this repository's
+    # dependencies. Those were installed in prepare, which has no id-token.
     - name: Upgrade npm for OIDC trusted publishing
+      if: needs.prepare.outputs.action_only == 'false'
       run: npm install -g npm@11
+
+    - name: Download the packed tarball
+      if: needs.prepare.outputs.action_only == 'false'
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      with:
+        name: npm-pack
+        path: pack-out
 
     # Skips a publish whose exact version is already on the registry, so a
     # tag run stays green after a version was published by hand. That
@@ -202,7 +278,7 @@ jobs:
     # true. Gated on the string 'false' rather than on a negation, so a step
     # output that failed to be written cannot read as "go ahead and publish".
     - name: Publish to npm
-      if: steps.kind.outputs.action_only == 'false'
+      if: needs.prepare.outputs.action_only == 'false'
       run: |
         set -euo pipefail
         name="$(node -p "require('./package.json').name")"
@@ -216,15 +292,16 @@ jobs:
           # attestation on its own, npm's own documentation says the flag is
           # unnecessary under OIDC, and neither dep-guard nor vault-guard
           # passes it. It buys no attestation and adds a way to fail.
-          # --no-git-checks stays: a tag checkout is on a detached head.
-          pnpm publish --access public --no-git-checks
+          tarball="$(find pack-out -name '*.tgz' -print)"
+          test -n "$tarball"
+          npm publish "$tarball" --access public
         fi
 
     # Both kinds of release get a Release page; only the body differs, because
     # a page saying "Published to npm" on a tag that published nothing is the
     # kind of small lie that later gets believed.
     - name: Create GitHub Release (package)
-      if: steps.kind.outputs.action_only == 'false'
+      if: needs.prepare.outputs.action_only == 'false'
       uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
       with:
         generate_release_notes: true
@@ -232,7 +309,7 @@ jobs:
           Published @vaultcompass/conductor to npm.
 
     - name: Create GitHub Release (action-only)
-      if: steps.kind.outputs.action_only == 'true'
+      if: needs.prepare.outputs.action_only == 'true'
       uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
       with:
         generate_release_notes: true
