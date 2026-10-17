@@ -143,6 +143,19 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   and the printed note is a WARNING naming the `conductor/gate-missing`
   result a run without it gets.
 
+### Fixed
+
+- **A dev dependency no longer blocks a present-on-base run on its own.**
+  osv-scanner 2.4.0 writes `dependency_groups` (for example `["dev"]`) on a
+  dev dependency, and the vulnerabilities gate counted that key as a verdict
+  that is not an advisory, so a compared run under `present-on-base: report`
+  still blocked when every advisory was already on the base. It fails closed
+  by over-blocking, and has since the key set was written. VERDICT CHANGE: a
+  compared run where every finding is present-on-base under report, and
+  whose only non-advisory verdict was `dependency_groups`, moves from exit 1
+  to exit 0; any real non-advisory verdict (a licence or deprecation
+  verdict) still blocks.
+
 ## [0.9.0] - 2026-10-14
 
 **A minor release.** Ecosystem coverage for the vulnerabilities gate and its

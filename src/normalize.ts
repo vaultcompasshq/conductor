@@ -1336,10 +1336,18 @@ export function normalizeOsvScanner(
 /**
  * The package-level keys of an osv-scanner result this normalizer knows:
  * the package itself, its advisories, their groups, and the licences it was
- * found to carry. `license_violations` is deliberately NOT here: it is a
- * verdict (osv-scanner exits 1 for it, measured on 2.4.0 with --licenses).
+ * found to carry, and `dependency_groups`, the dev marker osvDependencyGroups
+ * reads (2.4.0 writes ["dev"]; a marker, not a verdict). `license_violations`
+ * is deliberately NOT here: it is a verdict (osv-scanner exits 1 for it,
+ * measured on 2.4.0 with --licenses).
  */
-const OSV_KNOWN_PACKAGE_KEYS: ReadonlySet<string> = new Set(['package', 'vulnerabilities', 'groups', 'licenses']);
+const OSV_KNOWN_PACKAGE_KEYS: ReadonlySet<string> = new Set([
+  'package',
+  'vulnerabilities',
+  'groups',
+  'licenses',
+  'dependency_groups',
+]);
 
 function isEmptyValue(value: unknown): boolean {
   if (value === undefined || value === null || value === false || value === '') {

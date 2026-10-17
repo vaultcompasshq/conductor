@@ -214,6 +214,71 @@ describe('a licence violation or a deprecated package beside present-on-base adv
   });
 });
 
+describe('a dev dependency marked by dependency_groups beside present-on-base advisories (test 17c)', () => {
+  // The head output is the first result of the real 2.4.0 capture
+  // tests/fixtures/osv-scanner-2.4.0-two-lockfiles.json, re-pointed at the
+  // repository's package-lock.json. Its minimist package carries
+  // dependency_groups: ["dev"], which is a dev marker, not a verdict.
+  function fixtureHead(extraPackages: Array<Record<string, unknown>> = []): string {
+    const capture = JSON.parse(
+      readFileSync(path.join(HERE, 'fixtures', 'osv-scanner-2.4.0-two-lockfiles.json'), 'utf8')
+    ) as { results: Array<{ source: { path: string }; packages: unknown[] }> };
+    const first = capture.results[0]!;
+    first.source.path = '@CWD@/package-lock.json';
+    first.packages.push(...extraPackages);
+    return JSON.stringify({ results: [first] });
+  }
+
+  function runCompared(head: string) {
+    // package-lock.json is untouched by the pull request, so every advisory
+    // is present-on-base by the shortcut and no base run is needed.
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) }, { 'src/app.js': 'x\n' });
+    const bin = tempDir();
+    stubOsv(bin, { record: path.join(tempDir(), 'r'), head: { stdout: head, exit: 1 } });
+    const policy: Policy = {
+      version: 1,
+      gates: { vulnerabilities: osvGate('report') },
+      report: { format: 'text' },
+    };
+    return runAll(policy, {
+      repoRoot: repo,
+      staged: false,
+      pathValue: bin,
+      tempRoot: tempDir(),
+      trustBase: { ref: 'main', policyChanged: false, refusal: null },
+    });
+  }
+
+  it('exits 0 with token pass under report when dependency_groups is the only key beside the advisories', () => {
+    const result = runCompared(fixtureHead());
+    const gate = result.gates[0]!;
+    expect(gate.exitCode).toBe(1);
+    expect(
+      gate.findings.map((f) => [f.subject.kind === 'package' ? f.subject.name : '', f.details.baseline, f.blocking])
+    ).toEqual([
+      ['lodash', 'present-on-base', false],
+      ['minimist', 'present-on-base', false],
+    ]);
+    expect(gate.baseComparison?.otherVerdicts).toEqual([]);
+    expect(result.exitCode).toBe(EXIT_OK);
+    expect(verdictToken(result, false)).toBe('pass');
+  });
+
+  it('still exits 1 when a real licence verdict sits beside the dependency_groups package', () => {
+    const licence = (
+      JSON.parse(
+        readFileSync(path.join(HERE, 'fixtures', 'osv-scanner-2.4.0-license-violation.json'), 'utf8')
+      ) as { results: Array<{ packages: unknown[] }> }
+    ).results[0]!.packages[0] as Record<string, unknown>;
+    const result = runCompared(fixtureHead([licence]));
+    const gate = result.gates[0]!;
+    expect(gate.findings.every((f) => f.details.baseline === 'present-on-base' && !f.blocking)).toBe(true);
+    expect(gate.baseComparison?.otherVerdicts).toContain('license_violations (click@8.1.7)');
+    expect(result.exitCode).toBe(EXIT_BLOCKED);
+    expect(verdictToken(result, false)).not.toBe('pass');
+  });
+});
+
 describe('the exception is the vulnerabilities gate alone (test 17b)', () => {
   for (const [role, product] of [
     ['dependencies', 'dep-guard'],

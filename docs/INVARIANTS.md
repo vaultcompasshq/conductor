@@ -250,8 +250,23 @@ predicate states the whole rule. (f) The head run's raw output carried no
 verdict that is not an advisory: no `license_violations`, no deprecated
 package (`package.deprecated`, inside the package object in osv-scanner
 2.4.0), and no other non-empty package-level key the normalizer does not
-map. The flag exists only so a gate whose exit code somehow said clean while
-its own report carried a blocking finding still fails the run.
+map. The keys it maps are `OSV_KNOWN_PACKAGE_KEYS` in src/normalize.ts:
+`package`, `vulnerabilities`, `groups`, `licenses` and, since 2026-10-17,
+`dependency_groups`, the dev marker osv-scanner 2.4.0 writes as ["dev"] and
+the normalizer reads for the dev label. Before that date it was missing, so
+any dev dependency counted as a non-advisory verdict under (f) and a
+compared run where every finding was present-on-base under report still
+exited 1. VERDICT CHANGE: such a run whose only non-advisory verdict was
+`dependency_groups` now exits 0; a real non-advisory verdict (a licence or
+deprecation verdict) still blocks. Pinned by tests/osv-exit.test.ts ("exits
+0 with token pass under report when dependency_groups is the only key
+beside the advisories") over the real 2.4.0 capture
+tests/fixtures/osv-scanner-2.4.0-two-lockfiles.json, which goes red with the
+key removed, and by tests/osv-exit.test.ts ("still exits 1 when a real
+licence verdict sits beside the dependency_groups package"), which stays
+green with it removed. The flag exists only so a gate whose exit code
+somehow said clean while its own report carried a blocking finding still
+fails the run.
 
 Every other reader of "the child exited non-zero" goes through the same
 predicate, or the verdict token and the verdict sentence would disagree
