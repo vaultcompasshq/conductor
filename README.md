@@ -142,10 +142,9 @@ required.
 
    **`.guardrails/manifest.json` records the absolute path on the machine
    that ran `init`**, for the hook, when there is one, and for the policy
-   file alike, and
-   conductor does not add a `.gitignore` entry for it. That path is specific
-   to your checkout, so do not commit the file: add
-   `.guardrails/manifest.json` to your own `.gitignore` today. The file
+   file alike. That path is specific to your checkout, so do not commit the
+   file: init appends `.guardrails/` to `.gitignore` when git does not already
+   ignore it, and prints the line instead when it cannot append safely. The file
    lives inside your working tree so `--revert` can find it later, and
    recording repo-relative paths there instead of absolute ones is a known
    gap, not a design; it has not been fixed yet.
@@ -495,7 +494,14 @@ scan, with no warning).
 `conductor init` writes the policy file and `.guardrails/manifest.json`, the
 record `--revert` reads back later. The manifest currently records absolute
 machine paths rather than repo-relative ones (see "Adopting conductor"
-above); do not commit it.
+above); do not commit it. When git does not already ignore it, init appends
+`.guardrails/` to `.gitignore` (or creates one) and says so; a `.gitignore`
+that is a symbolic link or not a regular file is left alone and the line is
+printed for you to add. On a policy file that already exists, init lists the
+gate roles it has no entry for, with the two lines that add each. An external
+gate (gitleaks, osv-scanner) is written enabled only when its binary is found
+on the machine running init, with a comment under it that CI must install it;
+a CI job without it gets `conductor/gate-missing` and exit 2.
 
 - `--hook` also writes one pre-commit hook running every enabled gate whose
   stage is `commit`. Without it, init writes only the policy file and the
@@ -507,7 +513,9 @@ above); do not commit it.
   `--hook` itself.
 - `--dry-run` prints every file it would write or change and writes nothing.
 - `--revert` removes exactly what a previous init wrote, and nothing else.
-  A file changed since init is reported and left alone.
+  A file changed since init is reported and left alone. The one exception is
+  the `.guardrails/` line init appends to `.gitignore`: `--revert` does not
+  remove it.
 - `--adopt` replaces one gate's own pre-commit hook with the umbrella hook.
   Without it, init reports the collision and stops rather than stacking a
   second invocation of a gate that is already hooked. A hook the umbrella
@@ -534,7 +542,14 @@ and none of it can block the policy file from being written, on a plain
 
 Init recognises the hook manager already wired into the repository. husky is
 redirected to the tracked hook it maintains rather than the generated
-dispatcher git runs. lefthook and the pre-commit framework are refused, with
+dispatcher git runs. On a fresh clone, where husky's install has not set
+`core.hooksPath` yet, husky is recognised from `package.json` (a `husky`
+dependency or devDependency, or a `prepare` script that runs husky) or a
+tracked `.husky/` directory, and init writes `.husky/pre-commit` and says the
+install still has to run, rather than writing `.git/hooks/pre-commit`, which
+husky's install would bypass. This applies only when `core.hooksPath` is not
+set at all: one set by hand, even to `.git/hooks`, is left alone. A prepare
+script counts only when it runs husky as a command. lefthook and the pre-commit framework are refused, with
 the stanza to add to their own config file. simple-git-hooks and yorkie are
 refused too, and recognised from the declaration as well as from the hook
 file, because the declaration is there on a fresh clone where the generated
@@ -591,7 +606,13 @@ proceeds normally without mentioning them.
   copy in a file would only duplicate it. A path that cannot be written is
   exit 2, like `--output`. See "The verdict token" below.
 - `--verbose` prints the full per-gate report even when the run is clean.
-  Text output only; the SARIF log never changes shape with it.
+  Text output only; the SARIF log never changes shape with it. Without it a
+  gate prints its first 20 findings, blocking first, and one line saying how
+  many more there are; every count, the verdict and SARIF include all of
+  them. `--verbose` also lists the lockfiles behind an osv-scanner line
+  that groups one advisory across several ("lodash@4.17.20 2 lockfiles
+  fix 4.17.21"). A gitleaks finding shows its short commit and the
+  fingerprint `.gitleaksignore` takes.
 - `--compact-on-refusal` shrinks the report to the version, the verdict and
   the refusal reason when the trust base was refused and no gate ran,
   instead of the full per-gate report. Built for the pull-request-comment

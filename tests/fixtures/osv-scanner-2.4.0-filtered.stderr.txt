@@ -1,0 +1,9 @@
+Starting filesystem walk for root: /
+Scanned /tmp/conductor-osv-fixture/a/package-lock.json file and found 2 packages
+Scanned /tmp/conductor-osv-fixture/b/package-lock.json file and found 1 package
+End status: 0 dirs visited, 2 inodes visited, 2 Extract calls, 1.394083ms elapsed, 1.394ms wall time
+GHSA-29mw-wpgm-hmr9 and 1 alias have been filtered out because: no expiry
+GHSA-35jh-r3h4-6jhm and 1 alias have been filtered out because: synthetic fixture
+GHSA-29mw-wpgm-hmr9 and 1 alias have been filtered out because: no expiry
+GHSA-35jh-r3h4-6jhm and 1 alias have been filtered out because: synthetic fixture
+Filtered 4 vulnerabilities from output

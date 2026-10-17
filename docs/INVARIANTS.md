@@ -4997,3 +4997,50 @@ token in a comment matches the job when the gates step wrote no report (the
 comment then says it produced none), or that a clean non-verbose one-line
 summary carries a token (it is one line by design; the action always passes
 `--verbose`).
+
+THE TEXT REPORT'S PER-GATE CAP HIDES LINES, NEVER FINDINGS (phase 3, item
+3.3). Without `--verbose` a gate section prints its first
+`FINDINGS_SHOWN_PER_GATE` (src/output-text.ts:180) entries, blocking first, and
+rolls the rest into one line counting them (src/output-text.ts:342). The cap
+is applied inside `gateSection` only, after every number on the report has
+already been taken from `gate.findings`: the inventory line, the verdict
+sentence, the verdict token and the exit code (composed in exit-codes.ts,
+which never sees the text report) all count every finding, and SARIF renders
+every finding whatever the cap. The osv-scanner grouping beside it (one line
+per advisory on one installed package, across lockfiles) is the same kind of
+thing: presentation over unchanged findings. Pinned by "never drops a capped
+finding from the counts, the verdict, the token or SARIF" and "keeps every
+finding behind a grouped line: the count line, SARIF and the verdict are
+unchanged" in tests/readable-reports.test.ts.
+
+INIT ENABLES AN EXTERNAL GATE ONLY WHEN ITS BINARY IS FOUND, AND SAYS CI MUST
+INSTALL IT (phase 3, item 3.4). `renderPolicy` writes `enabled: true` for a
+role only when `detectGates` found its binary (src/init-policy.ts:110), and
+under an enabled external gate (a product whose profile is not `managed`) it
+writes a comment that CI must install that tool (src/init-policy.ts:123-127),
+because nothing in this family installs gitleaks or osv-scanner and a run
+without it is `conductor/gate-missing`, exit 2. init prints a WARNING line
+saying the same. Init never rewrites an existing policy file; on one it only
+lists the roles the file lacks. Pinned by "writes an external gate enabled
+only when its binary is found, with a CI comment in the file" and "names each
+role the file lacks, with the two lines that add it, and leaves the file
+alone" in tests/init-phase3.test.ts.
+
+OSV-SCANNER STDERR IS UNTRUSTED TEXT, AND NO CONTROL BYTE FROM IT REACHES A
+REPORT (phase 3 review, B1). `osvSuppressions` (src/normalize.ts) reads the
+osv-scanner.toml suppression lines from stderr, where osv-scanner 2.4.0
+prints a reason verbatim, newlines and escape bytes included, so a reason can
+forge a line of its own. Only an id of advisory-id shape is read, and every
+id and reason is cut to printable ASCII before it reaches the
+`suppressed-by-osv-scanner.toml` fact, which the text report prints
+uncleaned; a count that is not a safe integer is ignored. An id-shaped forged line made of printable text is still read and listed; that is display only and feeds no count, verdict or exit. Pinned by "never
+lets a control byte from osv-scanner stderr reach the fact, the text report,
+SARIF or the comment body (B1)" in tests/readable-reports.test.ts.
+
+THE HUSKY FRESH-CLONE REDIRECT FIRES ONLY WHEN core.hooksPath IS NOT SET AT
+ALL (phase 3 review, B2). A `core.hooksPath` set to `.git/hooks` by hand is
+the default directory but is configured, so git runs `.git/hooks` and init
+writes there; only an unset `core.hooksPath` with husky declared in
+package.json or a tracked `.husky/` sends the hook to `.husky/pre-commit`.
+Pinned by "does not redirect when core.hooksPath is set explicitly to
+.git/hooks, the path git then runs (B2)" in tests/init-phase3.test.ts.

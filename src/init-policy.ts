@@ -5,6 +5,7 @@ import { NATIVE_CONTRACT_PATH } from './intent-prepare.js';
 import { DEFAULT_STAGE_FOR_ROLE, GATE_ROLES, POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
 import type { GateRole } from './policy.js';
 import { installName } from './normalize.js';
+import { profileFor } from './products.js';
 import { CANDIDATES } from './resolve.js';
 
 export { POLICY_FILE_NAME };
@@ -116,6 +117,14 @@ export function renderPolicy(
     lines.push(`  ${role}:`);
     lines.push(`    product: ${product}`);
     lines.push(`    enabled: ${enabled ? 'true' : 'false'}`);
+    // An external tool is enabled only because THIS machine has it, and
+    // nothing installs it anywhere else: say so where the next reader of the
+    // file will look, not only in init's own output, which nobody re-reads.
+    if (enabled && !profileFor(product).managed) {
+      lines.push(`    # Enabled because ${product} was found on the machine that ran init. CI must`);
+      lines.push(`    # install ${product} itself (conductor does not); without it this gate`);
+      lines.push('    # reports conductor/gate-missing and the run exits 2.');
+    }
     lines.push(`    stage: ${DEFAULT_STAGE_FOR_ROLE[role]}`);
     // The intent gate is the one with ceremony, and the ramp is what makes
     // that ceremony adoptable: with no frozen contract yet, it reports for a

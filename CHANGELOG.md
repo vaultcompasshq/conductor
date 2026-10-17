@@ -40,6 +40,24 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   gate gets the full limit. The limit is a SIGTERM deadline: a gate that
   ignores SIGTERM is waited for, and a gate's own child processes are not
   stopped with it.
+- **`conductor init` on an existing policy names the gate roles the file
+  has no entry for**, with the two lines that add each one. The file is
+  still never rewritten.
+- **`conductor init` adds `.guardrails/` to `.gitignore`** when git does not
+  already ignore the manifest: appended to the end of an existing file
+  (every other line is left as it is) or written as a new file, and said in
+  the output. A `.gitignore` that is a symbolic link or not a regular file is
+  left alone and the line to add is printed instead. `--revert` does not
+  remove the line.
+- **`conductor init --hook` recognises husky on a fresh clone.** husky
+  declared in `package.json` (a `husky` dependency or devDependency, or a
+  `prepare` script that runs husky) or a tracked `.husky/` directory, with
+  `core.hooksPath` not yet set, now targets the tracked `.husky/pre-commit`
+  instead of `.git/hooks/pre-commit`, which husky's install would bypass,
+  and says the install still has to run. Any `core.hooksPath` that is set,
+  `.git/hooks` included, is left alone. The prepare script must run husky as
+  a command (`husky`, `husky install`, `is-ci || husky`, `npx husky`); the
+  word inside another name (`no-husky`, `echo skip husky`) does not count.
 
 ### Known open
 
@@ -52,6 +70,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   locally.** That test needs a repository large enough to outlive a real
   10 second limit, so it runs only against a local gitleaks with
   `CONDUCTOR_REAL_GITLEAKS_SLOW=1` set; CI runs the stubbed timeout tests.
+- **husky with a custom hooks directory is not followed.** The fresh-clone
+  redirect always targets `.husky/pre-commit`. A `prepare` script that
+  installs husky into another directory (`husky install .config/husky`, or
+  husky 9's `husky .config/husky`) leaves the written hook where husky will
+  not run it; run the install first and re-run `conductor init --hook`.
+- **An osv-scanner.toml reason shaped like a suppression line is still
+  read.** Control bytes are stripped and only an advisory-id-shaped id is
+  read, but a forged line made of printable text adds a plain id to the
+  `suppressed-by-osv-scanner.toml` fact. It is display only, authored by
+  whoever edits that file, and feeds no count, verdict or exit.
 
 ### Changed
 
@@ -73,6 +101,47 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   `note:` block, git's rename-detection warnings as gitleaks logs them) and
   prefers the line a gate marks as the failure (INCOMPLETE, or an ERR log
   line). Reporting only: no verdict or exit code changes.
+- **osv-scanner findings are easier to read.** Each line shows
+  `package@installed-version`, the fixed version or `no fix listed`, and `dev`
+  when osv-scanner marks the package a dev dependency. One advisory on one
+  installed package in several lockfiles is one line ("N lockfiles"), with
+  the lockfiles listed under `--verbose`. The finding count, SARIF and the
+  exit code still have one finding per lockfile.
+- **osv-scanner.toml suppressions are counted.** The vulnerabilities gate's
+  `suppressed` number was always 0; it is now osv-scanner's own count from
+  its "Filtered N vulnerabilities" line (once per advisory per lockfile),
+  and the ids and reasons are listed. osv-scanner reports no expiry, so none
+  is shown. osv-scanner prints a reason verbatim, control bytes included, so
+  only an id-shaped id is read and every id and reason is cut to printable
+  ASCII; a count that is not a safe integer is ignored. `sources-with-findings` now counts the lockfiles that findings
+  name, so a lockfile with only a licence or deprecation verdict is not
+  counted.
+- **gitleaks findings show the short commit and the fingerprint** (the
+  value `.gitleaksignore` takes), and the commits a duplicate was folded
+  from. The run fact `entries` is now `entries-raw` (records in gitleaks'
+  report) and `entries-distinct` (findings after the merge collapse), in the
+  text report and in SARIF `properties.details`. Two records from different
+  commits that agree on rule, file, columns and entropy but not line (a merge
+  reporting a moved line again) are both kept and each names the other as
+  possibly the same secret.
+- **Long reports are capped per gate.** Without `--verbose`, a gate prints
+  its first 20 findings (blocking first) and one line saying how many more
+  there are. Every count, the verdict, the token and SARIF still include all
+  of them.
+- **A gate that could not run prints its reason and its stderr once.** The
+  umbrella's own finding under it no longer repeats both; SARIF keeps the
+  full message.
+- **A refused trust base on a terminal prints the refusal once**, with one
+  line per gate in the report and one line on stderr. A file, a pipe, the
+  `--text-report` copy and a job log are unchanged.
+- **A dep-guard run whose online lookups hit its deadline says so** on the
+  one-line clean summary and on its job-log line, read from dep-guard's own
+  `online-deadline-exceeded` diagnostic. Still exit 0.
+- **`conductor init` warns harder about external gates.** An external gate
+  (gitleaks, osv-scanner) is still enabled only when its binary is found;
+  the policy file now carries a comment under it saying CI must install it,
+  and the printed note is a WARNING naming the `conductor/gate-missing`
+  result a run without it gets.
 
 ## [0.9.0] - 2026-10-14
 

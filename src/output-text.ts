@@ -49,10 +49,103 @@ function subjectLabel(finding: Finding): string {
   }
 }
 
-function findingLines(finding: Finding): string[] {
+/**
+ * The findings of one section, as the entries a reader sees.
+ *
+ * For osv-scanner one entry per ADVISORY ON ONE INSTALLED PACKAGE, however
+ * many lockfiles carry it: a repository with a dozen lockfiles pinning the
+ * same lodash printed the same advisory a dozen times, and the one fact that
+ * differed between those lines, the lockfile, is what --verbose lists. Every
+ * other gate keeps one entry per finding. Presentation only: the findings
+ * themselves, their count, SARIF and the exit decision are all untouched.
+ */
+function findingEntries(gate: GateOutcome): Finding[][] {
+  const sorted = [...gate.findings].sort(compareFindings);
+  if (gate.product !== 'osv-scanner') {
+    return sorted.map((finding) => [finding]);
+  }
+  const groups = new Map<string, Finding[]>();
+  for (const finding of sorted) {
+    const name = finding.subject.kind === 'package' ? finding.subject.name : '';
+    const key = JSON.stringify([
+      finding.ruleId,
+      name,
+      finding.details.version ?? null,
+      finding.blocking,
+      finding.severity,
+      finding.details.baseline ?? null,
+    ]);
+    groups.set(key, [...(groups.get(key) ?? []), finding]);
+  }
+  return [...groups.values()];
+}
+
+function isDev(finding: Finding): boolean {
+  const groups = finding.details.dependencyGroups;
+  return Array.isArray(groups) && groups.includes('dev');
+}
+
+/** The osv-scanner head-line subject: package@installed, the lockfile or the count, the fix, dev. */
+function osvSubject(entry: Finding[]): string {
+  const first = entry[0] as Finding;
+  const name = first.subject.kind === 'package' ? first.subject.name : '';
+  const installed = typeof first.details.version === 'string' ? first.details.version : '';
+  const where =
+    entry.length === 1 && first.subject.kind === 'package'
+      ? `(${first.subject.manifest})`
+      : `${entry.length} lockfiles`;
+  const fixed = typeof first.details.fixedVersion === 'string' ? `fix ${first.details.fixedVersion}` : 'no fix listed';
+  const dev = entry.filter(isDev).length;
+  const devLabel = dev === 0 ? '' : dev === entry.length ? '  dev' : `  dev in ${dev} of ${entry.length}`;
+  return `${name}@${installed} ${where}  ${fixed}${devLabel}`;
+}
+
+function shortCommit(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value.slice(0, 7) : null;
+}
+
+/** gitleaks' own identity for a finding: the commit it was seen in and its fingerprint. */
+function gitleaksLines(finding: Finding): string[] {
+  const commit = shortCommit(finding.details.commit);
+  const parts = [
+    ...(commit === null ? [] : [`commit ${commit}`]),
+    ...(finding.fingerprint === null ? [] : [`fingerprint ${finding.fingerprint.value}`]),
+  ];
+  const alsoIn = Array.isArray(finding.details.alsoIn)
+    ? finding.details.alsoIn.map(shortCommit).filter((value): value is string => value !== null)
+    : [];
+  if (alsoIn.length > 0) {
+    parts.push(`also in ${alsoIn.join(', ')}`);
+  }
+  const lines = parts.length === 0 ? [] : [`      ${parts.join('  ')}`];
+  const twins = finding.details.possiblySameSecretAs;
+  if (Array.isArray(twins) && twins.length > 0) {
+    lines.push(
+      `      possibly the same secret as ${twins.join(', ')} (same rule, file, columns and entropy; ` +
+        'a merge reports a moved line again)'
+    );
+  }
+  return lines;
+}
+
+/**
+ * The umbrella's own finding for a gate that did not complete, whose message
+ * is that gate's detail plus its stderr: both already printed in the section
+ * just above it. gate-missing is not one, its message carries the install
+ * remedy, which the section does not print anywhere else.
+ */
+function isRepeatedProblem(finding: Finding): boolean {
+  return (
+    finding.product === 'conductor' &&
+    (finding.ruleId === 'conductor/gate-failed' || finding.ruleId === 'conductor/gate-output-unparseable')
+  );
+}
+
+function findingLines(entry: Finding[], verbose: boolean, shortProblem: boolean): string[] {
+  const finding = entry[0] as Finding;
   const marker = finding.blocking ? 'BLOCKING' : '  report';
   const severity = finding.severityIsDerived ? `${finding.severity}*` : finding.severity;
-  const subject = subjectLabel(finding);
+  const subject = finding.product === 'osv-scanner' && finding.subject.kind === 'package' ? osvSubject(entry) : subjectLabel(finding);
   // The vulnerabilities gate's base-comparison label, on a compared
   // pull-request run only: the label is set nowhere else.
   const baseline = finding.details.baseline;
@@ -60,8 +153,37 @@ function findingLines(finding: Finding): string[] {
   const head = `  ${marker}  ${severity.padEnd(9)} ${finding.ruleId}${
     subject === '' ? '' : `  ${subject}`
   }${label}`;
-  return [head, `      ${finding.message}`];
+  // A gate that could not run already printed its reason, and the gate's own
+  // output, in the lines above this one. The umbrella's finding carries the
+  // same two again for SARIF, where they are the only record; here they were
+  // the second and third copy of one failure.
+  // The unparseable finding keeps the one sentence the section above does not
+  // say: whose side the problem is on.
+  const message = !shortProblem
+    ? finding.message
+    : finding.ruleId === 'conductor/gate-output-unparseable'
+      ? 'Nothing was verified by this gate; the reason is above. This is the umbrella being out of date with that gate, not a problem in your code.'
+      : 'Nothing was verified by this gate; the reason is above.';
+  const lines = [head, `      ${message}`];
+  if (finding.product === 'gitleaks') {
+    lines.push(...gitleaksLines(finding));
+  }
+  if (verbose && entry.length > 1) {
+    const manifests = entry.map((each) => (each.subject.kind === 'package' ? each.subject.manifest : ''));
+    lines.push(`      lockfiles: ${manifests.join(', ')}`);
+  }
+  return lines;
 }
+
+/**
+ * How many entries a section prints before it rolls the rest up into one
+ * line, unless --verbose. A full-history gitleaks scan or an osv-scanner run
+ * over an old lockfile printed six hundred lines on one repository, which
+ * buries the verdict and every other gate. Findings past the cap are still
+ * findings: they are counted in every number on the report, they are in the
+ * SARIF log, --verbose prints them, and the exit code never reads this.
+ */
+export const FINDINGS_SHOWN_PER_GATE = 20;
 
 /**
  * The base comparison under the vulnerabilities gate's threshold line: the
@@ -172,7 +294,14 @@ function contractLine(gate: GateOutcome): string | null {
   return `  contract: ${where}   ${base}`;
 }
 
-function gateSection(gate: GateOutcome, verbose: boolean): string[] {
+function gateSection(gate: GateOutcome, verbose: boolean, refusedOnTerminal = false): string[] {
+  // A gate the refused trust base stopped, on a terminal: the refusal is at
+  // the top of the report once, so the section is one line and no more.
+  // Every other caller (a file, a pipe, a pull request comment) keeps the full
+  // section, byte for byte.
+  if (refusedOnTerminal) {
+    return [`  ${gate.role}  ${gate.product}  did not run: the trust base was refused (above)`];
+  }
   const lines: string[] = ['', header(gate, verbose)];
 
   // Under the header, on every outcome that carries it: gitleaks' own
@@ -209,9 +338,19 @@ function gateSection(gate: GateOutcome, verbose: boolean): string[] {
 
   // Sorted here rather than relying on the order the gate happened to emit:
   // blocking first, then by severity. A section whose first line is a low
-  // finding buries the one that just refused a commit.
-  for (const finding of [...gate.findings].sort(compareFindings)) {
-    lines.push(...findingLines(finding));
+  // finding buries the one that just refused a commit. The cap keeps that
+  // order, so what it rolls up is always the least severe.
+  const entries = findingEntries(gate);
+  const shown = verbose ? entries : entries.slice(0, FINDINGS_SHOWN_PER_GATE);
+  for (const entry of shown) {
+    lines.push(...findingLines(entry, verbose, gate.couldNotRun !== null && isRepeatedProblem(entry[0] as Finding)));
+  }
+  const hidden = entries.slice(shown.length).reduce((total, entry) => total + entry.length, 0);
+  if (hidden > 0) {
+    lines.push(
+      `  ${hidden} more finding(s) in this gate, not shown here: re-run with --verbose, or read the ` +
+        'SARIF report (--format sarif). They count toward everything on this report.'
+    );
   }
 
   if (gate.couldNotRun === null) {
@@ -595,7 +734,17 @@ export function jobLogSummary(result: RunResult): string {
  * Describes, decides nothing: every word is read off the outcomes the exit
  * code was already composed from. Same plain ASCII as the rest of this file.
  */
-export function gateLogLines(result: RunResult): string[] {
+export function gateLogLines(result: RunResult, options: { terminal?: boolean } = {}): string[] {
+  // On a terminal a refused run's per-gate lines are the refusal sentence once
+  // per gate, under a report that already led with it. One line instead; a
+  // job log (never a terminal) keeps one line per gate.
+  const refusal = result.trustBase?.refusal;
+  if (options.terminal === true && refusal !== undefined && refusal !== null && result.gates.length > 0) {
+    return [
+      `conductor: the trust base was refused, so no gate ran: ` +
+        `${result.gates.map((gate) => `${gate.role} (${gate.product})`).join(', ')}; could-not-run, no exit code`,
+    ];
+  }
   const lines: string[] = [];
   for (const gate of result.gates) {
     const version = gate.productVersion === null ? 'version unknown' : gate.productVersion;
@@ -612,6 +761,11 @@ export function gateLogLines(result: RunResult): string[] {
       const blocking = gate.findings.filter((finding) => finding.blocking).length;
       outcome =
         total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
+      // Only when the gate said so; the outcome word above is unchanged.
+      const coverage = deadlineCoverage(gate);
+      if (coverage !== null) {
+        outcome += `, ${coverage}`;
+      }
     }
     // conductor's own refusals (a git below the floor, a path list it cannot
     // pass, a PATH or git-directory failure, a gate below its minimum) carry
@@ -1044,6 +1198,15 @@ export interface TextOptions {
    * that did not block, never about a gate that did not run.
    */
   advisory?: boolean;
+
+  /**
+   * The report is going straight to a terminal (cli.ts: stdout is a TTY and
+   * no --output). Only one thing reads it: a refused trust base prints its
+   * refusal once at the top and one line per gate, rather than the refusal
+   * again in every gate's section and again in every gate's finding. A file,
+   * a pipe and a pull request comment never set it and are unchanged.
+   */
+  terminal?: boolean;
 }
 
 /**
@@ -1091,6 +1254,34 @@ function isFullyClean(result: RunResult): boolean {
       gate.intent?.note === undefined &&
       !gate.findings.some((finding) => finding.blocking)
   );
+}
+
+/**
+ * dep-guard's own diagnostic code for an online budget that ran out before
+ * every lookup was made (dep-guard core, online/deadline.ts,
+ * ONLINE_DEADLINE_CODE). Read, never minted: the umbrella only repeats it.
+ */
+export const DEP_GUARD_DEADLINE_CODE = 'online-deadline-exceeded';
+
+/**
+ * The coverage clause for a dep-guard run whose online lookups were cut short
+ * by its own deadline, or null. Not a verdict: dep-guard still exits 0 for
+ * this and so does the run; the clause exists because a summary that read
+ * "ok" while some names were never looked up overstated what was checked.
+ */
+function deadlineCoverage(gate: GateOutcome): string | null {
+  if (gate.product !== 'dep-guard' || gate.couldNotRun !== null) {
+    return null;
+  }
+  const said = gate.run.diagnostics.some((diagnostic) => diagnostic.code === DEP_GUARD_DEADLINE_CODE);
+  const skipped = gate.run.details['skipped-by-deadline'];
+  const count = typeof skipped === 'number' ? skipped : null;
+  if (!said && (count === null || count === 0)) {
+    return null;
+  }
+  return count === null || count === 0
+    ? `online lookups incomplete (${DEP_GUARD_DEADLINE_CODE})`
+    : `online lookups incomplete, ${count} skipped by the deadline (${DEP_GUARD_DEADLINE_CODE})`;
 }
 
 /**
@@ -1216,6 +1407,15 @@ function summaryLine(result: RunResult): string {
     parts.push(`${counts.join(', ')}.`);
   }
 
+  // A clean run whose dependency gate did not finish its online lookups is
+  // still exit 0, and still this line, but it says so in words.
+  for (const gate of result.gates) {
+    const coverage = deadlineCoverage(gate);
+    if (coverage !== null) {
+      parts.push(`${gate.role} (${gate.product}): ${coverage}.`);
+    }
+  }
+
   // The suppressed and ignored counts the gates reported, summed across them
   // and printed even at zero. The full report prints these per gate for the
   // same reason, so a quiet report is not mistaken for a clean one; the clean
@@ -1321,8 +1521,12 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];
 
+  const refusedOnTerminal = options.terminal === true && refusal.length > 0;
+  if (refusedOnTerminal && result.gates.length > 0) {
+    lines.push('');
+  }
   for (const gate of result.gates) {
-    lines.push(...gateSection(gate, Boolean(options.verbose)));
+    lines.push(...gateSection(gate, Boolean(options.verbose), refusedOnTerminal));
   }
 
   const aside = [
@@ -1344,7 +1548,8 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // A derived severity is marked with a trailing asterisk above; say what
   // that means rather than leaving a reader to guess, and only when one is
   // actually on screen.
-  if (result.findings.some((finding) => finding.severityIsDerived)) {
+  // A compact terminal refusal prints no finding line at all, so no asterisk.
+  if (!refusedOnTerminal && result.findings.some((finding) => finding.severityIsDerived)) {
     lines.push('', '* severity assigned by the umbrella; that gate reports no per-finding severity.');
   }
 
