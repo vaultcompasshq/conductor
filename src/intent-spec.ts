@@ -29,9 +29,10 @@
 //     explicit statement beats the inferred convention below.
 //
 //  3. The convention: a markdown file directly under docs/superpowers/specs
-//     whose name relates to the branch. Directly under, not nested, because
-//     that is the layout intent-guard's own importer discovers and an
-//     archive subdirectory is not a candidate for this branch's contract.
+//     whose name matches the branch on WHOLE WORDS (selectByBranch below).
+//     Directly under, not nested, because that is the layout intent-guard's
+//     own importer discovers and an archive subdirectory is not a candidate
+//     for this branch's contract.
 
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -41,7 +42,9 @@ export const PLAN_DIR = 'docs/superpowers/plans';
 
 export type SpecDiscovery =
   /** Found, with the source that won. Paths are repository-relative. */
-  | { kind: 'flag' | 'pr-body' | 'convention'; spec: string; plan: string | null }
+  | { kind: 'flag' | 'pr-body'; spec: string; plan: string | null }
+  /** Found by the branch-name convention, with how it was chosen. */
+  | { kind: 'convention'; spec: string; plan: string | null; match: ConventionMatch }
   /** `--spec` named a file that is not there. Never silently replaced. */
   | { kind: 'missing-flag'; spec: string }
   /** The pull request body said `Spec: none`: there is nothing to import. */
@@ -53,7 +56,8 @@ export type SpecDiscovery =
    * as unable to run, never as having nothing to check.
    */
   | { kind: 'escaped'; path: string }
-  | { kind: 'none' };
+  /** Nothing found. `selection` is present when a branch was available. */
+  | { kind: 'none'; selection?: SelectionMiss };
 
 /**
  * The token that turns a `Spec:` line into a waiver.
@@ -101,12 +105,256 @@ export function normalizeStem(fileName: string): string {
   return stem.replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-design$/, '');
 }
 
-/** Whether a normalized stem and a slug name the same work. */
-export function stemMatches(stem: string, slug: string): boolean {
-  if (stem === '' || slug === '') {
-    return false;
+/**
+ * The shortest token that can be evidence for a binding.
+ *
+ * Two-letter tokens (pr, ci, ui, db, v2) are the shape of the dogfood failure
+ * this rule exists to close, and they recur across unrelated work. Three
+ * keeps the short domain words a team actually names features after (api,
+ * cli, osv).
+ */
+export const MIN_TOKEN_LENGTH = 3;
+
+/**
+ * Words that appear in branch and spec names because of the naming
+ * convention, not because of the feature. Closed and pinned exactly by a
+ * test. A stop word is ignored as EVIDENCE, never deleted from a sequence: it
+ * still occupies its position for the contiguity test.
+ */
+export const STOP_WORDS: readonly string[] = Object.freeze([
+  // Change-type words
+  'feat', 'feature', 'fix', 'bugfix', 'hotfix', 'chore', 'docs',
+  'refactor', 'test', 'tests', 'wip', 'release', 'build', 'perf',
+  'style', 'revert', 'deps', 'bump',
+  // Convention words
+  'design', 'spec', 'specs', 'plan', 'draft', 'review', 'followup',
+  'temp', 'tmp',
+  // Function words
+  'and', 'the', 'for', 'with', 'from', 'into', 'onto', 'per', 'via', 'not',
+  'add', 'use', 'new', 'more', 'misc',
+]);
+
+const STOP_WORD_SET: ReadonlySet<string> = new Set(STOP_WORDS);
+
+/**
+ * A branch slug or a spec stem as a sequence of whole words.
+ *
+ * ASCII letters only are folded, never toLowerCase(): that maps U+212A
+ * KELVIN SIGN to an ASCII k, so a branch spelled with one would fold into an
+ * ASCII word and could bind a spec. The delimiters are ASCII only for the
+ * same reason, never \s, which also matches Unicode whitespace git allows in
+ * a ref name (U+00A0 and the rest). A non-ASCII character therefore survives
+ * unchanged inside its token, and the charset rule in isSignificant keeps
+ * that token from ever counting. A dot is not a delimiter: 1.2.1 is one token.
+ */
+export function tokens(text: string): string[] {
+  return text
+    .replace(/[A-Z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32))
+    .split(/[-_/ \t\n\r\f\v]+/)
+    .filter((token) => token !== '');
+}
+
+/**
+ * Whether a token can be evidence for a binding: three or more characters,
+ * letters digits and dots only, at least one letter, and not a stop word.
+ * The charset rule is also what keeps every word the report prints as
+ * "shared" free of markup, whatever the head branch was called.
+ */
+export function isSignificant(token: string): boolean {
+  return (
+    token.length >= MIN_TOKEN_LENGTH &&
+    /^[a-z0-9.]+$/.test(token) &&
+    /[a-z]/.test(token) &&
+    !STOP_WORD_SET.has(token)
+  );
+}
+
+/** Where `needle` sits as one contiguous run of `haystack`, or -1. */
+function runAt(haystack: string[], needle: string[]): number {
+  for (let start = 0; start + needle.length <= haystack.length; start++) {
+    if (needle.every((token, offset) => haystack[start + offset] === token)) {
+      return start;
+    }
   }
-  return stem.includes(slug) || slug.includes(stem);
+  return -1;
+}
+
+function candidateOnTokens(
+  slug: string[],
+  stem: string[]
+): { exact: boolean; shared: string[] } | null {
+  if (slug.length === 0 || stem.length === 0) {
+    return null;
+  }
+  const [longer, shorter] = slug.length >= stem.length ? [slug, stem] : [stem, slug];
+  if (runAt(longer, shorter) === -1) {
+    return null;
+  }
+  const shared = shorter.filter(isSignificant);
+  if (shared.length === 0) {
+    return null;
+  }
+  return { exact: slug.length === stem.length, shared };
+}
+
+/**
+ * Whether a spec stem is a candidate for a branch slug, and on what words.
+ *
+ * The shorter token sequence must appear as ONE CONTIGUOUS RUN of the longer,
+ * compared token by token, in either direction, and that run must hold a
+ * significant token. This is the old substring test moved from characters to
+ * whole tokens and nothing looser: on tokens(x).join("-") of both sides,
+ * every candidate here is one the substring rule also accepts.
+ */
+export function candidateRun(slug: string, stem: string): { exact: boolean; shared: string[] } | null {
+  return candidateOnTokens(tokens(slug), tokens(stem));
+}
+
+/** How a convention selection was made, carried to every report surface. */
+export interface ConventionMatch {
+  strength: 'exact' | 'strong' | 'weak';
+  weakBecause: Array<'single-token' | 'length-tiebreak'>;
+  /** The significant tokens of the shared run, charset-restricted. */
+  shared: string[];
+  /** The next stem group's member, if any. */
+  runnerUp: string | null;
+  /** The runner-up's shared significant tokens, for the length-tiebreak wording. */
+  runnerUpShared: string[];
+  /**
+   * What 0.10.0's substring rule would have chosen, when that differs from
+   * this choice; null when it is the same file. Reporting only.
+   */
+  legacy: string | null;
+}
+
+/** Why the convention chose nothing, when a branch was available. */
+export interface SelectionMiss {
+  why: 'no-usable-token' | 'no-candidate' | 'ambiguous';
+  /** Ambiguous only: every tied group's member, sorted lexically, in full. */
+  tied: string[];
+  /** What 0.10.0's substring rule would have chosen. Reporting only. */
+  legacy: string | null;
+}
+
+export type BranchSelection =
+  | ({ kind: 'selected'; name: string } & ConventionMatch)
+  | ({ kind: 'none' } & SelectionMiss);
+
+/**
+ * 0.10.0's convention rule, verbatim: a character substring test in either
+ * direction, then an exact stem, the longer stem, the lexically greatest
+ * filename. Kept for one minor release for the legacy sentence in the report
+ * and for nothing else; it never selects.
+ */
+function legacySelection(names: string[], slug: string): string | null {
+  const contains = (stem: string): boolean =>
+    stem !== '' && slug !== '' && (stem.includes(slug) || slug.includes(stem));
+  const ranked = names
+    .filter((name) => contains(normalizeStem(name)))
+    .sort((a, b) => {
+      const stemA = normalizeStem(a);
+      const stemB = normalizeStem(b);
+      const exactA = stemA === slug ? 0 : 1;
+      const exactB = stemB === slug ? 0 : 1;
+      if (exactA !== exactB) {
+        return exactA - exactB;
+      }
+      if (stemA.length !== stemB.length) {
+        return stemB.length - stemA.length;
+      }
+      return a < b ? 1 : a > b ? -1 : 0;
+    });
+  return ranked[0] ?? null;
+}
+
+interface ScoredGroup {
+  member: string;
+  exact: boolean;
+  shared: string[];
+  longest: number;
+}
+
+function compareScore(a: ScoredGroup, b: ScoredGroup): number {
+  if (a.exact !== b.exact) {
+    return a.exact ? -1 : 1;
+  }
+  if (a.shared.length !== b.shared.length) {
+    return b.shared.length - a.shared.length;
+  }
+  return b.longest - a.longest;
+}
+
+/**
+ * The branch-name convention's choice among `names` (spec filenames), the one
+ * function both selection paths call, on the working tree and at the trust
+ * base.
+ *
+ * Candidates are grouped by their folded stem sequence; a group's member is
+ * its lexically greatest filename. Groups are ranked by an exact sequence,
+ * then the number of significant shared tokens, then the length of the
+ * longest one. A tie on all three between the top two groups chooses
+ * NOTHING: every key the old code used after the first was a guess about
+ * which feature the branch meant, and a tie on everything this measures is
+ * the code saying it does not know.
+ */
+export function selectByBranch(names: string[], branch: string): BranchSelection {
+  const rawSlug = branchSlug(branch);
+  const slug = tokens(rawSlug);
+  const oldAnswer = legacySelection(names, rawSlug);
+
+  if (!slug.some(isSignificant)) {
+    return { kind: 'none', why: 'no-usable-token', tied: [], legacy: oldAnswer };
+  }
+
+  const groups = new Map<string, ScoredGroup>();
+  for (const name of [...names].sort()) {
+    const stem = tokens(normalizeStem(name));
+    const run = candidateOnTokens(slug, stem);
+    if (run === null) {
+      continue;
+    }
+    // Sorted ascending, so a later name in the same group replaces an
+    // earlier one: the member is the lexically greatest filename.
+    groups.set(JSON.stringify(stem), {
+      member: name,
+      exact: run.exact,
+      shared: run.shared,
+      longest: Math.max(...run.shared.map((token) => token.length)),
+    });
+  }
+
+  const ranked = [...groups.values()].sort(
+    (a, b) => compareScore(a, b) || (a.member < b.member ? -1 : a.member > b.member ? 1 : 0)
+  );
+  const top = ranked[0];
+  if (top === undefined) {
+    return { kind: 'none', why: 'no-candidate', tied: [], legacy: oldAnswer };
+  }
+  const second = ranked[1];
+  if (second !== undefined && compareScore(top, second) === 0) {
+    const tied = ranked.filter((group) => compareScore(top, group) === 0).map((group) => group.member);
+    return { kind: 'none', why: 'ambiguous', tied: tied.sort(), legacy: oldAnswer };
+  }
+
+  const weakBecause: ConventionMatch['weakBecause'] = [];
+  if (!top.exact) {
+    if (top.shared.length === 1) {
+      weakBecause.push('single-token');
+    }
+    if (second !== undefined && second.exact === top.exact && second.shared.length === top.shared.length) {
+      weakBecause.push('length-tiebreak');
+    }
+  }
+  return {
+    kind: 'selected',
+    name: top.member,
+    strength: top.exact ? 'exact' : weakBecause.length > 0 ? 'weak' : 'strong',
+    weakBecause,
+    shared: top.shared,
+    runnerUp: second?.member ?? null,
+    runnerUpShared: second?.shared ?? [],
+    legacy: oldAnswer === top.member ? null : oldAnswer,
+  };
 }
 
 /**
@@ -172,44 +420,6 @@ function exists(repoRoot: string, relative: string): boolean {
 }
 
 /**
- * The best of the candidates whose stem relates to `target`, or undefined.
- *
- * `stemMatches` decides who is a CANDIDATE; this decides who wins, and the
- * two are different questions. Ranking on the lexically newest filename alone
- * was answering the second with the first: a loose candidate carrying a later
- * date beat the spec whose stem was the branch slug exactly, and an undated
- * name beat everything because it sorts after every date. A pull request was
- * then measured against a different feature's requirements, with nothing in
- * the report saying so, since naming the spec it used is exactly what the
- * report does.
- *
- * So: an exact stem first, then the most specific stem, and only then the
- * newest name. Specificity is stem LENGTH, which is crude but is the property
- * the failure actually had: "superpowers" beat
- * "1.2.1-base-and-superpowers" by being shorter and vaguer.
- */
-export function bestMatch(names: string[], target: string): string | undefined {
-  return names
-    .filter((name) => stemMatches(normalizeStem(name), target))
-    .sort((a, b) => {
-      const stemA = normalizeStem(a);
-      const stemB = normalizeStem(b);
-      const exactA = stemA === target ? 0 : 1;
-      const exactB = stemB === target ? 0 : 1;
-      if (exactA !== exactB) {
-        return exactA - exactB;
-      }
-      if (stemA.length !== stemB.length) {
-        return stemB.length - stemA.length;
-      }
-      // Newest name last in lexical order, so descending puts it first. The
-      // names carry an ISO date prefix, so this is date order among equally
-      // good candidates and nothing more.
-      return a < b ? 1 : a > b ? -1 : 0;
-    })[0];
-}
-
-/**
  * The plan belonging to a spec.
  *
  * The stem must be EQUAL, not merely related. The loose rule paired one
@@ -239,13 +449,29 @@ function planFor(repoRoot: string, specPath: string): { plan: string | null } | 
 }
 
 /** A found spec with its plan, or the refusal for a plan that escapes. */
-function withPlan(
-  repoRoot: string,
-  kind: 'flag' | 'pr-body' | 'convention',
-  spec: string
-): SpecDiscovery {
+function withPlan(repoRoot: string, kind: 'flag' | 'pr-body', spec: string): SpecDiscovery {
   const found = planFor(repoRoot, spec);
   return 'escaped' in found ? { kind: 'escaped', path: found.escaped } : { kind, spec, plan: found.plan };
+}
+
+/** The same, for a convention spec, which carries how it was chosen. */
+function conventionWithPlan(repoRoot: string, spec: string, match: ConventionMatch): SpecDiscovery {
+  const found = planFor(repoRoot, spec);
+  return 'escaped' in found
+    ? { kind: 'escaped', path: found.escaped }
+    : { kind: 'convention', spec, plan: found.plan, match };
+}
+
+/** The match record of a selection, without its discriminant and name. */
+export function matchOf(selection: Extract<BranchSelection, { kind: 'selected' }>): ConventionMatch {
+  return {
+    strength: selection.strength,
+    weakBecause: selection.weakBecause,
+    shared: selection.shared,
+    runnerUp: selection.runnerUp,
+    runnerUpShared: selection.runnerUpShared,
+    legacy: selection.legacy,
+  };
 }
 
 /** Normalizes a user-supplied path to a repository-relative one. */
@@ -337,17 +563,21 @@ export function discoverSpec(options: SpecDiscoveryOptions): SpecDiscovery {
   }
 
   if (options.branch !== undefined) {
-    const best = bestMatch(markdownFilesIn(repoRoot, SPEC_DIR), branchSlug(options.branch));
-    if (best !== undefined) {
-      const relative = `${SPEC_DIR}/${best}`;
-      // The convention spec is held to the repository too: a specs directory
-      // linked out of the checkout is refused, never imported. Only --spec is
-      // exempt, as a path a person typed.
-      if (!resolvesInsideRoot(repoRoot, relative)) {
-        return { kind: 'escaped', path: relative };
-      }
-      return withPlan(repoRoot, 'convention', relative);
+    const selection = selectByBranch(markdownFilesIn(repoRoot, SPEC_DIR), options.branch);
+    if (selection.kind === 'none') {
+      return {
+        kind: 'none',
+        selection: { why: selection.why, tied: selection.tied, legacy: selection.legacy },
+      };
     }
+    const relative = `${SPEC_DIR}/${selection.name}`;
+    // The convention spec is held to the repository too: a specs directory
+    // linked out of the checkout is refused, never imported. Only --spec is
+    // exempt, as a path a person typed.
+    if (!resolvesInsideRoot(repoRoot, relative)) {
+      return { kind: 'escaped', path: relative };
+    }
+    return conventionWithPlan(repoRoot, relative, matchOf(selection));
   }
 
   return { kind: 'none' };

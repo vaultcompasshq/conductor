@@ -1379,6 +1379,22 @@ scan at the gitleaks default"), and for an invalid head value by
 tests/cli.test.ts:3432 ("only in the head of a pull-request run leaves the
 run on the base policy, as a proposal").
 
+### The branch-name convention is a convenience, not a control
+
+The branch-name convention is a convenience, not a control against the
+pull request's author: the head branch name only chooses among the base's
+specs and the chosen text is the base's, but the author can equally choose
+any base spec, or none, with a Spec: line. A spec the head adds is never a
+candidate, and is reported as a proposal only when the base selects
+nothing. The control is a frozen native contract on the base. The
+candidate list is `markdownFilesAtRef` at the trust base and the selection
+is the same `selectByBranch` as the working tree
+(src/intent-prepare.ts:1285-1308); the head-spec proposal is reached only
+after the found return and the spec-ambiguous return
+(src/intent-prepare.ts:1446-1476). Pinned by tests/intent-prepare.test.ts
+("chooses only among the base specs at the trust base, never a spec the
+head adds").
+
 ### The Action installs outside the tree, and the umbrella is one of the four
 
 New in 0.4.0, and it closes the half of the boundary 0.3.0 left open. Every
@@ -3137,7 +3153,7 @@ spec by flag, and assert the reported source is the imported spec and
 that the gate is handed a temporary directory rather than `.`, with
 `import-spec` and `freeze` both recorded as having run. Note that the
 native tests above have a DISCOVERED spec beside the contract, which is
-the opposite rule; and tests/intent-spec.test.ts:246 covers `--spec`
+the opposite rule; and tests/intent-spec.test.ts ("lets --spec win over a Spec: line in the PR body") covers `--spec`
 beating a pull request body, a different question in a different file.
 Neither covers this.
 
@@ -3155,13 +3171,13 @@ for. Swapping the two branches now turns both tests red.
 `--spec` on the command line outranks everything. A path there that does
 not exist is REPORTED rather than replaced by a discovered one, because
 running a different contract than the one a person just named is the wrong
-kindness (src/intent-spec.ts:284-290, reported at
-src/intent-prepare.ts:454-462).
+kindness (src/intent-spec.ts:533-539, reported at
+src/intent-prepare.ts:673-681).
 
 A `Spec:` line in the pull request body comes next, anchored to the start
 of a line so a sentence containing the words in prose is not read as
 somebody naming a file, and the FIRST such line wins when a body carries
-two (src/intent-spec.ts:118-121). A path here that does not exist falls
+two (src/intent-spec.ts:373-376). A path here that does not exist falls
 through to the convention, because a typo in a pull request description
 must not be able to fail a build.
 
@@ -3169,55 +3185,148 @@ must not be able to fail a build.
 through. It is a WAIVER: a statement that this pull request deliberately
 has no spec, answered with a `waived` discovery before the convention is
 tried, because an explicit statement beats an inferred one
-(src/intent-spec.ts:294-302, with the token itself at
-src/intent-spec.ts:51-59). The token is exact and lowercase; anything else
+(src/intent-spec.ts:541-551, with the token itself at
+src/intent-spec.ts:60-70). The token is exact and lowercase; anything else
 unusable keeps the silent fall-through, so a sentence with "None" in it
 cannot switch a gate off. The waiver sits BELOW `--spec` in this file and
 below a frozen native contract in prepareIntent
-(src/intent-prepare.ts:491-504, the branch after the native contract
+(src/intent-prepare.ts:711-724, the branch after the native contract
 rather than before it), which is the whole meaning of it: it says there is
 nothing to import, never that a contract this repository froze should be
 ignored.
 
 The convention is a markdown file DIRECTLY under `docs/superpowers/specs`
-whose stem relates to the branch slug. Directly under, not nested, because
-that is the layout the gate's own importer discovers and an archive
-subdirectory is not a candidate for this branch's contract
-(src/intent-spec.ts:146-156).
+whose name matches the branch slug on whole tokens. Directly under, not
+nested, because that is the layout the gate's own importer discovers and an
+archive subdirectory is not a candidate for this branch's contract
+(src/intent-spec.ts:401-411).
 
-Candidacy and victory are different questions. `stemMatches` decides who
-is a candidate; `bestMatch` decides who wins, ranking an exact stem first,
-then the most specific stem by length, and only then the newest filename
-(src/intent-spec.ts:184-203). Ranking on the newest name alone answered
-the second question with the first: a loose candidate carrying a later
-date beat the spec whose stem was the branch slug exactly, and an undated
-name beat everything because it sorts after every date. A pull request was
-then measured against a different feature's requirements with nothing in
-the report saying so.
+The convention matches whole tokens, never a substring. Branch slug and
+spec stem have their ASCII letters lower-cased (no other character is
+folded, so no non-ASCII character can fold into a match) and are split on
+hyphen, underscore, slash and ASCII whitespace only (never Unicode
+whitespace); a spec is a candidate only when the shorter token sequence is
+one contiguous run of the longer and that run holds a significant token
+(three or more characters, letters digits and dots only, at least one
+letter, not a stop word). A slug with no significant token selects nothing
+(`tokens`, `isSignificant` and `candidateRun` at src/intent-spec.ts:150-212,
+the closed stop list at src/intent-spec.ts:124-135). A stop word is ignored
+as evidence but keeps its place in the sequence, so deleting one cannot make
+two names contiguous. Pinned by tests/intent-spec.test.ts ("folds ASCII
+case and splits on hyphen, underscore, slash and ASCII whitespace", "keeps
+a dot inside a token", "rejects short tokens", "rejects stop words",
+"rejects a token with no letter", "rejects a token outside letters, digits
+and dots", "is exactly the closed list of the design", "rejects a match
+inside a word, which the substring rule accepted", "rejects tokens that are
+all present but not one contiguous run", "keeps a stop word in the sequence
+for the contiguity test", "rejects an equal name made only of
+non-significant tokens", and "selects nothing for the dogfood branch pr,
+and names what 0.10.0 chose").
 
-A plan is paired only on an EQUAL stem (src/intent-spec.ts:219-226). No
+Candidacy and victory are different questions. Candidates are grouped by
+their folded stem sequence, and a group's member is its lexically greatest
+filename (the newest date only when every name carries a well-formed one);
+groups are ranked by an exact sequence, then the number of significant
+shared tokens, then the length of the longest shared token
+(`selectByBranch` and `compareScore`, src/intent-spec.ts:270-358). 0.10.0's stem-length key is
+gone: it let a long vague stem beat a short precise one whenever both
+contained the slug. Ranking on the newest name alone, before that, answered
+the second question with the first: a loose candidate carrying a later date
+beat the spec whose stem was the branch slug exactly, and an undated name
+beat everything because it sorts after every date. A pull request was then
+measured against a different feature's requirements with nothing in the
+report saying so.
+
+An ambiguous selection is reported, never guessed. When the top two stem
+groups tie on every ranking key, no spec is chosen, the gate is a
+`spec-ambiguous` skip on the working tree and at the trust base alike, and
+every tied spec is named (src/intent-spec.ts:333-337, the skip at
+src/intent-prepare.ts:219-246, reached at the trust base before the
+head-spec proposal at src/intent-prepare.ts:1446-1448). Pinned by
+tests/intent-spec.test.ts ("names both of two equally matching specs and
+chooses neither", and "says ambiguous where the longer-stem key would have
+picked one"), tests/intent-prepare.test.ts ("skips as spec-ambiguous on the
+working tree, naming both specs", and "skips as spec-ambiguous at the trust
+base, naming the base ref and its files, and keeps the proposals") and
+tests/intent-run.test.ts ("reports a tie as spec-ambiguous on every
+surface, with exit 0").
+
+A spec chosen by the branch name on one significant token, or by the
+token-length key alone, is selected and labelled weak in the gate block,
+the --verbose block, a SARIF note and the step summary; the label never
+changes its verdict or enforcement. Pinned by tests/intent-spec.test.ts
+("labels a single shared token weak", and "labels a win on token length
+alone weak, naming the runner-up") and tests/intent-run.test.ts ("labels a
+single-token choice weak in the gate block, --verbose, SARIF and line 3",
+"names the runner-up when the longer word decided", "keeps a weak
+selection blocking and enforced", and "handles a weak selection under
+enforce: false exactly as an exact one").
+
+On the normalisation `tokens(x).join("-")`, the token rule only removes
+bindings: every branch and spec pair that is a candidate is one the
+substring rule accepts on those normalised strings. On raw strings it
+gains exactly five kinds of pair and no others: ASCII case, underscore for
+hyphen, slash for hyphen, whitespace for hyphen, and doubled, leading or
+trailing delimiters. No non-ASCII character contributes. Pinned by
+tests/intent-spec.test.ts ("makes no candidate the substring rule rejects
+on the hyphen-joined tokens of both sides", "gains, on the raw strings,
+only pairs that differ from their normalised form by the five foldings",
+"does not let a Kelvin sign fold into an ASCII k", and "does not let a
+no-break space act as a delimiter").
+
+One function, selectByBranch, makes the convention choice on the working
+tree and at the trust base (defined at src/intent-spec.ts:300, called from
+`discoverSpec` at src/intent-spec.ts:565-582 and from `discoverSpecAtRef`
+at src/intent-prepare.ts:1292; the trust-base head-spec proposal reuses
+`discoverSpec`). Pinned by tests/intent-spec.test.ts ("leaves no
+stemMatches or bestMatch in src, and calls selectByBranch from the two
+selection paths").
+
+Known open, time-limited: the legacy substring answer is computed for
+reporting only, until the release after 0.11.x removes it; it never decides
+a selection (`legacySelection`, src/intent-spec.ts:249-268, read only into
+the `legacy` field). Pinned by tests/intent-prepare.test.ts ("skips a branch
+0.10.0 bound inside a word, on both paths, saying so") and
+tests/intent-run.test.ts ("says a branch 0.10.0 bound is now skipped, on
+line 3, in SARIF, and off the one-line summary", "notes a changed winner in
+the gate block, SARIF and line 3", and "prints the changed-winner line, not
+the weak one, when the new winner is weak").
+
+A plan is paired only on an EQUAL stem (src/intent-spec.ts:436-450). No
 plan is a fine outcome, since the gate imports a spec on its own; the
 wrong plan freezes one feature's requirements against another's change
 budget, and the resulting block or pass is about neither of them.
 
-Pinned by tests/intent-spec.test.ts:137 and 149 (the convention, and the
-plan paired by the same stem rule), 161, 175 and 193 (the ranking: the
-newest name only among equally good candidates, an exact stem beating a
-newer looser one, and an undated name not winning by sorting last), 206
-and 216 (the most specific match, and no plan rather than another
-feature's), 230 and 246 (a `Spec:` line beating the convention, and
-`--spec` beating the `Spec:` line), 263 (a `Spec:` path that is not there
-falls through), 401 (a `--spec` path that is not there is reported
-instead), and 419, 425, 431 and 440 (nothing matches, no directory, a
-nested spec, a non-markdown file), with 446 for a plan paired to a spec
-that came from the pull request body.
+Pinned by tests/intent-spec.test.ts ("finds a spec by branch slug, with
+the date prefix and -design suffix stripped", and "pairs the plan matched
+by the same stem rule"), the ranking by tests/intent-spec.test.ts ("takes
+the lexically newest filename when several specs match", "prefers the spec
+whose stem IS the branch slug over a newer looser one", "does not let an
+undated looser spec win by sorting last", "takes the most specific match
+when none is exact", "lets an exact stem beat a candidate it ties on count
+and length", "lets a higher count beat a longer token", "treats two files
+with one stem and different dates as one group, the lexically greatest
+winning", "puts a plain .md after its -design.md twin, by lexical order",
+and "reports a malformed date as a different stem, and so an ambiguous
+pair"), and by tests/intent-spec.test.ts ("pairs no plan at all rather than
+another feature plan", "lets a Spec: line in the PR body win over the
+branch-slug match", "lets --spec win over a Spec: line in the PR body",
+"falls through to the convention when the PR body names a file that is not
+there", "reports a --spec path that is not there rather than quietly
+discovering another", "finds nothing when no spec matches the branch",
+"finds nothing when the spec directory does not exist at all", "ignores a
+spec nested in a subdirectory, which is not the convention", "ignores a
+file under the spec directory that is not markdown", and "pairs a plan
+with a spec that came from the PR body"). A named spec is never subject to
+the token rule: tests/intent-prepare.test.ts ("takes a --spec or a Spec:
+line as named, with no match record, on a branch the rule rejects").
 
-The waiver is pinned by tests/intent-spec.test.ts:460 (it beats the
-convention with a matching spec sitting on disk), 475 (it answers `waived`
-rather than `none`, which is what lets the report tell the two apart), 483
-(`--spec` still wins), 500 (`Spec: None` with a capital falls through to
-the convention instead), and 518 (the first `Spec:` line decides, so a
-later real path does not undo it).
+The waiver is pinned by tests/intent-spec.test.ts ("beats the branch-slug
+convention, even with a matching spec on disk", "is waived rather than
+none, so the report can tell the two apart", "loses to --spec, which is the
+most explicit statement of all", "is the exact lowercase token and nothing
+else", and "takes the FIRST Spec: line, so a later real path does not undo
+it").
 
 ## Containment applies to the pull request body, the convention spec and the plan, and to --spec only on a pull-request run
 
@@ -3263,7 +3372,13 @@ symlinked specs directory, naming it") and tests/intent-spec.test.ts
 ("refuses a plan reached through a symlinked plans directory, rather than
 dropping it").
 
-Pinned by tests/intent-spec.test.ts:295, 312, 324, 332, 354, 375 and 392.
+Pinned by tests/intent-spec.test.ts ("falls through to the convention
+rather than importing it", "finds nothing at all when there is no
+convention match to fall through to", "refuses an absolute path out of the
+tree the same way", "refuses a committed symlink that points out of the
+tree", "still follows a symlink that stays inside the tree", "treats a
+dangling symlink as a path that is not there", and "still lets --spec point
+outside, because a person typed it").
 
 ## A branch with no spec is advisory, and never changes the exit code
 
@@ -3301,6 +3416,16 @@ one function answers for all three (`skipWording`,
 src/output-text.ts:253-274): the skipped line, the verdict sentence for a
 run whose gate list is empty, and the clause on the one-line summary of a
 clean run.
+
+A third reason arrived in 0.11.0, `spec-ambiguous`: two or more specs
+matched the branch name equally, so the convention chose none (see "Spec
+discovery" above). It is advisory exactly like the other two and reaches no
+exit code. Its summary-line clause exists in `skipWording` but is never
+printed: `isFullyClean` keeps any run with a `spec-ambiguous` skip, or with
+a skip carrying the 0.10.0 legacy answer, off the one-line summary, so the
+sentence naming the tied specs is always on screen. Pinned by
+tests/intent-run.test.ts ("keeps a tie off the one-line summary, beside a
+second clean gate, while the token stays pass").
 
 Three, not one, and this was wrong when it was first written. Only the
 skipped line was reason-aware; the verdict still said "had no contract to
@@ -3513,6 +3638,20 @@ warnings" describe block (moved out of results and into notifications
 while keeping the gate's own namespace, sent at note level with the
 message text unchanged, and silent when the gate sent no warnings).
 The exit-code assertion is a different test, tests/output-sarif.test.ts:484 ("leaves the exit code alone in every one of those cases"), and it sits before that describe.
+
+The intent-spec header line is one of four fixed strings and carries no
+repository text; the Action copies it only on a whole-line match on line 3
+or 4. The strings are `INTENT_SPEC_LINES` (src/output-text.ts:1348-1353),
+printed after the present-on-base line, at most one, in the precedence
+ambiguous, none-changed, winner-changed, weak; the Action matches each of
+lines 3 and 4 whole (action.yml:1222-1228). Pinned by
+tests/action.test.ts ("copies an intent-spec line from line 3 or 4 to the
+step summary, whole lines only") and tests/intent-run.test.ts ("prints the
+changed-winner line, not the weak one, when the new winner is weak", and
+"prints no character of the branch name beyond the shared words"). The weak
+note is `intent-guard/spec-weak-match` and the tie is
+`intent-guard/spec-ambiguous`, both notifications by the rule above: each
+says how much of the intent policy this run's verdict covered.
 
 ## The clean-run summary line, and what it may not swallow
 
@@ -4390,7 +4529,7 @@ blocking-count-mismatch branch gets the "This run was advisory" wording and
 never the "Findings were advisory" one. End to end through the CLI: "maps a blocking run to
 exit 0 with the advisory wording, and pins the same run at exit 1 without
 the flag" and "leaves a could-not-run gate at exit 2, the load-bearing case
-advisory must never touch" in tests/cli.test.ts. The Action's own wiring: tests/action.test.ts:243 ("adds --advisory to the gates invocation only when the input is exactly "true"") and tests/action-pr-comment.test.ts:894 ("adds --advisory to the render run only when the input is exactly "true", proven by running the step"), both of which run the real step script
+advisory must never touch" in tests/cli.test.ts. The Action's own wiring: tests/action.test.ts:244 ("adds --advisory to the gates invocation only when the input is exactly "true"") and tests/action-pr-comment.test.ts:894 ("adds --advisory to the render run only when the input is exactly "true", proven by running the step"), both of which run the real step script
 against a conductor stub that records its argv rather than pattern-matching
 the YAML, following the same device tests/action.test.ts already uses for
 the trust-base fetch guard (commit f32c638, "Parse action.yml instead of

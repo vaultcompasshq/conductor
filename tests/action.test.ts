@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { INTENT_SPEC_LINES } from '../src/output-text.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2267,6 +2268,34 @@ describe('action.yml: the verdict token from the gates step', () => {
     });
     expect(blocked.status).toBe(1);
     expect(blocked.summary).toBe('conductor verdict: blocked (1)\n\npresent-on-base: 2 reported, not blocking\n\n');
+  });
+
+  // Intent spec auto-selection design, section 5.4 (O1). Kills: reading a
+  // line other than 3 and 4; a prefix match instead of a whole-line match.
+  it('copies an intent-spec line from line 3 or 4 to the step summary, whole lines only', () => {
+    for (const line of INTENT_SPEC_LINES) {
+      const onThree = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: pass\n${line}\nrest\n`, exit: 0 });
+      expect([line, onThree.summary]).toEqual([line, `conductor verdict: pass\n\n${line}\n\n`]);
+
+      const onFour = runGatesForVerdict({
+        body: `conductor 9.9.9\nverdict-token: pass\npresent-on-base: 3 reported, not blocking\n${line}\n`,
+        exit: 0,
+      });
+      expect([line, onFour.summary]).toEqual([
+        line,
+        `conductor verdict: pass\n\npresent-on-base: 3 reported, not blocking\n\n${line}\n\n`,
+      ]);
+
+      for (const body of [
+        `conductor 9.9.9\nverdict-token: pass\n${line} ::error::x\n`,
+        `conductor 9.9.9\nverdict-token: pass\n ${line}\n`,
+        `conductor 9.9.9\nverdict-token: pass\n${line}\r::warning::y\n`,
+        `conductor 9.9.9\nverdict-token: pass\nother\nother\n${line}\n`,
+      ]) {
+        const other = runGatesForVerdict({ body, exit: 0 });
+        expect([body, other.summary]).toEqual([body, 'conductor verdict: pass\n\n']);
+      }
+    }
   });
 
   describe('against an installed conductor that predates --text-report', () => {

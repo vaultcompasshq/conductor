@@ -721,7 +721,12 @@ code and the `enforce` flags the run already had.
   vulnerabilities already on the base branch, reported and not blocking;
   the report's third line then says `present-on-base: N reported, not
   blocking`, the verdict sentence says the same, and the Action copies that
-  line to the job summary under the token.
+  line to the job summary under the token. When the intent gate's spec was
+  chosen weakly, differently than before 0.11.0, or not at all because of a
+  tie or a branch 0.10.0 bound, the line after the token (after the
+  present-on-base line, when there is one) is one of four fixed
+  `intent-spec:` lines naming no branch or file, and the Action copies that
+  one too.
 - `nothing-checked`: exit 0, but nothing was checked. Either no gate ran at
   all (none is enabled, or every enabled one was deferred to a later stage,
   had nothing to judge, or was skipped), or every gate that ran examined
@@ -1180,12 +1185,24 @@ itself and needs an administrator to merge it.
    token is exact and lowercase, a frozen contract at rule 2 still wins over
    it, and `--spec` at rule 1 still overrides it.
 4. A markdown file **directly under** `docs/superpowers/specs` whose name
-   relates to the branch. The branch slug is the branch name with its first
-   segment (`feat/`, `fix/`) removed; a filename is reduced by stripping a
-   `YYYY-MM-DD-` prefix and a trailing `-design`; the two are candidates when
-   either contains the other. Several candidates are ranked: a stem **equal**
-   to the slug first, then the **longest** stem, and only then the newest
-   name, which is a lexical tie-break, so **date every spec**.
+   matches the branch on **whole words**. The branch slug is the branch name
+   with its first segment (`feat/`, `fix/`) removed; a filename is reduced by
+   stripping a `YYYY-MM-DD-` prefix and a trailing `-design`. Both have their
+   ASCII letters lower-cased and are split into words on `-`, `_`, `/` and
+   spaces. A spec is a candidate when one name's words appear, in order and
+   together, inside the other's, and at least one shared word is three or
+   more characters, contains a letter, and is not a common branch word
+   (`fix`, `feat`, `wip`, `docs`, and the rest of the list in
+   `src/intent-spec.ts`). Candidates are ranked by an equal name first, then
+   the most shared words, then the longest shared word, then the lexically
+   greatest filename among files with the same name (the newest date when
+   every spec is dated `YYYY-MM-DD-`, so **date every spec** in that form).
+   Two different specs that tie are **not** guessed between: the gate is
+   skipped as `intent-guard/spec-ambiguous`, naming both. A spec chosen on
+   one shared word, or on word length alone, is used and the report says the
+   match is weak. Branch names like `pr` or `fix/wip` choose nothing. When
+   the choice matters, say it: a `Spec:` line in the pull request body, or a
+   branch named after the spec.
 
 **A branch with neither** is a third state beside deferred and could-not-run:
 the gate is switched on, it ran, and it had nothing to check. It gets one
@@ -1197,7 +1214,9 @@ repository. A waived pull request lands in the same state and is reported
 under its own `intent-guard/contract-waived` id, with its own wording on the
 skipped line, in the verdict and on the one-line summary of a clean run, so a
 reader can tell "nobody has written one" from "somebody decided against one"
-wherever they meet it.
+wherever they meet it. An ambiguous branch, one two specs match equally,
+lands in the same advisory state under its own `intent-guard/spec-ambiguous`
+id, and never reaches the exit code either.
 
 **A repository with no contract yet is not a repository this gate can act
 on**, and the no-contract skip line names `docs/superpowers/specs`, which is
@@ -1222,7 +1241,8 @@ gate does not run at all on that pull request, and budget breaches are the
 thing this gate blocks on. The one thing a waiver cannot override is a frozen
 native contract, under either of the two paths above, which is checked first:
 a repository that wants the gate to be non-waivable freezes a native contract
-and keeps it committed.
+and keeps it committed. The branch-name convention is not a control either:
+whoever names the branch chooses among the base's specs.
 
 **What blocks is unchanged.** Blocking stays where intent-guard puts it:
 budget breaches block, subject to `enforce`. Drift on its own is reported and

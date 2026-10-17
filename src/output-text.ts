@@ -30,7 +30,9 @@ import {
   cleanOutputLine,
   conductorStatedReason,
 } from './gate-runner.js';
-import { isLegacyContractPath } from './intent-prepare.js';
+import { isLegacyContractPath, legacyChangedSentence } from './intent-prepare.js';
+import type { ReportedMatch } from './intent-prepare.js';
+import { SPEC_DIR } from './intent-spec.js';
 import type { RunResult } from './run.js';
 
 function subjectLabel(finding: Finding): string {
@@ -294,6 +296,58 @@ function contractLine(gate: GateOutcome): string | null {
   return `  contract: ${where}   ${base}`;
 }
 
+/** The convention match behind a gate's contract, when the branch name chose it. */
+export function conventionMatch(gate: GateOutcome): ReportedMatch | null {
+  const source = gate.intent?.contractSource;
+  return source?.kind === 'imported' && source.match !== undefined ? source.match : null;
+}
+
+/**
+ * The weak-match line, printed under the contract line in every report.
+ *
+ * The shared words are charset-restricted tokens (isSignificant in
+ * intent-spec.ts), so nothing the branch was called beyond them reaches this
+ * line, and the runner-up is a filename the specs directory listed.
+ */
+function weakMatchLine(match: ReportedMatch): string {
+  const words = (list: string[]): string => list.map((word) => `"${word}"`).join(', ');
+  const why =
+    match.weakBecause.includes('length-tiebreak') && match.runnerUp !== null
+      ? `the branch name shares ${words(match.shared)} with this spec and ` +
+        `${words(match.runnerUpShared)} with ${SPEC_DIR}/${match.runnerUp}; the longer word decided it.`
+      : `the branch name shares only ${words(match.shared)} with this spec's name.`;
+  const remedy =
+    match.remedy === 'pr-body'
+      ? 'To be sure this is the right contract, add a "Spec: <path>" line to the pull request body ' +
+        "or rename the branch to the spec's name."
+      : "To be sure this is the right contract, pass --spec <path> or rename the branch to the spec's name.";
+  return `  match: weak, ${why} ${remedy}`;
+}
+
+/**
+ * The lines a convention match adds to the gate block: the weak line and the
+ * changed-winner note, printed in every report, and the chosen-by line,
+ * printed for every strength under --verbose so a strong or exact choice is
+ * visible too.
+ */
+function conventionLines(gate: GateOutcome): { under: string[]; chosenBy: string | null } {
+  const match = conventionMatch(gate);
+  if (match === null) {
+    return { under: [], chosenBy: null };
+  }
+  const under: string[] = [];
+  if (match.strength === 'weak') {
+    under.push(weakMatchLine(match));
+  }
+  if (match.legacy !== null) {
+    under.push(`  note: ${legacyChangedSentence(match.legacy)}`);
+  }
+  const chosenBy =
+    `  chosen by: branch name, ${match.strength}, shared: ${match.shared.join(' ')}` +
+    (match.runnerUp === null ? '' : `, runner-up ${SPEC_DIR}/${match.runnerUp}`);
+  return { under, chosenBy };
+}
+
 function gateSection(gate: GateOutcome, verbose: boolean, refusedOnTerminal = false): string[] {
   // A gate the refused trust base stopped, on a terminal: the refusal is at
   // the top of the report once, so the section is one line and no more.
@@ -314,8 +368,15 @@ function gateSection(gate: GateOutcome, verbose: boolean, refusedOnTerminal = fa
   const contract = contractLine(gate);
   if (contract !== null) {
     lines.push(contract);
+    // The weak line and the changed-winner note sit directly under the
+    // contract line; the chosen-by line, --verbose only, after any other note.
+    const convention = conventionLines(gate);
+    lines.push(...convention.under);
     if (gate.intent?.note !== undefined) {
       lines.push(`  note: ${gate.intent.note}`);
+    }
+    if (verbose && convention.chosenBy !== null) {
+      lines.push(convention.chosenBy);
     }
   }
 
@@ -464,17 +525,27 @@ interface SkipWording {
 }
 
 function skipWording(reason: RunResult['skipped'][number]['reason']): SkipWording {
-  return reason === 'contract-waived'
-    ? {
-        line: 'spec waived',
-        verdict: 'had its spec waived by the pull request body',
-        summary: 'Spec waived by the pull request body',
-      }
-    : {
-        line: 'no contract',
-        verdict: 'had no contract to check against',
-        summary: 'Nothing to check against',
-      };
+  if (reason === 'contract-waived') {
+    return {
+      line: 'spec waived',
+      verdict: 'had its spec waived by the pull request body',
+      summary: 'Spec waived by the pull request body',
+    };
+  }
+  if (reason === 'spec-ambiguous') {
+    // A spec exists; two or more matched equally. Never "nothing to check
+    // against", which tells a reader to go and write one.
+    return {
+      line: 'spec ambiguous',
+      verdict: 'matched two or more specs equally, so none was chosen',
+      summary: 'No spec chosen, two or more matched the branch equally',
+    };
+  }
+  return {
+    line: 'no contract',
+    verdict: 'had no contract to check against',
+    summary: 'Nothing to check against',
+  };
 }
 
 /**
@@ -1244,6 +1315,15 @@ function isFullyClean(result: RunResult): boolean {
   if (result.exitCode !== 0 || result.gates.length === 0 || result.gates.every(gateCheckedNothing)) {
     return false;
   }
+  // A tie the convention refused to guess, or a skip whose branch 0.10.0
+  // bound to a spec, carries a sentence the one-line summary would drop.
+  if (
+    result.skipped.some(
+      (gate) => gate.reason === 'spec-ambiguous' || (gate.selection?.legacy ?? null) !== null
+    )
+  ) {
+    return false;
+  }
   return result.gates.every(
     (gate) =>
       gate.couldNotRun === null &&
@@ -1252,8 +1332,46 @@ function isFullyClean(result: RunResult): boolean {
       // A note about an input this run did not use is never folded into the
       // one-line summary, where nobody would see it.
       gate.intent?.note === undefined &&
+      // Nor a weak convention match, or a winner that changed this release.
+      conventionMatch(gate)?.strength !== 'weak' &&
+      (conventionMatch(gate)?.legacy ?? null) === null &&
       !gate.findings.some((finding) => finding.blocking)
   );
+}
+
+/**
+ * The intent-spec header line: a CLOSED SET of four strings, in precedence
+ * order, naming no branch, no file and no token. The Action copies one to the
+ * step summary only on a whole-line match, so nothing the repository or the
+ * head branch carries can reach that summary through it.
+ */
+export const INTENT_SPEC_LINES = [
+  'intent-spec: none chosen, two or more specs matched the branch equally',
+  'intent-spec: none chosen, this branch chose a spec before conductor 0.11.0',
+  'intent-spec: a different spec chosen than before conductor 0.11.0, see the report',
+  'intent-spec: weak match, see the intent gate in the report',
+] as const;
+
+/** The first of the four lines that applies to this run, or null. */
+function intentSpecLine(result: RunResult): string | null {
+  const misses = result.skipped.flatMap((gate) => (gate.selection === undefined ? [] : [gate.selection]));
+  const matches = result.gates.flatMap((gate) => {
+    const match = conventionMatch(gate);
+    return match === null ? [] : [match];
+  });
+  if (misses.some((miss) => miss.why === 'ambiguous')) {
+    return INTENT_SPEC_LINES[0];
+  }
+  if (misses.some((miss) => miss.legacy !== null)) {
+    return INTENT_SPEC_LINES[1];
+  }
+  if (matches.some((match) => match.legacy !== null)) {
+    return INTENT_SPEC_LINES[2];
+  }
+  if (matches.some((match) => match.strength === 'weak')) {
+    return INTENT_SPEC_LINES[3];
+  }
+  return null;
 }
 
 /**
@@ -1513,9 +1631,14 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // job summary when, and only when, line 3 is exactly this shape, so a pass
   // that carries them does not read as spotless there either.
   const reported = presentOnBaseReported(result);
+  // The intent-spec line follows it, so the present-on-base line, when
+  // present, stays line 3 and every report without an intent-spec line keeps
+  // the shape the Action already reads.
+  const specLine = intentSpecLine(result);
   const lines: string[] = [
     ...headerLines(result, options),
     ...(reported === 0 ? [] : [`present-on-base: ${reported} reported, not blocking`]),
+    ...(specLine === null ? [] : [specLine]),
     ...refusal,
     ...(refusal.length === 0 ? [] : ['']),
     `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,

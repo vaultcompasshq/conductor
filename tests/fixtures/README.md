@@ -401,3 +401,16 @@ repository's absolute path in one vault-guard error line, replaced with
   and the merge at line 5. They differ in StartLine, Commit, Date, Message
   and Fingerprint and agree on RuleID, File, StartColumn, EndColumn and
   Entropy. Author and Email removed.
+
+## Intent spec selection baseline (2026-10-17)
+
+`intent-spec-selection-baseline.json` is not a gate capture. It is the
+section 8.1 measurement of the intent spec auto-selection design: the
+0.10.0 substring rule and the 0.11.0 token rule run side by side over each
+public guard repository's `docs/superpowers/specs` listing at the commit
+named, paired with the head branch names of that repository's merged pull
+requests (`gh pr list --state merged --limit 1000 --json headRefName`).
+The per-repository counts and the pair table are the tool's output, not
+hand-written; names that tripped the public-hygiene check were dropped and
+only their count is kept. tests/intent-spec.test.ts replays the pairs, so a
+later change to the rule shows its diff against real names.
