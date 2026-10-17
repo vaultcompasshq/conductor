@@ -945,9 +945,42 @@ export function normalizeGitleaks(
       seen.alsoIn.push(droppedCommit);
     }
   });
-  const findings: Finding[] = [...byPlace.values()].map(({ finding, alsoIn }) =>
+  const kept = [...byPlace.values()].map(({ finding, alsoIn }) =>
     alsoIn.length === 0 ? finding : { ...finding, details: { ...finding.details, alsoIn } }
   );
+  // THE MERGE COPY ON A MOVED LINE IS NOT COLLAPSED, and that is deliberate
+  // (tests/fixtures/gitleaks-8.30.1-merge-doubled.json, measured on 8.30.1).
+  // When the base branch moved the lines above a pull request's secret, the
+  // merge's first-parent diff reports it at a different StartLine, so the two
+  // records differ in StartLine, Commit, Date, Message and Fingerprint and
+  // agree on RuleID, File, StartColumn, EndColumn and Entropy. Under --redact
+  // nothing in the record identifies the secret itself: Entropy is a
+  // character-frequency score, the same for any two secrets that are
+  // anagrams, so collapsing on it could fold two different leaks into one
+  // SARIF result. Each record is kept, and each names the other here, so a
+  // reader sees the likely pair without the report hiding either of them.
+  const shape = (finding: Finding): string | null => {
+    const subject = finding.subject;
+    return subject.kind === 'location' && typeof finding.details.entropy === 'number'
+      ? JSON.stringify([finding.ruleId, subject.file, subject.column, subject.endColumn ?? null, finding.details.entropy])
+      : null;
+  };
+  const findings: Finding[] = kept.map((finding) => {
+    const key = shape(finding);
+    const twins =
+      key === null
+        ? []
+        : kept
+            // A merge re-report is by definition another commit: two records
+            // of one shape in the same commit are two places, not a pair.
+            .filter(
+              (other) =>
+                other !== finding && shape(other) === key && other.details.commit !== finding.details.commit
+            )
+            .map((other) => other.fingerprint?.value)
+            .filter((value): value is string => value !== undefined);
+    return twins.length === 0 ? finding : { ...finding, details: { ...finding.details, possiblySameSecretAs: twins } };
+  });
   return {
     findings,
     run: {
@@ -956,7 +989,10 @@ export function normalizeGitleaks(
       suppressed: 0,
       ignored: 0,
       diagnostics: [],
-      details: { entries: entries.length },
+      // Both counts, labelled: the raw number of records in gitleaks' report,
+      // and the distinct places left after the merge collapse above. One
+      // unlabelled `entries` read as the finding count when it was not.
+      details: { 'entries-raw': entries.length, 'entries-distinct': findings.length },
     },
     diagnostics: [],
   };
@@ -1110,6 +1146,75 @@ export function describeLockfiles(
   return lockfiles.length === 0 ? '0' : `${lockfiles.length} (${named.join(', ')})`;
 }
 
+/**
+ * The advisories osv-scanner.toml filtered out of this run, read from
+ * osv-scanner's stderr, the only place it says so.
+ *
+ * Measured on 2.4.0 (tests/fixtures/osv-scanner-2.4.0-filtered.stderr.txt):
+ * the JSON carries no trace of a filtered advisory at all, while stderr
+ * prints one "<id> and N alias(es) have been filtered out because: <reason>"
+ * line per advisory PER LOCKFILE, then "Filtered N vulnerabilities from
+ * output", where N counts the same way (two ignored advisories in two
+ * lockfiles print 4). The ignoreUntil expiry is printed nowhere, so it is
+ * never claimed here.
+ *
+ * Annotation only, never a verdict: the count and the ids feed the report's
+ * suppressed number and one run fact, and nothing reads them for a decision.
+ * A stderr without the count line (a policy that lowers osv-scanner's
+ * verbosity) gives null, and the caller keeps the old 0.
+ */
+export interface OsvSuppressions {
+  count: number;
+  /** Distinct ids in first-seen order, each with the reason osv printed. */
+  ids: Array<{ id: string; reason: string }>;
+}
+
+const OSV_FILTERED_COUNT = /^Filtered (\d+) vulnerabilit(?:y|ies) from output$/;
+// The id is restricted to an advisory id's shape. osv-scanner prints a
+// reason from osv-scanner.toml verbatim, newlines and escape bytes included
+// (measured on 2.4.0), so a reason can forge what looks like a second line;
+// an id that is not id-shaped is not read at all, and every id that is still
+// goes through the same cleaner as the reason.
+const OSV_FILTERED_ID = /^([A-Za-z0-9._:-]+) and \d+ alias(?:es)? ha(?:s|ve) been filtered out because: (.*)$/;
+
+/** Printable ASCII only, capped: the reason is text from the repository's own config. */
+function cleanReason(reason: string): string {
+  const printable = reason.replace(/[^\x20-\x7e]/g, '').trim();
+  return printable.length <= 80 ? printable : `${printable.slice(0, 80)}...`;
+}
+
+export function osvSuppressions(stderr: string): OsvSuppressions | null {
+  let count: number | null = null;
+  const ids: OsvSuppressions['ids'] = [];
+  for (const raw of stderr.split('\n')) {
+    const line = raw.trim();
+    const total = OSV_FILTERED_COUNT.exec(line);
+    if (total !== null) {
+      // A count that is not a safe integer is not a count (a 400-digit one
+      // printed as "suppressed Infinity"); it is ignored like a missing one.
+      const value = Number(total[1]);
+      if (Number.isSafeInteger(value)) {
+        count = value;
+      }
+      continue;
+    }
+    const one = OSV_FILTERED_ID.exec(line);
+    const id = one === null ? '' : cleanReason(one[1] as string);
+    if (one !== null && id !== '' && !ids.some((entry) => entry.id === id)) {
+      ids.push({ id, reason: cleanReason(one[2] as string) });
+    }
+  }
+  return count === null ? null : { count, ids };
+}
+
+/** osv-scanner's `dependency_groups` on a package (2.4.0 writes ["dev"]), read leniently. */
+function osvDependencyGroups(entry: Record<string, unknown>): string[] | undefined {
+  const groups = entry.dependency_groups;
+  return Array.isArray(groups) && groups.every((group) => typeof group === 'string')
+    ? (groups as string[])
+    : undefined;
+}
+
 export function normalizeOsvScanner(
   raw: unknown,
   version: string | null,
@@ -1117,7 +1222,9 @@ export function normalizeOsvScanner(
   /** The scan root as a path osv-scanner may have printed it, in any spelling. */
   roots: readonly string[] = [],
   /** The lockfiles the umbrella passed with --lockfile, repository-relative. */
-  lockfiles: readonly string[] = []
+  lockfiles: readonly string[] = [],
+  /** osv-scanner's stderr, read only for the osv-scanner.toml suppressions it names. */
+  stderr = ''
 ): NormalizedGateOutput {
   const product = 'osv-scanner';
   const top = needRecord(raw, product, 'the output');
@@ -1140,6 +1247,7 @@ export function normalizeOsvScanner(
       const name = needString(pkg.name, product, `${packageWhere}.package.name`);
       const installed = optionalString(pkg.version, product, `${packageWhere}.package.version`) ?? '';
       const ecosystem = optionalString(pkg.ecosystem, product, `${packageWhere}.package.ecosystem`);
+      const dependencyGroups = osvDependencyGroups(entry);
       otherVerdicts.push(...osvOtherVerdicts(entry, pkg, `${name}@${installed}`));
       const groups = (
         entry.groups === undefined ? [] : needArray(entry.groups, product, `${packageWhere}.groups`)
@@ -1176,26 +1284,48 @@ export function normalizeOsvScanner(
             aliases: Array.isArray(vuln.aliases) ? vuln.aliases : [],
             ...(score === null ? {} : { cvss: score }),
             ...(fixedVersion === undefined ? {} : { fixedVersion }),
+            // Carried, never mapped: whether a dev-only dependency carries
+            // the advisory is for the reader, and changes no verdict.
+            ...(dependencyGroups === undefined ? {} : { dependencyGroups }),
           },
         });
       }
     }
   }
+  const suppressions = osvSuppressions(stderr);
   return {
     findings,
     run: {
       // Any known vulnerability fails the gate; a threshold, when an adopter
       // wants one, lives in osv-scanner.toml.
       failOn: 'any',
-      suppressed: 0,
+      // osv-scanner's own count of what osv-scanner.toml filtered, from its
+      // stderr (osvSuppressions): one per advisory per lockfile. 0 when it
+      // printed no count, which was the only value this ever had before.
+      suppressed: suppressions?.count ?? 0,
       ignored: 0,
       diagnostics: [],
       details: {
         lockfiles: describeLockfiles(lockfiles),
         // Distinct from the old "sources" name on purpose: this counts only
         // the sources osv-scanner reported findings for, never how many were
-        // scanned, and the old name read as the latter.
-        'sources-with-findings': results.length,
+        // scanned. Counted as the distinct lockfiles the FINDINGS name rather
+        // than results.length: osv-scanner 2.4.0 prints one result per
+        // lockfile handed with --lockfile (measured,
+        // tests/fixtures/osv-scanner-2.4.0-two-lockfiles.json), but a result
+        // carrying only a non-advisory verdict (a licence, a deprecation) has
+        // no finding, and counting it said a lockfile had findings that the
+        // report then showed none for.
+        'sources-with-findings': new Set(
+          findings.map((finding) => (finding.subject.kind === 'package' ? finding.subject.manifest : ''))
+        ).size,
+        ...(suppressions === null || suppressions.ids.length === 0
+          ? {}
+          : {
+              'suppressed-by-osv-scanner.toml':
+                `${suppressions.ids.map((entry) => `${entry.id} (${entry.reason})`).join(', ')}; ` +
+                'counted by osv-scanner once per advisory per lockfile; expiry not reported by osv-scanner',
+            }),
       },
     },
     diagnostics: [],

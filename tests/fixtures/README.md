@@ -378,3 +378,26 @@ repository's absolute path in one vault-guard error line, replaced with
   change): exit 0, and the first two stderr lines are the WRN "exhaustive
   rename detection was skipped due to too many files." and "you may want to
   set your diff.renameLimit variable to at least 6 and retry the command."
+
+## Phase 3 readability captures (osv-scanner 2.4.0, gitleaks 8.30.1)
+
+- `osv-scanner-2.4.0-two-lockfiles.json`: `osv-scanner scan source --format
+  json` with two `--lockfile` arguments, two synthetic package-lock.json
+  files, both pinning lodash 4.17.20 and the first also minimist 1.2.5 as a
+  dev dependency. Trimmed to two advisories (GHSA-35jh-r3h4-6jhm and
+  GHSA-xvch-5gv4-984h) and to the fields the normalizer reads; source paths
+  rewritten under `/tmp/conductor-osv-fixture`. What it showed: ONE RESULT
+  PER LOCKFILE, so `results.length` equals the lockfiles with findings, and a
+  package-level `dependency_groups: ["dev"]` on the dev dependency.
+- `osv-scanner-2.4.0-filtered.stderr.txt`: stderr of the same run with
+  `--config` naming an osv-scanner.toml that ignores two advisories, one
+  with `ignoreUntil`. The JSON carried no trace of either; stderr printed one
+  "filtered out because: <reason>" line per advisory per lockfile and
+  "Filtered 4 vulnerabilities from output". No expiry is printed anywhere.
+- `gitleaks-8.30.1-merge-doubled.json`: `gitleaks git --redact` with
+  `--log-opts "--diff-merges=first-parent HEAD"` over a synthetic repository
+  where a branch appended a token at line 3 while main added two lines at
+  the top, then a `--no-ff` merge. Two records: the branch commit at line 3
+  and the merge at line 5. They differ in StartLine, Commit, Date, Message
+  and Fingerprint and agree on RuleID, File, StartColumn, EndColumn and
+  Entropy. Author and Email removed.

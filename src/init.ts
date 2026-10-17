@@ -65,12 +65,13 @@
 //     and lost it at the next install, with the manifest still recording it
 //     as installed. See detectManagedHook and declaredManagedHooks.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
   constants as fsConstants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -89,6 +90,7 @@ import {
   DEP_GUARD_HOOK_MARKER,
   INTENT_GUARD_HOOK_MARKER,
   MANAGED_HOOK_MARKER,
+  declaredHusky,
   declaredManagedHooks,
   detectGateHook,
   detectGeneratedHook,
@@ -115,7 +117,7 @@ import type { Manifest, ManifestFile } from './init-manifest.js';
 
 import { POLICY_FILE_NAME, detectGates, renderPolicy } from './init-policy.js';
 import { frozenNativeContractPath } from './intent-prepare.js';
-import { GATE_ROLES, PRODUCT_FOR_ROLE } from './policy.js';
+import { GATE_ROLES, PRODUCT_FOR_ROLE, parsePolicy } from './policy.js';
 import { profileFor } from './products.js';
 
 export {
@@ -306,6 +308,12 @@ export interface InitResult {
    * "this is mine to remove".
    */
   records: Array<{ path: string; content: string; kind: 'hook' | 'policy' }>;
+  /**
+   * The .gitignore that GITIGNORE_LINE is appended to on apply, when the
+   * manifest is not already ignored and appending is safe. Absent otherwise.
+   * Never in the manifest: --revert does not touch .gitignore.
+   */
+  gitignoreAppend?: string;
 }
 
 export interface InitOptions {
@@ -356,6 +364,12 @@ function repoRootOf(cwd: string): string | null {
   return gitOutput(cwd, ['rev-parse', '--show-toplevel']);
 }
 
+/** Whether git tracks anything under .husky/ at the repository root. */
+function trackedHuskyDirectory(cwd: string): boolean {
+  const listed = gitOutput(cwd, ['ls-files', '--full-name', '--', ':/.husky']);
+  return listed !== null && listed.length > 0;
+}
+
 interface HooksDir {
   dir: string;
   /** True when a configured hooksPath points outside the repository. */
@@ -371,6 +385,14 @@ interface HooksDir {
    * repositories git treats identically.
    */
   isDefault: boolean;
+  /**
+   * True when core.hooksPath is set at all, to any value. The one question
+   * isDefault deliberately does not answer: the husky fresh-clone redirect
+   * applies only when nothing is configured, because a core.hooksPath set to
+   * .git/hooks by hand (exactly what the outside-repository guidance below
+   * tells people to do) means git runs .git/hooks and husky has not taken over.
+   */
+  configured: boolean;
 }
 
 function effectiveHooksDir(cwd: string, root: string): HooksDir {
@@ -383,7 +405,7 @@ function effectiveHooksDir(cwd: string, root: string): HooksDir {
   const defaultDir = path.join(path.resolve(cwd, gitDir ?? '.git'), 'hooks');
 
   if (hooksPath.length === 0) {
-    return { dir: defaultDir, outside: false, isDefault: true };
+    return { dir: defaultDir, outside: false, isDefault: true, configured: false };
   }
 
   // A RELATIVE core.hooksPath resolves against the WORKING-TREE ROOT.
@@ -392,7 +414,7 @@ function effectiveHooksDir(cwd: string, root: string): HooksDir {
   const dir = path.isAbsolute(hooksPath) ? hooksPath : path.join(root, hooksPath);
   const relative = path.relative(root, dir);
   const outside = relative.startsWith('..') || path.isAbsolute(relative);
-  return { dir, outside, isDefault: samePath(dir, defaultDir) };
+  return { dir, outside, isDefault: samePath(dir, defaultDir), configured: true };
 }
 
 /**
@@ -509,10 +531,12 @@ export function planInit(options: InitOptions): InitResult {
   // executes (on husky 8 that file IS the tracked hook), and never
   // conditional on husky's shim being present (a clean deletes it, and the
   // repository is still husky's).
-  const huskyDir = huskyDirectoryFor(hooks.dir);
-  const husky = huskyDir !== null;
+  let huskyDir = huskyDirectoryFor(hooks.dir);
+  // Where husky was recognised from when core.hooksPath does not say so yet:
+  // a fresh clone of a husky repository, before its install has run.
+  let huskyDeclaredIn: string | null = null;
 
-  if (!husky) {
+  if (huskyDir === null) {
     const rel = path.relative(root, executedHookPath).split(path.sep).join('/');
 
     if (executedHook !== undefined) {
@@ -561,7 +585,26 @@ export function planInit(options: InitOptions): InitResult {
         hookManager: managedBy.manager,
       };
     }
+
+    // HUSKY ON A FRESH CLONE. core.hooksPath is set by husky's own install
+    // (its prepare script), so a clone that has not run it yet looks native,
+    // and a hook written to .git/hooks then goes dark the moment the install
+    // points git at .husky/_. The declaration is the signal that exists
+    // before the install: husky in package.json, or a tracked .husky/
+    // directory. Same rule as simple-git-hooks above, the declaration counts
+    // on its own, but the answer differs: husky HAS a tracked hook file, and
+    // that file is what both husky 8 and husky 9 end up running, so init
+    // writes there and says the install still has to run, rather than
+    // refusing. Only where git runs .git/hooks: a hooks directory somebody
+    // configured is their decision, not a fresh clone.
+    if (!hooks.configured) {
+      huskyDeclaredIn = declaredHusky(root) ?? (trackedHuskyDirectory(options.cwd) ? 'a tracked .husky/ directory' : null);
+      if (huskyDeclaredIn !== null) {
+        huskyDir = path.join(root, '.husky');
+      }
+    }
   }
+  const husky = huskyDir !== null;
 
   const hookManager: HookManager = husky ? 'husky' : 'native';
   const hookPath = huskyDir === null ? executedHookPath : path.join(huskyDir, 'pre-commit');
@@ -638,7 +681,17 @@ export function planInit(options: InitOptions): InitResult {
   } else if (existingHook !== undefined && existingHook.trim().length > 0) {
     const gateProduct = detectGateHook(existingHook);
     if (gateProduct === null) {
-      conflicts.push({ path: relHook, reason: 'foreign-hook', guidance: foreignGuidance(relHook) });
+      conflicts.push({
+        path: relHook,
+        reason: 'foreign-hook',
+        guidance:
+          foreignGuidance(relHook) +
+          // On a fresh husky clone the tracked hook is not run by anything yet.
+          (huskyDeclaredIn === null
+            ? ''
+            : ' Note that husky is not installed in this clone (core.hooksPath is not set), so that hook ' +
+              "does not run at all until the install (husky's prepare script) has run."),
+      });
       return { ...base, repoRoot: root, hookPath, hookManager };
     }
     if (!options.adopt) {
@@ -666,7 +719,11 @@ export function planInit(options: InitOptions): InitResult {
       // the one core.hooksPath points at. The shim's state is reported
       // here, where it informs, rather than tested in the rule, where it
       // would send a cleaned repository back into the trap.
-      detail: husky
+      detail: huskyDeclaredIn !== null
+        ? `${created}: husky is declared in ${huskyDeclaredIn} but has not been installed in this ` +
+          'clone (core.hooksPath is not set), so git runs nothing from here yet. Run your install ' +
+          "(husky's prepare script) and husky will run this tracked file; .git/hooks would be bypassed then"
+        : husky
         ? `${created}: husky runs ${path
             .relative(root, executedHookPath)
             .split(path.sep)
@@ -724,9 +781,11 @@ function finishPlan(
     if (external.length > 0) {
       const one = external.length === 1;
       notes.push(
-        `Note: ${external.join(' and ')} ${one ? 'is' : 'are'} enabled because ` +
+        `WARNING: ${external.join(' and ')} ${one ? 'is' : 'are'} enabled only because ` +
           `${one ? 'its tool was' : 'their tools were'} found on this machine's PATH; your CI ` +
-          `workflow must install ${one ? 'it' : 'them'} too, conductor does not.`
+          `workflow must install ${one ? 'it' : 'them'} too, conductor does not. A teammate or a CI ` +
+          `job without ${one ? 'it' : 'them'} gets conductor/gate-missing and exit 2; set enabled: ` +
+          `false in ${POLICY_FILE_NAME} if that is not wanted.`
       );
     }
   } else {
@@ -737,6 +796,7 @@ function finishPlan(
       path: POLICY_FILE_NAME,
       detail: 'already present, left exactly as it is',
     });
+    notes.push(...missingRoleNotes(existingPolicy));
   }
 
   // A record with nothing to write is still work: the manifest has to be
@@ -746,10 +806,29 @@ function finishPlan(
     actions.push({ kind: 'write', path: MANIFEST_RELATIVE_PATH, detail: 'record what init wrote' });
   }
 
+  // The manifest names absolute paths on this machine, so it is never meant
+  // to be committed. Appended to .gitignore when that can be done without
+  // touching a single existing line; otherwise the line to add is printed.
+  const ignore = alreadyInstalled ? null : planGitignore(root);
+  if (ignore !== null && ignore.kind === 'append') {
+    actions.push({
+      kind: 'write',
+      path: '.gitignore',
+      detail: `append "${GITIGNORE_LINE}" (the per-machine manifest); no other line is changed, and --revert leaves it`,
+    });
+  } else if (ignore !== null) {
+    notes.push(
+      `Note: ${MANIFEST_RELATIVE_PATH} is not ignored by git and init did not change .gitignore ` +
+        `(${ignore.why}). Add the line "${GITIGNORE_LINE}" to it yourself: the manifest records ` +
+        'paths on this machine and is not meant to be committed.'
+    );
+  }
+
   return {
     ...base,
     ok: true,
     alreadyInstalled,
+    ...(ignore !== null && ignore.kind === 'append' ? { gitignoreAppend: ignore.path } : {}),
     hookPath: hook.hookPath,
     hookManager: hook.hookManager,
     repoRoot: root,
@@ -758,6 +837,92 @@ function finishPlan(
     records,
     notes,
   };
+}
+
+/** The line init adds to .gitignore for the per-machine manifest. */
+export const GITIGNORE_LINE = '.guardrails/';
+
+type GitignorePlan = { kind: 'append'; path: string } | { kind: 'print'; why: string };
+
+/**
+ * Whether init can append GITIGNORE_LINE to .gitignore, or why not, or null
+ * when git already ignores the manifest (by any rule, in any ignore file).
+ *
+ * APPEND ONLY. Init never rewrites a file it did not write: the line goes at
+ * the end of an existing .gitignore, after a newline if the file lacks a
+ * final one, or into a new .gitignore. A .gitignore that is a symbolic link,
+ * not a regular file, or resolves outside the repository is left alone and
+ * the line is printed instead. Not recorded in the manifest, so --revert
+ * never removes or rewrites .gitignore.
+ */
+function planGitignore(root: string): GitignorePlan | null {
+  const probe = spawnSync('git', ['check-ignore', '-q', '--no-index', MANIFEST_RELATIVE_PATH], {
+    cwd: root,
+    stdio: 'ignore',
+  });
+  if (probe.status === 0) {
+    return null;
+  }
+  if (probe.status !== 1) {
+    return { kind: 'print', why: 'git could not say whether it is already ignored' };
+  }
+  const target = path.join(root, '.gitignore');
+  let info;
+  try {
+    info = lstatSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { kind: 'append', path: target };
+    }
+    return { kind: 'print', why: '.gitignore could not be read' };
+  }
+  if (info.isSymbolicLink()) {
+    return { kind: 'print', why: '.gitignore is a symbolic link' };
+  }
+  if (!info.isFile()) {
+    return { kind: 'print', why: '.gitignore is not a regular file' };
+  }
+  return { kind: 'append', path: target };
+}
+
+/** Appends the line without following a link swapped in after planning. */
+function appendGitignore(target: string): void {
+  const existing = readIfExists(target);
+  const lead = existing !== undefined && existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | noFollow, 0o666);
+  try {
+    writeSync(fd, `${lead}${GITIGNORE_LINE}\n`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * On an existing policy file, the roles it has no entry for, with the two
+ * lines that add each. The file itself is never touched; this only says what
+ * a newer conductor knows about that an older init did not write.
+ */
+function missingRoleNotes(text: string): string[] {
+  let policy;
+  try {
+    policy = parsePolicy(text, POLICY_FILE_NAME);
+  } catch {
+    return [
+      `Note: ${POLICY_FILE_NAME} does not parse, so init could not list the gate roles it lacks. ` +
+        '"conductor run" says why.',
+    ];
+  }
+  const missing = GATE_ROLES.filter((role) => policy.gates[role] === undefined);
+  if (missing.length === 0) {
+    return [];
+  }
+  return [
+    `Note: ${POLICY_FILE_NAME} has no entry for ${missing.length} gate role(s): ${missing.join(', ')}. ` +
+      'To add one, put its two lines under "gates:" (a role listed is enabled unless it also says ' +
+      'enabled: false):',
+    ...missing.flatMap((role) => [`  ${role}:`, `    product: ${PRODUCT_FOR_ROLE[role]}`]),
+  ];
 }
 
 /**
@@ -907,6 +1072,12 @@ export function applyInit(plan: InitResult, options: InitOptions): InitResult {
     const manifestPath = path.join(plan.repoRoot, MANIFEST_RELATIVE_PATH);
     mkdirSync(path.dirname(manifestPath), { recursive: true });
     writeManifestFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    // Last, and contained like every other write: a .gitignore resolving
+    // outside the repository is never appended to.
+    if (plan.gitignoreAppend !== undefined && manifestPathInsideRepo(plan.repoRoot, plan.gitignoreAppend)) {
+      appendGitignore(plan.gitignoreAppend);
+    }
   } catch (err) {
     return {
       ...plan,

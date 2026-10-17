@@ -1306,7 +1306,14 @@ function normalizeFor(
   product: Product,
   parsed: unknown,
   version: string | null,
-  context: { blocked: boolean; roots: readonly string[]; online: boolean; lockfiles: readonly string[] }
+  context: {
+    blocked: boolean;
+    roots: readonly string[];
+    online: boolean;
+    lockfiles: readonly string[];
+    /** The child's stderr, read by the osv-scanner normalizer for its suppression lines only. */
+    stderr: string;
+  }
 ) {
   switch (product) {
     case 'dep-guard':
@@ -1318,7 +1325,14 @@ function normalizeFor(
     case 'gitleaks':
       return normalizeGitleaks(parsed, version, context.blocked);
     case 'osv-scanner':
-      return normalizeOsvScanner(parsed, version, context.blocked, context.roots, context.lockfiles);
+      return normalizeOsvScanner(
+        parsed,
+        version,
+        context.blocked,
+        context.roots,
+        context.lockfiles,
+        context.stderr
+      );
   }
 }
 
@@ -2280,6 +2294,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       // not off gate.options: the argv is what dep-guard was actually told.
       online: argv.includes('--online'),
       lockfiles: external.lockfiles ?? [],
+      stderr: withRun.stderr,
     });
     // The base comparison (osv design, section 3.1): only on a decided trust
     // base, only when the head run exited blocked and produced a finding. A

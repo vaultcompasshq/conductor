@@ -289,6 +289,53 @@ export function declaredManagedHooks(root: string): ManagedDeclaration | null {
   return null;
 }
 
+/**
+ * Where this repository's package.json declares husky, or null: a husky
+ * dependency or devDependency, or a prepare script that runs husky. The
+ * signal that exists on a fresh clone, before husky's own install has set
+ * core.hooksPath. Unreadable or unparseable is the same as undeclared, as for
+ * declaredManagedHooks above.
+ */
+/**
+ * husky as a COMMAND in a script: at the start or after a shell separator
+ * (&&, ||, ;, |), optionally behind a package runner, and followed by an
+ * argument or the end. So "husky", "husky install", "is-ci || husky" and
+ * "npx husky" match, and "no-husky" or "echo skip husky" do not.
+ */
+const HUSKY_COMMAND =
+  /(?:^|&&|\|\||;|\|)\s*(?:(?:npx|pnpx|bunx)\s+|(?:pnpm|yarn|npm)\s+(?:exec\s+)?)?husky(?:\s|$)/;
+
+export function declaredHusky(root: string): string | null {
+  const raw = readIfExists(path.join(root, 'package.json'));
+  if (raw === undefined) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) {
+    return null;
+  }
+  const manifest = parsed as Record<string, unknown>;
+  for (const key of ['devDependencies', 'dependencies']) {
+    const deps = manifest[key];
+    if (isPlainObject(deps) && (deps as Record<string, unknown>).husky !== undefined) {
+      return `package.json (${key})`;
+    }
+  }
+  const scripts = manifest.scripts;
+  if (isPlainObject(scripts)) {
+    const prepare = (scripts as Record<string, unknown>).prepare;
+    if (typeof prepare === 'string' && HUSKY_COMMAND.test(prepare)) {
+      return 'package.json (the prepare script)';
+    }
+  }
+  return null;
+}
+
 function isPlainObject(value: unknown): boolean {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

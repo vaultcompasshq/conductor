@@ -1,0 +1,38 @@
+[
+  {
+    "RuleID": "github-pat",
+    "Description": "Uncovered a GitHub Personal Access Token, potentially leading to unauthorized repository access and sensitive content exposure.",
+    "StartLine": 5,
+    "EndLine": 5,
+    "StartColumn": 9,
+    "EndColumn": 48,
+    "Match": "REDACTED",
+    "Secret": "REDACTED",
+    "File": "config.txt",
+    "SymlinkFile": "",
+    "Commit": "252f53e499d6b657bc8865ea7f6ac5fa60bab49f",
+    "Entropy": 5.121928,
+    "Date": "2026-10-17T18:45:54Z",
+    "Message": "Merge pr into main",
+    "Tags": [],
+    "Fingerprint": "252f53e499d6b657bc8865ea7f6ac5fa60bab49f:config.txt:github-pat:5"
+  },
+  {
+    "RuleID": "github-pat",
+    "Description": "Uncovered a GitHub Personal Access Token, potentially leading to unauthorized repository access and sensitive content exposure.",
+    "StartLine": 3,
+    "EndLine": 3,
+    "StartColumn": 9,
+    "EndColumn": 48,
+    "Match": "REDACTED",
+    "Secret": "REDACTED",
+    "File": "config.txt",
+    "SymlinkFile": "",
+    "Commit": "a45fca73a783a24de4986fa5781506a3a5aab980",
+    "Entropy": 5.121928,
+    "Date": "2026-10-17T18:45:44Z",
+    "Message": "add token",
+    "Tags": [],
+    "Fingerprint": "a45fca73a783a24de4986fa5781506a3a5aab980:config.txt:github-pat:3"
+  }
+]

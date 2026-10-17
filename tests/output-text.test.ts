@@ -135,7 +135,7 @@ describe('the text report with the two external gates', () => {
   });
 
   it('names the package and the OSV id on each vulnerability line', () => {
-    expect(text).toMatch(/osv-scanner\/GHSA-35jh-r3h4-6jhm\s+lodash \(package-lock\.json\)/);
+    expect(text).toMatch(/osv-scanner\/GHSA-35jh-r3h4-6jhm\s+lodash@4\.17\.20 \(package-lock\.json\) {2}fix 4\.17\.21/);
   });
 
   it('names the lockfile the umbrella passed and how many sources had findings, on the vulnerabilities line (issue #72)', () => {

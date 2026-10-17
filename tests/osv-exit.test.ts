@@ -273,7 +273,7 @@ describe('the pair, through runAll (test 7, exit and token)', () => {
     expect(result.gates[0]!.exitCode).toBe(1);
     expect(result.exitCode).toBe(EXIT_OK);
     expect(verdictToken(result, false)).toBe('pass');
-    expect(renderText(result)).toMatch(/ {2}report {2}high\* {5}osv-scanner\/GHSA-A {2}lodash \(package-lock\.json\) {2}present-on-base\n/);
+    expect(renderText(result)).toMatch(/ {2}report {2}high\* {5}osv-scanner\/GHSA-A {2}lodash@4\.17\.20 \(package-lock\.json\) {2}no fix listed {2}present-on-base\n/);
   });
 });
 

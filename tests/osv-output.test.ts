@@ -100,8 +100,8 @@ describe('a compared run under report, one advisory of each kind', () => {
 
   it('labels each finding line and prints the base comparison line under the threshold', () => {
     const lines = renderText(mixed, { version: '9.9.9' }).split('\n');
-    expect(lines).toContain('  BLOCKING  high*     osv-scanner/GHSA-B  minimist (package-lock.json)  introduced');
-    expect(lines).toContain('    report  high*     osv-scanner/GHSA-A  lodash (package-lock.json)  present-on-base');
+    expect(lines).toContain('  BLOCKING  high*     osv-scanner/GHSA-B  minimist@1.0.0 (package-lock.json)  no fix listed  introduced');
+    expect(lines).toContain('    report  high*     osv-scanner/GHSA-A  lodash@1.0.0 (package-lock.json)  no fix listed  present-on-base');
     const threshold = lines.findIndex((l) => l.startsWith('  threshold any'));
     expect(lines[threshold + 1]).toBe(
       '  base comparison  main  introduced 1  present-on-base 1  present-on-base: report (not blocking)'
@@ -174,7 +174,7 @@ describe('a run with no base comparison', () => {
 
   it('prints no label, no comparison line and no present-on-base line', () => {
     const text = renderText(local, { version: '9.9.9' });
-    expect(text).toContain('  BLOCKING  high*     osv-scanner/GHSA-A  lodash (package-lock.json)\n');
+    expect(text).toContain('  BLOCKING  high*     osv-scanner/GHSA-A  lodash@1.0.0 (package-lock.json)  no fix listed\n');
     expect(text).not.toMatch(/introduced|present-on-base|base comparison/);
   });
 

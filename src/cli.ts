@@ -284,6 +284,15 @@ function applyAdvisory(exitCode: number, advisory: boolean): number {
 }
 
 /**
+ * Whether the text report is rendered for a terminal: only when it goes to
+ * stdout (no --output) and stdout is a TTY. A file, a pipe and the
+ * --text-report copy never are, so they stay byte for byte as before.
+ */
+export function rendersToTerminal(output: string | undefined, stdoutIsTTY: boolean | undefined): boolean {
+  return output === undefined && stdoutIsTTY === true;
+}
+
+/**
  * The policy for one run, and where it came from.
  *
  * Two shapes rather than one, because a run that could not use its trust base
@@ -832,18 +841,22 @@ export function buildProgram(): Command {
         // there: each finding's `properties.blocking` is the gate's own
         // decision (see output-sarif.ts) and is unaffected by this flag,
         // exactly as the text report's per-finding BLOCKING marker is.
-        const renderTextReport = (): string =>
+        const renderTextReport = (terminal: boolean): string =>
           renderText(result, {
             verbose: Boolean(options.verbose),
             version: pkg.version,
             compact: Boolean(options.compactOnRefusal),
             advisory,
+            ...(terminal ? { terminal: true } : {}),
           });
+        // Only a report printed straight to a terminal is told so; a file,
+        // a pipe and the --text-report copy render exactly as before.
+        const toTerminal = rendersToTerminal(options.output, process.stdout.isTTY);
         const rendered =
-          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderTextReport();
+          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderTextReport(toTerminal);
         // The SAME result, rendered a second time, never a second run: the
         // token in this file is for the run that set the exit code below.
-        const textReport = options.textReport === undefined ? undefined : renderTextReport();
+        const textReport = options.textReport === undefined ? undefined : renderTextReport(false);
 
         if (options.output === undefined) {
           process.stdout.write(rendered);
@@ -891,7 +904,10 @@ export function buildProgram(): Command {
         // Written after the report file, so a failure above still takes the
         // catch below and these lines never describe a run that then exits 2
         // for an unwritable file.
-        const logLines = [...gateLogLines(result), ...versionSkewWarnings(result)];
+        const logLines = [
+          ...gateLogLines(result, process.stderr.isTTY === true ? { terminal: true } : {}),
+          ...versionSkewWarnings(result),
+        ];
         if (logLines.length > 0) {
           process.stderr.write(`${logLines.join('\n')}\n`);
         }
