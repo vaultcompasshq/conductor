@@ -14,6 +14,30 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-18
+
+**A minor release.** The intent gate's branch-name spec match moves to whole
+words, a tie is reported instead of guessed, and a weak match says so; the
+gate defaults move to dep-guard 0.14.0 and intent-guard 1.10.0 (both
+published 2026-10-17 with provenance). dep-guard 0.14.0 adds per-ecosystem
+coverage lines, collapses the install-script findings on a wholly new npm
+lockfile into one, and lets ignorePaths from the base drop an unparseable
+fixture manifest. intent-guard 1.10.0 reads whole paragraphs and labelled spec
+sections and stops counting a file name alone as drift, so what blocks changes.
+
+**Consumer cost.** The action tag now ships conductor 0.11.0, so an explicit
+`conductor-version: 0.10.0` (or any lower version) is refused on pull requests
+once this tag ships; remove the input or raise it. Workflows that leave the
+inputs unset take the new defaults. Because intent-guard 1.10.0 changes what
+counts as drift, a pull request that passed before can newly block, and one
+that blocked on a file name alone can newly pass. On a pull request an
+explicit gate pin below the new defaults is refused too, so the way to hold
+back is to stay on the previous action tag. Existing branch-to-spec bindings
+can change: a branch that matched a spec only inside a word, a branch made
+only of short or common words, and a branch that two specs match equally no
+longer choose a spec. To keep a binding, rename the branch after the spec, or
+pin the spec with a Spec: line in the pull request body or with --spec.
+
 ### Changed
 
 - **The intent gate's branch-name spec match is on whole words, not
