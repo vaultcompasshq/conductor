@@ -14,6 +14,22 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-17
+
+**A minor release.** The per-gate time limit, readable osv-scanner and
+gitleaks lines with a capped report, the `dependency_groups` verdict fix and
+a safer release pipeline ship together, and the gate defaults move to
+vault-guard 1.11.0 and dep-guard 0.13.0 (both published 2026-10-17).
+
+**Consumer cost.** The action tag now ships conductor 0.10.0, so an explicit
+`conductor-version: 0.9.0` (or any lower version) is refused on pull requests
+once this tag ships; remove the input or raise it. Workflows that leave the
+inputs unset take the new defaults. vault-guard 1.11.0 can newly find, or
+stop skipping, things, so adopters may see new secrets findings. dep-guard
+0.13.0 adds Python name checks that can newly block a run on a PyPI 404.
+On a pull request an explicit gate pin below the new defaults is refused too,
+so the way to hold back is to stay on the previous action tag.
+
 ### Security
 
 - **The release workflow keeps the npm publish token out of the job that
