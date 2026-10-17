@@ -123,7 +123,7 @@ function prepare(
   const binary = resolveGateBinary(INTENT_GATE, repoRoot, bin);
   const result = prepareIntent({
     repoRoot,
-    binary,
+    binary, timeoutMs: 120_000,
     env: options.env ?? {},
     ...(options.base === undefined ? {} : { base: options.base }),
     ...(options.spec === undefined ? {} : { spec: options.spec }),
@@ -1005,7 +1005,7 @@ describe('on a run with a trust base, the contract decision comes from the base 
     const binary = resolveGateBinary(INTENT_GATE, root, bin);
     const result = prepareIntent({
       repoRoot: root,
-      binary,
+      binary, timeoutMs: 120_000,
       env: options.env ?? {},
       trustBase: base,
       ...(options.spec === undefined ? {} : { spec: options.spec }),

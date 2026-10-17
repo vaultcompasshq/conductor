@@ -1459,7 +1459,9 @@ export function normalizeFailedGate(
   role: GateRole,
   product: Product,
   detail: string,
-  stderr?: string | null
+  stderr?: string | null,
+  /** Structured facts beside the detail, such as a timed-out gate's limit and elapsed time. */
+  extra: Record<string, unknown> = {}
 ): Finding {
   const said = summariseStderr(stderr);
   return gateProblem(
@@ -1468,6 +1470,6 @@ export function normalizeFailedGate(
     product,
     `The "${role}" gate did not complete: ${detail} Nothing was verified by this gate.` +
       (said === null ? '' : ` The gate wrote to stderr: ${said}`),
-    { detail, stderr: said }
+    { detail, stderr: said, ...extra }
   );
 }

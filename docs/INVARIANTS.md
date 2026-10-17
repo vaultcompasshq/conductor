@@ -174,6 +174,23 @@ and the gate's verdict over the remaining files stands.
    workaround, not the fix. The fix is to read the spec from the base ref
    too, and it is not in this release.
 
+Four more arrive in 0.10.0 with the per-gate time limit, each stated again
+under "A gate that could not run is a result, never a note":
+
+1. THAT A REAL GITLEAKS FULL-HISTORY SCAN IS STOPPED AT THE POLICY LIMIT IS
+   CHECKED ONLY AGAINST A LOCAL BINARY. The case is in
+   tests/external-gates.real.e2e.test.ts behind CONDUCTOR_REAL_GITLEAKS_SLOW
+   as well as an available gitleaks, because the repository has to be large
+   enough to outlive a real 10 s limit; CI runs the stubbed timeout suites
+   only. Measured with it: a gitleaks scan stopped early, by conductor's
+   limit or by its own --timeout, prints no rename-detection warning at all.
+2. KNOWN-OPEN: the time limit is a SIGTERM deadline with no SIGKILL
+   escalation, so a gate that ignores SIGTERM holds the run until it exits.
+3. KNOWN-OPEN: a stopped gate's own child processes are not killed.
+4. KNOWN-OPEN: gitleaks' own --timeout always ends in exit 1 and
+   could-not-run, and leaks it found before its deadline are never shown as
+   findings.
+
 ## The exit code is composed, not maximised
 
 Three codes and nothing else. 0 means every enabled gate ran and none
@@ -361,10 +378,10 @@ CLI; and tests/output-sarif.test.ts:1015, 1027, 1060, 1080 and 1094.
 
 ## A gate that could not run is a result, never a note
 
-Eleven reasons, enumerated as a union so a new one cannot be spelled freely
-(`CouldNotRunReason`, src/gate-runner.ts:58-105; the last three, `gate-version-unsupported`,
-`report-missing` and `history-shallow`, came after the description below was
-written): a missing binary, a
+Twelve reasons, enumerated as a union so a new one cannot be spelled freely
+(`CouldNotRunReason`, src/gate-runner.ts:76-136; the last four, `gate-version-unsupported`,
+`report-missing`, `history-shallow` and, in 0.10.0, `timed-out`, came after
+the description below was written): a missing binary, a
 configured command that is not there, a spawn failure, the gate's own
 error exit, output the umbrella could not read, a preparation that never
 got as far as spawning anything, and the two pull-request-mode refusals
@@ -389,17 +406,36 @@ the rule below, so without one of these findings the published report
 would carry no trace of the most important thing that happened.
 
 A gate that exits outside its product's clean and blocked codes (above 1,
-for the three family gates), or does not exit normally at all because it was
-killed or timed out, is could-not-run (src/gate-runner.ts:1347-1365). A gate
+for the three family gates), is stopped at its time limit, which is
+`timed-out`, decided by the spawn error code ETIMEDOUT and never by the
+signal (ENOBUFS shares SIGTERM), or is killed by anything else, which is
+`gate-error`; both are could-not-run (`spawnFailure`,
+src/gate-runner.ts:263-276, called at src/gate-runner.ts:2093; pinned by
+tests/timed-out.test.ts:154 ("keeps ENOBUFS, which arrives with the same
+SIGTERM, and ENOENT and EACCES as spawn-failed")). A gate
 that exits 1 with stdout that will not parse as JSON is could-not-run
 (the `normalizeUnparseableGate` return in `spawnAndRead`, src/gate-runner.ts). Reporting the second as a policy violation
 would tell a user their code is at fault when their config is.
 
 What the gate itself said rides along on the could-not-run result as
-`couldNotRun.gateSaid`: the first non-empty stderr line, or for a gate whose
-output is JSON on stdout a string `reason` field, sanitised to ASCII and cut
-to 160 characters. It is read after the exit code has been judged, never
-changes the outcome or the exit code, and its absence is not an error. Pinned
+`couldNotRun.gateSaid`: the first stderr line that is not informational (a
+`note:` block, gitleaks' rename-detection warnings), preferring a block that
+starts at an INCOMPLETE or ERR marker, or for a gate whose output is JSON on
+stdout a string `reason` field; absent when every line is informational
+(`statedReasonFromStderr`, src/gate-runner.ts:411-456). It is sanitised to
+ASCII and cut to 160 characters. It is read after the exit code has been
+judged and never changes the outcome or the exit code, and its absence is
+not an error. The rule is pinned case by case against captured bytes by
+tests/stated-reason.test.ts:52 ("captured vault-guard 1.10.0 INCOMPLETE:
+joins the file lines across the colour-only blank line"),
+tests/stated-reason.test.ts:69 ("the captured note block then a plain
+reason (constructed): the continuation lines are skipped too") and
+tests/stated-reason.test.ts:74 ("a note block, a blank line, then an
+indented real reason (constructed): the reason is chosen"), and its purity
+by tests/stated-reason.test.ts:128 ("gateSaid is read nowhere in the exit
+code, the run composition or the verdict token") and
+tests/stated-reason.test.ts:142 ("a gate-error outcome over every captured
+input is the first-line rule outcome, gateSaid aside"). Also pinned
 by tests/gate-runner.test.ts ("carries the first stderr line of an exit 2
 gate as a bounded, sanitised excerpt"), tests/gate-runner.test.ts ("falls back to a reason field in
 stdout JSON when stderr is empty, and never changes the exit 2") and tests/gate-runner.test.ts
@@ -415,6 +451,76 @@ reaches the published format too") and 538 ("reaches
 gate-output-unparseable too, which is the same reader problem"), and by
 tests/cli.test.ts:122 ("prints no stack frames when a gate exits with its
 could-not-run code"), which asserts the CLI exits 2.
+
+A TIMED-OUT GATE'S REPORT IS NEVER READ, AND ITS STATUS IS NEVER A VERDICT.
+The spawn-error branch is the first thing read after spawnSync returns and
+tests the error code alone (src/gate-runner.ts:2093-2117); a child that
+handled SIGTERM can return status 0 or its blocked code with a clean or
+complete report, and the outcome's exitCode is null whatever the status
+was. The report path is a fresh directory removed on every path (the
+`finally` at src/gate-runner.ts:1797-1801). Pinned by
+tests/timed-out.test.ts:143 ("reads ETIMEDOUT as timed-out when the child
+handled SIGTERM and exited 0, signal null"), tests/timed-out.test.ts:150
+("reads ETIMEDOUT as timed-out when the child exited 3, its blocked code,
+signal null"), and against real child processes by
+tests/timed-out.test.ts:297 ("never reads a clean report written in the
+trap, with exit 0"), tests/timed-out.test.ts:320 ("never reads a
+one-finding report written in the trap with exit 3, the blocked code"),
+tests/timed-out.test.ts:328 ("never reads clean JSON printed before the
+deadline") and tests/timed-out.test.ts:285 ("never reads a complete, valid
+one-finding report"), each of which also asserts the work directory is gone.
+
+A VERSION PROBE OR AN INTENT PREPARATION STEP THAT TIMES OUT IS
+`timed-out`, never an unreadable version and never preparation-failed; a
+timed-out probe stops the gate before the scan (src/gate-runner.ts:1652-1672),
+and is enforced on a trust-base run. The preparation's steps report it
+through `timedOutStep` (src/intent-prepare.ts:489-496) and
+`preparationTimedOut` (src/gate-runner.ts:889-918, mapped at
+src/run.ts:616-631). Pinned by tests/gate-runner-timeout.test.ts:416 ("stops
+the gate at the probe on a local run, and never spawns the scan"),
+tests/gate-runner-timeout.test.ts:428 ("is enforced on a trust-base run under
+enforce: false, and is not trust-base-unverified") and, for import-spec and
+freeze, the generated cases at tests/gate-runner-timeout.test.ts:466.
+
+ONE FUNCTION RESOLVES A GATE'S TIME LIMIT, AND EVERY SPAWN OF THAT GATE GETS
+THE FULL LIMIT. `resolveTimeLimit` (src/gate-runner.ts:238-246): the test
+hook, then the policy's `timeout-seconds`, then the product default. runGate
+calls it (src/gate-runner.ts:1499) and run.ts calls the same function for the
+intent preparation (src/run.ts:582); `IntentPrepareOptions.timeoutMs` is
+required (src/intent-prepare.ts:224), so the type checker, not a test, keeps
+a fallback from coming back. Pinned by tests/timed-out.test.ts:170 ("takes
+the test hook first, then the policy, then the profile default"),
+tests/timed-out.test.ts:179 ("is the only expression in src that turns
+timeoutSeconds or a profile timeoutMs into a limit"),
+tests/gate-runner-timeout.test.ts:336 ("sends 30 s to the probe, import-spec,
+freeze and check alike") and tests/gate-runner-timeout.test.ts:358 ("gets the
+policy limit too, not the profile constant").
+
+`options.timeout` on the secrets-history gate is gitleaks' own deadline, and
+the `conductor/option-is-gate-own` note saying so lives on the OUTCOME
+(`gateOwnOption`, set on `progress` before any spawn,
+src/gate-runner.ts:1499-1509), not in `run.diagnostics`, because every
+could-not-run outcome carries an empty run and the gate-error gitleaks' own
+deadline produces is exactly the outcome that needs it. Pinned by
+tests/gate-runner-timeout.test.ts:215 ("keeps the note on the gate-error that
+gitleaks own deadline produces, in text and in SARIF").
+
+KNOWN-OPEN, limits documented rather than behaviour the code promises, so
+not pinned:
+
+- The time limit is a SIGTERM deadline, not a hard bound. spawnSync sends
+  SIGTERM and waits; it never escalates to SIGKILL, so a gate that ignores
+  SIGTERM holds the run until it exits on its own.
+- A stopped gate's own children are not killed. spawnSync has no detached
+  option, so there is no process group to signal; a gate behind a
+  shell-wrapper command can keep running after it is reported timed-out. A
+  group kill would need an async spawn, signal forwarding in the hook, and
+  taskkill on Windows; not done in 0.10.0.
+- gitleaks' own --timeout (options.timeout) always ends in exit 1, which is
+  could-not-run whether or not a leak was found before the deadline. Leaks
+  found before it are never shown as findings, because the report is not
+  read on a could-not-run path; only the echoed stderr line "N leaks found
+  in partial scan" mentions them.
 
 AGENTS.md and README.md both used to say the umbrella raises no findings
 of its own "beyond conductor/gate-missing". That was false and always had
@@ -1244,6 +1350,20 @@ secret, the dependency and the self-approval. It runs twice, once against the
 sibling builds through `command:` and once against whatever is on PATH, and
 the PATH half skips loudly when a binary is below its floor.
 
+A GATE'S TIME LIMIT, `timeout-seconds`, COMES FROM THE POLICY THE RUN WAS
+JUDGED BY: the base ref's on a pull request. No path builds a GatePolicy
+from the head policy on a pull-request run: only the base text is parsed
+(src/cli.ts:467), the head text goes to `policyDiffers`, and on every refusal
+path the head's gates are reported as not run and never spawned. So a pull
+request cannot raise, lower or remove its own limits; a head-side edit is a
+policy proposal. Pinned through the CLI path with the spawnSync spy by
+tests/gate-runner-timeout.test.ts:296 ("a head policy raising the limit to
+21600 leaves the scan at the base 10 s, as a proposal") and
+tests/gate-runner-timeout.test.ts:306 ("a key only on the head leaves the
+scan at the gitleaks default"), and for an invalid head value by
+tests/cli.test.ts:3432 ("only in the head of a pull-request run leaves the
+run on the base policy, as a proposal").
+
 ### The Action installs outside the tree, and the umbrella is one of the four
 
 New in 0.4.0, and it closes the half of the boundary 0.3.0 left open. Every
@@ -2047,6 +2167,43 @@ and need a hand-maintained entry. That list is still hand maintained, but
 it is two entries long rather than the whole table, it is held against
 the derived set rather than restated beside it, and each of the two has
 its own message test above.
+
+A SECOND CATEGORY, added in 0.10.0: keys reserved because they name
+CONDUCTOR'S OWN setting written in the wrong place, not a flag the
+umbrella writes (`CONDUCTOR_SETTING_KEYS` and its sentences in
+`reservedReason`, src/policy.ts:186 and src/policy.ts:318-325).
+`timeout-seconds` is reserved under `options` on all five gates: it is the
+gate-level time limit beside `enforce`, no tool has the flag (gitleaks exits
+126 on it), so the only way to write it under `options` is to mean
+conductor's key. `timeout` is reserved on dep-guard, vault-guard,
+intent-guard and osv-scanner, which all reject `--timeout` at the pinned
+versions, so no working policy breaks; it is reserved for clarity, because
+without it intent-guard's rejection reads as a rejected config file. It is
+NOT reserved on gitleaks, where `--timeout` is gitleaks' own deadline and
+works today: reserving it would refuse policies that pass it, which the
+reserved-list comment rules out for a standing document. It stays a
+passthrough and carries the `conductor/option-is-gate-own` note instead
+(see "A gate that could not run is a result, never a note"). The nine
+entries are a second hand-maintained list, `RESERVED_FOR_CONDUCTOR_SETTING`
+(tests/policy.test.ts:738), subtracted in the "reserves nothing else"
+check and held to exactly nine by tests/policy.test.ts:826 ("reserves
+exactly the nine keys that name conductor own setting, each of them
+reserved"); the sentences are pinned by tests/policy.test.ts:800
+("refuses options.timeout-seconds on every gate, pointing at the
+gate-level key") and tests/policy.test.ts:811 ("refuses options.timeout on
+the four gates that have no such flag"), and the gitleaks passthrough by
+tests/policy.test.ts:820 ("passes options.timeout through on gitleaks,
+where it is gitleaks own flag").
+
+WHAT THE RESERVATIONS DO NOT COVER, so nobody reads them as a boundary:
+they match exact `options` keys only. `args` beside `command` can still
+carry a literal `--timeout`, and a `no-timeout: true` key (or
+`timeout: false` on gitleaks, where `timeout` stays a passthrough) renders
+`--no-timeout`, which no tool accepts, so that run is could-not-run with the
+tool's own rejection. On a pull request only the base policy is read, so
+none of this is reachable from the pull request: the reservations are a
+clarity measure for the policy author, not a trust control. Not pinned by
+any test, since it is a statement of what is not covered.
 
 ## Stages are cumulative, and a gate the filter holds back is never resolved
 
@@ -3953,13 +4110,14 @@ exactly when a commit has just been refused. It is explicitly flagged in
 the source as the obvious thing to revisit with a measurement, and nothing
 depends on the ordering.
 
-The per-gate timeout comes from the product's profile when the caller sets
-none (src/gate-runner.ts:868): 120 seconds for the three family gates, as
+The per-gate timeout comes from the gate's `timeout-seconds` in the policy,
+else from the product's profile (`resolveTimeLimit`,
+src/gate-runner.ts:238-246): 120 seconds for the three family gates, as
 before, 600 for gitleaks, whose full-history scan outlives two minutes on a
 large repository, and 300 for osv-scanner (src/products.ts). The child
-output buffer is 64MB (src/gate-runner.ts:1267). Both are values, not
-rules; the only invariant near them is that a timeout lands in the
-could-not-run path rather than being read as a clean exit.
+output buffer is 64MB (src/gate-runner.ts:2056). The defaults are values,
+not rules; the rule that stays is that a timeout is could-not-run
+(`timed-out`), never a clean exit.
 
 `report.format` in the policy file is a default that `--format` overrides
 (src/cli.ts:655). There is no rule about which one a repository should

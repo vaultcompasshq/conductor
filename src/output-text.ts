@@ -96,7 +96,7 @@ function presentOnBaseReported(result: RunResult): number {
     .filter((finding) => finding.details.baseline === 'present-on-base' && !finding.blocking).length;
 }
 
-function header(gate: GateOutcome): string {
+function header(gate: GateOutcome, verbose: boolean): string {
   const version = gate.productVersion === null ? '(version unknown)' : gate.productVersion;
   // On the header line rather than only at the bottom of the section: a
   // reader scanning headers for the gate that refused their commit has to
@@ -106,7 +106,11 @@ function header(gate: GateOutcome): string {
     return `${gate.role}  ${gate.product} ${version}  DID NOT RUN (${gate.couldNotRun.reason})${enforcement}`;
   }
   const source = gate.binary === null ? '' : `  via ${gate.binary.candidate} on ${gate.binary.source}`;
-  return `${gate.role}  ${gate.product} ${version}  exit ${gate.exitCode ?? '?'}  ${gate.durationMs}ms${source}${enforcement}`;
+  // Only with --verbose, and only a limit the policy set: a default is the
+  // same on every run and says nothing about this repository.
+  const limit =
+    verbose && gate.timeLimit?.source === 'policy' ? `  limit ${Math.round(gate.timeLimit.ms / 1000)}s (policy)` : '';
+  return `${gate.role}  ${gate.product} ${version}  exit ${gate.exitCode ?? '?'}  ${gate.durationMs}ms${limit}${source}${enforcement}`;
 }
 
 /**
@@ -168,8 +172,15 @@ function contractLine(gate: GateOutcome): string | null {
   return `  contract: ${where}   ${base}`;
 }
 
-function gateSection(gate: GateOutcome): string[] {
-  const lines: string[] = ['', header(gate)];
+function gateSection(gate: GateOutcome, verbose: boolean): string[] {
+  const lines: string[] = ['', header(gate, verbose)];
+
+  // Under the header, on every outcome that carries it: gitleaks' own
+  // --timeout is not conductor's limit, and the gate-error it produces is the
+  // outcome a reader most needs this on.
+  if (gate.gateOwnOption !== undefined) {
+    lines.push(`  note conductor/option-is-gate-own: ${gate.gateOwnOption}`);
+  }
 
   const contract = contractLine(gate);
   if (contract !== null) {
@@ -185,6 +196,11 @@ function gateSection(gate: GateOutcome): string[] {
       lines.push(`    gate said: "${gate.couldNotRun.gateSaid}"`);
     }
     if (gate.stderr.trim().length > 0) {
+      if (gate.couldNotRun.reason === 'timed-out') {
+        // What a stopped gate printed is often a warning that has nothing to
+        // do with the stop; the line above is the reason.
+        lines.push('    (printed by the gate before it was stopped; not the reason it stopped)');
+      }
       for (const line of gate.stderr.trim().split('\n')) {
         lines.push(`    | ${cleanOutputLine(line)}`);
       }
@@ -1306,7 +1322,7 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   ];
 
   for (const gate of result.gates) {
-    lines.push(...gateSection(gate));
+    lines.push(...gateSection(gate, Boolean(options.verbose)));
   }
 
   const aside = [

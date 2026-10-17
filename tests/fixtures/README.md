@@ -343,3 +343,38 @@ score of 90 shows it counting toward the drift score this time, unlike the
 capped run where `categories.constraint_violation` stayed 0. This is the
 fixture for the case the capped-finding fix must not touch: an uncapped
 constraint_violation finding in a run that blocks stays blocking.
+
+## Stated-reason captures (vault-guard 1.10.0, gitleaks 8.30.1)
+
+`stated-reason-captures.json` holds raw stderr, ANSI colour codes kept and
+written as JSON escapes so the file stays ASCII, for the rule that picks the
+"gate said" line of a gate that could not run. Captured on 2026-10-17, each
+from the real binary; none is constructed. The only edit is the scratch
+repository's absolute path in one vault-guard error line, replaced with
+`<repo>`.
+
+- vault-guard 1.10.0, installed into a scratch prefix (never globally),
+  `vault-guard scan -f json` with `FORCE_COLOR=1`, in a repository holding
+  one file at mode 000: exit 2, the INCOMPLETE block. Line 1 is a colour
+  code, a cross-mark emoji and `INCOMPLETE:`; line 2 holds colour codes and
+  nothing else; then the file path indented two spaces, the error and the
+  exclude hint indented four, another colour-only line, and a closing
+  paragraph whose lines start with a colour code and only then with three
+  spaces.
+- The same repository plus one low-severity finding (a Google OAuth client
+  id) and no `fail_on`: exit 2, and vault-guard's 1.4.0 upgrade note
+  (`note:` and two indented continuation lines, each continuation starting
+  with a colour code) is printed BEFORE the INCOMPLETE block. The note
+  fires only when findings exist, none blocks and no threshold was set.
+- gitleaks 8.30.1 with its own `--timeout 1` and conductor's flags
+  (`--exit-code 3 --log-level info`, `--log-opts` with
+  `--diff-merges=first-parent HEAD`) over forty commits of about 2 MB each:
+  exit 1 (not 3), "INF 10 commits scanned.", then "ERR failed to scan Git
+  repository error=context deadline exceeded", then three WRN lines, the
+  last "no leaks found in partial scan".
+- gitleaks 8.30.1 with conductor's flags over a repository with
+  `diff.renameLimit` set to 1 and six files renamed with a change (an exact
+  rename is found without the exhaustive pass, so the content has to
+  change): exit 0, and the first two stderr lines are the WRN "exhaustive
+  rename detection was skipped due to too many files." and "you may want to
+  set your diff.renameLimit variable to at least 6 and retry the command."

@@ -8,7 +8,15 @@
 // did before profiles existed; changing one of them changes a gate that
 // adopters already run.
 
-import type { Product } from './policy.js';
+import type { GateRole, Product } from './policy.js';
+
+/** The first half of every timed-out remedy: where the limit is raised. */
+function raiseTheLimit(role: GateRole): string {
+  return (
+    `Raise the limit with gates.${role}.timeout-seconds in .guardrails.yaml (on a pull request, on ` +
+    'the base branch).'
+  );
+}
 
 export type OutputSource =
   | { kind: 'stdout' }
@@ -37,7 +45,14 @@ export interface ProductProfile {
   versionProbe: VersionProbeSpec | null;
   output: OutputSource;
   exit: ExitSemantics;
+  /** The time limit when the policy sets no timeout-seconds for this gate. */
   timeoutMs: number;
+  /**
+   * What to do about a gate stopped at its limit: the sentence the timed-out
+   * detail carries. Never a bounded history window or a default size cap,
+   * which would narrow coverage without anybody deciding to.
+   */
+  timeoutRemedies: (role: GateRole) => string;
   /** Oldest version whose command line this runner speaks; null means any. */
   minVersion: string | null;
   /** Config file the tool auto-loads from the scanned tree; read from the base ref on a pull request. */
@@ -214,6 +229,9 @@ function managedProfile(product: Product): ProductProfile {
     output: { kind: 'stdout' },
     exit: NPM_EXIT,
     timeoutMs: 120_000,
+    timeoutRemedies: (role) =>
+      `${raiseTheLimit(role)} A family gate that needs more than two minutes is unusual, so the ` +
+      "gate's own output below is worth reading first.",
     minVersion: null,
     configFile: null,
     neutralConfig: null,
@@ -242,7 +260,13 @@ const PROFILES: Record<Product, ProductProfile> = {
     exit: { clean: [0], blocked: [3], nothingToScan: [] },
     // A full-history scan on a large repository outlives the npm gates' two
     // minutes; could-not-run on every pull request is the failure to avoid.
+    // This is the default when the policy sets no timeout-seconds.
     timeoutMs: 600_000,
+    timeoutRemedies: (role) =>
+      `${raiseTheLimit(role)} A history scan grows with the repository's history and the size of ` +
+      'what was committed: scan full history on a schedule and let pull requests scan only their ' +
+      'own range, or pass max-target-megabytes under options, which skips every file larger than ' +
+      'the cap without saying which, so a secret in such a file is not found.',
     minVersion: '8.19.0',
     configFile: '.gitleaks.toml',
     neutralConfig: '[extend]\nuseDefault = true\n',
@@ -278,6 +302,9 @@ const PROFILES: Record<Product, ProductProfile> = {
     // lockfile has nothing to scan, which is clean, not an error.
     exit: { clean: [0], blocked: [1], nothingToScan: [128] },
     timeoutMs: 300_000,
+    timeoutRemedies: (role) =>
+      `${raiseTheLimit(role)} osv-scanner queries osv.dev over the network, so a slow or ` +
+      'unreachable service shows up as a timeout too.',
     minVersion: '2.0.0',
     configFile: 'osv-scanner.toml',
     neutralConfig: '',

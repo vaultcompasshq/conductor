@@ -400,7 +400,7 @@ describe('the reserved option list against the flags the umbrella writes', () =>
     for (const role of GATE_ROLES) {
       const product = PRODUCT_FOR_ROLE[role];
       const written = flagsWritten(role);
-      const extra = RESERVED_OPTIONS[product].filter((key) => !written.has(key)).sort();
+      const extra = RESERVED_OPTIONS[product].filter((key) => !written.has(key) && !RESERVED_FOR_CONDUCTOR_SETTING[product].includes(key)).sort();
       expect({ product, extra }).toEqual({
         product,
         extra: [...RESERVED_WITHOUT_WRITING[product]].sort(),
@@ -724,5 +724,130 @@ describe('the two osv-scanner flags the umbrella writes without reserving', () =
       '--lockfile', 'requirements.txt:a/requirements-dev.txt', '--lockfile', 'requirements.txt:/w/osv-base/b/dev-requirements.txt',
       '--no-resolve',
     ]);
+  });
+});
+
+/**
+ * Keys reserved because the key names conductor's OWN setting, not a flag the
+ * umbrella writes: timeout-seconds on every gate (no tool has the flag, so the
+ * only way to write it under options is to mean conductor's key in the wrong
+ * place) and timeout on the four tools that have no such flag. gitleaks is
+ * not here: its --timeout is real and stays a passthrough. Held to exactly
+ * these nine by the test below, so a further entry has to say why.
+ */
+const RESERVED_FOR_CONDUCTOR_SETTING: Record<Product, string[]> = {
+  'dep-guard': ['timeout-seconds', 'timeout'],
+  'vault-guard': ['timeout-seconds', 'timeout'],
+  'intent-guard': ['timeout-seconds', 'timeout'],
+  gitleaks: ['timeout-seconds'],
+  'osv-scanner': ['timeout-seconds', 'timeout'],
+};
+
+function policyWith(role: GateRole, lines: string[]): string {
+  return ['version: 1', 'gates:', `  ${role}:`, `    product: ${PRODUCT_FOR_ROLE[role]}`, ...lines.map((l) => `    ${l}`), ''].join('\n');
+}
+
+describe('timeout-seconds, the per-gate time limit', () => {
+  it('accepts 10, 600 and 21600 on each of the five gates and carries the value', () => {
+    for (const role of GATE_ROLES) {
+      for (const value of [10, 600, 21600]) {
+        const policy = parsePolicy(policyWith(role, [`timeout-seconds: ${value}`]), POLICY_FILE_NAME);
+        expect({ role, value, got: policy.gates[role]?.timeoutSeconds }).toEqual({ role, value, got: value });
+      }
+    }
+  });
+
+  it('reads 600.0 as the integer it is', () => {
+    const policy = parsePolicy(policyWith('secrets-history', ['timeout-seconds: 600.0']), POLICY_FILE_NAME);
+    expect(policy.gates['secrets-history']?.timeoutSeconds).toBe(600);
+  });
+
+  it('rejects 9, 21601, 0, -5, 600.5, a quoted "600" and null, naming the key', () => {
+    for (const role of GATE_ROLES) {
+      for (const value of ['9', '21601', '0', '-5', '600.5', '"600"', 'null']) {
+        expect(() => parsePolicy(policyWith(role, [`timeout-seconds: ${value}`]), POLICY_FILE_NAME)).toThrow(
+          new RegExp(`/gates/${role}/timeout-seconds`)
+        );
+      }
+    }
+  });
+
+  it('names the bound that was broken', () => {
+    expect(() =>
+      parsePolicy(policyWith('secrets-history', ['timeout-seconds: 21601']), POLICY_FILE_NAME)
+    ).toThrow(/\/gates\/secrets-history\/timeout-seconds must be <= 21600/);
+    expect(() =>
+      parsePolicy(policyWith('secrets-history', ['timeout-seconds: 9']), POLICY_FILE_NAME)
+    ).toThrow(/\/gates\/secrets-history\/timeout-seconds must be >= 10/);
+  });
+
+  it('leaves timeoutSeconds undefined when the key is absent', () => {
+    for (const role of GATE_ROLES) {
+      const policy = parsePolicy(policyWith(role, []), POLICY_FILE_NAME);
+      expect(policy.gates[role]).not.toHaveProperty('timeoutSeconds');
+    }
+  });
+
+  it('has no policy-wide default: top level and report both refuse the key', () => {
+    expect(() => parsePolicy(`${MINIMAL}timeout-seconds: 600\n`, POLICY_FILE_NAME)).toThrow(/timeout-seconds/);
+    expect(() =>
+      parsePolicy(`${MINIMAL}report:\n  timeout-seconds: 600\n`, POLICY_FILE_NAME)
+    ).toThrow(/timeout-seconds/);
+  });
+});
+
+describe('the timeout set under options instead of beside enforce', () => {
+  it('refuses options.timeout-seconds on every gate, pointing at the gate-level key', () => {
+    for (const role of GATE_ROLES) {
+      expect(() =>
+        parsePolicy(policyWith(role, ['options:', '  timeout-seconds: 900']), POLICY_FILE_NAME)
+      ).toThrow(
+        `"timeout-seconds" under gates.${role}.options is reserved. timeout-seconds is conductor's own ` +
+          `limit for this gate. Set it beside enforce, as gates.${role}.timeout-seconds, not under options.`
+      );
+    }
+  });
+
+  it('refuses options.timeout on the four gates that have no such flag', () => {
+    for (const role of ['dependencies', 'secrets', 'intent', 'vulnerabilities'] as const) {
+      expect(() => parsePolicy(policyWith(role, ['options:', '  timeout: 900']), POLICY_FILE_NAME)).toThrow(
+        `"timeout" under gates.${role}.options is reserved. This gate has no --timeout flag; conductor's ` +
+          `own limit is gates.${role}.timeout-seconds, beside enforce.`
+      );
+    }
+  });
+
+  it('passes options.timeout through on gitleaks, where it is gitleaks own flag', () => {
+    const policy = parsePolicy(policyWith('secrets-history', ['options:', '  timeout: 900']), POLICY_FILE_NAME);
+    expect(policy.gates['secrets-history']?.options).toEqual({ timeout: 900 });
+    expect(policy.gates['secrets-history']).not.toHaveProperty('timeoutSeconds');
+  });
+
+  it('reserves exactly the nine keys that name conductor own setting, each of them reserved', () => {
+    const entries = Object.entries(RESERVED_FOR_CONDUCTOR_SETTING).flatMap(([product, keys]) =>
+      keys.map((key) => `${product}:${key}`)
+    );
+    expect(entries.sort()).toEqual(
+      [
+        'dep-guard:timeout',
+        'dep-guard:timeout-seconds',
+        'gitleaks:timeout-seconds',
+        'intent-guard:timeout',
+        'intent-guard:timeout-seconds',
+        'osv-scanner:timeout',
+        'osv-scanner:timeout-seconds',
+        'vault-guard:timeout',
+        'vault-guard:timeout-seconds',
+      ].sort()
+    );
+    for (const [product, keys] of Object.entries(RESERVED_FOR_CONDUCTOR_SETTING)) {
+      for (const key of keys) {
+        expect({ product, key, reserved: RESERVED_OPTIONS[product as Product].includes(key) }).toEqual({
+          product,
+          key,
+          reserved: true,
+        });
+      }
+    }
   });
 });

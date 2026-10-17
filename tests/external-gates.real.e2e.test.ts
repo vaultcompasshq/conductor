@@ -11,7 +11,7 @@
 // one at .local/bin/gitleaks in this checkout (gitignored). CI without it
 // runs the stubbed suites only, which pin the argv and the working directory.
 
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -286,5 +286,109 @@ function packageLock(packages: Record<string, string>): string {
     expect(byName('minimist').length).toBeGreaterThan(0);
     expect(byName('lodash').every((f) => f.details.baseline === 'present-on-base' && !f.blocking)).toBe(true);
     expect(byName('minimist').every((f) => f.details.baseline === 'introduced' && f.blocking)).toBe(true);
+  });
+});
+
+// LOCAL ONLY, on purpose: a full-history scan has to outlive a real 10 s
+// limit, so the repository is a few hundred megabytes of history and the run
+// takes tens of seconds. Set CONDUCTOR_REAL_GITLEAKS_SLOW=1 as well as making
+// gitleaks available. Sized for the machine it was written on; a faster
+// machine may need more commits (HISTORY_COMMITS).
+const slow = available && process.env.CONDUCTOR_REAL_GITLEAKS_SLOW === '1';
+const HISTORY_COMMITS = Number(process.env.CONDUCTOR_REAL_GITLEAKS_COMMITS ?? '160');
+
+/** About 2 MB of plain text, different per seed. */
+function bulk(seed: number): string {
+  const lines: string[] = [];
+  let n = seed;
+  let size = 0;
+  while (size < 2 * 1024 * 1024) {
+    n = (n * 1103515245 + 12345) % 2147483648;
+    const line = `line ${n.toString(36)} ${'lorem ipsum dolor sit amet '.repeat(3)}${n % 997}`;
+    lines.push(line);
+    size += line.length + 1;
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** Many large commits, the newest renaming six files with a change under diff.renameLimit 1. */
+function largeHistoryWithRenames(): string {
+  const repo = repoOnMain();
+  git(repo, 'config', 'diff.renameLimit', '1');
+  for (let i = 0; i < HISTORY_COMMITS; i++) {
+    commit(repo, { [`data-${i}.txt`]: bulk(i + 1) }, `data ${i}`);
+  }
+  commit(repo, Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [`f${i}.txt`, `${bulk(500 + i).slice(0, 4000)}`])), 'files');
+  for (let i = 0; i < 6; i++) {
+    git(repo, 'mv', `f${i}.txt`, `g${i}.txt`);
+    put(repo, { [`g${i}.txt`]: `${bulk(500 + i).slice(0, 4000)}changed ${i}\n` });
+  }
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '--quiet', '-m', 'rename');
+  return repo;
+}
+
+(slow ? describe : describe.skip)('gitleaks, for real, at its time limit (local only)', () => {
+  // Built once and shared by both cases, so it is taken off the per-test
+  // cleanup list and removed after the last one instead.
+  let repo = '';
+  const history = (): string => {
+    if (repo === '') {
+      repo = largeHistoryWithRenames();
+      temps.splice(temps.indexOf(repo), 1);
+    }
+    return repo;
+  };
+  afterAll(() => {
+    if (repo !== '') {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('stops a full-history scan at a 10 s policy limit as timed-out, the rename warnings echoed and never quoted', () => {
+    const out = runGate(
+      { ...gitleaksGate, timeoutSeconds: 10 },
+      { repoRoot: history(), staged: false, pathValue: path.dirname(GITLEAKS), tempRoot: tempDir() }
+    );
+    expect(out.couldNotRun?.reason).toBe('timed-out');
+    expect(out.couldNotRun?.timedOut).toMatchObject({ step: 'scan', limitSeconds: 10, limitSource: 'policy' });
+    expect(out.exitCode).toBeNull();
+    expect(out.couldNotRun?.gateSaid).toBeUndefined();
+  }, 600_000);
+
+  it('quotes the ERR line, not the rename warnings, when gitleaks own --timeout fires', () => {
+    const out = runGate(
+      { ...gitleaksGate, options: { timeout: 1 } },
+      { repoRoot: history(), staged: false, pathValue: path.dirname(GITLEAKS), tempRoot: tempDir() }
+    );
+    expect(out.couldNotRun?.reason).toBe('gate-error');
+    expect(out.exitCode).toBe(1);
+    expect(out.couldNotRun?.gateSaid).toMatch(/ERR failed to scan Git repository error='context deadline exceeded'/);
+    expect(out.gateOwnOption).toContain("gitleaks' own --timeout (1 s)");
+    // Measured here: a scan stopped early, by its own deadline or by
+    // conductor's, prints no rename warning at all, so the warnings reach
+    // stderr only on a scan that finished (the case below).
+    expect(out.stderr).not.toContain('rename detection was skipped');
+  }, 600_000);
+});
+
+(available ? describe : describe.skip)('gitleaks, for real, the rename-detection warnings', () => {
+  it('prints them first on a scan that finishes, and a clean scan quotes nothing', () => {
+    const repo = repoOnMain();
+    git(repo, 'config', 'diff.renameLimit', '1');
+    commit(repo, Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [`f${i}.txt`, bulk(500 + i).slice(0, 4000)])), 'files');
+    for (let i = 0; i < 6; i++) {
+      git(repo, 'mv', `f${i}.txt`, `g${i}.txt`);
+      put(repo, { [`g${i}.txt`]: `${bulk(500 + i).slice(0, 4000)}changed ${i}\n` });
+    }
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '--quiet', '-m', 'rename');
+
+    const out = run(repo);
+
+    expect(out.couldNotRun).toBeNull();
+    const lines = out.stderr.split('\n');
+    expect(lines[0]).toMatch(/^\S+ WRN warning: exhaustive rename detection was skipped due to too many files\.$/);
+    expect(lines[1]).toMatch(/^\S+ WRN warning: you may want to set your diff\.renameLimit variable to at least 6/);
   });
 });

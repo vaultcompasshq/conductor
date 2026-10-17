@@ -161,6 +161,10 @@ export function renderPolicy(
     if (role === 'secrets-history') {
       lines.push('    # gitleaks has no severity floor. Tune its rules in .gitleaks.toml and');
       lines.push('    # accept an old finding in .gitleaksignore, not here.');
+      // No timeout-seconds line: an absent key is the default, and writing
+      // 600 would freeze today's default into every new policy.
+      lines.push('    # A full-history scan can outlive the 600 s default on a large repository.');
+      lines.push('    # Set timeout-seconds beside enforce to change it; see the README.');
     } else if (role === 'vulnerabilities') {
       lines.push('    # osv-scanner has no severity floor. Tune what it reports in');
       lines.push('    # osv-scanner.toml, not here.');
