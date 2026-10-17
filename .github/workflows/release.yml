@@ -292,9 +292,14 @@ jobs:
           # attestation on its own, npm's own documentation says the flag is
           # unnecessary under OIDC, and neither dep-guard nor vault-guard
           # passes it. It buys no attestation and adds a way to fail.
+          # The path MUST start with ./ : npm reads a bare "dir/file.tgz"
+          # (one slash, no leading dot) as the GitHub shorthand owner/repo
+          # and tries to clone it over SSH. The v0.10.0 run failed exactly
+          # that way with exit 128 and published nothing. A path that starts
+          # with ./ is always a local file to npm.
           tarball="$(find pack-out -name '*.tgz' -print)"
           test -n "$tarball"
-          npm publish "$tarball" --access public
+          npm publish "./$tarball" --access public
         fi
 
     # Both kinds of release get a Release page; only the body differs, because
