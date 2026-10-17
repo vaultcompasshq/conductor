@@ -410,6 +410,14 @@ Several candidates are ranked: a stem **equal** to the slug first, then the
 and it put a pull request against another feature's requirements: a vaguer
 spec carrying a later date beat the one named for the branch.
 
+Superseded in 0.11.0 by docs/superpowers/specs/2026-10-17-intent-spec-auto-selection.md:
+candidacy is a whole-token run rather than a substring, the stem-length key
+is replaced by the number of shared significant words and then the longest
+shared word, a tie between two different specs chooses nothing and is
+reported as `intent-guard/spec-ambiguous`, and a choice on one shared word
+or on word length alone is reported as weak. The lexical tie-break below
+still applies among files with the same stem.
+
 The newest-name tie-break is still a lexical one, so **date every spec**.
 Where two names reduce to the same stem and one has no `YYYY-MM-DD-`
 prefix, the undated one sorts last and wins. That is a different revision

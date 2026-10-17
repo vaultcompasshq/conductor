@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-17",
+  "description": "Section 8.1 of the intent spec auto-selection design: the 0.10.0 substring rule and the 0.11.0 token rule side by side, over each public guard repository's docs/superpowers/specs listing at the commit named, paired with the head branch names of that repository's merged pull requests (gh pr list --state merged --limit 1000 --json headRefName). branchesListed is what gh returned; hitLimit says whether that equals the limit (it did for none, so no repeat was needed). droppedForHygiene counts names left out because they tripped the public-hygiene check; the names themselves are not recorded. uniqueBranches is counted BEFORE those drops (intent-guard: 114 unique, 2 dropped, so 112 measured), and boundBefore, boundAfter, differing and newlyWeak are counted over the names kept after them. pairs lists every branch that either rule binds, or that the token rule calls ambiguous; old is the 0.10.0 choice and new the 0.11.0 outcome. A repository with an empty specs list had no such directory at that commit.",
+  "repositories": [
+    {
+      "repo": "vaultcompasshq/conductor",
+      "commit": "afd0ea85447b863028eb18736b44ef266abd9500",
+      "limit": 1000,
+      "branchesListed": 84,
+      "hitLimit": false,
+      "uniqueBranches": 84,
+      "specs": [
+        "2026-09-26-one-required-check-program-design.md",
+        "2026-10-11-osv-gate-coverage-and-base-comparison.md",
+        "2026-10-13-action-path-after-signature-audit.md",
+        "2026-10-17-per-gate-timeout-and-stated-reason.md"
+      ],
+      "droppedForHygiene": 0,
+      "boundBefore": 1,
+      "boundAfter": 1,
+      "differing": 0,
+      "newlyWeak": 0
+    },
+    {
+      "repo": "vaultcompasshq/dep-guard",
+      "commit": "86877b2dfc7b3cc7d47318b26b597066928fbb1a",
+      "limit": 1000,
+      "branchesListed": 82,
+      "hitLimit": false,
+      "uniqueBranches": 82,
+      "specs": [],
+      "droppedForHygiene": 0,
+      "boundBefore": 0,
+      "boundAfter": 0,
+      "differing": 0,
+      "newlyWeak": 0
+    },
+    {
+      "repo": "vaultcompasshq/vault-guard",
+      "commit": "90b479ab5ac99cd3cc7b60561c56b47fd9bd7c44",
+      "limit": 1000,
+      "branchesListed": 140,
+      "hitLimit": false,
+      "uniqueBranches": 140,
+      "specs": [],
+      "droppedForHygiene": 0,
+      "boundBefore": 0,
+      "boundAfter": 0,
+      "differing": 0,
+      "newlyWeak": 0
+    },
+    {
+      "repo": "vaultcompasshq/intent-guard",
+      "commit": "b17a23e7d5ca983a63cfbbdb4e1f9d246e4bfd63",
+      "limit": 1000,
+      "branchesListed": 114,
+      "hitLimit": false,
+      "uniqueBranches": 114,
+      "specs": [],
+      "droppedForHygiene": 2,
+      "boundBefore": 0,
+      "boundAfter": 0,
+      "differing": 0,
+      "newlyWeak": 0
+    }
+  ],
+  "pairs": [
+    {
+      "repo": "vaultcompasshq/conductor",
+      "branch": "feat/gate-timeout-and-stated-reason",
+      "old": "2026-10-17-per-gate-timeout-and-stated-reason.md",
+      "new": {
+        "kind": "selected",
+        "name": "2026-10-17-per-gate-timeout-and-stated-reason.md",
+        "strength": "strong"
+      }
+    }
+  ]
+}

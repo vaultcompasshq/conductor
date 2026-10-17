@@ -21,7 +21,7 @@ import {
 } from '../src/intent-prepare.js';
 import { TRUST_BASE_MIN_VERSION } from '../src/gate-runner.js';
 import { renderSarif } from '../src/output-sarif.js';
-import { gateLogLines, renderText } from '../src/output-text.js';
+import { INTENT_SPEC_LINES, gateLogLines, renderText, verdictToken } from '../src/output-text.js';
 import { atLeastVersion } from '../src/trust-base.js';
 import { POLICY_FILE_NAME, parsePolicy } from '../src/policy.js';
 import { runAll } from '../src/run.js';
@@ -165,7 +165,7 @@ describe('a pull-request run against an imported spec', () => {
       contractSource: {
         kind: 'imported',
         spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
-        plan: 'docs/superpowers/plans/2026-09-03-widget-cache.md',
+        plan: 'docs/superpowers/plans/2026-09-03-widget-cache.md', match: expect.objectContaining({ strength: 'exact' }),
       },
       baseRef: 'main',
     });
@@ -1261,5 +1261,308 @@ describe('the proposal count when the intent preparation fails on a trust-base r
 
     expect(gateLogLines(result)).toHaveLength(1);
     expect(gateLogLines(result)[0]).toMatch(/^conductor: gate intent \(intent-guard\): skipped \(/);
+  });
+});
+
+// The branch-name convention on every report surface (design
+// 2026-10-17-intent-spec-auto-selection, sections 5 and 9.2). The branch comes
+// from GITHUB_HEAD_REF, as on a pull request, so a name git would refuse as a
+// ref still reaches the rule.
+describe('the branch-name convention on every report surface', () => {
+  const SPECS = 'docs/superpowers/specs';
+  const DEPS_AND_INTENT = parsePolicy(
+    'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  intent:\n    product: intent-guard\n',
+    POLICY_FILE_NAME
+  );
+  const DOGFOOD = [
+    '2026-10-01-prepare-release-notes-design.md',
+    '2026-10-02-improve-parser.md',
+    '2026-10-03-fix-pr-comment.md',
+    '2026-10-04-pr.md',
+    '2026-10-05-review-pr.md',
+  ];
+  const [AMBIGUOUS_LINE, NONE_CHANGED_LINE, WINNER_CHANGED_LINE, WEAK_LINE] = INTENT_SPEC_LINES;
+
+  interface SarifLog {
+    runs: Array<{
+      tool: { driver: { name: string } };
+      properties?: Record<string, unknown>;
+      invocations?: Array<{
+        toolExecutionNotifications: Array<{
+          descriptor: { id: string };
+          level: string;
+          message: { text: string };
+          properties: { details: Record<string, unknown> };
+        }>;
+      }>;
+    }>;
+  }
+
+  /** main carries the specs; the branch changes one file. Returns the root and main's commit. */
+  function specRepo(specs: string[]): { root: string; mainSha: string } {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    for (const name of specs) {
+      write(root, `${SPECS}/${name}`, SPEC_BODY);
+    }
+    commit(root, 'base');
+    const mainSha = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ['checkout', '--quiet', '-b', 'work']);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    commit(root, 'branch work');
+    return { root, mainSha };
+  }
+
+  function conventionRun(
+    specs: string[],
+    branch: string,
+    options: {
+      check?: string;
+      exit?: number;
+      second?: boolean;
+      enforce?: boolean;
+      trustBase?: boolean;
+      prEvent?: boolean;
+      argvLog?: string;
+    } = {}
+  ): RunResult {
+    const { root, mainSha } = specRepo(specs);
+    const bin = tempDir();
+    stubIntentGuard(bin, {
+      importSpec: { stdout: IMPORT_DRY_RUN },
+      freeze: { stdout: FREEZE },
+      check: { stdout: options.check ?? CHECK_PASSING, exit: options.exit ?? 0 },
+      version: '1.8.1',
+      ...(options.argvLog === undefined ? {} : { argvLog: options.argvLog }),
+    });
+    if (options.second === true) {
+      stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    }
+    const env: NodeJS.ProcessEnv = { GITHUB_HEAD_REF: branch };
+    if (options.prEvent === true) {
+      const event = path.join(tempDir(), 'event.json');
+      writeFileSync(event, JSON.stringify({ pull_request: { body: 'No spec line here.\n' } }));
+      env.GITHUB_EVENT_PATH = event;
+    }
+    const policy =
+      options.second === true ? DEPS_AND_INTENT : options.enforce === false ? INTENT_UNENFORCED : INTENT_ONLY;
+    return runAll(policy, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env,
+      ...(options.trustBase === true
+        ? { trustBase: { ref: mainSha, policyChanged: false, refusal: null } }
+        : { base: 'main' }),
+    });
+  }
+
+  function reportLines(result: RunResult, verbose = false): string[] {
+    return renderText(result, { version: '0.11.0', verbose }).split('\n');
+  }
+
+  function notifications(result: RunResult): NonNullable<SarifLog['runs'][number]['invocations']>[number]['toolExecutionNotifications'] {
+    const log = JSON.parse(renderSarif(result, '0.11.0')) as SarifLog;
+    return log.runs.flatMap((entry) => entry.invocations?.[0]?.toolExecutionNotifications ?? []);
+  }
+
+  // A1, run level. Kills: printing the none-changed line only for some
+  // causes.
+  it('skips the dogfood branch pr with exit 0, spawning nothing, and says on line 3 it chose a spec before', () => {
+    for (const trustBase of [false, true]) {
+      const argvLog = path.join(tempDir(), 'argv.log');
+      const result = conventionRun(DOGFOOD, 'pr', { trustBase, argvLog });
+      expect([trustBase, result.exitCode]).toEqual([trustBase, 0]);
+      expect(result.gates).toEqual([]);
+      expect(result.skipped.map((gate) => gate.reason)).toEqual(['no-contract']);
+      expect(verdictToken(result, false)).toBe('nothing-checked');
+      expect(reportLines(result)[2]).toBe(NONE_CHANGED_LINE);
+      expect(existsSync(argvLog)).toBe(false);
+    }
+  });
+
+  // A3, run level. Kills: filing the skip under no-contract; isFullyClean
+  // ignoring skips.
+  it('reports a tie as spec-ambiguous on every surface, with exit 0', () => {
+    for (const trustBase of [false, true]) {
+      const result = conventionRun(['2026-01-01-widget-cache-index.md', '2026-01-02-widget-cache-rev.md'], 'feat/widget-cache', { trustBase });
+      expect([trustBase, result.exitCode]).toEqual([trustBase, 0]);
+      expect(result.skipped.map((gate) => gate.reason)).toEqual(['spec-ambiguous']);
+      expect(verdictToken(result, false)).toBe('nothing-checked');
+      const lines = reportLines(result);
+      expect(lines[2]).toBe(AMBIGUOUS_LINE);
+      const text = lines.join('\n');
+      expect(text).toMatch(/skipped\s+intent\s+intent-guard\s+spec ambiguous: No spec was chosen/);
+      expect(text).toMatch(/verdict:.*intent matched two or more specs equally, so none was chosen/);
+      expect(gateLogLines(result)[0]).toMatch(/skipped \(spec ambiguous\)/);
+      const ambiguous = notifications(result).find((entry) => entry.descriptor.id === 'intent-guard/spec-ambiguous');
+      expect(ambiguous?.level).toBe('note');
+      expect(ambiguous?.properties.details).toMatchObject({
+        reason: 'spec-ambiguous',
+        tied: ['2026-01-01-widget-cache-index.md', '2026-01-02-widget-cache-rev.md'],
+        tiedCount: 2,
+        legacySelection: '2026-01-01-widget-cache-index.md',
+      });
+      expect(notifications(result).map((entry) => entry.descriptor.id)).not.toContain('intent-guard/no-contract');
+    }
+  });
+
+  it('keeps a tie off the one-line summary, beside a second clean gate, while the token stays pass', () => {
+    const result = conventionRun(['2026-01-01-widget-cache-index.md', '2026-01-02-widget-cache-rev.md'], 'feat/widget-cache', { second: true });
+    expect(result.exitCode).toBe(0);
+    expect(verdictToken(result, false)).toBe('pass');
+    const text = renderText(result);
+    expect(text.trimEnd().split('\n').length).toBeGreaterThan(1);
+    expect(text).toContain('No spec was chosen');
+  });
+
+  // A4. Kills: no weak flag; the weak line not keeping the run off the
+  // summary; a missing notification; the header line missing.
+  it('labels a single-token choice weak in the gate block, --verbose, SARIF and line 3', () => {
+    const result = conventionRun(['2026-01-01-widget-cache.md', '2026-01-02-cache.md'], 'fix/cache-tuning', { second: true });
+    expect(result.exitCode).toBe(0);
+    const summary = renderText(result);
+    expect(summary.trimEnd().split('\n').length).toBeGreaterThan(1);
+    const lines = reportLines(result);
+    expect(lines[2]).toBe(WEAK_LINE);
+    expect(lines).toContain(
+      '  match: weak, the branch name shares only "cache" with this spec\'s name. To be sure this is ' +
+        "the right contract, pass --spec <path> or rename the branch to the spec's name."
+    );
+    expect(reportLines(result, true)).toContain('  chosen by: branch name, weak, shared: cache');
+    expect(lines.join('\n')).not.toMatch(/chosen by:/);
+    const weak = notifications(result).find((entry) => entry.descriptor.id === 'intent-guard/spec-weak-match');
+    expect(weak?.level).toBe('note');
+    expect(weak?.properties.details).toEqual({
+      role: 'intent',
+      product: 'intent-guard',
+      spec: `${SPECS}/2026-01-02-cache.md`,
+      shared: ['cache'],
+      weakBecause: ['single-token'],
+      runnerUp: null,
+    });
+  });
+
+  it('names the pull request body in the weak remedy on a pull request', () => {
+    const result = conventionRun(['2026-01-02-cache.md'], 'fix/cache-tuning', { prEvent: true });
+    expect(reportLines(result)).toContain(
+      '  match: weak, the branch name shares only "cache" with this spec\'s name. To be sure this is ' +
+        'the right contract, add a "Spec: <path>" line to the pull request body or rename the branch ' +
+        "to the spec's name."
+    );
+  });
+
+  // A5. Kills: omitting the runner-up.
+  it('names the runner-up when the longer word decided', () => {
+    const result = conventionRun(['2026-01-01-widget.md', '2026-01-02-rev.md'], 'feat/widget-rev-notes');
+    const lines = reportLines(result);
+    expect(lines).toContain(
+      `  match: weak, the branch name shares "widget" with this spec and "rev" with ${SPECS}/2026-01-02-rev.md; ` +
+        'the longer word decided it. To be sure this is the right contract, pass --spec <path> or rename ' +
+        "the branch to the spec's name."
+    );
+    expect(reportLines(result, true)).toContain(
+      `  chosen by: branch name, weak, shared: widget, runner-up ${SPECS}/2026-01-02-rev.md`
+    );
+  });
+
+  it('prints the chosen-by line for an exact choice too, under --verbose only', () => {
+    const result = conventionRun(['2026-09-03-widget-cache-design.md'], 'feat/widget-cache', { second: true });
+    expect(renderText(result).trimEnd().split('\n')).toHaveLength(1);
+    expect(reportLines(result, true)).toContain('  chosen by: branch name, exact, shared: widget cache');
+    expect(reportLines(result, true).join('\n')).not.toMatch(/match: weak|intent-spec:/);
+  });
+
+  // A7, run level. Kills: dropping the legacy clause; isFullyClean ignoring
+  // a skip that carries legacy.
+  it('says a branch 0.10.0 bound is now skipped, on line 3, in SARIF, and off the one-line summary', () => {
+    const result = conventionRun(['2026-01-01-widgets-layer.md'], 'feat/widget', { second: true });
+    expect(result.exitCode).toBe(0);
+    expect(result.skipped[0].detail).toContain('Before conductor 0.11.0 this branch name chose');
+    expect(reportLines(result)[2]).toBe(NONE_CHANGED_LINE);
+    expect(renderText(result).trimEnd().split('\n').length).toBeGreaterThan(1);
+    const skipped = notifications(result).find((entry) => entry.descriptor.id === 'intent-guard/no-contract');
+    expect(skipped?.properties.details).toMatchObject({ legacySelection: '2026-01-01-widgets-layer.md' });
+  });
+
+  // A8. Kills: any code path that downgrades a weak selection's enforcement
+  // or verdict.
+  it('keeps a weak selection blocking and enforced', () => {
+    const result = conventionRun(['2026-01-02-cache.md'], 'fix/cache-tuning', { check: CHECK_BLOCKING, exit: 1 });
+    const source = result.gates[0].intent?.contractSource;
+    expect(source?.kind === 'imported' ? source.match?.strength : null).toBe('weak');
+    expect(result.exitCode).toBe(1);
+    // The blocking fixture carries two blocking findings; the token is the
+    // same one an exact selection of the same spec gets.
+    expect(verdictToken(result, false)).toBe('blocked (2)');
+    const exact = conventionRun(['2026-01-02-cache.md'], 'feat/cache', { check: CHECK_BLOCKING, exit: 1 });
+    expect(verdictToken(exact, false)).toBe('blocked (2)');
+    expect(result.gates[0].enforce).toBe(true);
+  });
+
+  it('handles a weak selection under enforce: false exactly as an exact one', () => {
+    const weak = conventionRun(['2026-01-02-cache.md'], 'fix/cache-tuning', { check: CHECK_BLOCKING, exit: 1, enforce: false });
+    const exact = conventionRun(['2026-01-02-cache.md'], 'feat/cache', { check: CHECK_BLOCKING, exit: 1, enforce: false });
+    const source = exact.gates[0].intent?.contractSource;
+    expect(source?.kind === 'imported' ? source.match?.strength : null).toBe('exact');
+    expect([weak.exitCode, verdictToken(weak, false), weak.gates[0].enforce]).toEqual([
+      exact.exitCode,
+      verdictToken(exact, false),
+      exact.gates[0].enforce,
+    ]);
+  });
+
+  // A10. Kills: no note line for a changed winner; the header line missing
+  // or printing the weak string instead; letting legacy decide the winner.
+  it('notes a changed winner in the gate block, SARIF and line 3', () => {
+    const result = conventionRun(
+      ['2026-01-01-alpha-and-the-beta.md', '2026-01-02-beta-gamma-omega.md'],
+      'feat/alpha-and-the-beta-gamma-omega',
+      { second: true }
+    );
+    expect(result.exitCode).toBe(0);
+    // The spec actually imported is the new winner, never the legacy answer.
+    const source = result.gates.find((gate) => gate.role === 'intent')?.intent?.contractSource;
+    expect(source?.kind === 'imported' ? source.spec : null).toBe(`${SPECS}/2026-01-02-beta-gamma-omega.md`);
+    const lines = reportLines(result);
+    expect(lines[2]).toBe(WINNER_CHANGED_LINE);
+    expect(lines).toContain(
+      `  note: Before conductor 0.11.0 this branch name chose ${SPECS}/2026-01-01-alpha-and-the-beta.md; ` +
+        'it now chooses this spec, which matches it on whole words.'
+    );
+    expect(lines.join('\n')).not.toMatch(/match: weak/);
+    expect(renderText(result).trimEnd().split('\n').length).toBeGreaterThan(1);
+    const log = JSON.parse(renderSarif(result, '0.11.0')) as SarifLog;
+    const intentRun = log.runs.find((entry) => entry.tool.driver.name === 'intent-guard');
+    expect(intentRun?.properties?.legacySelection).toBe('2026-01-01-alpha-and-the-beta.md');
+  });
+
+  it('prints the changed-winner line, not the weak one, when the new winner is weak', () => {
+    const result = conventionRun(['2026-01-01-gamma.md', '2026-01-02-gamma-omegas-delta-long.md'], 'feat/gamma-omega');
+    const lines = reportLines(result);
+    expect(lines[2]).toBe(WINNER_CHANGED_LINE);
+    expect(lines.filter((line) => line.startsWith('intent-spec:'))).toEqual([WINNER_CHANGED_LINE]);
+    expect(lines.some((line) => line.startsWith('  match: weak, the branch name shares only "gamma"'))).toBe(true);
+    expect(lines).toContain(
+      `  note: Before conductor 0.11.0 this branch name chose ${SPECS}/2026-01-02-gamma-omegas-delta-long.md; ` +
+        'it now chooses this spec, which matches it on whole words.'
+    );
+    const weak = notifications(result).find((entry) => entry.descriptor.id === 'intent-guard/spec-weak-match');
+    expect(weak?.properties.details).toMatchObject({ legacySelection: '2026-01-02-gamma-omegas-delta-long.md' });
+  });
+
+  // O2. Kills: printing raw slug tokens as shared (measured red). It does NOT
+  // kill dropping the charset rule, which U2 in tests/intent-spec.test.ts does.
+  it('prints no character of the branch name beyond the shared words', () => {
+    const result = conventionRun(['2026-01-01-cache.md'], 'feat/`x`-cache');
+    const lines = reportLines(result, true);
+    const matchLine = lines.find((line) => line.startsWith('  match: weak')) ?? '';
+    expect(matchLine).toContain('"cache"');
+    expect(matchLine).not.toContain('`');
+    expect(lines.find((line) => line.startsWith('  chosen by:'))).toBe('  chosen by: branch name, weak, shared: cache');
+    expect(lines[2]).toBe(WEAK_LINE);
+    const weak = notifications(result).find((entry) => entry.descriptor.id === 'intent-guard/spec-weak-match');
+    expect(JSON.stringify(weak)).not.toContain('`');
   });
 });

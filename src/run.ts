@@ -12,6 +12,7 @@ import {
   runGate,
 } from './gate-runner.js';
 import { resolveBaseRef } from './intent-base.js';
+import type { SelectionMiss } from './intent-spec.js';
 import {
   type IntentPreparation,
   frozenNativeContractPath,
@@ -94,8 +95,15 @@ export interface TreeUnchangedGate {
 export interface SkippedGate {
   role: GateRole;
   product: Product;
-  reason: 'no-contract' | 'contract-waived';
+  /**
+   * `spec-ambiguous` is the third: two or more specs matched the branch name
+   * equally, so the convention chose none. Advisory exactly like the other
+   * two, and for the same reason.
+   */
+  reason: 'no-contract' | 'contract-waived' | 'spec-ambiguous';
   detail: string;
+  /** What the branch-name convention said, for the SARIF details bag. */
+  selection?: SelectionMiss;
 }
 
 /**
@@ -610,6 +618,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
               product: gate.product,
               reason: prepared.reason,
               detail: prepared.detail,
+              ...(prepared.selection === undefined ? {} : { selection: prepared.selection }),
             });
             continue;
           }

@@ -264,7 +264,7 @@ describe('a repository with a spec and no frozen contract', () => {
     expect(result.kind === 'ready' && result.preparation.contractSource).toEqual({
       kind: 'imported',
       spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
-      plan: 'docs/superpowers/plans/2026-09-03-widget-cache.md',
+      plan: 'docs/superpowers/plans/2026-09-03-widget-cache.md', match: expect.objectContaining({ strength: 'exact', remedy: 'spec-flag' }),
     });
   });
 
@@ -1097,7 +1097,7 @@ describe('on a run with a trust base, the contract decision comes from the base 
       kind: 'imported',
       spec: SPEC_PATH,
       plan: null,
-      ref: base,
+      ref: base, match: expect.objectContaining({ strength: 'exact', remedy: 'spec-flag' }),
     });
     expect(readFileSync(specLog, 'utf8')).toBe(SPEC_BODY);
     const importLine = argvLines(argvLog).find((line) => line.startsWith('import-spec')) ?? '';
@@ -1270,5 +1270,282 @@ describe('the commit a freeze is attributed to, in a repository with no commit y
     expect(args[args.indexOf('--approved-by') + 1]).toBe(
       'conductor: docs/superpowers/specs/2026-09-03-widget-cache-design.md at an unknown commit'
     );
+  });
+});
+
+// The branch-name convention on whole tokens (design
+// 2026-10-17-intent-spec-auto-selection, sections 5.1a and 9.2), through both
+// selection paths. The branch comes from GITHUB_HEAD_REF, as on a pull request.
+describe('the branch-name convention through both preparations', () => {
+  const SPECS = 'docs/superpowers/specs';
+  const FROZEN_HEAD = 'contract_id: ic-head\nfrozen_by: user\napproval:\n  approved_by: the author\n';
+  const DOGFOOD = [
+    '2026-10-01-prepare-release-notes-design.md',
+    '2026-10-02-improve-parser.md',
+    '2026-10-03-fix-pr-comment.md',
+    '2026-10-04-pr.md',
+    '2026-10-05-review-pr.md',
+  ];
+  const SH_CAT = execFileSync('sh', ['-c', 'command -v cat'], { encoding: 'utf8' }).trim();
+
+  function commitAll(root: string, message: string): string {
+    git(root, ['add', '-A']);
+    git(root, ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', message]);
+    return git(root, ['rev-parse', 'HEAD']).trim();
+  }
+
+  /** main carries `specs` (each with its own body); the head then applies `head`. */
+  function selectionRepo(
+    specs: string[],
+    head: (root: string) => void = () => undefined
+  ): { root: string; base: string } {
+    const root = tempDir();
+    git(root, ['init', '--quiet', '-b', 'main']);
+    write(root, 'README.md', '# scratch\n');
+    for (const name of specs) {
+      write(root, `${SPECS}/${name}`, `${SPEC_BODY}\n<!-- base copy of ${name} -->\n`);
+    }
+    const base = commitAll(root, 'base');
+    git(root, ['checkout', '--quiet', '-b', 'work']);
+    write(root, 'src/widget/cache.ts', 'export const x = 1;\n');
+    head(root);
+    commitAll(root, 'the pull request');
+    return { root, base };
+  }
+
+  /** An intent-guard stub logging argv, copying the --spec file it is given to `specLog`. */
+  function loggingBin(argvLog: string, specLog: string): string {
+    const bin = tempDir();
+    const file = path.join(bin, 'intent-guard');
+    const importPayload = path.join(bin, 'import.json');
+    const freezePayload = path.join(bin, 'freeze.json');
+    writeFileSync(importPayload, IMPORT_DRY_RUN);
+    writeFileSync(freezePayload, FREEZE);
+    writeFileSync(
+      file,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo "1.8.0"; exit 0; fi',
+        `printf '%s\\n' "$*" >> ${JSON.stringify(argvLog)}`,
+        'case "$1" in',
+        '  import-spec)',
+        '    prev=""',
+        `    for a in "$@"; do if [ "$prev" = "--spec" ]; then ${SH_CAT} "$a" > ${JSON.stringify(specLog)}; fi; prev="$a"; done`,
+        `    ${SH_CAT} ${JSON.stringify(importPayload)}; exit 0 ;;`,
+        `  freeze) ${SH_CAT} ${JSON.stringify(freezePayload)}; exit 0 ;;`,
+        '  *) exit 2 ;;',
+        'esac',
+        '',
+      ].join('\n')
+    );
+    chmodSync(file, 0o755);
+    return bin;
+  }
+
+  function prepareOn(
+    root: string,
+    branch: string,
+    options: { trustBase?: string; spec?: string; prBody?: string } = {}
+  ): { result: IntentPrepareResult; argvLog: string; specLog: string } {
+    const argvLog = path.join(tempDir(), 'argv.log');
+    const specLog = path.join(tempDir(), 'spec.log');
+    const bin = loggingBin(argvLog, specLog);
+    const env: NodeJS.ProcessEnv = { GITHUB_HEAD_REF: branch };
+    if (options.prBody !== undefined) {
+      const eventPath = path.join(tempDir(), 'event.json');
+      writeFileSync(eventPath, JSON.stringify({ pull_request: { body: options.prBody } }));
+      env.GITHUB_EVENT_PATH = eventPath;
+    }
+    const result = prepareIntent({
+      repoRoot: root,
+      binary: resolveGateBinary(INTENT_GATE, root, bin),
+      timeoutMs: 120_000,
+      env,
+      ...(options.trustBase === undefined ? { base: 'main' } : { trustBase: options.trustBase }),
+      ...(options.spec === undefined ? {} : { spec: options.spec }),
+    });
+    if (result.kind === 'ready') {
+      cleanups.push(result.preparation.cleanup);
+    }
+    return { result, argvLog, specLog };
+  }
+
+  function skipOf(result: IntentPrepareResult): Extract<IntentPrepareResult, { kind: 'skip' }> {
+    if (result.kind !== 'skip') {
+      throw new Error(`expected a skip, got ${JSON.stringify(result)}`);
+    }
+    return result;
+  }
+
+  // A1, both paths. Kills: the trust-base path still using the substring
+  // rule; MIN_TOKEN_LENGTH below 3.
+  it('skips the dogfood branch pr as no-contract on both paths, spawning nothing, and names what 0.10.0 chose', () => {
+    const { root, base } = selectionRepo(DOGFOOD);
+    for (const trustBase of [undefined, base]) {
+      const { result, argvLog } = prepareOn(root, 'pr', trustBase === undefined ? {} : { trustBase });
+      const skip = skipOf(result);
+      expect([trustBase, skip.reason]).toEqual([trustBase, 'no-contract']);
+      expect(skip.selection).toEqual({ why: 'no-usable-token', tied: [], legacy: '2026-10-04-pr.md' });
+      expect(skip.detail).toContain(
+        'The branch name "pr" has no word of three or more letters that is not a common branch word ' +
+          '(fix, feat, wip, ...), so it cannot choose a spec.'
+      );
+      expect(skip.detail).toContain(
+        `Before conductor 0.11.0 this branch name chose ${SPECS}/2026-10-04-pr.md by a partial-word match; it no longer does.`
+      );
+      expect(existsSync(argvLog)).toBe(false);
+    }
+  });
+
+  // A3, both paths. Kills: filing the skip under no-contract; the trust-base
+  // path falling through to its unconditional no-contract return; dropping
+  // the proposals on that return.
+  it('skips as spec-ambiguous on the working tree, naming both specs', () => {
+    const { root } = selectionRepo(['2026-01-01-widget-cache-index.md', '2026-01-02-widget-cache-rev.md']);
+    const { result, argvLog } = prepareOn(root, 'feat/widget-cache');
+    const skip = skipOf(result);
+    expect(skip.reason).toBe('spec-ambiguous');
+    expect(skip.detail).toBe(
+      'No spec was chosen: the branch name "feat/widget-cache" matches 2 specs equally ' +
+        `(${SPECS}/2026-01-01-widget-cache-index.md, ${SPECS}/2026-01-02-widget-cache-rev.md), and ` +
+        'conductor does not guess between them. Add a "Spec: <path>" line to the pull request body or ' +
+        "pass --spec, or rename the branch to one spec's name. " +
+        `Before conductor 0.11.0 this branch name chose ${SPECS}/2026-01-01-widget-cache-index.md by a ` +
+        'partial-word match; it no longer does.'
+    );
+    expect(skip.selection).toEqual({
+      why: 'ambiguous',
+      tied: ['2026-01-01-widget-cache-index.md', '2026-01-02-widget-cache-rev.md'],
+      legacy: '2026-01-01-widget-cache-index.md',
+    });
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('skips as spec-ambiguous at the trust base, naming the base ref and its files, and keeps the proposals', () => {
+    // The head also adds a spec named exactly after the branch. It is not a
+    // candidate (the list is the base's), and no head-spec proposal is
+    // computed when the base already has candidates (design section 5.1a).
+    const { root, base } = selectionRepo(
+      ['2026-01-01-widget-cache-index.md', '2026-01-02-widget-cache-rev.md'],
+      (r) => {
+        write(r, NATIVE_CONTRACT_PATH, FROZEN_HEAD);
+        write(r, `${SPECS}/2026-01-03-widget-cache.md`, '# head spec\n');
+      }
+    );
+    const { result, argvLog } = prepareOn(root, 'feat/widget-cache', { trustBase: base });
+    const skip = skipOf(result);
+    expect(skip.reason).toBe('spec-ambiguous');
+    expect(skip.detail).toContain(
+      `matches 2 specs equally on "${base}" (${SPECS}/2026-01-01-widget-cache-index.md, ` +
+        `${SPECS}/2026-01-02-widget-cache-rev.md)`
+    );
+    expect(skip.detail).not.toMatch(/carries no frozen|no spec under/);
+    expect(skip.detail).toContain('Before conductor 0.11.0 this branch name chose');
+    expect(skip.proposals).toEqual([
+      expect.stringMatching(new RegExp(`^${NATIVE_CONTRACT_PATH.replace('.', '\\.')} is in this pull request`)),
+    ]);
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('caps the tied list in the detail at five, keeping every one in the selection', () => {
+    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((letter) => `2026-01-0${'abcdefg'.indexOf(letter) + 1}-widget-cache-${letter}${letter}${letter}.md`);
+    const { root } = selectionRepo(names);
+    const skip = skipOf(prepareOn(root, 'feat/widget-cache').result);
+    expect(skip.reason).toBe('spec-ambiguous');
+    expect(skip.detail).toContain('matches 7 specs equally');
+    expect(skip.detail).toContain(`${SPECS}/${names[4]}, and 2 more)`);
+    expect(skip.detail).not.toContain(names[5]);
+    expect(skip.selection?.tied).toEqual(names);
+  });
+
+  // A6. Kills: listing candidates from HEAD; reading the selected text from
+  // the working tree.
+  it('chooses only among the base specs at the trust base, never a spec the head adds', () => {
+    // The head adds an exact-named spec AND edits the base's, so the
+    // imported bytes prove which side they came from.
+    const { root, base } = selectionRepo(['2026-01-01-widget-cache-index.md'], (r) => {
+      write(r, `${SPECS}/2026-01-02-widget-cache.md`, '# head spec\n');
+      write(r, `${SPECS}/2026-01-01-widget-cache-index.md`, `${SPEC_BODY}\n<!-- head edit -->\n`);
+    });
+    const { result, specLog } = prepareOn(root, 'feat/widget-cache', { trustBase: base });
+    expect(result.kind).toBe('ready');
+    if (result.kind !== 'ready') throw new Error('unreachable');
+    expect(result.preparation.contractSource).toEqual({
+      kind: 'imported',
+      spec: `${SPECS}/2026-01-01-widget-cache-index.md`,
+      plan: null,
+      ref: base,
+      match: {
+        strength: 'strong',
+        weakBecause: [],
+        shared: ['widget', 'cache'],
+        runnerUp: null,
+        runnerUpShared: [],
+        legacy: null,
+        remedy: 'spec-flag',
+      },
+    });
+    expect(readFileSync(specLog, 'utf8')).toContain('base copy of 2026-01-01-widget-cache-index.md');
+    expect(readFileSync(specLog, 'utf8')).not.toContain('head edit');
+    // The edit to the imported spec is a proposal; the spec the head adds
+    // gets no line at all, since the base selected a spec.
+    expect(result.preparation.proposals).toEqual([
+      expect.stringMatching(new RegExp(`^${SPECS}/2026-01-01-widget-cache-index\\.md changed in this pull request`)),
+    ]);
+  });
+
+  // A7, both paths. Kills: dropping the legacy clause on either path;
+  // falling back to the legacy answer when the new rule finds nothing.
+  it('skips a branch 0.10.0 bound inside a word, on both paths, saying so', () => {
+    const { root, base } = selectionRepo(['2026-01-01-widgets-layer.md']);
+    for (const trustBase of [undefined, base]) {
+      const { result, argvLog } = prepareOn(root, 'feat/widget', trustBase === undefined ? {} : { trustBase });
+      const skip = skipOf(result);
+      expect([trustBase, skip.reason]).toEqual([trustBase, 'no-contract']);
+      expect(skip.selection).toEqual({ why: 'no-candidate', tied: [], legacy: '2026-01-01-widgets-layer.md' });
+      expect(skip.detail).toMatch(
+        /Before conductor 0\.11\.0 this branch name chose docs\/superpowers\/specs\/2026-01-01-widgets-layer\.md by a partial-word match; it no longer does\.$/
+      );
+      expect(existsSync(argvLog)).toBe(false);
+    }
+  });
+
+  // A9. Kills: applying the token rule to a named spec.
+  it('takes a --spec or a Spec: line as named, with no match record, on a branch the rule rejects', () => {
+    const { root } = selectionRepo([...DOGFOOD, 'pr.md']);
+    const viaFlag = prepareOn(root, 'pr', { spec: `${SPECS}/pr.md` }).result;
+    const viaBody = prepareOn(root, 'pr', { prBody: `Spec: ${SPECS}/2026-10-03-fix-pr-comment.md\n` }).result;
+    for (const [result, spec] of [
+      [viaFlag, `${SPECS}/pr.md`],
+      [viaBody, `${SPECS}/2026-10-03-fix-pr-comment.md`],
+    ] as const) {
+      expect(result.kind).toBe('ready');
+      if (result.kind !== 'ready') throw new Error('unreachable');
+      expect(result.preparation.contractSource).toEqual({ kind: 'imported', spec, plan: null });
+    }
+  });
+
+  // O3. Kills: churning the ordinary adoption-ramp wording.
+  it('keeps the no-candidate detail byte-identical to 0.10.0, with no selection attached', () => {
+    const { root, base } = selectionRepo(['2026-01-01-secret-scanner.md']);
+    const working = skipOf(prepareOn(root, 'feat/widget-cache').result);
+    expect(working).toEqual({
+      kind: 'skip',
+      reason: 'no-contract',
+      detail:
+        `No frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} and no spec under ${SPECS} matching ` +
+        'branch "feat/widget-cache". Name one with a "Spec: <path>" line in the pull request body, ' +
+        'or pass --spec.',
+    });
+    const atBase = skipOf(prepareOn(root, 'feat/widget-cache', { trustBase: base }).result);
+    expect(atBase).toEqual({
+      kind: 'skip',
+      reason: 'no-contract',
+      detail:
+        `No contract on the base: "${base}" carries no frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} ` +
+        `and no spec under ${SPECS} for branch "feat/widget-cache". On a pull-request run the intent ` +
+        'contract comes from the base ref only, so nothing in this pull request can become it; once a ' +
+        'contract or spec is on the base branch, the next pull request is judged against it.',
+    });
   });
 });

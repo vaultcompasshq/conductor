@@ -694,8 +694,55 @@ function skippedNotifications(result: RunResult): Notification[] {
     id: `${gate.product}/${gate.reason}`,
     message:
       `The ${gate.role} gate (${gate.product}) checked nothing on this branch. ${gate.detail}`,
-    details: { role: gate.role, product: gate.product, reason: gate.reason },
+    details: {
+      role: gate.role,
+      product: gate.product,
+      reason: gate.reason,
+      // The full tied list here; the message caps it for reading.
+      ...(gate.selection?.why === 'ambiguous'
+        ? { tied: gate.selection.tied, tiedCount: gate.selection.tied.length }
+        : {}),
+      ...(gate.selection === undefined || gate.selection.legacy === null
+        ? {}
+        : { legacySelection: gate.selection.legacy }),
+    },
   }));
+}
+
+/**
+ * A spec the branch-name convention chose on thin evidence, as a NOTE.
+ *
+ * A notification by the rule above: it says how much this run's verdict can
+ * be trusted to be about the right contract, which is a statement about the
+ * run's coverage, true on every run of this branch until somebody pins the
+ * spec. The verdict and enforcement are unchanged by it.
+ */
+function weakMatchNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) => {
+    const source = gate.intent?.contractSource;
+    if (source === undefined || source.kind !== 'imported' || source.match?.strength !== 'weak') {
+      return [];
+    }
+    const match = source.match;
+    return [
+      {
+        id: `${gate.product}/spec-weak-match`,
+        message:
+          `The ${gate.role} gate (${gate.product}) used ${source.spec}, chosen by the branch name on ` +
+          `a weak match (${match.weakBecause.join(', ')}). Name the spec with a "Spec: <path>" line ` +
+          'or --spec, or rename the branch to the spec name, to be sure it is the right contract.',
+        details: {
+          role: gate.role,
+          product: gate.product,
+          spec: source.spec,
+          shared: match.shared,
+          weakBecause: match.weakBecause,
+          runnerUp: match.runnerUp,
+          ...(match.legacy === null ? {} : { legacySelection: match.legacy }),
+        },
+      },
+    ];
+  });
 }
 
 /**
@@ -1056,6 +1103,13 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
         ...(gate.intent === undefined
           ? {}
           : { contractSource: gate.intent.contractSource, baseRef: gate.intent.baseRef }),
+        // What 0.10.0 would have chosen, when the branch-name convention now
+        // chooses a different spec. Reporting only, for one minor release.
+        ...(gate.intent?.contractSource.kind === 'imported' &&
+        gate.intent.contractSource.match !== undefined &&
+        gate.intent.contractSource.match.legacy !== null
+          ? { legacySelection: gate.intent.contractSource.match.legacy }
+          : {}),
         // The gate's own run facts (issue #72: the lockfiles the umbrella
         // handed osv-scanner, and dep-guard's online-lookup reporting), the
         // same bag the text report renders as scalars. Carried verbatim and
@@ -1087,6 +1141,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...skippedNotifications(result),
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),
+    ...weakMatchNotifications(result),
     ...trustBaseRefusedNotifications(result),
     ...programRefusedNotifications(result),
     ...proposalNotifications(result),

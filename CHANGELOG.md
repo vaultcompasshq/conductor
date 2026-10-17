@@ -14,6 +14,45 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Changed
+
+- **The intent gate's branch-name spec match is on whole words, not
+  substrings.** A spec under docs/superpowers/specs is chosen for a
+  branch only when one name's words appear, in order and together, in
+  the other's, and at least one shared word has three or more
+  characters, a letter, and is not a common branch word. Before this a
+  branch called pr could be bound to any spec with "pr" inside a word,
+  and the run reported that spec's verdict as the intent gate's. This is
+  a behaviour change: a branch that matched only inside a word (pr in
+  prepare, widget in widgets), a branch made only of short or common
+  words (fix/pr, wip), and a branch that two specs match equally no
+  longer choose a spec, and the report says so, including, for this
+  release, which spec 0.10.0 would have chosen. To keep a binding, add
+  a "Spec: <path>" line to the pull request body or name the branch
+  after the spec. A repository that wants one contract whatever the
+  branch is called should freeze a native contract on the base branch,
+  which outranks every other source. Measured against the merged pull
+  request branch names of the four public guard repositories and their
+  current spec listings (tests/fixtures/intent-spec-selection-baseline.json),
+  the one binding found is unchanged; three of the four carry no
+  docs/superpowers/specs directory, so that measurement is thin.
+- **A tie is reported, never guessed.** Two specs that match a branch
+  equally are both named, and the gate is skipped as
+  intent-guard/spec-ambiguous: advisory, like a branch with no spec, and
+  never in the exit code. Previously the longer stem won.
+
+### Added
+
+- **A weak match says so.** A spec chosen on one shared word, or on word
+  length alone, is still used, and the report says the match is weak in
+  the intent gate's block, the --verbose block, an
+  intent-guard/spec-weak-match SARIF note and the Action's step summary,
+  with how to pin it. Its verdict and enforcement are unchanged.
+- **The spec-ambiguous skip.** A third reason a skipped intent gate can
+  carry, beside no-contract and contract-waived, with its own SARIF
+  notification id (intent-guard/spec-ambiguous) whose details list every
+  tied spec, and its own wording on the skipped line and the verdict.
+
 ## [0.10.0] - 2026-10-17
 
 **A minor release.** The per-gate time limit, readable osv-scanner and

@@ -1207,18 +1207,25 @@ runs:
             if [ "$verdict_token" = "nothing-checked" ]; then
               printf 'No gate checked anything (none ran, or every gate that ran had nothing to check), so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
             fi
-            # Line 3 of the report, and ONLY when it is exactly the
-            # present-on-base line and the token above was accepted: a pass
-            # with known advisories reported and not blocking (the
-            # vulnerabilities gate under present-on-base: report) must not
-            # read as spotless here. Anything else on line 3 is ignored; the
-            # report can carry text from the scanned repository, so the line
-            # is matched whole rather than searched for.
+            # Lines 3 and 4 of the report, and ONLY a line that is exactly the
+            # present-on-base line or one of the four fixed intent-spec lines,
+            # and only when the token above was accepted. A pass with known
+            # advisories reported and not blocking (the vulnerabilities gate
+            # under present-on-base: report) must not read as spotless here,
+            # and neither may a pass whose intent spec was chosen weakly, or
+            # differently than before, or not at all. The intent-spec lines
+            # are a closed set naming no branch, file or token. Anything else
+            # on either line is ignored; the report can carry text from the
+            # scanned repository, so each line is matched whole rather than
+            # searched for.
             if [ "$token_valid" -eq 1 ] && [ -f "$TEXT_REPORT" ]; then
-              present_line="$(sed -n '3p' "$TEXT_REPORT")"
-              if [[ "$present_line" =~ ^present-on-base:\ [0-9]+\ reported,\ not\ blocking$ ]]; then
-                printf '%s\n\n' "$present_line" >> "$GITHUB_STEP_SUMMARY"
-              fi
+              intent_spec_shape='^intent-spec: (none chosen, two or more specs matched the branch equally|none chosen, this branch chose a spec before conductor 0\.11\.0|a different spec chosen than before conductor 0\.11\.0, see the report|weak match, see the intent gate in the report)$'
+              for summary_line_number in 3 4; do
+                summary_line="$(sed -n "${summary_line_number}p" "$TEXT_REPORT")"
+                if [[ "$summary_line" =~ ^present-on-base:\ [0-9]+\ reported,\ not\ blocking$ ]] || [[ "$summary_line" =~ $intent_spec_shape ]]; then
+                  printf '%s\n\n' "$summary_line" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done
             fi
           fi
         fi

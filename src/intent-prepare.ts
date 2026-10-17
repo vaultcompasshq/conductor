@@ -58,13 +58,14 @@ import {
   PLAN_DIR,
   SPEC_DIR,
   SPEC_WAIVER_TOKEN,
-  bestMatch,
-  branchSlug,
   discoverSpec,
+  matchOf,
   normalizeStem,
   prBodyFromEvent,
+  selectByBranch,
   specFromPrBody,
 } from './intent-spec.js';
+import type { ConventionMatch, SelectionMiss } from './intent-spec.js';
 import type { ResolvedBinary } from './resolve.js';
 import { readFileAtRef, unreadableBaseRemedy } from './trust-base.js';
 
@@ -124,8 +125,125 @@ export type ContractSource =
    * `ref` is set on a run with a trust base: the spec and plan were read from
    * that ref, never from the tree being judged.
    */
-  | { kind: 'imported'; spec: string; plan: string | null; ref?: string }
+  | {
+      kind: 'imported';
+      spec: string;
+      plan: string | null;
+      ref?: string;
+      /**
+       * Set only when the branch-name convention chose the spec. Its presence
+       * is how every renderer knows the branch name chose it; nothing
+       * recomputes that from the policy or the path.
+       */
+      match?: ReportedMatch;
+    }
   | { kind: 'none' };
+
+/**
+ * A convention match as the report carries it: how the spec was chosen, plus
+ * which remedy the weak-match line names. `pr-body` on a run with a pull
+ * request event (a "Spec:" line), `spec-flag` locally (--spec).
+ */
+export type ReportedMatch = ConventionMatch & { remedy: 'pr-body' | 'spec-flag' };
+
+/** How many tied specs a report sentence names before "and N more". */
+export const TIED_SHOWN = 5;
+
+/** The tied specs, as repository paths, capped for a report sentence. */
+function tiedList(tied: string[]): string {
+  const shown = tied.slice(0, TIED_SHOWN).map((name) => `${SPEC_DIR}/${name}`);
+  const more = tied.length - shown.length;
+  return more > 0 ? `${shown.join(', ')}, and ${more} more` : shown.join(', ');
+}
+
+/** The skip detail when two or more specs match the branch equally (5.2). */
+function ambiguousDetail(branch: string, tied: string[], ref?: string): string {
+  return (
+    `No spec was chosen: the branch name "${branch}" matches ${tied.length} specs equally` +
+    `${ref === undefined ? '' : ` on "${ref}"`} (${tiedList(tied)}), and conductor does not ` +
+    'guess between them. Add a "Spec: <path>" line to the pull request body or pass --spec, ' +
+    "or rename the branch to one spec's name."
+  );
+}
+
+/**
+ * The legacy clause for a branch 0.10.0 bound and this release does not.
+ * Reporting only, for one minor release.
+ */
+export function legacyNoneSentence(legacy: string): string {
+  return (
+    `Before conductor 0.11.0 this branch name chose ${SPEC_DIR}/${legacy} by a partial-word ` +
+    'match; it no longer does.'
+  );
+}
+
+/** The legacy clause for a branch whose chosen spec changed this release. */
+export function legacyChangedSentence(legacy: string): string {
+  return (
+    `Before conductor 0.11.0 this branch name chose ${SPEC_DIR}/${legacy}; it now chooses this ` +
+    'spec, which matches it on whole words.'
+  );
+}
+
+/** The sentences a no-contract skip gains from the convention's answer. */
+function selectionSuffix(branch: string | null, selection: SelectionMiss | undefined): string {
+  if (selection === undefined) {
+    return '';
+  }
+  const sentences: string[] = [];
+  if (selection.why === 'no-usable-token' && branch !== null) {
+    sentences.push(
+      `The branch name "${branch}" has no word of three or more letters that is not a common ` +
+        'branch word (fix, feat, wip, ...), so it cannot choose a spec.'
+    );
+  }
+  if (selection.legacy !== null) {
+    sentences.push(legacyNoneSentence(selection.legacy));
+  }
+  return sentences.map((sentence) => ` ${sentence}`).join('');
+}
+
+/**
+ * The selection a skip carries for its details bag, or undefined when it
+ * says nothing the ordinary adoption-ramp skip does not: a usable branch name
+ * that matched no spec, under either rule, keeps its 0.10.0 shape exactly.
+ */
+function reportedSelection(selection: SelectionMiss | undefined): SelectionMiss | undefined {
+  if (selection === undefined || (selection.why === 'no-candidate' && selection.legacy === null)) {
+    return undefined;
+  }
+  return selection;
+}
+
+/** The skip for a convention that found nothing, on either path. */
+function noSpecChosen(
+  branch: string | null,
+  selection: SelectionMiss | undefined,
+  noContractDetail: string,
+  proposals: string[],
+  ref?: string
+): IntentPrepareResult {
+  const reported = reportedSelection(selection);
+  const withProposals = proposals.length === 0 ? {} : { proposals };
+  if (selection !== undefined && selection.why === 'ambiguous' && branch !== null) {
+    return {
+      kind: 'skip',
+      reason: 'spec-ambiguous',
+      detail:
+        ambiguousDetail(branch, selection.tied, ref) +
+        (selection.legacy === null ? '' : ` ${legacyNoneSentence(selection.legacy)}`),
+      selection,
+      ...withProposals,
+    };
+  }
+  return {
+    kind: 'skip',
+    reason: 'no-contract',
+    detail: noContractDetail + selectionSuffix(branch, selection),
+    ...(reported === undefined ? {} : { selection: reported }),
+    ...withProposals,
+  };
+}
 
 export interface IntentPreparation {
   contractSource: ContractSource;
@@ -190,10 +308,18 @@ export type IntentPrepareResult =
    */
   | {
       kind: 'skip';
-      reason: 'no-contract' | 'contract-waived';
+      /**
+       * `spec-ambiguous`: two or more specs matched the branch name equally,
+       * so none was chosen. Its own reason because its remedy differs (a
+       * spec exists; choose one) and because a tie that 0.10.0 silently
+       * broke must not file itself under "nobody wrote one".
+       */
+      reason: 'no-contract' | 'contract-waived' | 'spec-ambiguous';
       detail: string;
       /** As on IntentPreparation: what this pull request proposes. */
       proposals?: string[];
+      /** What the branch-name convention said, for the details bag. */
+      selection?: SelectionMiss;
     }
   | { kind: 'failed'; step: PrepareStep; detail: string }
   /**
@@ -598,19 +724,26 @@ export function prepareIntent(options: IntentPrepareOptions): IntentPrepareResul
     };
   } else if (discovery.kind === 'none') {
     source = { kind: 'none' };
+  } else if (discovery.kind === 'convention') {
+    source = {
+      kind: 'imported',
+      spec: discovery.spec,
+      plan: discovery.plan,
+      match: { ...discovery.match, remedy: eventPath === undefined ? 'spec-flag' : 'pr-body' },
+    };
   } else {
     source = { kind: 'imported', spec: discovery.spec, plan: discovery.plan };
   }
 
   if (source.kind === 'none') {
-    return {
-      kind: 'skip',
-      reason: 'no-contract',
-      detail:
-        `No frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} and no spec under ${SPEC_DIR} matching ` +
+    return noSpecChosen(
+      branch,
+      discovery.kind === 'none' ? discovery.selection : undefined,
+      `No frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} and no spec under ${SPEC_DIR} matching ` +
         `${branch === null ? 'this branch' : `branch "${branch}"`}. ` +
         'Name one with a "Spec: <path>" line in the pull request body, or pass --spec.',
-    };
+      []
+    );
   }
 
   return finishPreparation(options, source, null, []);
@@ -1040,10 +1173,16 @@ type SpecAtRef =
       specText: string;
       plan: string | null;
       planText: string | null;
+      /** Set when the branch-name convention chose the spec. */
+      match?: ConventionMatch;
     }
   | { kind: 'waived' }
-  /** Nothing on the base. `flagOnHead` is a --spec path only the head carries. */
-  | { kind: 'none'; flagOnHead: string | null }
+  /**
+   * Nothing on the base. `flagOnHead` is a --spec path only the head carries;
+   * `selection` is what the convention said about the base's specs, when a
+   * branch was available.
+   */
+  | { kind: 'none'; flagOnHead: string | null; selection?: SelectionMiss }
   | { kind: 'failed'; detail: string };
 
 /** The plan for a spec at a ref: equal stem, newest name, or null. */
@@ -1085,12 +1224,19 @@ function discoverSpecAtRef(
   ref: string,
   inputs: { spec?: string; prBody: string | null; branch: string | null }
 ): SpecAtRef {
-  const found = (spec: string, specText: string): SpecAtRef => {
+  const found = (spec: string, specText: string, match?: ConventionMatch): SpecAtRef => {
     const plan = planAtRef(repoRoot, ref, spec);
     if (!plan.ok) {
       return { kind: 'failed', detail: plan.detail };
     }
-    return { kind: 'found', spec, specText, plan: plan.plan, planText: plan.planText };
+    return {
+      kind: 'found',
+      spec,
+      specText,
+      plan: plan.plan,
+      planText: plan.planText,
+      ...(match === undefined ? {} : { match }),
+    };
   };
 
   if (inputs.spec !== undefined) {
@@ -1141,18 +1287,25 @@ function discoverSpecAtRef(
     if (!listed.ok) {
       return { kind: 'failed', detail: listed.detail };
     }
-    const best = bestMatch(listed.names, branchSlug(inputs.branch));
-    if (best !== undefined) {
-      const relative = `${SPEC_DIR}/${best}`;
-      const read = readFileAtRef(repoRoot, ref, relative);
-      if (read.kind !== 'file') {
-        return {
-          kind: 'failed',
-          detail: read.kind === 'error' ? read.detail : `${relative} was listed at "${ref}" but not found`,
-        };
-      }
-      return found(relative, read.text);
+    // The same selector as the working tree, over the names listed AT THE
+    // BASE: a head branch name only ever chooses among the base's specs.
+    const selection = selectByBranch(listed.names, inputs.branch);
+    if (selection.kind === 'none') {
+      return {
+        kind: 'none',
+        flagOnHead: null,
+        selection: { why: selection.why, tied: selection.tied, legacy: selection.legacy },
+      };
     }
+    const relative = `${SPEC_DIR}/${selection.name}`;
+    const read = readFileAtRef(repoRoot, ref, relative);
+    if (read.kind !== 'file') {
+      return {
+        kind: 'failed',
+        detail: read.kind === 'error' ? read.detail : `${relative} was listed at "${ref}" but not found`,
+      };
+    }
+    return found(relative, read.text, matchOf(selection));
   }
 
   return { kind: 'none', flagOnHead: null };
@@ -1272,10 +1425,26 @@ function prepareAgainstTrustBase(options: IntentPrepareOptions, trustBase: strin
     proposals.push(...importedFileProposals(repoRoot, trustBase, files));
     return finishPreparation(
       options,
-      { kind: 'imported', spec: atBase.spec, plan: atBase.plan, ref: trustBase },
+      {
+        kind: 'imported',
+        spec: atBase.spec,
+        plan: atBase.plan,
+        ref: trustBase,
+        ...(atBase.match === undefined
+          ? {}
+          : { match: { ...atBase.match, remedy: eventPath === undefined ? 'spec-flag' : 'pr-body' } }),
+      },
       { ref: trustBase, specText: atBase.specText, planText: atBase.planText },
       proposals
     );
+  }
+
+  // The base carries SEVERAL specs the branch name matches equally. Saying
+  // the base has no spec for the branch would be false, so this returns
+  // before the head-spec proposal below: no spec is proposed when the base
+  // already has candidates. The proposals already collected are kept.
+  if (atBase.selection?.why === 'ambiguous') {
+    return noSpecChosen(branch, atBase.selection, '', proposals, trustBase);
   }
 
   // Nothing on the base. A spec the head carries is a proposal, and a --spec
@@ -1306,16 +1475,16 @@ function prepareAgainstTrustBase(options: IntentPrepareOptions, trustBase: strin
         'and pull requests are judged against it once it is on the base branch.'
     );
   }
-  return {
-    kind: 'skip',
-    reason: 'no-contract',
-    detail:
-      `No contract on the base: "${trustBase}" carries no frozen ` +
+  return noSpecChosen(
+    branch,
+    atBase.selection,
+    `No contract on the base: "${trustBase}" carries no frozen ` +
       `${NATIVE_CONTRACT_PATHS.join(' or ')} and no spec under ${SPEC_DIR} for ` +
       `${branch === null ? 'this branch' : `branch "${branch}"`}. On a pull-request run the ` +
       'intent contract comes from the base ref only, so nothing in this pull request can ' +
       'become it; once a contract or spec is on the base branch, the next pull request is ' +
       'judged against it.',
-    ...(proposals.length === 0 ? {} : { proposals }),
-  };
+    proposals,
+    trustBase
+  );
 }
