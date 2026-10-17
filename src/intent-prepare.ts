@@ -195,7 +195,13 @@ export type IntentPrepareResult =
       /** As on IntentPreparation: what this pull request proposes. */
       proposals?: string[];
     }
-  | { kind: 'failed'; step: PrepareStep; detail: string };
+  | { kind: 'failed'; step: PrepareStep; detail: string }
+  /**
+   * A preparation spawn was stopped at the intent gate's time limit (spawn
+   * error ETIMEDOUT, checked before the status). Not `failed`: the caller
+   * reports it as the timed-out could-not-run reason.
+   */
+  | { kind: 'timed-out'; step: 'import-spec' | 'freeze'; elapsedMs: number; signal: string | null };
 
 export interface IntentPrepareOptions {
   repoRoot: string;
@@ -209,7 +215,13 @@ export interface IntentPrepareOptions {
    * it when no --base and no GITHUB_BASE_REF names another base.
    */
   trustBase?: string;
-  timeoutMs?: number;
+  /**
+   * The intent gate's resolved time limit (`resolveTimeLimit` in
+   * src/gate-runner.ts), given in full to each preparation spawn. REQUIRED,
+   * with no fallback here, so the type checker holds the preparation to the
+   * one resolver.
+   */
+  timeoutMs: number;
   /**
    * The directory the per-run temporary project is created under.
    *
@@ -442,6 +454,10 @@ interface ChildResult {
   stdout: string;
   stderr: string;
   errorMessage: string | null;
+  /** The spawn error's code (ETIMEDOUT for the time limit), or null. */
+  errorCode: string | null;
+  signal: string | null;
+  elapsedMs: number;
 }
 
 function run(
@@ -450,6 +466,7 @@ function run(
   cwd: string,
   timeoutMs: number
 ): ChildResult {
+  const started = Date.now();
   const child = spawnSync(command, argv, {
     cwd,
     encoding: 'utf8',
@@ -461,7 +478,21 @@ function run(
     stdout: child.stdout ?? '',
     stderr: child.stderr ?? '',
     errorMessage: child.error === undefined ? null : child.error.message,
+    errorCode:
+      child.error === undefined ? null : ((child.error as NodeJS.ErrnoException).code ?? null),
+    signal: child.signal ?? null,
+    elapsedMs: Date.now() - started,
   };
+}
+
+/** A preparation spawn stopped at the limit, as a result; null for any other outcome. */
+function timedOutStep(
+  result: ChildResult,
+  step: 'import-spec' | 'freeze'
+): IntentPrepareResult | null {
+  return result.errorCode === 'ETIMEDOUT'
+    ? { kind: 'timed-out', step, elapsedMs: result.elapsedMs, signal: result.signal }
+    : null;
 }
 
 /**
@@ -605,8 +636,7 @@ function finishPreparation(
   proposals: string[],
   note?: string
 ): IntentPrepareResult {
-  const { repoRoot, env } = options;
-  const timeoutMs = options.timeoutMs ?? 120_000;
+  const { repoRoot, env, timeoutMs } = options;
 
   const resolvedBase = resolveBaseRefInRepo(repoRoot, {
     ...(options.base === undefined ? {} : { base: options.base }),
@@ -729,6 +759,13 @@ function finishPreparation(
     timeoutMs
   );
 
+  // The time limit first, before the status, as in the runner: a stopped
+  // child's status is not an answer.
+  const importStopped = timedOutStep(importResult, 'import-spec');
+  if (importStopped !== null) {
+    discard();
+    return importStopped;
+  }
   if (importResult.errorMessage !== null) {
     discard();
     return { kind: 'failed', step: 'import-spec', detail: importResult.errorMessage };
@@ -817,6 +854,11 @@ function finishPreparation(
     timeoutMs
   );
 
+  const freezeStopped = timedOutStep(freezeResult, 'freeze');
+  if (freezeStopped !== null) {
+    cleanup();
+    return freezeStopped;
+  }
   if (freezeResult.errorMessage !== null || freezeResult.status !== 0) {
     cleanup();
     return {

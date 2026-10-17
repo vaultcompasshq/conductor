@@ -435,6 +435,10 @@ that scans a requirements file always gets `--no-resolve`, and a
 `no-resolve` key here is dropped from that run with a note; and a
 pull-request run gets `--no-call-analysis=all` unless this block names
 `call-analysis` or `no-call-analysis`, in which case that value is used.
+`timeout-seconds` is refused under `options` on every gate, and `timeout`
+on every gate but gitleaks, where it is gitleaks' own `--timeout` flag and
+is passed through (see `timeout-seconds` below and "What a history scan
+costs").
 
 **`present-on-base`** (the `vulnerabilities` gate only, beside `enforce`,
 never under `options`) is `block` or `report`. On a pull-request run whose
@@ -450,6 +454,27 @@ local run, a push) has no labels, and every finding blocks. The key on any
 other gate is an error, and an older conductor rejects it, so move the
 Action first.
 
+**`timeout-seconds`** (any gate, beside `enforce`, never under `options`)
+is how long conductor lets that gate run before stopping it: a whole number
+of seconds from 10 to 21600. The floor is there because the same limit
+bounds the gate's version probe, and a limit of a second or two can stop the
+probe of a gate that starts slowly before it ever scans. The ceiling is the
+six hours after which a GitHub-hosted job is cancelled; a larger limit could
+never fire there. Without the key each gate keeps the default for its
+product: 120 seconds for dep-guard, vault-guard and intent-guard, 600 for
+gitleaks, 300 for osv-scanner. There is no policy-wide default, for the same
+reason there is no shared severity threshold: the five gates differ in cost
+by orders of magnitude. Every spawn of the gate gets the full limit (the
+version probe, the scan, the intent gate's preparation steps, osv-scanner's
+base run on a pull request). A gate stopped at its limit could not run, with
+the reason `timed-out` and what to do about it, and an enforced one makes
+the run exit 2. On a pull request the key is read from the base branch's
+policy like every other key, so a pull request cannot raise, lower or
+remove its own limit; an invalid value on the base fails every pull request
+with exit 2 until the base is fixed, and an invalid value only on the head
+is a policy proposal there and fails the push run after merge. An older
+conductor rejects the key, so move the Action first.
+
 **There is no shared severity threshold, on purpose.** One top-level
 `failOn` would read as one decision and mean five different things, so
 setting one is an error rather than a knob that half works. Each gate keeps
@@ -457,7 +482,11 @@ its own threshold in its own `options` block, spelled the way that gate
 spells it.
 
 **`command`** takes an absolute path and overrides binary resolution for
-that gate, for pointing at a build that is not installed anywhere.
+that gate, for pointing at a build that is not installed anywhere. `args`
+beside it sets the argument prefix. conductor's history gate assumes
+gitleaks' `git` mode; an `args` that switches it to `dir` mode changes what
+gitleaks' own `--timeout` does (in `dir` mode it exits 0 after a partial
+scan, with no warning).
 
 **`report.format`** is `text` or `sarif`, and `--format` overrides it.
 
@@ -595,9 +624,10 @@ proceeds normally without mentioning them.
 - **0** every enabled gate ran and none blocked.
 - **1** every enabled gate ran and at least one blocked.
 - **2** an enabled gate could not run: its binary is missing, it exited with
-  its own could-not-run code, or it exited 1 with nothing parseable on
+  its own could-not-run code, it exited 1 with nothing parseable on
   stdout, which is what a rejected config file looks like from two of the
-  three family gates.
+  three family gates, or conductor stopped it at its time limit
+  (`timed-out`, see `timeout-seconds` in the policy file).
 
 The external gates' exits are read per tool. gitleaks exits 1 for an error
 as well as for a leak, so the umbrella hands it `--exit-code 3`: 3 is a leak
@@ -1512,6 +1542,61 @@ The `@v4` pins there are readable, not safe: a tag moves, so pinning by one
 runs whatever its author pushes to it next. Pin every third-party action by
 commit digest in a workflow you actually run, the way this repository's own
 workflows do.
+
+### What a history scan costs
+
+What the history gate reads depends on the event. On a pull request it is
+`<base>..HEAD`, with first-parent diffs for merge commits; on a push, a
+schedule or a local run it is every commit reachable from HEAD. So a pull
+request's cost follows its own range, and a full run's cost follows the
+whole history and the size of every blob ever committed. Separately,
+`fetch-depth: 0` means the checkout fetches the whole history on every run,
+whatever the scan range.
+
+The time limit is per gate. The defaults are 120 seconds for the three
+family gates, 600 for gitleaks and 300 for osv-scanner, and you change one
+with `timeout-seconds` beside `enforce`; on a pull request it comes from the
+base branch. Every spawn of a gate gets the full limit (the version probe,
+the scan, the intent gate's preparation steps, osv-scanner's base run), so
+a gate's wall time can be a multiple of it. A gate stopped at its limit is
+could-not-run (`timed-out`), never a pass.
+
+- The limit is a SIGTERM deadline. A gate that ignores SIGTERM keeps the run
+  waiting until it exits on its own; conductor does not escalate to SIGKILL.
+- A gate's own child processes are not stopped with it. A gate behind a
+  shell-wrapper `command` can keep running after the report says
+  `timed-out`.
+- On a hosted runner the six-hour job limit includes checkout, setup and
+  every other gate, so a limit near the 21600 ceiling is cancelled with the
+  job before it can fire. Keep it well under.
+
+Measure your own full scan once, on the runner it will run on, and set the
+limit with headroom. The recommended split: every pull request scans its own
+range, and the full history is scanned on a schedule with a limit sized for
+it. Two existing ways to make it: by stage, since `secrets-history` defaults
+to stage `ci` and a push workflow run with the Action's `stage: push` input
+(or `conductor run --stage push`) leaves ci-stage gates out; or by trigger,
+running the workflow on pull requests and a schedule and not on push. With
+the CLI, `--gate secrets-history` on the scheduled job also works.
+
+`max-target-megabytes`, passed under `options`, skips every file larger
+than the cap. Measured with gitleaks 8.30.1 in the mode conductor runs, at
+the log level conductor runs it at: a secret inside a file over the cap was
+not reported, no line in gitleaks' log named the skipped file, and the scan
+summary still reported the full byte count. It is a coverage decision, made
+in the policy file where a reviewer can see it, and conductor never applies
+it by default.
+
+`options.timeout` on the secrets-history gate is gitleaks' own deadline,
+not conductor's. A `conductor/option-is-gate-own` note says so: always in
+the SARIF log, and in the text report under the gate header whenever the
+full report is printed (with `--verbose`, or on any run that is not fully
+clean; a clean run without `--verbose` prints only its one-line summary).
+When it fires
+gitleaks exits 1, whether or not it had found a leak, and the gate is
+could-not-run. Leaks it found before the deadline are not listed as
+findings; the echoed gitleaks log line ("N leaks found in partial scan") is
+the only mention of them.
 
 ### Running the gates as an advisory check
 

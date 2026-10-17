@@ -24,6 +24,56 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   where dependency install scripts run, so the split does not by itself
   guarantee the integrity of what was built.
 
+### Added
+
+- **A per-gate time limit in the policy file.** `timeout-seconds`, beside
+  `enforce` on any gate, sets how long conductor lets that gate run before
+  stopping it: a whole number of seconds from 10 to 21600. Without it each
+  gate keeps the limit it had: 120 seconds for dep-guard, vault-guard and
+  intent-guard, 600 for gitleaks, 300 for osv-scanner. On a pull request the
+  value is read from the base branch's policy, so a pull request cannot
+  change its own limit. Older conductor versions reject the key and exit 2,
+  so move the Action first.
+- **A gate stopped at its limit is reported as `timed-out`**, with the limit,
+  how long it ran, where the limit came from, and what to do about it. It is
+  still could-not-run, exit 2 when the gate is enforced. Every spawn of a
+  gate gets the full limit. The limit is a SIGTERM deadline: a gate that
+  ignores SIGTERM is waited for, and a gate's own child processes are not
+  stopped with it.
+
+### Known open
+
+- **gitleaks' own `--timeout` (`options.timeout`) hides what it found before
+  its deadline.** When it fires gitleaks exits 1 whether or not it found a
+  leak, so the gate is could-not-run, and leaks found before the deadline
+  are never shown as findings; only the echoed gitleaks log line ("N leaks
+  found in partial scan") mentions them.
+- **A real full-history scan stopped at the policy limit is checked only
+  locally.** That test needs a repository large enough to outlive a real
+  10 second limit, so it runs only against a local gitleaks with
+  `CONDUCTOR_REAL_GITLEAKS_SLOW=1` set; CI runs the stubbed timeout tests.
+
+### Changed
+
+- **A timeout is no longer labelled `spawn-failed`.** Tooling that matched
+  `could-not-run (spawn-failed)` for a timeout sees `could-not-run
+  (timed-out)`. Every other spawn failure keeps `spawn-failed`.
+- **A version probe that times out is `timed-out`**, not
+  `trust-base-unverified` on a pull request, and a local run no longer goes
+  on to run that gate with its version unknown. An intent-gate preparation
+  step that times out is `timed-out`, not `preparation-failed`.
+- **`timeout-seconds` under `options` is refused on every gate, and
+  `timeout` under `options` is refused on every gate but gitleaks.** None of
+  those tools accepts the flag, so no working policy is affected; a run with
+  either key already could not run. On gitleaks `options.timeout` is
+  gitleaks' own `--timeout` and is still passed through, with a note that it
+  is not conductor's limit.
+- **"gate said" quotes the cause rather than the first line.** For a gate
+  that could not run, the quoted reason now skips informational lines (a
+  `note:` block, git's rename-detection warnings as gitleaks logs them) and
+  prefers the line a gate marks as the failure (INCOMPLETE, or an ERR log
+  line). Reporting only: no verdict or exit code changes.
+
 ## [0.9.0] - 2026-10-14
 
 **A minor release.** Ecosystem coverage for the vulnerabilities gate and its

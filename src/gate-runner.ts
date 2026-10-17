@@ -124,11 +124,42 @@ export type CouldNotRunReason =
    * inside the pull request is never seen). Never unshallowed automatically:
    * the remedy is a checkout setting, fetch-depth: 0.
    */
-  | 'history-shallow';
+  | 'history-shallow'
+  /**
+   * conductor stopped the gate at its time limit (`timeout-seconds` in the
+   * policy, else the product's default). Decided by the spawn error code
+   * ETIMEDOUT alone, never by the signal or the status: a child that handled
+   * SIGTERM can return status 0, or its blocked code, with a clean report.
+   * Raised for the version probe, the scan, and the intent gate's
+   * preparation steps; `timedOut.step` says which spawn was stopped.
+   */
+  | 'timed-out';
+
+/** Where a gate's time limit came from: the test hook, the policy, or the product default. */
+export type TimeLimitSource = 'override' | 'policy' | 'default';
+
+export interface TimeLimit {
+  ms: number;
+  source: TimeLimitSource;
+}
+
+/** Which of a gate's spawns was stopped at the limit. The intent gate's check is `scan`. */
+export type TimedOutStep = 'version-probe' | 'scan' | 'import-spec' | 'freeze';
+
+export interface TimedOut {
+  step: TimedOutStep;
+  limitSeconds: number;
+  elapsedSeconds: number;
+  limitSource: TimeLimitSource;
+  /** What spawnSync reported; null when the child handled SIGTERM and exited itself. Never used to classify. */
+  signal: string | null;
+}
 
 export interface CouldNotRun {
   reason: CouldNotRunReason;
   detail: string;
+  /** Present only for `timed-out`. */
+  timedOut?: TimedOut;
   /**
    * What the gate itself said about why it could not run: a short, bounded,
    * sanitised excerpt of its own stderr (first line) or, failing that, of a
@@ -185,8 +216,8 @@ export function breakWorkflowMarkers(text: string): string {
 
 /**
  * The could-not-run reasons that are conductor's OWN decision, made before
- * the gate was spawned (or instead of spawning it), as opposed to something
- * the gate itself said or did.
+ * the gate was spawned (or instead of spawning it), or the umbrella stopping
+ * it, as opposed to something the gate itself said or did.
  */
 export const CONDUCTOR_OWN_REASONS: ReadonlySet<CouldNotRunReason> = new Set<CouldNotRunReason>([
   'preparation-failed',
@@ -194,7 +225,133 @@ export const CONDUCTOR_OWN_REASONS: ReadonlySet<CouldNotRunReason> = new Set<Cou
   'gate-program-refused',
   'gate-version-unsupported',
   'history-shallow',
+  'timed-out',
 ]);
+
+/**
+ * A gate's time limit, and where it came from. THE ONE PLACE the precedence
+ * is written: the test hook (`RunGateOptions.timeoutMs`, which no CLI path
+ * sets), then the policy's `timeout-seconds`, then the product's default.
+ * runGate and the intent gate's preparation in run.ts both call this, so the
+ * two cannot disagree about a gate's limit.
+ */
+export function resolveTimeLimit(gate: GatePolicy, override: number | undefined): TimeLimit {
+  if (override !== undefined) {
+    return { ms: override, source: 'override' };
+  }
+  if (gate.timeoutSeconds !== undefined) {
+    return { ms: gate.timeoutSeconds * 1000, source: 'policy' };
+  }
+  return { ms: profileFor(gate.product).timeoutMs, source: 'default' };
+}
+
+/** What a spawn error was: the umbrella's deadline, or anything else. */
+export type SpawnFailure =
+  | { reason: 'timed-out'; signal: string | null }
+  | { reason: 'spawn-failed'; message: string };
+
+/**
+ * Classifies a spawnSync result that carries an error. PURE, so it is tested
+ * on hand-built results.
+ *
+ * THE ERROR CODE ALONE decides it. ETIMEDOUT is timed-out and nothing else
+ * is. No status or signal condition belongs here: a child that traps SIGTERM,
+ * or ignores it and exits on its own, comes back with status 0 (or its
+ * blocked code) and signal null, and ENOBUFS arrives with the same SIGTERM a
+ * timeout does. The signal is recorded for the report and never classifies.
+ */
+export function spawnFailure(child: {
+  error?: Error | undefined;
+  status?: number | null;
+  signal?: NodeJS.Signals | string | null;
+}): SpawnFailure | null {
+  if (child.error === undefined) {
+    return null;
+  }
+  if ((child.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+    return { reason: 'timed-out', signal: child.signal ?? null };
+  }
+  return { reason: 'spawn-failed', message: child.error.message };
+}
+
+/** "(the default for this gate)", or where the policy value came from. */
+function limitSourcePhrase(gate: GatePolicy, source: TimeLimitSource, trustBase: string | undefined): string {
+  if (source === 'policy') {
+    return trustBase === undefined
+      ? `gates.${gate.role}.timeout-seconds`
+      : `gates.${gate.role}.timeout-seconds on ${trustBase}`;
+  }
+  return source === 'default' ? 'the default for this gate' : 'set by the caller';
+}
+
+/**
+ * The note for `options.timeout` on the secrets-history gate, which is
+ * gitleaks' own --timeout and not conductor's limit. Null when the key is not
+ * set or the gate is not gitleaks.
+ */
+function gateOwnTimeoutNote(gate: GatePolicy, limit: TimeLimit, trustBase: string | undefined): string | null {
+  if (gate.product !== 'gitleaks' || gate.options.timeout === undefined) {
+    return null;
+  }
+  return (
+    `options.timeout is gitleaks' own --timeout (${String(gate.options.timeout)} s); conductor stops the ` +
+    `gate at ${Math.round(limit.ms / 1000)} s (${limitSourcePhrase(gate, limit.source, trustBase)}).`
+  );
+}
+
+/** The could-not-run detail for a gate stopped at its limit, by step. */
+function timedOutDetail(
+  gate: GatePolicy,
+  step: TimedOutStep,
+  limit: TimeLimit,
+  elapsedMs: number,
+  trustBase: string | undefined
+): string {
+  const limitSeconds = Math.round(limit.ms / 1000);
+  const elapsedSeconds = Math.round(elapsedMs / 1000);
+  const where = limitSourcePhrase(gate, limit.source, trustBase);
+  const own = gateOwnTimeoutNote(gate, limit, trustBase);
+  const remedies = profileFor(gate.product).timeoutRemedies(gate.role);
+  if (step === 'version-probe') {
+    return (
+      `the version probe of ${gate.product} was stopped at ${limitSeconds} s (${where}), so the gate ` +
+      'was not run and nothing was checked by it.'
+    );
+  }
+  const what =
+    step === 'scan'
+      ? `${gate.product} was stopped after ${elapsedSeconds} s, at its ${limitSeconds} s limit (${where}), ` +
+        'so nothing was checked by it.'
+      : `the intent gate's ${step} step was stopped after ${elapsedSeconds} s, at its ${limitSeconds} s ` +
+        `limit (${where}), so the gate was not run and nothing was checked by it.`;
+  return `${what} ${remedies}${own === null ? '' : ` ${own}`}`;
+}
+
+function timedOutRecord(
+  step: TimedOutStep,
+  limit: TimeLimit,
+  elapsedMs: number,
+  signal: string | null
+): TimedOut {
+  return {
+    step,
+    limitSeconds: Math.round(limit.ms / 1000),
+    elapsedSeconds: Math.round(elapsedMs / 1000),
+    limitSource: limit.source,
+    signal,
+  };
+}
+
+/** The `conductor/gate-failed` finding for a timed-out gate, with the timing in its details. */
+function timedOutFinding(gate: GatePolicy, detail: string, timedOut: TimedOut, stderr?: string): Finding {
+  return normalizeFailedGate(gate.role, gate.product, detail, stderr, {
+    timedOut: {
+      limitSeconds: timedOut.limitSeconds,
+      elapsedSeconds: timedOut.elapsedSeconds,
+      limitSource: timedOut.limitSource,
+    },
+  });
+}
 
 /**
  * conductor's own reason for a could-not-run, as a job-log excerpt: cleaned,
@@ -214,16 +371,103 @@ export function cleanOutputLine(raw: string): string {
   return breakWorkflowMarkers(raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' '));
 }
 
+/** One stderr line as the stated-reason rule sees it. */
+interface ReasonLine {
+  /** Empty or whitespace-only after stripAnsi (a CRLF carriage return included). */
+  blank: boolean;
+  /** Begins with whitespace after stripAnsi, and is not blank. */
+  indented: boolean;
+  /** Plain one-line text, uncapped; empty when nothing printable is left. */
+  text: string;
+  /** A note block line or a gitleaks rename-detection warning: never chosen. */
+  informational: boolean;
+}
+
+/** A zerolog line at one level: gitleaks' "<time> ERR ..." shape. */
+const ZEROLOG_ERR = /^\S+\s+ERR\s/;
+const ZEROLOG_WRN = /^\S+\s+WRN\s/;
+
+function plainLine(raw: string): string {
+  return raw.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The stderr half of the stated-reason rule: the line a gate marks as its
+ * failure, else the first line that is not informational, else nothing.
+ *
+ *  1. Lines are split after stripAnsi. Whitespace tests (blank, indented)
+ *     are made there, before sanitizing, because a colour code can come
+ *     before the indentation; markers are matched on the sanitized text, so
+ *     a leading emoji or colour code does not hide one.
+ *  2. Informational lines are never chosen: a `note:` line and every
+ *     following indented line (a BLANK line ends the note block, so an
+ *     indented reason after it is not swallowed), and gitleaks' two
+ *     rename-detection warnings.
+ *  3. A marker wins: the first remaining INCOMPLETE: or zerolog ERR line,
+ *     joined with the indented lines after it, skipping blank lines, up to
+ *     the first non-blank line that is not indented.
+ *  4. No marker: the first remaining line.
+ */
+function statedReasonFromStderr(stderr: string): string | null {
+  const lines: ReasonLine[] = stripAnsi(stderr)
+    .split('\n')
+    .map((raw) => {
+      const blank = raw.trim() === '';
+      return { blank, indented: !blank && /^\s/.test(raw), text: plainLine(raw), informational: false };
+    });
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/^note:/i.test(line.text)) {
+      line.informational = true;
+      for (let j = i + 1; j < lines.length && lines[j]!.indented; j++) {
+        lines[j]!.informational = true;
+      }
+    } else if (
+      ZEROLOG_WRN.test(line.text) &&
+      (line.text.includes('rename detection was skipped') || line.text.includes('diff.renameLimit'))
+    ) {
+      line.informational = true;
+    }
+  }
+
+  const candidate = (line: ReasonLine): boolean => !line.blank && !line.informational && line.text !== '';
+  const markerAt = lines.findIndex(
+    (line) => candidate(line) && (line.text.startsWith('INCOMPLETE:') || ZEROLOG_ERR.test(line.text))
+  );
+  if (markerAt >= 0) {
+    const block = [lines[markerAt]!.text];
+    for (let k = markerAt + 1; k < lines.length; k++) {
+      const next = lines[k]!;
+      if (next.blank) {
+        continue;
+      }
+      if (!next.indented) {
+        break;
+      }
+      if (next.text !== '') {
+        block.push(next.text);
+      }
+    }
+    return sanitizeGateSaid(block.join(' '));
+  }
+  const first = lines.find(candidate);
+  return first === undefined ? null : sanitizeGateSaid(first.text);
+}
+
 /**
  * What a gate that exited with a non-verdict code said about why.
  *
  * TOTAL, and never a decision: the caller has already settled that this is a
- * could-not-run, and nothing here can change that. The first non-empty stderr
- * line is preferred, since that is where every gate in the family prints its
- * reason on exit 2 (dep-guard, intent-guard and vault-guard all do). Failing
- * that, stdout is parsed only for a gate whose output is JSON on stdout, and
- * only a string `reason` field (top level, or on `run`) is read; anything else,
- * including output that does not parse, is simply no excerpt.
+ * could-not-run, and nothing here can change that. stderr is preferred, since
+ * that is where every gate in the family prints its reason on exit 2
+ * (dep-guard, intent-guard and vault-guard all do), read by the rule in
+ * `statedReasonFromStderr`: the line the gate marks as the failure, never an
+ * informational line. Failing that, stdout is parsed only for a gate whose
+ * output is JSON on stdout, and only a string `reason` field (top level, or
+ * on `run`) is read; anything else, including output that does not parse, is
+ * simply no excerpt. An absent excerpt is better than quoting a warning as
+ * the cause; the full stderr is still printed in the text report.
  */
 export function gateStatedReason(
   stderr: string,
@@ -231,12 +475,9 @@ export function gateStatedReason(
   stdoutIsJson: boolean
 ): string | null {
   try {
-    const firstLine = stripAnsi(stderr)
-      .split('\n')
-      .map((line) => sanitizeGateSaid(line))
-      .find((line) => line !== null);
-    if (firstLine !== undefined && firstLine !== null) {
-      return firstLine;
+    const fromStderr = statedReasonFromStderr(stderr);
+    if (fromStderr !== null) {
+      return fromStderr;
     }
     if (!stdoutIsJson || typeof stdout !== 'string' || !stdout.trimStart().startsWith('{')) {
       return null;
@@ -551,6 +792,21 @@ export interface GateOutcome {
    * decision (gateExitBlocks) never need the policy file.
    */
   baseComparison?: BaseComparison;
+  /**
+   * The time limit this gate ran under and where it came from, carried like
+   * `enforce` so the report and the timed-out message never need the policy
+   * file. Set on every outcome runGate builds once the limit is resolved.
+   */
+  timeLimit?: TimeLimit;
+  /**
+   * The `conductor/option-is-gate-own` note: set when the secrets-history
+   * gate's options carry `timeout`, which is gitleaks' own --timeout and not
+   * conductor's limit. On the OUTCOME rather than in `run.diagnostics`,
+   * because every could-not-run outcome carries an empty run, and the
+   * gate-error that gitleaks' own deadline produces is exactly the outcome
+   * that needs the note. Information only; nothing decides on it.
+   */
+  gateOwnOption?: string;
 }
 
 export interface RunGateOptions {
@@ -564,7 +820,10 @@ export interface RunGateOptions {
   staged: boolean;
   /** PATH to search. Injected so tests never depend on the machine. */
   pathValue: string;
-  /** Wall-clock limit per gate. */
+  /**
+   * A test hook: the time limit for every spawn of this gate, outranking the
+   * policy's timeout-seconds. No CLI path sets it. See `resolveTimeLimit`.
+   */
   timeoutMs?: number;
   /** The contract and change set prepared for the intent gate, when there is one. */
   intent?: IntentPreparation;
@@ -616,6 +875,43 @@ export function preparationFailed(gate: GatePolicy, detail: string): GateOutcome
     stderr: '',
     couldNotRun: { reason: 'preparation-failed', detail },
     findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+    run: EMPTY_RUN,
+    diagnostics: [],
+  };
+}
+
+/**
+ * The intent gate whose preparation step (import-spec or freeze) was stopped
+ * at the gate's time limit. Shaped like `preparationFailed`, with the
+ * timed-out reason, so it composes the same way; the caller decides
+ * `enforce` under the same rule it applies to a failed preparation.
+ */
+export function preparationTimedOut(
+  gate: GatePolicy,
+  stopped: {
+    step: 'import-spec' | 'freeze';
+    elapsedMs: number;
+    signal: string | null;
+    limit: TimeLimit;
+    trustBase?: string;
+  }
+): GateOutcome {
+  const detail = timedOutDetail(gate, stopped.step, stopped.limit, stopped.elapsedMs, stopped.trustBase);
+  const timedOut = timedOutRecord(stopped.step, stopped.limit, stopped.elapsedMs, stopped.signal);
+  return {
+    role: gate.role,
+    product: gate.product,
+    stage: gate.stage,
+    enforce: gate.enforce,
+    productVersion: null,
+    argv: [],
+    binary: null,
+    exitCode: null,
+    durationMs: stopped.elapsedMs,
+    stderr: '',
+    timeLimit: stopped.limit,
+    couldNotRun: { reason: 'timed-out', detail, timedOut },
+    findings: [timedOutFinding(gate, detail, timedOut)],
     run: EMPTY_RUN,
     diagnostics: [],
   };
@@ -954,23 +1250,36 @@ export function gateArgs(
  * per-command binaries ignore --version and run the gate instead, so a
  * probe there would have side effects on the user's repository.
  */
+type ProbeResult =
+  | { kind: 'version'; value: string }
+  | { kind: 'unreadable' }
+  /** The probe was stopped at the gate's limit: ETIMEDOUT, whatever its status. */
+  | { kind: 'timed-out'; elapsedMs: number; signal: string | null };
+
 function probeVersion(
   binary: ResolvedBinary,
   product: Product,
   repoRoot: string,
   timeoutMs: number
-): string | null {
+): ProbeResult {
   const spec = profileFor(product).versionProbe;
   if (binary.versionProbe === null || spec === null) {
-    return null;
+    return { kind: 'unreadable' };
   }
+  const probeStarted = Date.now();
   const probe = spawnSync(binary.versionProbe.command, binary.versionProbe.argv, {
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: timeoutMs,
   });
+  // FIRST, before the status: a probe that handled SIGTERM can exit 0 with a
+  // version on stdout, and it was still stopped at the limit.
+  const failure = spawnFailure(probe);
+  if (failure !== null && failure.reason === 'timed-out') {
+    return { kind: 'timed-out', elapsedMs: Date.now() - probeStarted, signal: failure.signal };
+  }
   if (probe.status !== 0 || typeof probe.stdout !== 'string') {
-    return null;
+    return { kind: 'unreadable' };
   }
   // Take the first line and accept it only if the product's pattern matches,
   // so a future help banner does not end up in a SARIF driver's version
@@ -979,7 +1288,7 @@ function probeVersion(
   // a capture group that takes the number alone.
   const first = probe.stdout.trim().split('\n')[0]?.trim() ?? '';
   const match = spec.pattern.exec(first);
-  return match === null ? null : (match[1] ?? match[0]).replace(/^v/, '');
+  return match === null ? { kind: 'unreadable' } : { kind: 'version', value: (match[1] ?? match[0]).replace(/^v/, '') };
 }
 
 /**
@@ -1184,7 +1493,19 @@ function runGateInner(
   started: number,
   progress: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'>
 ): GateOutcome {
-  const timeoutMs = options.timeoutMs ?? profileFor(gate.product).timeoutMs;
+  // Every spawn of this gate gets the FULL limit, not a share of it: the
+  // version probe, the scan and, on a compared pull request, osv-scanner's
+  // base run. Onto `progress` so every outcome from here on carries it.
+  const timeLimit = resolveTimeLimit(gate, options.timeoutMs);
+  const timeoutMs = timeLimit.ms;
+  Object.assign(progress, { timeLimit });
+  const ownOption = gateOwnTimeoutNote(gate, timeLimit, options.trustBase);
+  if (ownOption !== null) {
+    // Before any spawn, the way nodeModulesSkipped is, so every return path
+    // from here on carries it, the gate-error of gitleaks' own deadline
+    // included.
+    Object.assign(progress, { gateOwnOption: ownOption });
+  }
 
   // ONE PLACE DECIDES WHAT PULL-REQUEST MODE IS, and it is the presence of a
   // trust base. resolve.ts knows nothing about refs, so it is told rather than
@@ -1327,7 +1648,29 @@ function runGateInner(
     };
   }
 
-  const version = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);
+  const probed = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);
+  if (probed.kind === 'timed-out') {
+    // Stopped here, before the version floor and before decideTrustBase: a
+    // timed-out probe is not an unreadable version (which on a pull request
+    // would read as trust-base-unverified, a packaging problem that does not
+    // exist), and a local run does not go on to scan with the version
+    // unknown. Enforced under a trust base, like trust-base-unverified: the
+    // gate could not be placed inside the boundary.
+    const detail = timedOutDetail(gate, 'version-probe', timeLimit, probed.elapsedMs, options.trustBase);
+    const timedOut = timedOutRecord('version-probe', timeLimit, probed.elapsedMs, probed.signal);
+    return {
+      ...base,
+      binary,
+      enforce: options.trustBase !== undefined ? true : gate.enforce,
+      durationMs: Date.now() - started,
+      exitCode: null,
+      couldNotRun: { reason: 'timed-out', detail, timedOut },
+      findings: [timedOutFinding(gate, detail, timedOut)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
+  }
+  const version = probed.kind === 'version' ? probed.value : null;
 
   // A PATH binary at a different version than the run was told to expect: a
   // fact for a warning and nothing else. It sits on `progress` (which `base`
@@ -1448,7 +1791,7 @@ function runGateInner(
       version,
       trustBase,
       profile,
-      timeoutMs,
+      timeLimit,
       workDir,
     });
   } finally {
@@ -1468,7 +1811,8 @@ interface SpawnContext {
   version: string | null;
   trustBase: GateTrustBase | undefined;
   profile: ProductProfile;
-  timeoutMs: number;
+  /** The resolved limit; its `ms` bounds the scan and osv-scanner's base run alike. */
+  timeLimit: TimeLimit;
   workDir: string | null;
 }
 
@@ -1479,8 +1823,9 @@ function stripAnsi(text: string): string {
 
 /** Builds the command line, runs the gate, and reads what it said. */
 function spawnAndRead(ctx: SpawnContext): GateOutcome {
-  const { gate, options, started, progress, base, binary, version, trustBase, profile, timeoutMs, workDir } =
+  const { gate, options, started, progress, base, binary, version, trustBase, profile, timeLimit, workDir } =
     ctx;
+  const timeoutMs = timeLimit.ms;
 
   const external: ExternalArgs = {};
   if (profile.output.kind === 'report-file' && workDir !== null) {
@@ -1701,6 +2046,9 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     ),
   ];
 
+  // Taken just before the call, so a timed-out message's elapsed time is the
+  // scan's own and not resolution plus the version probe.
+  const spawnStarted = Date.now();
   const child = spawnSync(binary.command, argv, {
     cwd: spawnCwd,
     encoding: 'utf8',
@@ -1734,14 +2082,34 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // reports which binary ran and what it printed.
   Object.assign(progress, withRun);
 
-  if (child.error !== undefined) {
+  // THE FIRST THING READ after spawnSync returns, ahead of every status,
+  // signal, report and stdout check, and it returns for every error. A child
+  // stopped at the limit that handled SIGTERM can come back with status 0, or
+  // its blocked code, and a complete clean report or clean JSON on stdout;
+  // only this order keeps that from reading as a verdict. The outcome's
+  // exitCode is null whatever child.status says: a status from a child that
+  // was told to stop is not a verdict. Nothing on this path reads the report
+  // file, parses stdout or calls a normalizer.
+  const failure = spawnFailure(child);
+  if (failure !== null) {
+    if (failure.reason === 'timed-out') {
+      const elapsedMs = Date.now() - spawnStarted;
+      const detail = timedOutDetail(gate, 'scan', timeLimit, elapsedMs, options.trustBase);
+      const timedOut = timedOutRecord('scan', timeLimit, elapsedMs, failure.signal);
+      return {
+        ...withRun,
+        exitCode: null,
+        couldNotRun: { reason: 'timed-out', detail, timedOut },
+        findings: [timedOutFinding(gate, detail, timedOut, withRun.stderr)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
     return {
       ...withRun,
       exitCode: null,
-      couldNotRun: { reason: 'spawn-failed', detail: child.error.message },
-      findings: [
-        normalizeFailedGate(gate.role, gate.product, child.error.message, withRun.stderr),
-      ],
+      couldNotRun: { reason: 'spawn-failed', detail: failure.message },
+      findings: [normalizeFailedGate(gate.role, gate.product, failure.message, withRun.stderr)],
       run: EMPTY_RUN,
       diagnostics: [],
     };
@@ -1800,13 +2168,14 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // The profile says which exits are verdicts. For the npm gates that is 0
   // and 1, exactly as before profiles existed: dep-guard's 2 means "could not
   // run the checks at all" and it prints no JSON. gitleaks is handed
-  // --exit-code 3, so its 1 is left meaning an error. A signal-killed child
-  // or a timeout lands here too, and none of those are a clean result.
+  // --exit-code 3, so its 1 is left meaning an error. A child killed by
+  // something other than the umbrella lands here too (a timeout returned
+  // above), and none of those are a clean result.
   const blocked = exitCode !== null && profile.exit.blocked.includes(exitCode);
   if (exitCode === null || (!blocked && !profile.exit.clean.includes(exitCode))) {
     const detail =
       exitCode === null
-        ? 'the gate did not exit normally (killed, or timed out).'
+        ? `the gate was killed by signal ${child.signal ?? 'unknown'} before it exited.`
         : `the gate exited ${exitCode}, which it uses for "could not run".`;
     // WHY, in the gate's own words, when it said. Read here and nowhere
     // earlier: the exit code has already been judged above, and this only

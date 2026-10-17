@@ -913,6 +913,26 @@ function nodeModulesSkippedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * A passthrough option that is a gate's own setting under a name conductor
+ * also uses (gitleaks' `options.timeout`), as notifications. A NOTE: nothing
+ * went wrong, and the gate's own outcome, whatever it was, is reported on its
+ * own. It says which deadline is whose.
+ */
+function gateOwnOptionNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) =>
+    gate.gateOwnOption === undefined
+      ? []
+      : [
+          {
+            id: 'conductor/option-is-gate-own',
+            message: gate.gateOwnOption,
+            details: { role: gate.role, product: gate.product, option: 'timeout' },
+          },
+        ]
+  );
+}
+
+/**
  * The gates the policy file told not to decide anything, as notifications.
  *
  * These are written in TWO places on purpose, and neither one is redundant:
@@ -1073,6 +1093,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...trustBaseWithheldNotifications(result),
     ...nodeModulesSkippedNotifications(result),
     ...intentWarningNotifications(result),
+    ...gateOwnOptionNotifications(result),
   ];
 
   // Notifications earn the run on their own. Before this, the umbrella run

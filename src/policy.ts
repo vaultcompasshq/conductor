@@ -120,6 +120,17 @@ export const PRODUCT_FOR_ROLE: Record<GateRole, Product> = {
  * depend on that CLI's argument parser rather than on anything the user
  * could read in their own policy file.
  */
+//
+// Two keys are reserved for a different reason: they name conductor's OWN
+// setting, written in the wrong place. `timeout-seconds` is the gate-level
+// time limit, beside `enforce`; no tool has a --timeout-seconds flag, so the
+// only way to write it under options is to mean conductor's key. `timeout`
+// is reserved on the four tools that have no --timeout flag (each rejects
+// it, so no working policy can contain it), and NOT on gitleaks, whose
+// --timeout is its own deadline and works: reserving it there would refuse
+// policies that pass it today. Neither reservation is a trust control: they
+// match exact option keys only, and on a pull request only the base policy is
+// read anyway.
 export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   // `trust-base` is reserved for all three products, and the umbrella now
   // writes it for all three. It was reserved here before dep-guard's own
@@ -128,8 +139,8 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   // have broken repositories on an upgrade nobody asked for. The flag it
   // names is the one that decides where a gate reads its rules from, which
   // is the last place to leave a window open.
-  'dep-guard': ['format', 'staged', 'base', 'trust-base'],
-  'vault-guard': ['format', 'f', 'staged', 'trust-base'],
+  'dep-guard': ['format', 'staged', 'base', 'trust-base', 'timeout-seconds', 'timeout'],
+  'vault-guard': ['format', 'f', 'staged', 'trust-base', 'timeout-seconds', 'timeout'],
   // `base` is reserved even though the umbrella never passes it to this gate,
   // and that is the point. The umbrella works the changed-path set out itself
   // and hands over `--paths`, because `--project` may be a temporary
@@ -145,7 +156,7 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
   // out. It is also the one flag where two writers would be a security
   // problem rather than a confusion, since the loser decides where the gate
   // reads its rules from.
-  'intent-guard': ['json', 'staged', 'project', 'paths', 'base', 'trust-base'],
+  'intent-guard': ['json', 'staged', 'project', 'paths', 'base', 'trust-base', 'timeout-seconds', 'timeout'],
   // The umbrella writes every one of these for gitleaks: the report goes to a
   // file it owns, the exit code for a leak is moved off 1 so an error and a
   // leak stop sharing a number, history is scoped by --log-opts so one
@@ -162,12 +173,17 @@ export const RESERVED_OPTIONS: Record<Product, readonly string[]> = {
     'redact',
     'no-banner',
     'log-level',
+    // Conductor's own setting; `timeout` stays a passthrough here (see above).
+    'timeout-seconds',
   ],
   // osv-scanner: the umbrella owns the format (json to stdout), the config on
   // a pull-request run, and which lockfiles are scanned (every tracked one,
   // by name; there is no directory walk and so no --recursive).
-  'osv-scanner': ['format', 'config', 'lockfile'],
+  'osv-scanner': ['format', 'config', 'lockfile', 'timeout-seconds', 'timeout'],
 };
+
+/** The keys reserved under options because they name conductor's own time limit. */
+const CONDUCTOR_SETTING_KEYS: ReadonlySet<string> = new Set(['timeout-seconds', 'timeout']);
 
 export type OptionValue = string | number | boolean | Array<string | number>;
 
@@ -210,6 +226,14 @@ export interface GatePolicy {
    * every other gate; a reader of an absent value treats it as `block`.
    */
   presentOnBase?: PresentOnBase;
+  /**
+   * conductor's own time limit for this gate, in whole seconds (10 to 21600,
+   * the schema's bounds). Set only when the policy names the key; absent
+   * means the product's profile default (src/products.ts). Gate-level beside
+   * `enforce`, never under `options`. Resolved, with the test hook, by
+   * `resolveTimeLimit` in src/gate-runner.ts and nowhere else.
+   */
+  timeoutSeconds?: number;
 }
 
 /** The two values of the vulnerabilities gate's present-on-base key. */
@@ -291,7 +315,14 @@ function describeErrors(errors: ValidateFunction['errors'], source: string): str
  * runs and the general sentence would send somebody looking for a flag that
  * is not on the command line of the run they are debugging.
  */
-function reservedReason(product: Product, key: string): string {
+function reservedReason(product: Product, role: GateRole, key: string): string {
+  if (CONDUCTOR_SETTING_KEYS.has(key)) {
+    return key === 'timeout-seconds'
+      ? "timeout-seconds is conductor's own limit for this gate. Set it beside enforce, as " +
+          `gates.${role}.timeout-seconds, not under options.`
+      : "This gate has no --timeout flag; conductor's own limit is " +
+          `gates.${role}.timeout-seconds, beside enforce.`;
+  }
   if (key === 'trust-base') {
     return (
       'That flag says where a gate reads its rules from, and on a pull-request run the umbrella ' +
@@ -434,7 +465,7 @@ export function parsePolicy(text: string, source: string): Policy {
       if (RESERVED_OPTIONS[product].includes(key)) {
         throw new PolicyError(
           `${source}: "${key}" under gates.${role}.options is reserved. ` +
-            reservedReason(product, key)
+            reservedReason(product, role, key)
         );
       }
     }
@@ -480,6 +511,11 @@ export function parsePolicy(text: string, source: string): Policy {
       // Absent means block: a policy written before the key existed blocks
       // on every known vulnerability, so no policy is loosened by an upgrade.
       ...(role === 'vulnerabilities' ? { presentOnBase: presentOnBase ?? 'block' } : {}),
+      // Only when the key is present: an absent key is the profile default,
+      // decided in resolveTimeLimit, never a value frozen in here.
+      ...(entry['timeout-seconds'] === undefined
+        ? {}
+        : { timeoutSeconds: entry['timeout-seconds'] as number }),
     };
   }
 

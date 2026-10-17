@@ -6,7 +6,9 @@ import {
   type GateOutcome,
   gateProgramRefused,
   preparationFailed,
+  preparationTimedOut,
   refuseHeadControlledBinary,
+  resolveTimeLimit,
   runGate,
 } from './gate-runner.js';
 import { resolveBaseRef } from './intent-base.js';
@@ -226,6 +228,10 @@ export interface RunOptions {
   repoRoot: string;
   staged: boolean;
   pathValue: string;
+  /**
+   * A test hook: every gate's time limit, outranking the policy. No CLI path
+   * sets it; `resolveTimeLimit` (src/gate-runner.ts) decides the limit.
+   */
   timeoutMs?: number;
   /**
    * Which stopping point this run is. Absent means every enabled gate runs,
@@ -573,13 +579,17 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
             }
           }
 
+          const intentLimit = resolveTimeLimit(gate, options.timeoutMs);
           const prepared = prepareIntent({
             repoRoot: options.repoRoot,
             binary,
             env,
             ...(options.base === undefined ? {} : { base: options.base }),
             ...(options.spec === undefined ? {} : { spec: options.spec }),
-            ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+            // The same resolver runGate uses, so the preparation spawns and
+            // the gate's own spawns cannot disagree about its limit; each
+            // preparation spawn gets the full limit.
+            timeoutMs: intentLimit.ms,
             ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
             ...(trustBaseRef === undefined ? {} : { trustBase: trustBaseRef }),
           });
@@ -601,6 +611,22 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
               reason: prepared.reason,
               detail: prepared.detail,
             });
+            continue;
+          }
+          if (prepared.kind === 'timed-out') {
+            outcomes.push(
+              preparationTimedOut(
+                // The same enforce rule as a failed preparation, below.
+                trustBaseRef === undefined ? gate : { ...gate, enforce: true },
+                {
+                  step: prepared.step,
+                  elapsedMs: prepared.elapsedMs,
+                  signal: prepared.signal,
+                  limit: intentLimit,
+                  ...(trustBaseRef === undefined ? {} : { trustBase: trustBaseRef }),
+                }
+              )
+            );
             continue;
           }
           if (prepared.kind === 'failed') {

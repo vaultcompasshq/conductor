@@ -1,0 +1,27 @@
+{
+  "about": "Raw stderr bytes, colour codes kept, captured on 2026-10-17 for the stated-reason rule (gateStatedReason). Every entry was captured from the real tool at the version named; none is constructed. The absolute path of the scratch repository in the vault-guard error line is replaced with <repo>, the only edit. See tests/fixtures/README.md.",
+  "vault-guard-1.10.0-incomplete": {
+    "tool": "vault-guard 1.10.0",
+    "how": "vault-guard scan -f json, FORCE_COLOR=1, in a repository with one file at mode 000 and nothing else to report.",
+    "exit": 2,
+    "stderr": "\u001b[31m\u001b[1m\u274c INCOMPLETE:\u001b[22m\u001b[39m \u001b[37m1 file(s) or target(s) could not be read and were not scanned\u001b[39m\n\u001b[37m\u001b[39m\n  \u001b[36msub/locked.txt\u001b[39m\n    \u001b[90mError: EACCES: permission denied, open '<repo>/sub/locked.txt'\u001b[39m\n    \u001b[90mto exclude it on purpose, add \"/sub/locked.txt\" to \"ignore.paths\" in .vault-guard.json\u001b[39m\n\u001b[90m\u001b[39m\n\u001b[90m   vault-guard cannot vouch for every file it was asked to scan.\u001b[39m\n\u001b[90m   Refusing to produce a \u2705 result that may be incorrect (exit 2).\u001b[39m\n\u001b[90m   Fix the cause, or exclude the file deliberately: an excluded file is counted\u001b[39m\n\u001b[90m   and reported as \"Excluded by config ignore\", never hidden.\u001b[39m\n\u001b[90m\u001b[39m\n"
+  },
+  "vault-guard-1.10.0-note-then-incomplete": {
+    "tool": "vault-guard 1.10.0",
+    "how": "The same repository plus one low-severity finding (a Google OAuth client id) and no fail_on set, so the 1.4.0 upgrade note is printed before the INCOMPLETE block.",
+    "exit": 2,
+    "stderr": "\u001b[33mnote: earlier vault-guard versions failed on any finding; since 1.4.0 the default gate is \"medium\".\u001b[39m\n\u001b[90m      This run would have failed before. Set \"fail_on\" in .vault-guard.json (\"low\" restores the old\u001b[39m\n\u001b[90m      behaviour, \"medium\" keeps this one) to silence this note.\u001b[39m\n\u001b[31m\u001b[1m\u274c INCOMPLETE:\u001b[22m\u001b[39m \u001b[37m1 file(s) or target(s) could not be read and were not scanned\u001b[39m\n\u001b[37m\u001b[39m\n  \u001b[36msub/locked.txt\u001b[39m\n    \u001b[90mError: EACCES: permission denied, open '<repo>/sub/locked.txt'\u001b[39m\n    \u001b[90mto exclude it on purpose, add \"/sub/locked.txt\" to \"ignore.paths\" in .vault-guard.json\u001b[39m\n\u001b[90m\u001b[39m\n\u001b[90m   vault-guard cannot vouch for every file it was asked to scan.\u001b[39m\n\u001b[90m   Refusing to produce a \u2705 result that may be incorrect (exit 2).\u001b[39m\n\u001b[90m   Fix the cause, or exclude the file deliberately: an excluded file is counted\u001b[39m\n\u001b[90m   and reported as \"Excluded by config ignore\", never hidden.\u001b[39m\n\u001b[90m\u001b[39m\n"
+  },
+  "gitleaks-8.30.1-own-timeout": {
+    "tool": "gitleaks 8.30.1",
+    "how": "gitleaks git --timeout 1 with conductor's own flags (--exit-code 3, --log-level info, --log-opts with --diff-merges=first-parent HEAD) over forty commits of about 2 MB each.",
+    "exit": 1,
+    "stderr": "\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1m10 commits scanned.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[31mERR\u001b[0m \u001b[1mfailed to scan Git repository\u001b[0m \u001b[36merror=\u001b[0m\u001b[31m\u001b[1m\"context deadline exceeded\"\u001b[0m\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mscanned ~20971976 bytes (20.97 MB)\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mpartial scan completed in 1.06s\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mno leaks found in partial scan\u001b[0m\n"
+  },
+  "gitleaks-8.30.1-rename-limit": {
+    "tool": "gitleaks 8.30.1",
+    "how": "gitleaks git with conductor's own flags over a repository with diff.renameLimit set to 1 and six files renamed with a change, so git skips exhaustive rename detection. Captured at exit 0; the stated-reason tests use the same bytes as the stderr of a gate that could not run.",
+    "exit": 0,
+    "stderr": "\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mwarning: exhaustive rename detection was skipped due to too many files.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mwarning: you may want to set your diff.renameLimit variable to at least 6 and retry the command.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1m2 commits scanned.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1mscanned ~48890 bytes (48.89 KB) in 51.8ms\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1mno leaks found\u001b[0m\n"
+  }
+}

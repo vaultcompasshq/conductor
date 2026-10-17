@@ -3411,3 +3411,46 @@ describe('the version-skew warning on a trust-base run', () => {
     expect(result.stderr).not.toContain('1.0.0');
   });
 });
+
+describe('an invalid timeout-seconds', () => {
+  const policyWith = (limit: string) =>
+    ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', `    timeout-seconds: ${limit}`, ''].join('\n');
+
+  it('in the working-tree policy exits 2 with the reason on stderr and no report', () => {
+    const repo = repoWithPolicy(policyWith('21601'));
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+
+    const result = runCli(repo, ['run'], bin);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('/gates/secrets/timeout-seconds must be <= 21600');
+    expect(result.stderr).not.toMatch(STACK_FRAME);
+  });
+
+  it('only in the head of a pull-request run leaves the run on the base policy, as a proposal', () => {
+    const repo = tempDir();
+    const g = (args: string[]) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    const commit = (message: string) =>
+      g(['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m', message]);
+    g(['init', '--quiet', '-b', 'main']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), policyWith('60'));
+    g(['add', '-A']);
+    commit('base');
+    g(['branch', 'base']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), policyWith('5'));
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+    g(['add', '-A']);
+    commit('head');
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, version: '1.10.0' });
+
+    const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/secrets {2}vault-guard 1\.10\.0 .* limit 60s \(policy\)/);
+    expect(result.stdout).toMatch(/policy changed in this pull request/);
+    expect(result.stderr).not.toContain('timeout-seconds must be');
+  });
+});
