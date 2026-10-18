@@ -29,6 +29,9 @@ import {
   type GateOutcome,
   cleanOutputLine,
   conductorStatedReason,
+  resolutionPlace,
+  versionCharacters,
+  versionSkewRemedy,
 } from './gate-runner.js';
 import { isLegacyContractPath, legacyChangedSentence } from './intent-prepare.js';
 import type { ReportedMatch } from './intent-prepare.js';
@@ -881,58 +884,49 @@ type VersionSkew = NonNullable<GateOutcome['versionSkew']>;
 
 /** Where a skewed binary came from, in words. Never a machine path. */
 export function skewPlace(skew: VersionSkew): string {
-  return skew.source === 'node_modules'
-    ? 'node_modules/.bin'
-    : skew.source === 'path'
-      ? 'PATH'
-      : 'the policy command';
+  return resolutionPlace(skew.source);
 }
 
-/**
- * The reported version as it may be printed. The probe for the family gates
- * accepts anything after x.y.z on the first line, and this text reaches a
- * workflow command and the step summary, so only version characters are
- * kept.
- */
+/** The reported version as it may be printed: version characters only (`versionCharacters`). */
 export function skewFound(skew: VersionSkew): string {
-  return skew.found.replace(/[^0-9A-Za-z.+-]/g, '').slice(0, 64);
+  return versionCharacters(skew.found);
 }
 
-/** The remedy, which depends on where the binary came from. */
+/** The remedy, which depends on where the binary came from. One source: `versionSkewRemedy`. */
 function skewFix(product: string, skew: VersionSkew): string {
-  if (skew.source === 'node_modules') {
-    return (
-      `Fix: bump or remove the repository's own ${product} devDependency. node_modules/.bin outranks ` +
-      "PATH outside a pull request, so on a push run it shadows the action's install."
-    );
-  }
-  if (skew.source === 'path') {
-    return `Fix: remove the other ${product} from PATH, or install ${skew.expected}.`;
-  }
-  return `Fix: point the policy command at ${product} ${skew.expected}, or remove the command override.`;
+  return versionSkewRemedy(product, skew.source, skew.expected);
 }
 
 /**
- * One warning per gate whose resolved binary reported a version other than
- * the one this run expected (the Action's pin), wherever it was found:
- * node_modules/.bin, PATH or a policy command.
+ * The sentence every GitHub surface shares (0.13.0): what was found, what was
+ * expected, and that the gate was therefore not run. No machine path.
+ */
+function skewSentence(product: string, skew: VersionSkew): string {
+  return (
+    `${product} resolved from ${skewPlace(skew)} reports version ${skewFound(skew)}, but this run expects ` +
+    `${skew.expected} (the version the action pinned), so conductor did not run it: the gate is ` +
+    'could-not-run (version-skew).'
+  );
+}
+
+/**
+ * One error line per gate whose resolved binary reported a version other
+ * than the one this run expected (the Action's pin), wherever it was found:
+ * node_modules/.bin, PATH or a policy command. Since 0.13.0 every such gate
+ * is could-not-run, so the line says so.
  *
  * For the job log: it names the file the binary was found at, which for PATH
  * is an absolute machine path, so this exact line is never part of a report.
  * The reports carry the same fact without that path (gateSection here, the
- * conductor/version-skew notification in SARIF). A warning and nothing more.
- * Resolution is unchanged and the gate ran (or was refused) exactly as it
- * would have without it.
+ * conductor/version-skew notification in SARIF). Resolution is unchanged.
  */
 export function versionSkewWarnings(result: RunResult): string[] {
   return result.gates.flatMap((gate) =>
     gate.versionSkew === undefined
       ? []
       : [
-          `conductor: warning: ${gate.product} resolved from ${skewPlace(gate.versionSkew)} reports version ` +
-            `${skewFound(gate.versionSkew)}, but this run expects ${gate.versionSkew.expected} (the version the ` +
-            `action pinned). It was found at ${gate.versionSkew.path}. Resolution is unchanged and that binary ` +
-            `was used. ${skewFix(gate.product, gate.versionSkew)}`,
+          `conductor: error: ${skewSentence(gate.product, gate.versionSkew)} It was found at ` +
+            `${gate.versionSkew.path}. ${skewFix(gate.product, gate.versionSkew)}`,
         ]
   );
 }
@@ -943,36 +937,30 @@ function workflowCommandData(text: string): string {
 }
 
 /**
- * The same warnings as GitHub Actions `::warning::` annotations, so a skew
- * shows on the run's summary page without anybody opening the log. No
- * machine path: the location is named in words.
+ * The same lines as GitHub Actions `::error::` annotations (a could-not-run
+ * since 0.13.0, a `::warning::` before), so a skew shows on the run's summary
+ * page without anybody opening the log. No machine path: the location is
+ * named in words.
  */
 export function versionSkewAnnotations(result: RunResult): string[] {
   return result.gates.flatMap((gate) =>
     gate.versionSkew === undefined
       ? []
       : [
-          '::warning title=conductor version skew::' +
+          '::error title=conductor version skew::' +
             workflowCommandData(
-              `${gate.product} resolved from ${skewPlace(gate.versionSkew)} reports version ` +
-                `${skewFound(gate.versionSkew)}, but this run expects ${gate.versionSkew.expected} (the version ` +
-                `the action pinned). Resolution is unchanged and that binary was used. ` +
-                skewFix(gate.product, gate.versionSkew)
+              `${skewSentence(gate.product, gate.versionSkew)} ${skewFix(gate.product, gate.versionSkew)}`
             ),
         ]
   );
 }
 
-/** The step-summary lines for the same warnings, one paragraph each. */
+/** The step-summary lines for the same errors, one paragraph each. */
 export function versionSkewSummaryLines(result: RunResult): string[] {
   return result.gates.flatMap((gate) =>
     gate.versionSkew === undefined
       ? []
-      : [
-          `conductor warning: ${gate.product} ${skewFound(gate.versionSkew)} ran from ` +
-            `${skewPlace(gate.versionSkew)}, but this run expects ${gate.versionSkew.expected} (the version ` +
-            `the action pinned). ${skewFix(gate.product, gate.versionSkew)}`,
-        ]
+      : [`conductor error: ${skewSentence(gate.product, gate.versionSkew)} ${skewFix(gate.product, gate.versionSkew)}`]
   );
 }
 
@@ -984,7 +972,7 @@ function versionSkewLine(gate: GateOutcome): string | null {
   }
   const from = skew.source === 'node_modules' ? skew.path : skewPlace(skew);
   return (
-    `  ! conductor/version-skew: ${gate.product} ${skewFound(skew)} ran, from ${from}, but this run expects ` +
+    `  ! conductor/version-skew: ${gate.product} ${skewFound(skew)}, from ${from}, was not run: this run expects ` +
     `${skew.expected} (the version the action pinned). Resolution is unchanged. ${skewFix(gate.product, skew)}`
   );
 }

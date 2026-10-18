@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { runGate } from '../src/gate-runner.js';
 import { checkEmptiedAgainstBase, type EmptiedCheckArgs } from '../src/osv-baseline.js';
 import type { GatePolicy } from '../src/policy.js';
+import { OSV_LOCKFILE_NAMES, osvLockfileFamily } from '../src/products.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
 import { lockBody, osvRecord, stubOsv, type OsvSide } from './helpers/osv-stub.js';
 import { CLEAN_VAULT_GUARD, stubGate } from './helpers/stub-gate.js';
@@ -443,5 +444,147 @@ describe('the audit case end to end', () => {
     expect(report.split('\n')[1]).toBe('verdict-token: could-not-run');
     expect(report).toContain('DID NOT RUN (lockfile-emptied)');
     expect(report).toContain('package-lock.json read no packages at the head but 3 at the base');
+  });
+});
+
+// 0.13.0, operator ruling of 2026-10-18 from the adversarial review of PR
+// #121: a replacement must be of the removed file's ecosystem family and a
+// regular file in the head's index. Kept in its own block at the end so the
+// cases above keep the lines docs/INVARIANTS.md cites.
+describe('the replacement rule: same ecosystem family, and not a symbolic link', () => {
+  const threeEach = (argv: readonly string[]) => ({
+    status: 0,
+    stderr: argv
+      .flatMap((arg, i) => (argv[i - 1] === '--lockfile' ? [`Scanned ${arg} file and found 3 packages`] : []))
+      .join('\n'),
+    failure: null,
+  });
+
+  function direct(repo: string, removed: string, headCounts: Map<string, number>): EmptiedCheckArgs {
+    return {
+      repoRoot: repo,
+      ref: 'main',
+      workDir: tempDir(),
+      emptied: [],
+      removed: [removed],
+      headCounts,
+      headArgv: null,
+      baseArgv: (copies) => ['scan', 'source', ...copies.flatMap((copy) => ['--lockfile', copy])],
+      budgetMs: 10_000,
+      spawn: threeEach,
+    };
+  }
+
+  it('is could-not-run when the only replacement is a new lockfile of another ecosystem (Cargo.lock)', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) + POPULATED }, { 'Cargo.lock': POPULATED }, (r) =>
+      git(r, 'rm', '--quiet', 'package-lock.json')
+    );
+    const { out, head } = run(repo);
+
+    expect(head.lockfiles.map((entry) => entry.arg)).toEqual(['Cargo.lock']);
+    expect(out.couldNotRun?.reason).toBe('lockfile-emptied');
+    expect(out.couldNotRun?.detail).toContain('package-lock.json is not in this pull request but had 3 package(s)');
+  });
+
+  it('does not count a new lockfile of another ecosystem, called directly', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) }, { 'Cargo.lock': POPULATED }, (r) =>
+      git(r, 'rm', '--quiet', 'package-lock.json')
+    );
+    const result = checkEmptiedAgainstBase(direct(repo, 'package-lock.json', new Map([['Cargo.lock', 2]])));
+
+    expect(result).toEqual({ kind: 'emptied', files: [{ path: 'package-lock.json', packages: 3, removed: true }] });
+  });
+
+  it('is could-not-run when the only replacement is a symbolic link to a populated lockfile elsewhere', () => {
+    const repo = prRepo(
+      { 'package-lock.json': lockBody([A]) + POPULATED, 'web/package-lock.json': POPULATED },
+      {},
+      (r) => {
+        git(r, 'rm', '--quiet', 'package-lock.json');
+        symlinkSync('web/package-lock.json', path.join(r, 'pnpm-lock.yaml'));
+      }
+    );
+    expect(git(repo, 'ls-files', '--stage', '--', 'pnpm-lock.yaml')).toMatch(/^120000 /);
+    const { out, head } = run(repo);
+
+    // Handed and read: the link resolves to two packages, which is exactly
+    // what made it clear the deleted file before.
+    expect(head.lockfiles.map((entry) => entry.arg).sort()).toEqual(['pnpm-lock.yaml', 'web/package-lock.json']);
+    expect(out.couldNotRun?.reason).toBe('lockfile-emptied');
+    expect(out.couldNotRun?.detail).toContain('package-lock.json is not in this pull request but had 3 package(s)');
+  });
+
+  it('does not count a symbolic link, called directly', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]), 'web/package-lock.json': POPULATED }, {}, (r) => {
+      git(r, 'rm', '--quiet', 'package-lock.json');
+      symlinkSync('web/package-lock.json', path.join(r, 'pnpm-lock.yaml'));
+    });
+    const result = checkEmptiedAgainstBase(direct(repo, 'package-lock.json', new Map([['pnpm-lock.yaml', 2]])));
+
+    expect(result).toEqual({ kind: 'emptied', files: [{ path: 'package-lock.json', packages: 3, removed: true }] });
+  });
+
+  it('does not count a replacement with no entry in the head index', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) }, {}, (r) => git(r, 'rm', '--quiet', 'package-lock.json'));
+    const result = checkEmptiedAgainstBase(direct(repo, 'package-lock.json', new Map([['pnpm-lock.yaml', 2]])));
+
+    expect(result).toEqual({ kind: 'emptied', files: [{ path: 'package-lock.json', packages: 3, removed: true }] });
+  });
+
+  it('changes nothing for an npm-to-pnpm rename with a populated regular file', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) + POPULATED }, { 'pnpm-lock.yaml': POPULATED }, (r) =>
+      git(r, 'mv', 'package-lock.json', 'pnpm-lock.yaml')
+    );
+    expect(git(repo, 'ls-files', '--stage', '--', 'pnpm-lock.yaml')).toMatch(/^100644 /);
+    const { out, base } = run(repo);
+
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(base.argv).toHaveLength(1);
+  });
+
+  it('counts a same-family regular file new in the pull request, called directly', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) }, { 'yarn.lock': POPULATED }, (r) =>
+      git(r, 'rm', '--quiet', 'package-lock.json')
+    );
+    const result = checkEmptiedAgainstBase(direct(repo, 'package-lock.json', new Map([['yarn.lock', 2]])));
+
+    expect(result).toEqual({ kind: 'clear' });
+  });
+
+  it('does not clear when the replacement has no ecosystem family', () => {
+    const repo = prRepo({ 'package-lock.json': lockBody([A]) }, { 'deno.lock': POPULATED }, (r) =>
+      git(r, 'rm', '--quiet', 'package-lock.json')
+    );
+    const result = checkEmptiedAgainstBase(direct(repo, 'package-lock.json', new Map([['deno.lock', 2]])));
+
+    expect(result).toEqual({ kind: 'emptied', files: [{ path: 'package-lock.json', packages: 3, removed: true }] });
+  });
+
+  it('does not clear when neither side has an ecosystem family (two unknown kinds never match)', () => {
+    const repo = prRepo({ 'Podfile.lock': 'PKG a 1.0.0\n' }, { 'deno.lock': POPULATED }, (r) =>
+      git(r, 'rm', '--quiet', 'Podfile.lock')
+    );
+    const result = checkEmptiedAgainstBase(direct(repo, 'Podfile.lock', new Map([['deno.lock', 2]])));
+
+    expect(result).toEqual({ kind: 'emptied', files: [{ path: 'Podfile.lock', packages: 3, removed: true }] });
+  });
+
+  it('gives every handed name a family, from the one table, and none to an unknown name', () => {
+    for (const name of OSV_LOCKFILE_NAMES) {
+      expect(osvLockfileFamily(name)).not.toBeNull();
+    }
+    const javascript = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock'];
+    expect(javascript.map(osvLockfileFamily)).toEqual(javascript.map(() => 'javascript'));
+    const python = ['poetry.lock', 'uv.lock', 'pdm.lock', 'Pipfile.lock', 'pylock.toml', 'requirements.txt'];
+    expect(python.map(osvLockfileFamily)).toEqual(python.map(() => 'python'));
+    expect(osvLockfileFamily('Cargo.lock')).toBe('rust');
+    expect(osvLockfileFamily('go.mod')).toBe('go');
+    expect(osvLockfileFamily('Gemfile.lock')).toBe('ruby');
+    expect(osvLockfileFamily('app/gradle/verification-metadata.xml')).toBe('jvm');
+    expect(osvLockfileFamily('verification-metadata.xml')).toBeNull();
+    expect(osvLockfileFamily('bun.lockb')).toBeNull();
+    expect(osvLockfileFamily('deno.lock')).toBeNull();
+    expect(osvLockfileFamily('go.sum')).toBeNull();
   });
 });

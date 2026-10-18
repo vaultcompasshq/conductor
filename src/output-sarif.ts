@@ -964,8 +964,9 @@ function nodeModulesSkippedNotifications(result: RunResult): Notification[] {
  * A gate whose resolved binary reported a version other than the one the
  * run was pinned to (the Action's CONDUCTOR_EXPECTED_* variables), from any
  * location: a node_modules/.bin devDependency, PATH, or a policy command.
- * A NOTE: it says which build ran, a statement in the same shape as
- * node-modules-skipped, and the gate's own outcome is reported on its own.
+ * A NOTE: it says which build was found, a statement in the same shape as
+ * node-modules-skipped, and the gate's own outcome (a version-skew
+ * could-not-run since 0.13.0) is reported on its own, at its own level.
  * The path is carried only when it is repository-relative (node_modules);
  * a PATH binary's absolute machine path stays in the job log line.
  */
@@ -982,7 +983,7 @@ function versionSkewNotifications(result: RunResult): Notification[] {
         message:
           `The ${gate.role} gate (${gate.product}) reported version ${found}, but this run expects ` +
           `${skew.expected} (the version the action pinned); it was resolved from ${skewPlace(skew)}. ` +
-          'Resolution is unchanged and that binary was used.',
+          'Resolution is unchanged; the gate was not run and is could-not-run (version-skew).',
         details: {
           role: gate.role,
           product: gate.product,

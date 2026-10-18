@@ -25,7 +25,7 @@ import {
 import { useGitProgram } from '../src/git.js';
 import { gateLogLines, proposalCount, verdictToken } from '../src/output-text.js';
 import type { GatePolicy } from '../src/policy.js';
-import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, stubGate } from './helpers/stub-gate.js';
+import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, CLEAN_VAULT_GUARD, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -1890,5 +1890,160 @@ describe('the wording of the reworded refusals', () => {
 
     expect(out.couldNotRun?.detail).toMatch(/^gitleaks did not run: the installed 8\.18\.4 is older than 8\.19\.0, /);
     expect(out.couldNotRun?.detail).toContain('Fix: upgrade it to 8.19.0 or later.');
+  });
+});
+
+// 0.13.0, operator ruling of 2026-10-18 (design
+// docs/superpowers/specs/2026-10-18-version-skew-could-not-run.md): under
+// the Action's expected-version signal a gate at another version, or at a
+// version that cannot be read, is could-not-run. Without the signal nothing
+// changes. At the end of the file so earlier cited lines do not move.
+describe('a gate version that is not the expected one, under the signal', () => {
+  const vault = (overrides: Partial<GatePolicy> = {}) =>
+    gate({ role: 'secrets', product: 'vault-guard', enforce: true, ...overrides });
+  /** A repository whose own vault-guard devDependency reports `local`, with PATH at the pin. */
+  function devDependency(local: string, argvLog?: string): { repo: string; onPath: string } {
+    const repo = tempDir();
+    stubGate(path.join(repo, 'node_modules', '.bin'), 'vault-guard', {
+      stdout: CLEAN_VAULT_GUARD,
+      exit: 0,
+      version: local,
+      ...(argvLog === undefined ? {} : { argvLog }),
+    });
+    const onPath = tempDir();
+    stubGate(onPath, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.9.0' });
+    return { repo, onPath };
+  }
+
+  it('is could-not-run, version-skew, for a skewed node_modules/.bin gate, and never runs its scan', () => {
+    const argvLog = path.join(tempDir(), 'argv');
+    const { repo, onPath } = devDependency('1.7.0', argvLog);
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: onPath, expectedVersion: '1.9.0' });
+
+    expect(out.couldNotRun?.reason).toBe('version-skew');
+    expect(out.enforce).toBe(true);
+    expect(out.productVersion).toBe('1.7.0');
+    expect(out.binary?.source).toBe('node_modules');
+    expect(out.couldNotRun?.detail).toBe(
+      `vault-guard did not run: the build resolved from ${path.join('node_modules', '.bin', 'vault-guard')} ` +
+        'reports version 1.7.0, but this run expects 1.9.0 (the version the action pinned). ' +
+        "Fix: bump or remove the repository's own vault-guard devDependency. node_modules/.bin outranks " +
+        "PATH outside a pull request, so on a push run it shadows the action's install."
+    );
+    expect(out.findings.map((finding) => finding.ruleId)).toEqual(['conductor/gate-failed']);
+    expect(out.versionSkew).toEqual({
+      expected: '1.9.0',
+      found: '1.7.0',
+      source: 'node_modules',
+      path: path.join('node_modules', '.bin', 'vault-guard'),
+    });
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('is could-not-run for a skewed PATH gate, naming PATH and never its machine path', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.8.5' });
+
+    const out = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin, expectedVersion: '1.9.0' });
+
+    expect(out.couldNotRun?.reason).toBe('version-skew');
+    expect(out.couldNotRun?.detail).toContain('the build resolved from PATH reports version 1.8.5');
+    expect(out.couldNotRun?.detail).toContain('Fix: remove the other vault-guard from PATH, or install 1.9.0.');
+    expect(out.couldNotRun?.detail).not.toContain(bin);
+  });
+
+  it('is enforced even when the policy says enforce: false', () => {
+    const { repo, onPath } = devDependency('1.7.0');
+
+    const out = runGate(vault({ enforce: false }), {
+      repoRoot: repo,
+      staged: true,
+      pathValue: onPath,
+      expectedVersion: '1.9.0',
+    });
+
+    expect(out.couldNotRun?.reason).toBe('version-skew');
+    expect(out.enforce).toBe(true);
+  });
+
+  it('runs a gate at the expected version, with no skew', () => {
+    const { repo, onPath } = devDependency('1.9.0');
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: onPath, expectedVersion: '1.9.0' });
+
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.versionSkew).toBeUndefined();
+  });
+
+  it('changes nothing without the signal: the skewed gate runs', () => {
+    const argvLog = path.join(tempDir(), 'argv');
+    const { repo, onPath } = devDependency('1.7.0', argvLog);
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: onPath });
+
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.productVersion).toBe('1.7.0');
+    expect(out.versionSkew).toBeUndefined();
+    expect(existsSync(argvLog)).toBe(true);
+  });
+
+  it('is could-not-run, version-unverified, when the version cannot be read under the signal', () => {
+    const argvLog = path.join(tempDir(), 'argv');
+    const { repo, onPath } = devDependency('not a version', argvLog);
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: onPath, expectedVersion: '1.9.0' });
+
+    expect(out.couldNotRun?.reason).toBe('version-unverified');
+    expect(out.enforce).toBe(true);
+    expect(out.couldNotRun?.detail).toBe(
+      `vault-guard did not run: the version of the build resolved from ${path.join('node_modules', '.bin', 'vault-guard')} ` +
+        'could not be read, so it is not known to be 1.9.0 (the version the action pinned). ' +
+        "Fix: bump or remove the repository's own vault-guard devDependency. node_modules/.bin outranks " +
+        "PATH outside a pull request, so on a push run it shadows the action's install."
+    );
+    expect(out.versionSkew).toBeUndefined();
+    expect(existsSync(argvLog)).toBe(false);
+  });
+
+  it('runs a gate whose version cannot be read when there is no signal, as before', () => {
+    const { repo, onPath } = devDependency('not a version');
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: onPath });
+
+    expect(out.couldNotRun).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.productVersion).toBeNull();
+  });
+
+  it('enforces a version probe that timed out under the signal, whatever the policy says', () => {
+    const hangingProbe = () => {
+      const bin = tempDir();
+      const file = path.join(bin, 'vault-guard');
+      writeFileSync(file, '#!/bin/sh\n/bin/sleep 5\n');
+      chmodSync(file, 0o755);
+      return bin;
+    };
+
+    const signalled = runGate(vault({ enforce: false }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: hangingProbe(),
+      timeoutMs: 300,
+      expectedVersion: '1.9.0',
+    });
+    const unsignalled = runGate(vault({ enforce: false }), {
+      repoRoot: tempDir(),
+      staged: true,
+      pathValue: hangingProbe(),
+      timeoutMs: 300,
+    });
+
+    expect(signalled.couldNotRun?.reason).toBe('timed-out');
+    expect(signalled.enforce).toBe(true);
+    expect(unsignalled.couldNotRun?.reason).toBe('timed-out');
+    expect(unsignalled.enforce).toBe(false);
   });
 });

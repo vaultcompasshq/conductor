@@ -23,7 +23,7 @@ import { realPathInside, runGit } from './git.js';
 import { normalizeOsvScanner } from './normalize.js';
 import { ABSENT_ON_BASE, baseReader, packageCounts } from './osv-coverage.js';
 import type { PresentOnBase } from './policy.js';
-import { osvLockfileKind } from './products.js';
+import { osvLockfileKind, sameOsvFamily } from './products.js';
 import { checkRequirementsPins } from './requirements-pin.js';
 import { readFileAtRefBytes, treeEntryAt } from './trust-base.js';
 
@@ -259,6 +259,31 @@ export type EmptiedCheckResult =
   | { kind: 'timed-out'; elapsedMs: number; signal: string | null };
 
 /**
+ * Whether `file` is a regular file (mode 100644 or 100755, stage 0) in the
+ * head's index: the listing the gate's handed files come from (`git
+ * ls-files`). A symbolic link (120000), a submodule, a conflicted or missing
+ * entry, and an index git cannot read are all false (fail closed). The path
+ * is passed as a literal pathspec, so no character in it is a glob.
+ */
+export function regularInHeadIndex(repoRoot: string, file: string): boolean {
+  const out = runGit(repoRoot, ['ls-files', '--stage', '-z', '--', `:(literal)${file}`]);
+  if (out.error !== undefined || out.status !== 0) {
+    return false;
+  }
+  const entries = out.stdout.split('\0').filter((entry) => entry !== '');
+  if (entries.length !== 1) {
+    return false;
+  }
+  const match = /^(\d{6}) [0-9a-f]+ (\d)\t(.*)$/s.exec(entries[0]!);
+  return (
+    match !== null &&
+    (match[1] === '100644' || match[1] === '100755') &&
+    match[2] === '0' &&
+    match[3] === file
+  );
+}
+
+/**
  * The emptied-lockfile base check (design
  * docs/superpowers/specs/2026-10-18-emptied-lockfile-under-trust-base.md,
  * audit 2026-10-18 N1). On a decided trust base, a handed lockfile that read
@@ -266,8 +291,9 @@ export type EmptiedCheckResult =
  * is copied from the base and osv-scanner is run once on those copies; a
  * copy with packages means the head removed what the gate judges. A removed
  * file is cleared only by a head-handed lockfile in the SAME directory that
- * read packages, is not a requirements file, and is absent from the base
- * tree (a migration, say npm to pnpm, beside the same manifest).
+ * read packages, is not a requirements file, is absent from the base tree,
+ * is of the removed file's ecosystem family, and is a regular file in the
+ * head's index (a migration, say npm to pnpm, beside the same manifest).
  *
  * FAIL CLOSED, unlike compareWithBase, whose labels only ever move toward
  * introduced. This check exists only to stop a head from removing what the
@@ -355,6 +381,13 @@ export function checkEmptiedAgainstBase(args: EmptiedCheckArgs): EmptiedCheckRes
   // (a Cargo.lock beside the deleted package-lock.json), carries another
   // manifest's packages. A base listing that errors is not absent, so that
   // file does not count (fail closed).
+  //
+  // 0.13.0, operator ruling of 2026-10-18: also of the removed file's
+  // ecosystem family (a NEW Cargo.lock carries a Rust manifest's packages,
+  // not the npm ones the head removed; an unknown family matches nothing),
+  // and a regular file in the head's index (a symbolic link to a populated
+  // lockfile elsewhere reads that file's packages). The cheap checks first,
+  // so git is asked only about a candidate that could otherwise count.
   const newOnHead = (other: string): boolean => treeEntryAt(args.repoRoot, args.ref, other).kind === 'absent';
   const replaced = (file: string): boolean =>
     [...args.headCounts].some(
@@ -363,6 +396,8 @@ export function checkEmptiedAgainstBase(args: EmptiedCheckArgs): EmptiedCheckRes
         count > 0 &&
         path.posix.dirname(other) === path.posix.dirname(file) &&
         osvLockfileKind(path.posix.basename(other)) !== 'requirements' &&
+        sameOsvFamily(other, file) &&
+        regularInHeadIndex(args.repoRoot, other) &&
         newOnHead(other)
     );
   const emptied = copied

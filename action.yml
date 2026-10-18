@@ -976,11 +976,11 @@ runs:
         OUTPUT: ${{ inputs.output }}
         WORKDIR: ${{ inputs.working-directory }}
         ADVISORY: ${{ inputs.advisory }}
-        # The versions this action pinned for the three gates, handed to
-        # conductor ONLY so it can warn when a resolved gate reports another
-        # version (a repo devDependency in node_modules/.bin, or PATH).
-        # A warning and nothing else: conductor reads these for no decision,
-        # resolution is unchanged, and a wrong value gets a wrong warning.
+        # The versions this action pinned for the three gates. Since 0.13.0 a
+        # resolved gate reporting another version (a node_modules/.bin
+        # devDependency, PATH, a policy command), or none, is could-not-run
+        # (exit 2); resolution is unchanged. One direction only: these add a
+        # could-not-run and never clear a gate, so a wrong value fails closed.
         CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
         CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: ${{ inputs.vault-guard-version }}
         CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: ${{ inputs.intent-guard-version }}
