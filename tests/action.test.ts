@@ -1225,7 +1225,7 @@ describe('action.yml installs the gates without trusting them first', () => {
     // skips it and still exits 0.
     expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.12.1');
     expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.10.1');
-    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.12.0');
+    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.13.0');
     expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.15.0');
   });
 
@@ -1258,7 +1258,7 @@ describe('action.yml installs the gates outside the tree', () => {
     for (const input of VERSION_INPUTS) {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
-    expect(action.inputs?.['conductor-version']?.default).toBe('0.12.0');
+    expect(action.inputs?.['conductor-version']?.default).toBe('0.13.0');
     expect(action.inputs?.['dep-guard-version']?.default).toBe('0.15.0');
     expect(action.inputs?.['vault-guard-version']?.default).toBe('1.12.1');
     expect(action.inputs?.['intent-guard-version']?.default).toBe('1.10.1');
@@ -1305,7 +1305,7 @@ describe('action.yml installs the gates outside the tree', () => {
       'install',
       '-g',
       '--ignore-scripts',
-      '@vaultcompass/conductor@0.12.0',
+      '@vaultcompass/conductor@0.13.0',
       '@vaultcompass/dep-guard@0.15.0',
       '@vaultcompass/vault-guard@1.12.1',
       '@vaultcompass/intent-guard@1.10.1',
@@ -1723,7 +1723,7 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag the TAG constants
-    // are 0.12.0 (conductor), 0.15.0 (dep-guard), 1.12.1 (vault-guard) and
+    // are 0.13.0 (conductor), 0.15.0 (dep-guard), 1.12.1 (vault-guard) and
     // 1.10.1 (intent-guard). Only an input whose shipped patch is above 0 has a
     // lower patch to refuse on the UNMODIFIED step, and as of this tag
     // vault-guard and intent-guard do while conductor and dep-guard ship
@@ -1799,8 +1799,8 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
       ['DEP_GUARD_VERSION', '0.16.0'],
       ['VAULT_GUARD_VERSION', '1.12.1'],
       ['VAULT_GUARD_VERSION', '1.13.0'],
-      ['CONDUCTOR_VERSION', '0.12.0'],
       ['CONDUCTOR_VERSION', '0.13.0'],
+      ['CONDUCTOR_VERSION', '0.14.0'],
     ];
     for (const [variable, value] of forward) {
       const run = runValidate({ [variable]: value }, { GITHUB_BASE_REF: 'main' });

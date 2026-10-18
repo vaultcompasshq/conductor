@@ -14,7 +14,9 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-**A minor release (0.13.0): it adds two exit 2 cases.**
+## [0.13.0] - 2026-10-18
+
+**A minor release: it adds two exit 2 cases.**
 
 ### Security
 
@@ -81,6 +83,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   a red default branch: move the action and the gate devDependencies in
   the same pull request. A version probe that times out under the Action
   is enforced too, whatever the policy's `enforce` says.
+
+- **The action tag now ships conductor 0.13.0, and the gate defaults are
+  unchanged** (dep-guard 0.15.0, vault-guard 1.12.1, intent-guard 1.10.1).
+  **The consumer cost.** An explicit `conductor-version: 0.12.0` (or any
+  lower version) is refused on pull requests once this tag ships; remove
+  the input or raise it. Workflows that leave the input unset take the new
+  default.
 
 ## [0.12.0] - 2026-10-18
 
