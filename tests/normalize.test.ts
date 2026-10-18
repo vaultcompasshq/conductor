@@ -1206,6 +1206,47 @@ describe('gitleaks 8.30.1 normalization', () => {
     expect(() => normalizeGitleaks({ findings: [] }, '8.30.1', false)).toThrow(NormalizeError);
   });
 
+  describe('columns are 1-based and an end column is never before the start (audit 2026-10-18 B1)', () => {
+    const entry = (fields: Record<string, unknown>): Record<string, unknown> => ({
+      ...(blocking as Array<Record<string, unknown>>)[0]!,
+      ...fields,
+    });
+    const subjectOf = (fields: Record<string, unknown>): unknown =>
+      normalizeGitleaks([entry(fields)], '8.30.1', true).findings[0]!.subject;
+
+    it('drops the EndColumn 0 gitleaks writes on a private key (captured on a public repository)', () => {
+      const captured = fixture('gitleaks-8.30.1-private-key-endcolumn-zero.json');
+      const f = normalizeGitleaks(captured, '8.30.1', true).findings[0]!;
+      expect(f.subject).toEqual({ kind: 'location', file: 'test/fixtures/ssl/key.pem', line: 1, column: 1 });
+    });
+
+    it('raises a StartColumn 0 to 1', () => {
+      expect(subjectOf({ StartColumn: 0, EndColumn: 5 })).toMatchObject({ column: 1, endColumn: 5 });
+    });
+
+    it('raises a StartLine below 1, or not an integer, to 1 (SARIF startLine has a minimum of 1)', () => {
+      expect(subjectOf({ StartLine: 0, EndLine: 0 })).toMatchObject({ line: 1 });
+      expect(subjectOf({ StartLine: -2, EndLine: -2 })).toMatchObject({ line: 1 });
+      expect(subjectOf({ StartLine: 2.5, EndLine: 2.5 })).toMatchObject({ line: 1 });
+    });
+
+    it('drops an end column before the start column on a single-line finding', () => {
+      expect(subjectOf({ StartColumn: 22, EndColumn: 21 })).not.toHaveProperty('endColumn');
+      expect(subjectOf({ StartColumn: 22, EndColumn: 22 })).toMatchObject({ endColumn: 22 });
+    });
+
+    it('drops a negative or fractional end column', () => {
+      expect(subjectOf({ StartColumn: 1, EndColumn: -3 })).not.toHaveProperty('endColumn');
+      expect(subjectOf({ StartColumn: 1, EndColumn: 4.5 })).not.toHaveProperty('endColumn');
+    });
+
+    it('drops the end column of a finding that spans lines, since the subject has no end line', () => {
+      // A region with no endLine ends on its startLine, so an end column
+      // from a later line would mark the wrong span on the first one.
+      expect(subjectOf({ StartLine: 3, EndLine: 9, StartColumn: 22, EndColumn: 30 })).not.toHaveProperty('endColumn');
+    });
+  });
+
   it('rejects an entry without a RuleID or a File', () => {
     expect(() => normalizeGitleaks([{ File: 'a', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);
     expect(() => normalizeGitleaks([{ RuleID: 'x', StartLine: 1 }], '8.30.1', false)).toThrow(NormalizeError);

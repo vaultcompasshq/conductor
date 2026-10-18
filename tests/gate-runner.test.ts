@@ -1094,7 +1094,16 @@ describe('external gate exit semantics', () => {
     execFileSync('git', ['checkout', '--quiet', '-b', 'pr'], { cwd: repo });
     commitFiles(repo, { 'web/package-lock.json': '{}\n', 'web/osv-scanner.toml': '[[PackageOverrides]]\nname = "lodash"\nignore = true\n' }, 'nested config');
     const bin = tempDir();
-    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    stubGate(bin, 'osv-scanner', {
+      versionLine: 'osv-scanner version: 2.6.0',
+      exit: 0,
+      stdout: CLEAN_OSV_SCANNER,
+      // The per-file count lines the real binary prints, which a trust-base
+      // run needs (a missing one is lockfile-emptied-unverified).
+      stderr:
+        `Scanned ${path.join(repo, 'package-lock.json')} file and found 3 packages\n` +
+        `Scanned ${path.join(repo, 'web', 'package-lock.json')} file and found 2 packages\n`,
+    });
     const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'main' });
     expect(out.couldNotRun).toBeNull();
     // The base carries no nested file, so the line says what was used instead.
@@ -1337,6 +1346,17 @@ describe('external gate exit semantics', () => {
     expect(note?.message).toMatch(
       /Tracked manifests not handed to osv-scanner: app\/pubspec\.yaml, deno\.lock, ios\/Podfile\.lock, mix\.exs\./
     );
+  });
+
+  it('names a tracked Gopkg.lock, which osv-scanner cannot read, as not handed (audit 2026-10-18 N8)', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { 'Gopkg.lock': '[[projects]]\n  name = "github.com/pkg/errors"\n' }, 'dep lockfile');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.4.0', exit: 1, stdout: '' });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+    expect(out.argv).not.toContain('Gopkg.lock');
+    const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
+    expect(note?.message).toContain('Tracked manifests not handed to osv-scanner: Gopkg.lock.');
   });
 
   it('names unread manifests even when other lockfiles were handed over, as a note (review of 1b.2, item 5)', () => {
@@ -1789,6 +1809,51 @@ describe('the gate stated reason, continued', () => {
     stubGate(bin, 'vault-guard', { stdout: '', exit: 2, version: '1.9.0' });
     const same = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin, expectedVersion: '1.9.0' });
     expect(same.versionSkew).toBeUndefined();
+  });
+
+  // Audit 2026-10-18 (the intent-guard audit's MB3): every guard repository's
+  // own push-to-main run used its stale devDependency from node_modules/.bin,
+  // which outranks PATH outside a pull request, with the action's pins set
+  // and nothing printed, because the skew was recorded for PATH alone.
+  it('records version skew for a node_modules/.bin gate, the location named repository-relative', () => {
+    const repo = tempDir();
+    stubGate(path.join(repo, 'node_modules', '.bin'), 'vault-guard', { stdout: '', exit: 2, version: '1.7.0' });
+    const onPath = tempDir();
+    stubGate(onPath, 'vault-guard', { stdout: '', exit: 2, version: '1.9.0' });
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: onPath, expectedVersion: '1.9.0' });
+
+    expect(out.binary?.source).toBe('node_modules');
+    expect(out.versionSkew).toEqual({
+      expected: '1.9.0',
+      found: '1.7.0',
+      source: 'node_modules',
+      path: path.join('node_modules', '.bin', 'vault-guard'),
+    });
+  });
+
+  it('records version skew for a PATH gate, with its absolute path', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: '', exit: 2, version: '1.8.5' });
+
+    const out = runGate(vault(), { repoRoot: tempDir(), staged: true, pathValue: bin, expectedVersion: '1.9.0' });
+
+    expect(out.versionSkew).toEqual({
+      expected: '1.9.0',
+      found: '1.8.5',
+      source: 'path',
+      path: path.join(bin, 'vault-guard'),
+    });
+  });
+
+  it('records no skew for a node_modules/.bin gate at the expected version', () => {
+    const repo = tempDir();
+    stubGate(path.join(repo, 'node_modules', '.bin'), 'vault-guard', { stdout: '', exit: 2, version: '1.9.0' });
+
+    const out = runGate(vault(), { repoRoot: repo, staged: true, pathValue: tempDir(), expectedVersion: '1.9.0' });
+
+    expect(out.binary?.source).toBe('node_modules');
+    expect(out.versionSkew).toBeUndefined();
   });
 });
 

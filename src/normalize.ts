@@ -882,13 +882,40 @@ export function normalizeGitleaks(
     const entry = needRecord(rawEntry, product, where);
     const rule = needString(entry.RuleID, product, `${where}.RuleID`);
     const file = needString(entry.File, product, `${where}.File`);
-    const line = needNumber(entry.StartLine, product, `${where}.StartLine`);
+    // Required, and then floored like the columns below: SARIF 2.1.0 gives
+    // startLine a minimum of 1, so a line below 1 or not an integer is 1.
+    const startLine = needNumber(entry.StartLine, product, `${where}.StartLine`);
+    const line = Number.isInteger(startLine) && startLine >= 1 ? startLine : 1;
     // Carried as gitleaks reports them, which is also what its own SARIF
     // output uses. gitleaks 8.30.1 column numbers are not consistently 0- or
     // 1-based across findings (one token at character 21 was reported at 22,
     // another at character 15 at 15), so no correction is applied.
-    const column = typeof entry.StartColumn === 'number' ? entry.StartColumn : 1;
-    const endColumn = typeof entry.EndColumn === 'number' ? entry.EndColumn : undefined;
+    //
+    // BUT A COLUMN BELOW 1 IS NEVER CARRIED. The envelope's columns are
+    // 1-based and SARIF 2.1.0 gives startColumn and endColumn a minimum of 1,
+    // and gitleaks 8.30.1 writes "EndColumn": 0 on its private-key rule over
+    // a PEM file (tests/fixtures/gitleaks-8.30.1-private-key-endcolumn-zero.json),
+    // which made the SARIF file invalid and so refused by code scanning
+    // (audit 2026-10-18 B1). A start column below 1 becomes 1. The end column
+    // is kept only as an integer that is at least 1 and at least the start
+    // column, on a finding whose EndLine is absent or equals its StartLine:
+    // the subject carries no end line, so a region read from it ends on its
+    // start line, and an end column from a later line would mark the wrong
+    // span. Otherwise it is left out, which SARIF reads as "to the end of
+    // the line".
+    const column =
+      typeof entry.StartColumn === 'number' && Number.isInteger(entry.StartColumn) && entry.StartColumn >= 1
+        ? entry.StartColumn
+        : 1;
+    const oneLine = entry.EndLine === undefined || entry.EndLine === entry.StartLine;
+    const endColumn =
+      oneLine &&
+      typeof entry.EndColumn === 'number' &&
+      Number.isInteger(entry.EndColumn) &&
+      entry.EndColumn >= 1 &&
+      entry.EndColumn >= column
+        ? entry.EndColumn
+        : undefined;
     const commit = optionalString(entry.Commit, product, `${where}.Commit`);
     const date = optionalString(entry.Date, product, `${where}.Date`);
     // gitleaks' own Fingerprint is commit:file:rule:line, identical across

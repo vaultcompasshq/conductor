@@ -1,0 +1,23 @@
+[
+ {
+  "RuleID": "private-key",
+  "Description": "Identified a Private Key, which may compromise cryptographic security and sensitive data encryption.",
+  "StartLine": 1,
+  "EndLine": 1,
+  "StartColumn": 1,
+  "EndColumn": 0,
+  "Match": "REDACTED",
+  "Secret": "REDACTED",
+  "File": "test/fixtures/ssl/key.pem",
+  "SymlinkFile": "",
+  "Commit": "7692c3503c4dc24f05f2281fef928d233ceec2b9",
+  "Link": "https://github.com/elixir-plug/plug/blob/7692c3503c4dc24f05f2281fef928d233ceec2b9/test/fixtures/ssl/key.pem#L1",
+  "Entropy": 5.994351,
+  "Author": "Fixture",
+  "Email": "fixture@example.invalid",
+  "Date": "2013-11-21T10:15:40Z",
+  "Message": "Provide a cowboy adapter",
+  "Tags": [],
+  "Fingerprint": "7692c3503c4dc24f05f2281fef928d233ceec2b9:test/fixtures/ssl/key.pem:private-key:1"
+ }
+]

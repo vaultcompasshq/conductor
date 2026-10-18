@@ -173,7 +173,11 @@ describe('the pair (test 7)', () => {
     expect(local.baseComparison).toBeUndefined();
     expect(local.findings.every((f) => f.blocking && f.details.baseline === undefined)).toBe(true);
 
-    const clean = compared(prRepo({ 'package-lock.json': lockBody([A]) }, { 'package-lock.json': lockBody([]) }));
+    // A clean head that still has a package: an EMPTIED head lockfile is the
+    // emptied-lockfile check's case (tests/osv-emptied-base.test.ts).
+    const clean = compared(
+      prRepo({ 'package-lock.json': lockBody([A]) }, { 'package-lock.json': `${lockBody([])}PKG left-pad 1.0.0\n` })
+    );
     expect(clean.out.exitCode).toBe(0);
     expect(clean.base.argv).toEqual([]);
     expect(clean.out.baseComparison).toBeUndefined();
@@ -181,6 +185,29 @@ describe('the pair (test 7)', () => {
 });
 
 describe('the rename attack (test 8)', () => {
+  // Since the emptied-lockfile check (audit 2026-10-18 N1, fix round), the
+  // lockfile that left is itself a removal the base had packages in, with no
+  // replacement in legacy/, so the gate is could-not-run before any label is
+  // given. The labels are pinned again below with a replacement left in
+  // legacy/, which is what clears the removal.
+  it('is could-not-run when the lockfile that left had packages on the base and nothing replaced it', () => {
+    const repo = prRepo(
+      {
+        'legacy/package-lock.json': lockBody([A], 'legacy'),
+        'api/package-lock.json': lockBody([], 'api'),
+        'tools/package-lock.json': lockBody([A], 'tools'),
+      },
+      {
+        'api/package-lock.json': lockBody([A], 'legacy, lightly edited'),
+        'tools/package-lock.json': lockBody([A], 'tools, touched'),
+      },
+      ['legacy']
+    );
+    const { out } = compared(repo, { presentOnBase: 'report' });
+    expect(out.couldNotRun?.reason).toBe('lockfile-emptied');
+    expect(out.couldNotRun?.detail).toContain('legacy/package-lock.json is not in this pull request but had 1 package(s)');
+  });
+
   it('labels a vulnerable lockfile moved onto a clean one introduced, and notes the one that left', () => {
     // tools/ carries A on both sides and is touched, so the base run reports
     // A there too: a key without the full path would match api's A to it.
@@ -194,6 +221,8 @@ describe('the rename attack (test 8)', () => {
       {
         'api/package-lock.json': lockBody([A], 'legacy, lightly edited'),
         'tools/package-lock.json': lockBody([A], 'tools, touched'),
+        // A populated replacement beside the same manifest clears the removal.
+        'legacy/pnpm-lock.yaml': 'PKG left-pad 1.0.0\n',
       },
       ['legacy']
     );

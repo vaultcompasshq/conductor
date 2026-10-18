@@ -28,6 +28,9 @@ const LEAKED_ON_PULL_REQUEST_EVENT = [
   'GITHUB_HEAD_REF',
   'GITHUB_EVENT_PATH',
   'GITHUB_ACTIONS',
+  // Set on every Actions step. A child run that is told it is in Actions
+  // appends to this file, so it must never be the real job's summary.
+  'GITHUB_STEP_SUMMARY',
 ] as const;
 
 export interface ChildEnvOptions {

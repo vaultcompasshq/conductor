@@ -21,7 +21,7 @@ import path from 'node:path';
 import type { Diagnostic, Finding } from './envelope.js';
 import { realPathInside, runGit } from './git.js';
 import { normalizeOsvScanner } from './normalize.js';
-import { ABSENT_ON_BASE, baseReader } from './osv-coverage.js';
+import { ABSENT_ON_BASE, baseReader, packageCounts } from './osv-coverage.js';
 import type { PresentOnBase } from './policy.js';
 import { osvLockfileKind } from './products.js';
 import { checkRequirementsPins } from './requirements-pin.js';
@@ -225,6 +225,150 @@ export function comparisonFailed(args: CompareArgs, reason: string): CompareResu
     },
     diagnostics: unavailableNotes(unavailable),
   };
+}
+
+/** How the emptied-lockfile check's one spawn went, classified by the caller's spawnFailure. */
+export interface EmptiedSpawnResult {
+  status: number | null;
+  stderr: string;
+  failure: null | { reason: 'timed-out'; signal: string | null } | { reason: 'spawn-failed'; message: string };
+}
+
+export interface EmptiedCheckArgs {
+  repoRoot: string;
+  ref: string;
+  workDir: string;
+  /** Repository-relative: the emptied handed lockfiles, or every handed one on exit 128. */
+  emptied: readonly string[];
+  /** Repository-relative: base lockfiles the head no longer tracks (deleted or moved). */
+  removed: readonly string[];
+  /** The head run's package count for each handed lockfile, for the same-directory replacement rule. */
+  headCounts: ReadonlyMap<string, number>;
+  /** Null when nothing was handed and the head was never spawned: no symmetry check. */
+  headArgv: readonly string[] | null;
+  baseArgv: (copies: readonly string[]) => string[];
+  /** What is left of the gate's time limit after the head scan. */
+  budgetMs: number;
+  spawn: (argv: readonly string[], cwd: string, timeoutMs: number) => EmptiedSpawnResult;
+}
+
+export type EmptiedCheckResult =
+  | { kind: 'clear' }
+  | { kind: 'emptied'; files: Array<{ path: string; packages: number; removed: boolean }> }
+  | { kind: 'unverified'; detail: string }
+  | { kind: 'timed-out'; elapsedMs: number; signal: string | null };
+
+/**
+ * The emptied-lockfile base check (design
+ * docs/superpowers/specs/2026-10-18-emptied-lockfile-under-trust-base.md,
+ * audit 2026-10-18 N1). On a decided trust base, a handed lockfile that read
+ * no packages at the head, and a base lockfile the head deleted or moved,
+ * is copied from the base and osv-scanner is run once on those copies; a
+ * copy with packages means the head removed what the gate judges. A removed
+ * file is cleared only by a head-handed lockfile in the SAME directory that
+ * read packages, is not a requirements file, and is absent from the base
+ * tree (a migration, say npm to pnpm, beside the same manifest).
+ *
+ * FAIL CLOSED, unlike compareWithBase, whose labels only ever move toward
+ * introduced. This check exists only to stop a head from removing what the
+ * gate judges, so anything that keeps it from clearing the head (a base
+ * copy that cannot be read, an asymmetric command line, a base run that
+ * fails, times out or prints no count for a copy) is a failure the caller
+ * turns into could-not-run. Requirements files are not checked (known-open).
+ */
+export function checkEmptiedAgainstBase(args: EmptiedCheckArgs): EmptiedCheckResult {
+  const baseDir = path.join(args.workDir, 'osv-base', 'emptied');
+  const removed = new Set(args.removed);
+  const candidates = [...new Set([...args.emptied, ...args.removed])].filter(
+    (file) => osvLockfileKind(path.posix.basename(file)) !== 'requirements'
+  );
+  const copies: string[] = [];
+  const copied: string[] = [];
+  for (const file of candidates) {
+    const read = readFileAtRefBytes(args.repoRoot, args.ref, file);
+    if (read.kind === 'absent') {
+      continue;
+    }
+    if (read.kind === 'error') {
+      return { kind: 'unverified', detail: `the base copy of ${file} cannot be read (${read.detail})` };
+    }
+    if (realPathInside(args.repoRoot, args.workDir)) {
+      return {
+        kind: 'unverified',
+        detail:
+          'the temporary directory is inside the repository, so no base copy can be kept outside the ' +
+          'tree being judged',
+      };
+    }
+    try {
+      copies.push(placeCopy(baseDir, file, read.bytes));
+    } catch (err) {
+      return { kind: 'unverified', detail: err instanceof Error ? err.message : String(err) };
+    }
+    copied.push(file);
+  }
+  if (copies.length === 0) {
+    return { kind: 'clear' };
+  }
+
+  const baseArgv = args.baseArgv(copies);
+  const headRest = args.headArgv === null ? null : withoutLockfiles(args.headArgv);
+  const baseRest = withoutLockfiles(baseArgv);
+  if (headRest !== null && JSON.stringify(headRest) !== JSON.stringify(baseRest)) {
+    return {
+      kind: 'unverified',
+      detail: `the base run's command line would differ from the head run's at ${firstDifference(headRest, baseRest)}`,
+    };
+  }
+  if (args.budgetMs <= 0) {
+    return { kind: 'timed-out', elapsedMs: 0, signal: null };
+  }
+
+  const started = Date.now();
+  const child = args.spawn(baseArgv, baseDir, args.budgetMs);
+  if (child.failure !== null) {
+    return child.failure.reason === 'timed-out'
+      ? { kind: 'timed-out', elapsedMs: Date.now() - started, signal: child.failure.signal }
+      : { kind: 'unverified', detail: `osv-scanner could not be run on the base copies (${child.failure.message})` };
+  }
+  if (child.status === null) {
+    return { kind: 'unverified', detail: 'osv-scanner did not finish on the base copies' };
+  }
+  // Exit 128: every copy parsed to nothing, so the base had nothing either.
+  if (child.status === 128) {
+    return { kind: 'clear' };
+  }
+  if (child.status !== 0 && child.status !== 1) {
+    return { kind: 'unverified', detail: `osv-scanner exited ${child.status} on the base copies` };
+  }
+  const counts = packageCounts(child.stderr, copies, baseDir);
+  const unread = copied.filter((_, index) => !counts.has(copies[index]!));
+  if (unread.length > 0) {
+    return {
+      kind: 'unverified',
+      detail: `osv-scanner printed no package count for the base copy of ${unread.join(', ')}`,
+    };
+  }
+  // A removed file is replaced only by a head-handed lockfile in the same
+  // directory that read packages, that is not a requirements file, and that
+  // the base tree does not have: one elsewhere, or one the base already had
+  // (a Cargo.lock beside the deleted package-lock.json), carries another
+  // manifest's packages. A base listing that errors is not absent, so that
+  // file does not count (fail closed).
+  const newOnHead = (other: string): boolean => treeEntryAt(args.repoRoot, args.ref, other).kind === 'absent';
+  const replaced = (file: string): boolean =>
+    [...args.headCounts].some(
+      ([other, count]) =>
+        other !== file &&
+        count > 0 &&
+        path.posix.dirname(other) === path.posix.dirname(file) &&
+        osvLockfileKind(path.posix.basename(other)) !== 'requirements' &&
+        newOnHead(other)
+    );
+  const emptied = copied
+    .map((file, index) => ({ path: file, packages: counts.get(copies[index]!) ?? 0, removed: removed.has(file) }))
+    .filter((entry) => entry.packages > 0 && !(entry.removed && replaced(entry.path)));
+  return emptied.length === 0 ? { kind: 'clear' } : { kind: 'emptied', files: emptied };
 }
 
 /**

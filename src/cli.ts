@@ -8,6 +8,7 @@
 
 import { Command, CommanderError } from 'commander';
 import {
+  appendFileSync,
   closeSync,
   constants as fsConstants,
   lstatSync,
@@ -47,6 +48,8 @@ import {
   jobLogSummary,
   renderText,
   verdictToken,
+  versionSkewAnnotations,
+  versionSkewSummaryLines,
   versionSkewWarnings,
 } from './output-text.js';
 import {
@@ -910,6 +913,30 @@ export function buildProgram(): Command {
         ];
         if (logLines.length > 0) {
           process.stderr.write(`${logLines.join('\n')}\n`);
+        }
+        // IN GITHUB ACTIONS, A VERSION SKEW IS ALSO AN ANNOTATION AND A
+        // STEP-SUMMARY LINE, so a run on a stale gate is visible on the run's
+        // page without anybody opening the log (audit 2026-10-18: every guard
+        // repository's own push runs used a stale devDependency for weeks and
+        // only the log said which version ran). Reporting only. The
+        // annotation goes to stdout when stdout is not the report (--output
+        // given, which is how the Action runs), and to stderr otherwise. A
+        // summary that cannot be written is skipped: it never changes the
+        // exit code.
+        if (process.env.GITHUB_ACTIONS === 'true') {
+          const annotations = versionSkewAnnotations(result);
+          if (annotations.length > 0) {
+            (options.output !== undefined ? process.stdout : process.stderr).write(`${annotations.join('\n')}\n`);
+          }
+          const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+          const summaryLines = versionSkewSummaryLines(result);
+          if (summaryFile !== undefined && summaryFile !== '' && summaryLines.length > 0) {
+            try {
+              appendFileSync(summaryFile, summaryLines.map((line) => `${line}\n\n`).join(''));
+            } catch {
+              // The annotation and the log line above already say it.
+            }
+          }
         }
         process.exitCode = applyAdvisory(result.exitCode, advisory);
       } catch (err) {

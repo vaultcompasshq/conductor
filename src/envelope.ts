@@ -61,7 +61,13 @@ export interface Fingerprint {
 
 export type Subject =
   | { kind: 'package'; name: string; manifest: string; lockfile?: string }
-  /** `column` and `endColumn` are 1-based here even where the source is 0-based. */
+  /**
+   * `column` and `endColumn` are 1-based here even where the source is
+   * 0-based (SARIF 2.1.0 sets a minimum of 1 on both). The gitleaks
+   * normalizer enforces it: a column below 1 becomes 1, and an `endColumn`
+   * is kept only when it is at least `column` and on the same line.
+   * vault-guard's is its 0-based column plus one, with no `endColumn`.
+   */
   | { kind: 'location'; file: string; line: number; column: number; endColumn?: number }
   | { kind: 'paths'; paths: string[] }
   | { kind: 'contract'; category?: string }
