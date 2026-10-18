@@ -45,16 +45,20 @@ import {
   NO_RESOLVE_OVERRIDDEN,
   emptiedLockfiles,
   noLongerScanned,
+  noLongerScannedFiles,
   nothingScannableMessage,
   notScannedDetail,
+  packageCounts,
   selectOsvInputs,
   type OsvSelection,
 } from './osv-coverage.js';
 import {
+  checkEmptiedAgainstBase,
   compareWithBase,
   comparisonFailed,
   type BaseComparison,
   type CompareArgs,
+  type EmptiedCheckResult,
 } from './osv-baseline.js';
 import {
   ExternalConfigError,
@@ -71,7 +75,7 @@ import {
   nodeModulesCandidate,
   resolveGateBinary,
 } from './resolve.js';
-import type { ResolvedBinary } from './resolve.js';
+import type { ResolutionSource, ResolvedBinary } from './resolve.js';
 
 export type CouldNotRunReason =
   | 'binary-missing'
@@ -133,7 +137,22 @@ export type CouldNotRunReason =
    * Raised for the version probe, the scan, and the intent gate's
    * preparation steps; `timedOut.step` says which spawn was stopped.
    */
-  | 'timed-out';
+  | 'timed-out'
+  /**
+   * The vulnerabilities gate on a decided trust base: a handed lockfile read
+   * no packages at the head, or a base lockfile is gone from the head with
+   * no populated replacement in its directory, and the base copy had
+   * packages, so the dependency set the head removed cannot be judged.
+   * Fail closed by design
+   * (docs/superpowers/specs/2026-10-18-emptied-lockfile-under-trust-base.md).
+   */
+  | 'lockfile-emptied'
+  /**
+   * The same check could not clear the head: a base copy unreadable, a base
+   * run that failed or printed no count, a command-line mismatch, or a head
+   * run whose stderr carries no package count (a lowered verbosity).
+   */
+  | 'lockfile-emptied-unverified';
 
 /** Where a gate's time limit came from: the test hook, the policy, or the product default. */
 export type TimeLimitSource = 'override' | 'policy' | 'default';
@@ -144,7 +163,7 @@ export interface TimeLimit {
 }
 
 /** Which of a gate's spawns was stopped at the limit. The intent gate's check is `scan`. */
-export type TimedOutStep = 'version-probe' | 'scan' | 'import-spec' | 'freeze';
+export type TimedOutStep = 'version-probe' | 'scan' | 'import-spec' | 'freeze' | 'base-check';
 
 export interface TimedOut {
   step: TimedOutStep;
@@ -226,6 +245,8 @@ export const CONDUCTOR_OWN_REASONS: ReadonlySet<CouldNotRunReason> = new Set<Cou
   'gate-version-unsupported',
   'history-shallow',
   'timed-out',
+  'lockfile-emptied',
+  'lockfile-emptied-unverified',
 ]);
 
 /**
@@ -318,6 +339,13 @@ function timedOutDetail(
       'was not run and nothing was checked by it.'
     );
   }
+  if (step === 'base-check') {
+    return (
+      `${gate.product}'s check of the base copies of the lockfiles this pull request emptied was stopped ` +
+      `after ${elapsedSeconds} s, at what was left of its ${limitSeconds} s limit (${where}) after the ` +
+      `head scan, so the dependencies the pull request removed were not judged. ${remedies}`
+    );
+  }
   const what =
     step === 'scan'
       ? `${gate.product} was stopped after ${elapsedSeconds} s, at its ${limitSeconds} s limit (${where}), ` +
@@ -387,6 +415,19 @@ interface ReasonLine {
 const ZEROLOG_ERR = /^\S+\s+ERR\s/;
 const ZEROLOG_WRN = /^\S+\s+WRN\s/;
 
+/**
+ * osv-scanner 2.4.0's progress lines, which come before its error on every
+ * run (tests/fixtures/stated-reason-captures.json, audit 2026-10-18 N4): the
+ * walk banner, one "Scanned <file> file and found N package(s)" per file
+ * read, and the "End status:" counters. Quoting the banner as "gate said"
+ * was noise on every osv could-not-run.
+ */
+const OSV_PROGRESS: readonly RegExp[] = [
+  /^Starting filesystem walk for root: /,
+  /^Scanned .+ file and found \d+ packages?$/,
+  /^End status: /,
+];
+
 function plainLine(raw: string): string {
   return raw.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -402,7 +443,8 @@ function plainLine(raw: string): string {
  *  2. Informational lines are never chosen: a `note:` line and every
  *     following indented line (a BLANK line ends the note block, so an
  *     indented reason after it is not swallowed), and gitleaks' two
- *     rename-detection warnings.
+ *     rename-detection warnings, and osv-scanner's progress lines
+ *     (OSV_PROGRESS).
  *  3. A marker wins: the first remaining INCOMPLETE: or zerolog ERR line,
  *     joined with the indented lines after it, skipping blank lines, up to
  *     the first non-blank line that is not indented.
@@ -427,6 +469,8 @@ function statedReasonFromStderr(stderr: string): string | null {
       ZEROLOG_WRN.test(line.text) &&
       (line.text.includes('rename detection was skipped') || line.text.includes('diff.renameLimit'))
     ) {
+      line.informational = true;
+    } else if (OSV_PROGRESS.some((pattern) => pattern.test(line.text))) {
       line.informational = true;
     }
   }
@@ -776,13 +820,22 @@ export interface GateOutcome {
    */
   nodeModulesSkipped?: string;
   /**
-   * Present only when this gate was resolved from PATH, the version it
-   * reported differs from the one the run was told to expect (the Action's
-   * pin, handed over as an environment variable), and both are known. A
-   * statement for a warning, never an input to a decision: resolution,
-   * trust-base handling and the exit code are all settled without it.
+   * Present only when the version this gate reported differs from the one
+   * the run was told to expect (the Action's pin, handed over as an
+   * environment variable), and both are known, WHEREVER the binary was
+   * resolved from. A statement for a warning, never an input to a decision:
+   * resolution, trust-base handling and the exit code are all settled
+   * without it.
+   *
+   * Every location, not only PATH (audit 2026-10-18, the intent-guard
+   * audit's MB3). Outside a pull request a repository's own devDependency in
+   * node_modules/.bin outranks the Action's global install by design, and
+   * recording PATH alone left every guard repository's own push runs on
+   * stale gates with the pins set and nothing said. `path` is
+   * repository-relative when the binary is inside the repository (it
+   * reaches a published log through the reports), and absolute otherwise.
    */
-  versionSkew?: { expected: string; found: string; path: string };
+  versionSkew?: { expected: string; found: string; source: ResolutionSource; path: string };
   /**
    * The vulnerabilities gate only, and only when a base comparison ran (a
    * pull-request run whose head scan blocked with at least one finding): the
@@ -812,8 +865,9 @@ export interface GateOutcome {
 export interface RunGateOptions {
   /**
    * The version this run expects of the gate, when something says so (the
-   * Action passes its pin). Compared with what the PATH binary reports, for a
-   * warning only. Absent means no expectation, which is every local run.
+   * Action passes its pin). Compared with what the resolved binary reports,
+   * wherever it was found, for a warning only. Absent means no expectation,
+   * which is every local run.
    */
   expectedVersion?: string;
   repoRoot: string;
@@ -1686,17 +1740,22 @@ function runGateInner(
   }
   const version = probed.kind === 'version' ? probed.value : null;
 
-  // A PATH binary at a different version than the run was told to expect: a
-  // fact for a warning and nothing else. It sits on `progress` (which `base`
-  // is) so every outcome from here on carries it, and no branch below reads it.
-  if (
-    options.expectedVersion !== undefined &&
-    version !== null &&
-    binary.source === 'path' &&
-    version !== options.expectedVersion
-  ) {
+  // A binary at a different version than the run was told to expect, from
+  // whichever location resolution took it (node_modules/.bin, PATH or a
+  // policy command): a fact for a warning and nothing else. It sits on
+  // `progress` (which `base` is) so every outcome from here on carries it,
+  // and no branch below reads it.
+  if (options.expectedVersion !== undefined && version !== null && version !== options.expectedVersion) {
+    const relative = path.relative(options.repoRoot, binary.program);
+    const inside =
+      relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
     Object.assign(progress, {
-      versionSkew: { expected: options.expectedVersion, found: version, path: binary.program },
+      versionSkew: {
+        expected: options.expectedVersion,
+        found: version,
+        source: binary.source,
+        path: inside ? relative : binary.program,
+      },
     });
   }
 
@@ -1860,6 +1919,105 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // notes. Carried onto every outcome from here on that reports a scan.
   let selection: OsvSelection | null = null;
   const selectionDiagnostics: Diagnostic[] = [];
+  // On a decided trust base, the base lockfiles the head deleted or moved:
+  // candidates for the emptied-lockfile base check below. Null when the base
+  // tree could not be listed, which that check reads as unverified.
+  let removedLockfiles: string[] | null = [];
+
+  // THE EMPTIED-LOCKFILE BASE CHECK (audit 2026-10-18 N1, design
+  // docs/superpowers/specs/2026-10-18-emptied-lockfile-under-trust-base.md).
+  // Only on a decided trust base and only for the vulnerabilities gate. The
+  // candidates are the emptied handed lockfiles plus the base lockfiles the
+  // head deleted or moved. Called after a completed head scan (every head
+  // could-not-run returns first), or, when nothing at all was handed, in its
+  // place. Returns the could-not-run outcome, or null when the head result
+  // stands. `headArgv` null means no head run, so there is no command line
+  // to hold the base one against.
+  const removalCheck = (input: {
+    emptied: readonly string[];
+    headCounts: ReadonlyMap<string, number>;
+    headArgv: readonly string[] | null;
+    budgetMs: number;
+    outcome: Omit<GateOutcome, 'couldNotRun' | 'findings' | 'run' | 'diagnostics'>;
+  }): GateOutcome | null => {
+    if (gate.product !== 'osv-scanner' || decidedRef === undefined) {
+      return null;
+    }
+    const removed = removedLockfiles;
+    if (input.emptied.length === 0 && removed !== null && removed.length === 0) {
+      return null;
+    }
+    const baseArgv = (copies: readonly string[]): string[] => [
+      ...binary.argvPrefix,
+      ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: [...copies] }),
+    ];
+    const checked: EmptiedCheckResult =
+      removed === null
+        ? { kind: 'unverified', detail: `the base tree at ${decidedRef} could not be listed` }
+        : workDir === null
+          ? { kind: 'unverified', detail: 'there is no work directory to hold the base copies' }
+          : checkEmptiedAgainstBase({
+              repoRoot: options.repoRoot,
+              ref: decidedRef,
+              workDir,
+              emptied: input.emptied,
+              removed,
+              headCounts: input.headCounts,
+              headArgv: input.headArgv,
+              baseArgv,
+              budgetMs: input.budgetMs,
+              spawn: (argv, cwd, budget) => {
+                const baseChild = spawnSync(binary.command, [...argv], {
+                  cwd,
+                  encoding: 'utf8',
+                  timeout: budget,
+                  maxBuffer: 64 * 1024 * 1024,
+                });
+                return {
+                  status: baseChild.status,
+                  stderr: stripAnsi(baseChild.stderr ?? ''),
+                  failure: spawnFailure(baseChild),
+                };
+              },
+            });
+    if (checked.kind === 'clear') {
+      return null;
+    }
+    const done = { ...input.outcome, durationMs: Date.now() - started };
+    if (checked.kind === 'timed-out') {
+      const detail = timedOutDetail(gate, 'base-check', timeLimit, checked.elapsedMs, options.trustBase);
+      const timedOut = timedOutRecord('base-check', timeLimit, checked.elapsedMs, checked.signal);
+      return {
+        ...done,
+        couldNotRun: { reason: 'timed-out', detail, timedOut },
+        findings: [timedOutFinding(gate, detail, timedOut)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+    const named = [...new Set([...input.emptied, ...(removed ?? [])])];
+    const detail =
+      checked.kind === 'emptied'
+        ? `${checked.files
+            .map((entry) =>
+              entry.removed
+                ? `${entry.path} is not in this pull request but had ${entry.packages} package(s) at the base (${decidedRef})`
+                : `${entry.path} read no packages at the head but ${entry.packages} at the base (${decidedRef})`
+            )
+            .join('; ')}, so the dependencies this pull request removed cannot be judged. Regenerate the ` +
+          'lockfile, or add its replacement beside the same manifest in this pull request, or remove ' +
+          "the manifest's dependencies with it."
+        : `${named.join(', ')} ${named.length === 1 ? 'was' : 'were'} emptied, deleted or moved by this pull ` +
+          `request, and the check that the base had no packages there could not be completed: ` +
+          `${checked.detail}. Nothing the pull request removed was judged.`;
+    return {
+      ...done,
+      couldNotRun: { reason: checked.kind === 'emptied' ? 'lockfile-emptied' : 'lockfile-emptied-unverified', detail },
+      findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
+  };
   // Tracked manifests this gate was NOT handed, when it was handed others
   // (review of 1b.2, item 5): a run note, so a Podfile.lock beside a scanned
   // mix.lock is named without pushing a clean run off its one-line summary.
@@ -1917,6 +2075,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     selectionDiagnostics.push(...selection.diagnostics);
     if (decidedRef !== undefined) {
       selectionDiagnostics.push(...noLongerScanned(options.repoRoot, decidedRef, new Set(tracked)));
+      removedLockfiles = noLongerScannedFiles(options.repoRoot, decidedRef, new Set(tracked));
     }
     if (external.lockfiles.length > 0) {
       const unread = unreadManifestsNote(tracked, new Set(selection.handed), gate.product);
@@ -1927,6 +2086,25 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       // without spawning it. The verdict is unchanged (clean); what changes is
       // what is said: which requirements files the pin check left out, and
       // which tracked manifests were not handed to this scanner.
+      // Every lockfile the base had may have been deleted: on a trust base
+      // the removed ones are still checked, with no head scan to precede
+      // it, so the whole limit is the budget.
+      const removedOutcome = removalCheck({
+        emptied: [],
+        headCounts: new Map(),
+        headArgv: null,
+        budgetMs: timeoutMs,
+        outcome: {
+          ...base,
+          productVersion: version,
+          binary,
+          ...(trustBase === undefined ? {} : { trustBase }),
+          exitCode: null,
+        },
+      });
+      if (removedOutcome !== null) {
+        return removedOutcome;
+      }
       const unread = unreadManifestsNote(tracked, new Set(selection.handed), gate.product);
       const cleanBecause =
         'the verdict is clean because there was nothing to read, not because a scan found nothing.';
@@ -2096,6 +2274,21 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // reports which binary ran and what it printed.
   Object.assign(progress, withRun);
 
+  // The emptied-lockfile base check after a completed head scan, under what
+  // is left of the limit (removalCheck, above).
+  const emptiedOnBase = (
+    emptied: readonly string[],
+    headCounts: ReadonlyMap<string, number>,
+    exitCode: number
+  ): GateOutcome | null =>
+    removalCheck({
+      emptied,
+      headCounts,
+      headArgv: argv,
+      budgetMs: timeoutMs - (Date.now() - spawnStarted),
+      outcome: { ...withRun, exitCode },
+    });
+
   // THE FIRST THING READ after spawnSync returns, ahead of every status,
   // signal, report and stdout check, and it returns for every error. A child
   // stopped at the limit that handled SIGTERM can come back with status 0, or
@@ -2137,6 +2330,12 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // scan that did not happen. So it is clean, and the report says why.
   if (exitCode !== null && profile.exit.nothingToScan.includes(exitCode)) {
     const handedAll = external.lockfiles ?? [];
+    // Every handed file read nothing: on a trust base, each one's base copy
+    // is checked (the emptied-lockfile check above).
+    const emptiedAll = emptiedOnBase(handedAll, new Map(), exitCode);
+    if (emptiedAll !== null) {
+      return emptiedAll;
+    }
     return {
       ...withRun,
       exitCode: 0,
@@ -2304,6 +2503,51 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     // never a could-not-run, unlike the normalizer failure the catch below
     // is for.
     let findings = normalized.findings;
+    // A handed lockfile osv-scanner read no packages from, while it read
+    // packages from another (audit finding F2). Exit 128 above covers only
+    // the all-empty case; this is the rest, named on the coverage line and
+    // in a diagnostic, so an emptied lockfile's advisories never vanish
+    // without a word. Annotation only on a plain run; on a trust base the
+    // emptied-lockfile check runs first, BEFORE the comparison, and a head
+    // that blocked is checked too, so the verdict is could-not-run rather
+    // than blocked when the head emptied a file the base had packages in.
+    const emptied =
+      gate.product === 'osv-scanner'
+        ? emptiedLockfiles(withRun.stderr, external.lockfiles ?? [], spawnCwd)
+        : [];
+    const headCounts =
+      gate.product === 'osv-scanner'
+        ? packageCounts(withRun.stderr, external.lockfiles ?? [], spawnCwd)
+        : new Map<string, number>();
+    // A LOWERED VERBOSITY FAILS CLOSED on a trust base: without a count line
+    // for a handed lockfile, an emptied one cannot be told from a populated
+    // one, so the check that the head removed nothing cannot run. Said, and
+    // the option left alone: conductor never edits a gate's configuration.
+    const uncounted =
+      gate.product === 'osv-scanner' && decidedRef !== undefined
+        ? (external.lockfiles ?? []).filter(
+            (file) => osvLockfileKind(path.posix.basename(file)) !== 'requirements' && !headCounts.has(file)
+          )
+        : [];
+    if (uncounted.length > 0) {
+      const detail =
+        `osv-scanner printed no package count for ${uncounted.join(', ')}, which the trust-base check that ` +
+        'this pull request emptied, deleted or moved no lockfile needs. A verbosity option in the ' +
+        "policy's osv-scanner options hides those counts: remove it.";
+      return {
+        ...withRun,
+        durationMs: Date.now() - started,
+        exitCode,
+        couldNotRun: { reason: 'lockfile-emptied-unverified', detail },
+        findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+    const emptiedOutcome = emptiedOnBase(emptied, headCounts, exitCode as number);
+    if (emptiedOutcome !== null) {
+      return emptiedOutcome;
+    }
     let baseComparison: BaseComparison | undefined;
     const comparisonDiagnostics: Diagnostic[] = [];
     if (
@@ -2349,15 +2593,6 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       baseComparison = compared.comparison;
       comparisonDiagnostics.push(...compared.diagnostics);
     }
-    // A handed lockfile osv-scanner read no packages from, while it read
-    // packages from another (audit finding F2). Exit 128 above covers only
-    // the all-empty case; this is the rest, named on the coverage line and
-    // in a diagnostic, so an emptied lockfile's advisories never vanish
-    // without a word. Annotation only: the verdict is osv-scanner's.
-    const emptied =
-      gate.product === 'osv-scanner'
-        ? emptiedLockfiles(withRun.stderr, external.lockfiles ?? [], spawnCwd)
-        : [];
     const emptyDiagnostics: Diagnostic[] =
       emptied.length === 0
         ? []

@@ -289,6 +289,43 @@ describe('report volume (3.3)', () => {
     expect(sarif.runs.flatMap((each) => each.results)).toHaveLength(FINDINGS_SHOWN_PER_GATE + 5);
   });
 
+  // Audit 2026-10-18 N2: one osv advisory over two lockfiles is ONE line and
+  // TWO findings, and the rollup counts findings. Counting lines stayed
+  // green on every test before this one.
+  it('counts findings, not lines, when the hidden osv lines group several lockfiles', () => {
+    const advisories = FINDINGS_SHOWN_PER_GATE + 3;
+    const grouped: Finding[] = Array.from({ length: advisories }, (_, index) =>
+      ['a/package-lock.json', 'b/package-lock.json'].map(
+        (lockfile): Finding => ({
+          schemaVersion: 1,
+          product: 'osv-scanner',
+          productVersion: '2.4.0',
+          ruleId: `osv-scanner/GHSA-test-${String(index).padStart(4, '0')}`,
+          severity: 'high',
+          severityIsDerived: false,
+          blocking: true,
+          message: `advisory ${index}`,
+          subject: { kind: 'package', name: `pkg${index}`, manifest: lockfile, lockfile },
+          fingerprint: { value: `GHSA-test-${index}:${lockfile}`, scope: 'osv-scanner', stability: 'stable' },
+          details: { version: '1.0.0' },
+        })
+      )
+    ).flat();
+    const osv = outcome({
+      role: 'vulnerabilities',
+      product: 'osv-scanner',
+      exitCode: 1,
+      findings: grouped,
+      run: { failOn: 'any', suppressed: 0, ignored: 0, diagnostics: [], details: {} },
+    });
+    const report = renderText(result([osv], 1));
+    expect(report.split('\n').filter((line) => line.includes('osv-scanner/GHSA-test-'))).toHaveLength(
+      FINDINGS_SHOWN_PER_GATE
+    );
+    expect(report).toContain('  6 more finding(s) in this gate, not shown here');
+    expect(report).toContain(`conductor run: 1 gate(s), ${advisories * 2} finding(s)`);
+  });
+
   it('prints no rollup at exactly the cap', () => {
     const exact = { ...many, findings: manyFindings(FINDINGS_SHOWN_PER_GATE) };
     expect(renderText(result([exact], 1))).not.toContain('more finding(s) in this gate');

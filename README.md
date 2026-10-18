@@ -1317,7 +1317,11 @@ runs `npm install -g --ignore-scripts` under the runner temp, never into the
 workspace, and prepends that bin directory to `PATH`, so the run step invokes
 `conductor` off `PATH` and each gate resolves by name the same way. The install
 is **unconditional**, on push and `pull_request` alike, so there is one code
-path rather than one that matters and one that nobody exercises.
+path rather than one that matters and one that nobody exercises. On a push
+run, though, a repository's own devDependency on a gate in
+`node_modules/.bin` outranks that install and shadows the action's pin; when
+its version differs from the pin, conductor now warns in the job log, as a
+`::warning::` annotation and in the step summary, and still runs it.
 
 **On a pull request those four inputs may not pin backward.** The shape check
 asks whether an input is an exact version; it says nothing about which one, and

@@ -14,7 +14,92 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-## [0.11.1] - 2026-10-17
+**A minor release (0.12.0): it adds an exit 2.**
+
+### Security
+
+- **On a pull request, emptying, deleting or moving a lockfile no longer
+  hides the dependencies it held.** A head that rewrote a tracked lockfile
+  to `{}` (or to anything osv-scanner reads no packages from), deleted it,
+  or moved it with `git mv` silenced the vulnerabilities gate for it and
+  could pass with only a `lockfiles-empty` or `lockfile-no-longer-scanned`
+  note. On a run with a trust base, conductor now copies the base version of
+  each such lockfile (every handed lockfile when osv-scanner read nothing at
+  all) and runs osv-scanner once on those copies, under what is left of the
+  gate's time limit. If a base copy had packages, the gate is
+  could-not-run, reason `lockfile-emptied`, naming the file and the base
+  count, even when the head also blocked. A deleted or moved file is
+  cleared only by a populated replacement lockfile in the same directory
+  that is new in the pull request and is not a requirements file (an
+  npm-to-pnpm migration, for example); a lockfile the base already had
+  there, such as a Cargo.lock, does not count. The check fails closed, with
+  reason `lockfile-emptied-unverified`: a base run that fails or prints no
+  package count, an unreadable base copy, and a head run whose stderr has no
+  package count for a handed lockfile, which is what a verbosity option in
+  the policy's osv-scanner options causes (remove it; conductor does not
+  edit it). A base run past the limit is `timed-out`. Plain runs are
+  unchanged, and requirements files are not yet checked. (Audit 2026-10-18
+  N1.)
+
+  **The consumer cost.** A pull request that empties a lockfile the base
+  had packages in, or deletes or moves one, now exits 2 instead of passing,
+  unless a populated replacement new in the pull request sits beside the
+  same manifest. A policy
+  that lowers osv-scanner's verbosity now makes every pull-request run of
+  the vulnerabilities gate exit 2. When osv-scanner reads nothing at all
+  (its exit 128) on a pull request, the gate now pays one extra osv-scanner
+  run under the remaining time limit, and can time out where it passed
+  before. **Remedy:** regenerate the lockfile, or add its replacement in
+  the same pull request, or remove the manifest's dependencies with it. A
+  lockfile that is absent on the base, or was already empty there, is
+  unaffected.
+
+### Fixed
+
+- **SARIF from a gitleaks finding with an end column of 0 was
+  schema-invalid, since about 2026-09-26.** gitleaks 8.30.1 reports
+  `"EndColumn": 0` on its private-key rule over a PEM file, one of its
+  commonest hits, and conductor copied it into `region.endColumn`, which
+  SARIF 2.1.0 requires to be at least 1. `github/codeql-action/upload-sarif`,
+  which the README recipe feeds, refuses an invalid file, so code scanning
+  broke for the whole run. A gitleaks line or column below 1 now becomes 1, and the
+  end column is kept only when it is an integer of at least 1, not before the
+  start column, on a finding that starts and ends on one line; otherwise it
+  is left out, which SARIF reads as the end of the line. No finding is
+  added or removed. (Audit 2026-10-18 B1.)
+
+- **A gate whose version is not the action's pin now warns wherever it was
+  found, not only on PATH.** On a push run a repository's own devDependency
+  on a gate in `node_modules/.bin` outranks the action's global install, by
+  design, and the warning fired only for a PATH binary, so a repository with
+  stale gate devDependencies ran them with nothing said. The skew is now
+  printed on the job log line for every resolution source, as a
+  `! conductor/version-skew` line in the gate block of the text report (and
+  so in the pull request comment), as a note-level `conductor/version-skew`
+  notification in SARIF, and in GitHub Actions as a `::warning::` annotation
+  and a step-summary line. Which binary runs, the exit code and the verdict
+  token are unchanged. **In the next minor release the Action will make a
+  version skew a could-not-run** (exit 2), so this release is the one release
+  of warning: bump or remove a gate devDependency that differs from the pin.
+  (Intent-guard audit 2026-10-18 MB3.)
+
+- **"gate said" for an osv-scanner that could not run now quotes its
+  error.** osv-scanner 2.4.0 always prints its filesystem walk banner first,
+  so every osv could-not-run quoted "Starting filesystem walk for root: /".
+  Its progress lines are now skipped, and the extraction error is quoted.
+  (Audit 2026-10-18 N4.)
+
+- **A tracked `Gopkg.lock` is named in the unread-manifests note.**
+  osv-scanner 2.4.0 has no extractor for it, so it was neither handed over
+  nor named. (Audit 2026-10-18 N8.)
+
+- The per-gate rollup count over grouped osv-scanner lines is now pinned by
+  a test; the behaviour is unchanged. (Audit 2026-10-18 N2.)
+
+- The dates of 0.11.0 and 0.11.1 below were swapped and are corrected.
+  (Audit 2026-10-18 N5.)
+
+## [0.11.1] - 2026-10-18
 
 **An action-only release. The tag moves; the npm package does not.**
 `@vaultcompass/conductor` stays at 0.11.0 on npm and the action's
@@ -64,7 +149,7 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   raise it. Outside a pull request an explicit pin is unaffected. To hold
   back, stay on the previous action tag, v0.11.0.
 
-## [0.11.0] - 2026-10-18
+## [0.11.0] - 2026-10-17
 
 **A minor release.** The intent gate's branch-name spec match moves to whole
 words, a tie is reported instead of guessed, and a weak match says so; the

@@ -123,6 +123,7 @@ import { gateExitBlocks } from './exit-codes.js';
 import type { GateOutcome } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
 import { INTENT_WARNING } from './normalize.js';
+import { skewFound, skewPlace } from './output-text.js';
 import { POLICY_FILE_NAME } from './policy.js';
 import type { RunResult } from './run.js';
 
@@ -960,6 +961,42 @@ function nodeModulesSkippedNotifications(result: RunResult): Notification[] {
 }
 
 /**
+ * A gate whose resolved binary reported a version other than the one the
+ * run was pinned to (the Action's CONDUCTOR_EXPECTED_* variables), from any
+ * location: a node_modules/.bin devDependency, PATH, or a policy command.
+ * A NOTE: it says which build ran, a statement in the same shape as
+ * node-modules-skipped, and the gate's own outcome is reported on its own.
+ * The path is carried only when it is repository-relative (node_modules);
+ * a PATH binary's absolute machine path stays in the job log line.
+ */
+function versionSkewNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) => {
+    const skew = gate.versionSkew;
+    if (skew === undefined) {
+      return [];
+    }
+    const found = skewFound(skew);
+    return [
+      {
+        id: 'conductor/version-skew',
+        message:
+          `The ${gate.role} gate (${gate.product}) reported version ${found}, but this run expects ` +
+          `${skew.expected} (the version the action pinned); it was resolved from ${skewPlace(skew)}. ` +
+          'Resolution is unchanged and that binary was used.',
+        details: {
+          role: gate.role,
+          product: gate.product,
+          expected: skew.expected,
+          found,
+          source: skew.source,
+          ...(skew.source === 'node_modules' ? { path: skew.path } : {}),
+        },
+      },
+    ];
+  });
+}
+
+/**
  * A passthrough option that is a gate's own setting under a name conductor
  * also uses (gitleaks' `options.timeout`), as notifications. A NOTE: nothing
  * went wrong, and the gate's own outcome, whatever it was, is reported on its
@@ -1147,6 +1184,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...proposalNotifications(result),
     ...trustBaseWithheldNotifications(result),
     ...nodeModulesSkippedNotifications(result),
+    ...versionSkewNotifications(result),
     ...intentWarningNotifications(result),
     ...gateOwnOptionNotifications(result),
   ];

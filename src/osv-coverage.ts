@@ -179,28 +179,38 @@ export function selectOsvInputs(args: {
  * Notes for every basename-matched file tracked on the base and absent from
  * the head (section 3.2): deleted, moved, or renamed to a name the matcher
  * does not take. Such a file is not scanned on either side, and saying so is
- * all this does: it never blocks. A base listing git could not make yields no
- * note rather than a guess.
+ * all this says: the note never blocks. A base listing git could not make
+ * yields no note rather than a guess. Whether the removal blocks is the
+ * emptied-lockfile base check's decision (src/osv-baseline.ts), which reads
+ * the same list through noLongerScannedFiles.
  */
 export function noLongerScanned(repoRoot: string, ref: string, tracked: ReadonlySet<string>): Diagnostic[] {
+  return (noLongerScannedFiles(repoRoot, ref, tracked) ?? []).map((file) => ({
+    code: 'conductor/lockfile-no-longer-scanned',
+    message:
+      `${file} is tracked on the base and not in this pull request, so it is no longer scanned ` +
+      '(by either run). Its removal is visible in the diff.',
+  }));
+}
+
+/**
+ * The base lockfiles the head no longer tracks, sorted. Null when the base
+ * tree could not be listed, which the emptied-lockfile check treats as
+ * unverified rather than as none.
+ */
+export function noLongerScannedFiles(repoRoot: string, ref: string, tracked: ReadonlySet<string>): string[] | null {
   if (ref.startsWith('-')) {
-    return [];
+    return null;
   }
   const listing = runGit(repoRoot, ['ls-tree', '-r', '-z', '--name-only', ref], { maxBuffer: 64 * 1024 * 1024 });
   if (listing.error !== undefined || listing.status !== 0) {
-    return [];
+    return null;
   }
   return listing.stdout
     .split('\0')
     .filter((file) => file !== '' && !file.split('/').includes('node_modules'))
     .filter((file) => osvLockfileKind(file) !== null && !tracked.has(file))
-    .sort()
-    .map((file) => ({
-      code: 'conductor/lockfile-no-longer-scanned',
-      message:
-        `${file} is tracked on the base and not in this pull request, so it is no longer scanned ` +
-        '(by either run). Its removal is visible in the diff.',
-    }));
+    .sort();
 }
 
 /** The nothing-to-scan sentence when every candidate was a requirements file left out. */
@@ -268,6 +278,35 @@ export function emptiedLockfiles(stderr: string, handed: readonly string[], cwd:
     return [];
   }
   return handed.filter((file) => spellings(path.resolve(cwd, file)).some((spelling) => empty.has(spelling)));
+}
+
+/**
+ * The package count osv-scanner printed for each handed file, read by the
+ * same SCANNED_LINE and the same two-spelling path match as
+ * emptiedLockfiles. A file with no count line is absent from the map. Read
+ * by the emptied-lockfile base check (src/osv-baseline.ts), where a missing
+ * line fails closed.
+ */
+export function packageCounts(stderr: string, handed: readonly string[], cwd: string): Map<string, number> {
+  const bySpelling = new Map<string, number>();
+  for (const raw of stderr.split('\n')) {
+    const match = SCANNED_LINE.exec(raw.trim());
+    if (match !== null) {
+      for (const spelling of spellings(match[1] as string)) {
+        bySpelling.set(spelling, Number(match[2]));
+      }
+    }
+  }
+  const out = new Map<string, number>();
+  for (const file of handed) {
+    const count = spellings(path.resolve(cwd, file))
+      .map((spelling) => bySpelling.get(spelling))
+      .find((value) => value !== undefined);
+    if (count !== undefined) {
+      out.set(file, count);
+    }
+  }
+  return out;
 }
 
 /** The note when a policy's no-resolve was dropped from an invocation. */

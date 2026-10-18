@@ -1,5 +1,5 @@
 {
-  "about": "Raw stderr bytes, colour codes kept, captured on 2026-10-17 for the stated-reason rule (gateStatedReason). Every entry was captured from the real tool at the version named; none is constructed. The absolute path of the scratch repository in the vault-guard error line is replaced with <repo>, the only edit. See tests/fixtures/README.md.",
+  "about": "Raw stderr bytes, colour codes kept, captured on 2026-10-17 for the stated-reason rule (gateStatedReason). Every entry was captured from the real tool at the version named; none is constructed. The absolute path of the scratch repository in the vault-guard error line, and of the scratch directory in the osv-scanner lines, is replaced with <repo>, the only edit. See tests/fixtures/README.md.",
   "vault-guard-1.10.0-incomplete": {
     "tool": "vault-guard 1.10.0",
     "how": "vault-guard scan -f json, FORCE_COLOR=1, in a repository with one file at mode 000 and nothing else to report.",
@@ -23,5 +23,11 @@
     "how": "gitleaks git with conductor's own flags over a repository with diff.renameLimit set to 1 and six files renamed with a change, so git skips exhaustive rename detection. Captured at exit 0; the stated-reason tests use the same bytes as the stderr of a gate that could not run.",
     "exit": 0,
     "stderr": "\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mwarning: exhaustive rename detection was skipped due to too many files.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mwarning: you may want to set your diff.renameLimit variable to at least 6 and retry the command.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1m2 commits scanned.\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1mscanned ~48890 bytes (48.89 KB) in 51.8ms\u001b[0m\n\u001b[90m10:19AM\u001b[0m \u001b[32mINF\u001b[0m \u001b[1mno leaks found\u001b[0m\n"
+  },
+  "osv-scanner-2.4.0-truncated-lockfile": {
+    "tool": "osv-scanner 2.4.0",
+    "how": "osv-scanner scan source --format json with conductor's own --lockfile arguments for a truncated, invalid package-lock.json and a valid requirements.txt, and --no-resolve. Captured on 2026-10-18 for audit finding N4. The scratch directory's absolute path, written by osv-scanner with and without its leading slash, is replaced with <repo>.",
+    "exit": 127,
+    "stderr": "Starting filesystem walk for root: /\nScanned <repo>/requirements.txt file and found 1 package\nEnd status: 0 dirs visited, 2 inodes visited, 2 Extract calls, 1.683791ms elapsed, 1.684ms wall time\nError during extraction: (extracting as javascript/packagelockjson) <repo>/package-lock.json: could not extract: unexpected end of JSON input\nextraction failed on specified lockfile\n"
   }
 }

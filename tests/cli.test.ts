@@ -3364,6 +3364,148 @@ describe('the PATH version-skew warning', () => {
   });
 });
 
+// Audit 2026-10-18 (the intent-guard audit's MB3): on a push run a
+// repository's own devDependency in node_modules/.bin outranks the action's
+// global install, by design, and the skew used to be recorded for PATH
+// alone, so every guard repository's own CI ran stale gates with the pins
+// set and nothing printed. Reporting only: which binary runs is unchanged.
+describe('the version-skew warning for a node_modules/.bin gate', () => {
+  const EXPECTED = {
+    CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.0',
+    CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: '1.9.0',
+    CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: '1.8.0',
+  };
+  /** A repository whose own vault-guard devDependency is at `localVersion`, and PATH at the pin. */
+  function setup(localVersion: string): { repo: string; bin: string } {
+    const repo = repoWithPolicy();
+    stubGate(path.join(repo, 'node_modules', '.bin'), 'vault-guard', {
+      stdout: CLEAN_VAULT_GUARD,
+      exit: 0,
+      version: localVersion,
+    });
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.9.0' });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+    return { repo, bin };
+  }
+
+  it('warns on a plain run, naming the location, and still runs that binary', () => {
+    const { repo, bin } = setup('1.7.0');
+    const result = runCli(repo, ['run', '--staged'], bin, { env: EXPECTED });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(
+      'conductor: warning: vault-guard resolved from node_modules/.bin reports version 1.7.0, but this run expects 1.9.0'
+    );
+    expect(result.stderr).toContain(`It was found at ${path.join('node_modules', '.bin', 'vault-guard')}.`);
+    expect(result.stderr).toContain("the repository's own vault-guard");
+    expect(result.stderr).toContain('gate secrets (vault-guard 1.7.0)');
+    expect(result.stderr).not.toContain('::warning');
+  });
+
+  it('puts the skew in the SARIF log and in the gate block of the text report', () => {
+    const { repo, bin } = setup('1.7.0');
+    const sarifPath = path.join(tempDir(), 'out.sarif');
+    const textPath = path.join(tempDir(), 'out.txt');
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', sarifPath, '--verbose', '--text-report', textPath],
+      bin,
+      { env: EXPECTED }
+    );
+
+    expect(result.status).toBe(0);
+    const log = JSON.parse(readFileSync(sarifPath, 'utf8'));
+    const umbrella = log.runs.find((run: { tool: { driver: { name: string } } }) => run.tool.driver.name === 'conductor');
+    const notes = umbrella.invocations[0].toolExecutionNotifications.filter(
+      (entry: { descriptor: { id: string } }) => entry.descriptor.id === 'conductor/version-skew'
+    );
+    expect(notes).toHaveLength(1);
+    expect(notes[0].level).toBe('note');
+    expect(notes[0].properties.details).toMatchObject({
+      role: 'secrets',
+      product: 'vault-guard',
+      expected: '1.9.0',
+      found: '1.7.0',
+      source: 'node_modules',
+      path: path.join('node_modules', '.bin', 'vault-guard'),
+    });
+    const text = readFileSync(textPath, 'utf8');
+    expect(text).toContain(
+      `  ! conductor/version-skew: vault-guard 1.7.0 ran, from ${path.join('node_modules', '.bin', 'vault-guard')}, but this run expects 1.9.0`
+    );
+  });
+
+  it('in GitHub Actions also writes a warning annotation and a step-summary line', () => {
+    const { repo, bin } = setup('1.7.0');
+    const summary = path.join(tempDir(), 'summary.md');
+    writeFileSync(summary, '');
+    const sarifPath = path.join(tempDir(), 'out.sarif');
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', sarifPath], bin, {
+      env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      /^::warning title=conductor version skew::vault-guard resolved from node_modules\/\.bin reports version 1\.7\.0, but this run expects 1\.9\.0/m
+    );
+    expect(readFileSync(summary, 'utf8')).toContain(
+      'conductor warning: vault-guard 1.7.0 ran from node_modules/.bin, but this run expects 1.9.0 (the version the action pinned).'
+    );
+  });
+
+  it('warns for a PATH gate in Actions the same way', () => {
+    const { repo, bin } = setup('1.9.0');
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: '1.8.5' });
+    rmSync(path.join(repo, 'node_modules'), { recursive: true, force: true });
+    const summary = path.join(tempDir(), 'summary.md');
+    writeFileSync(summary, '');
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', path.join(tempDir(), 'o.sarif')], bin, {
+      env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+    });
+
+    expect(result.stderr).toContain('vault-guard resolved from PATH reports version 1.8.5');
+    expect(result.stdout).toMatch(/^::warning title=conductor version skew::vault-guard resolved from PATH reports version 1\.8\.5/m);
+    const written = readFileSync(summary, 'utf8');
+    expect(written).toContain('vault-guard 1.8.5 ran from PATH');
+    // An absolute machine path stays in the job log line only.
+    expect(written).not.toContain(bin);
+  });
+
+  it('cuts a probed version with junk after x.y.z to version characters on every GitHub surface', () => {
+    // The family probe accepts anything after x.y.z on the first line.
+    const { repo, bin } = setup('1.7.0 ::error::pwned <b>%0A;x');
+    const summary = path.join(tempDir(), 'summary.md');
+    writeFileSync(summary, '');
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', path.join(tempDir(), 'o.sarif')], bin, {
+      env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+    });
+
+    const annotation = result.stdout.split('\n').find((line) => line.startsWith('::warning')) ?? '';
+    expect(annotation).toContain('reports version 1.7.0errorpwnedb0Ax,');
+    expect(annotation.slice('::warning title=conductor version skew::'.length)).not.toContain('::');
+    const written = readFileSync(summary, 'utf8');
+    expect(written).toContain('vault-guard 1.7.0errorpwnedb0Ax ran from');
+    expect(written).not.toMatch(/[<%;]/);
+  });
+
+  it('says nothing anywhere when the node_modules/.bin gate matches the pin', () => {
+    const { repo, bin } = setup('1.9.0');
+    const summary = path.join(tempDir(), 'summary.md');
+    writeFileSync(summary, '');
+    const sarifPath = path.join(tempDir(), 'out.sarif');
+    const result = runCli(repo, ['run', '--staged', '--format', 'sarif', '--output', sarifPath], bin, {
+      env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+    });
+
+    expect(result.stderr).not.toContain('warning:');
+    expect(result.stdout).not.toContain('::warning');
+    expect(readFileSync(summary, 'utf8')).toBe('');
+    expect(readFileSync(sarifPath, 'utf8')).not.toContain('conductor/version-skew');
+  });
+});
+
 describe('the per-gate log lines when the report cannot be written', () => {
   it('prints none: the run exits 2 on the write failure before the lines are written', () => {
     // Pinned as the code behaves: the lines are written after the report, so a

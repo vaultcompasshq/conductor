@@ -31,6 +31,10 @@ const EXACT_NAMES = new Set([
   'deno.lock',
   'mix.exs',
   'pubspec.yaml',
+  // Added 2026-10-18 (audit finding N8): dep's lockfile, which osv-scanner
+  // 2.4.0 has no extractor for ("could not determine extractor suitable to
+  // this file", measured), so it is never handed over.
+  'Gopkg.lock',
 ]);
 
 const MAX_LISTED = 12;

@@ -434,22 +434,31 @@ would tell a user their code is at fault when their config is.
 
 What the gate itself said rides along on the could-not-run result as
 `couldNotRun.gateSaid`: the first stderr line that is not informational (a
-`note:` block, gitleaks' rename-detection warnings), preferring a block that
+`note:` block, gitleaks' rename-detection warnings, osv-scanner's progress
+lines), preferring a block that
 starts at an INCOMPLETE or ERR marker, or for a gate whose output is JSON on
 stdout a string `reason` field; absent when every line is informational
-(`statedReasonFromStderr`, src/gate-runner.ts:411-456). It is sanitised to
+(`statedReasonFromStderr`, src/gate-runner.ts:453-500, with osv-scanner's
+progress patterns at src/gate-runner.ts:425-429). It is sanitised to
 ASCII and cut to 160 characters. It is read after the exit code has been
 judged and never changes the outcome or the exit code, and its absence is
 not an error. The rule is pinned case by case against captured bytes by
-tests/stated-reason.test.ts:52 ("captured vault-guard 1.10.0 INCOMPLETE:
+tests/stated-reason.test.ts:53 ("captured vault-guard 1.10.0 INCOMPLETE:
 joins the file lines across the colour-only blank line"),
-tests/stated-reason.test.ts:69 ("the captured note block then a plain
-reason (constructed): the continuation lines are skipped too") and
-tests/stated-reason.test.ts:74 ("a note block, a blank line, then an
-indented real reason (constructed): the reason is chosen"), and its purity
-by tests/stated-reason.test.ts:128 ("gateSaid is read nowhere in the exit
+tests/stated-reason.test.ts:70 ("the captured note block then a plain
+reason (constructed): the continuation lines are skipped too"),
+tests/stated-reason.test.ts:75 ("a note block, a blank line, then an
+indented real reason (constructed): the reason is chosen") and, for
+osv-scanner (audit 2026-10-18 N4, whose first line is always its walk
+banner), tests/stated-reason.test.ts:121 ("captured osv-scanner 2.4.0
+truncated lockfile: the extraction error, never the progress lines"), 128
+("osv-scanner progress lines then a plain failure line (constructed from
+the capture): the failure line") and 135 ("osv-scanner progress lines
+alone (cut from the capture): no excerpt at all"); disabling the osv rule
+turned those three red. Its purity
+by tests/stated-reason.test.ts:150 ("gateSaid is read nowhere in the exit
 code, the run composition or the verdict token") and
-tests/stated-reason.test.ts:142 ("a gate-error outcome over every captured
+tests/stated-reason.test.ts:164 ("a gate-error outcome over every captured
 input is the first-line rule outcome, gateSaid aside"). Also pinned
 by tests/gate-runner.test.ts ("carries the first stderr line of an exit 2
 gate as a bounded, sanitised excerpt"), tests/gate-runner.test.ts ("falls back to a reason field in
@@ -1315,12 +1324,12 @@ them is a way the mechanism above was true and the REPORT of it was not:
   ten"), 1611 ("leads with the refusal rather than burying it under the gate
   sections"), 1623 ("still names the gates the inventory did hold") and 1639
   ("never prints the clean one-line summary for a refusal"), and
-  tests/output-sarif.test.ts:2013 ("writes the umbrella run even when there
-  is no gate and no finding"), 2022 ("carries a conductor/trust-base-refused
-  notification naming the ref"), 2035 ("raises it at error level, unlike
-  every other notification here"), 2047 ("says the analysis did not
-  complete"), 2053 ("keeps the could-not-run results for whatever gates the
-  inventory named") and 2067 ("says nothing of the kind on a run that was
+  tests/output-sarif.test.ts:2056 ("writes the umbrella run even when there
+  is no gate and no finding"), 2065 ("carries a conductor/trust-base-refused
+  notification naming the ref"), 2078 ("raises it at error level, unlike
+  every other notification here"), 2090 ("says the analysis did not
+  complete"), 2096 ("keeps the could-not-run results for whatever gates the
+  inventory named") and 2110 ("says nothing of the kind on a run that was
   not refused"). End to end through the CLI on a real repository at
   tests/cli.test.ts ("still reports the refusal when the head policy
   enables no gate at all"), tests/cli.test.ts ("writes a SARIF log with the refusal even
@@ -1376,7 +1385,7 @@ tests/gate-runner-timeout.test.ts:296 ("a head policy raising the limit to
 21600 leaves the scan at the base 10 s, as a proposal") and
 tests/gate-runner-timeout.test.ts:306 ("a key only on the head leaves the
 scan at the gitleaks default"), and for an invalid head value by
-tests/cli.test.ts:3432 ("only in the head of a pull-request run leaves the
+tests/cli.test.ts:3574 ("only in the head of a pull-request run leaves the
 run on the base policy, as a proposal").
 
 ### The branch-name convention is a convenience, not a control
@@ -2067,6 +2076,59 @@ binary is probed, the per-command one is never probed, and the unified
 binary of the same product is probed in its place), and by
 tests/policy.test.ts:141 for the absolute-path rule. The candidate table
 itself is pinned at tests/resolve.test.ts:232 and 239.
+
+### A version that is not the pin is said out loud, from every location, and changes nothing
+
+The Action hands conductor the versions it pinned
+(CONDUCTOR_EXPECTED_DEP_GUARD_VERSION and its two siblings, exact x.y.z
+only). When a resolved family gate reports a different version, the
+outcome records `versionSkew` with the expected and found versions, the
+resolution source and the path, WHEREVER the binary came from:
+node_modules/.bin, PATH or a policy command (src/gate-runner.ts:1748).
+Until audit 2026-10-18 (the intent-guard audit's MB3) the condition also
+required `binary.source === 'path'`, so the most common skew of all was
+silent: on a push run a repository's own devDependency in node_modules/.bin
+outranks the Action's global install by the rule above, and every guard
+repository's own push-to-main job ran stale gates (intent-guard's ran
+dep-guard 0.6.0, vault-guard 1.7.0 and intent-guard 1.2.1) with the pins
+set and nothing printed. A pull-request run never consults
+node_modules/.bin, so this is a push-run and local-run statement.
+
+REPORTING ONLY. Which binary runs is unchanged, and skew is never a
+could-not-run: no branch after the record reads it, and the exit code and
+the verdict token are what they would have been without it. Turning skew
+into a could-not-run is an open operator decision, announced in the
+CHANGELOG for the next minor release and not implemented.
+
+Where it is said: the job-log warning line on stderr
+(`versionSkewWarnings`, src/output-text.ts:927), which names the file and
+the remedy for its source; a `! conductor/version-skew` line under the gate
+header in the text report (`versionSkewLine`, src/output-text.ts:980), and
+so in the pull request comment; a note-level `conductor/version-skew`
+notification in the SARIF umbrella run (src/output-sarif.ts:972); and, in
+GitHub Actions only (GITHUB_ACTIONS=true), a `::warning::` annotation and a
+step-summary paragraph (src/cli.ts:926). The path is repository-relative
+for a node_modules/.bin binary; a PATH binary's absolute machine path is in
+the job-log line only, never in a report, the annotation or the summary.
+The found version is cut to version characters before it reaches any of
+those surfaces, because the family probe accepts anything after x.y.z.
+
+Pinned by tests/gate-runner.test.ts:1818 ("records version skew for a
+node_modules/.bin gate, the location named repository-relative"), 1835
+("records version skew for a PATH gate, with its absolute path") and 1849
+("records no skew for a node_modules/.bin gate at the expected version"),
+and through the CLI by tests/cli.test.ts:3393 ("warns on a plain run,
+naming the location, and still runs that binary"), 3407 ("puts the skew in
+the SARIF log and in the gate block of the text report"), 3440 ("in GitHub
+Actions also writes a warning annotation and a step-summary line"), 3458
+("warns for a PATH gate in Actions the same way") and 3493 ("says nothing
+anywhere when the node_modules/.bin gate matches the pin"). Mutation, run:
+restoring `binary.source === 'path'` to the condition turned 4 tests red
+(the gate-runner node_modules case and the first three CLI cases), and the
+PATH and matching cases stayed green, as they should. The version cut
+(`skewFound`, src/output-text.ts:897) is pinned by tests/cli.test.ts:3476
+("cuts a probed version with junk after x.y.z to version characters on
+every GitHub surface"); making it the identity turned that test red.
 
 ## The policy file is a passthrough, and the reserved list is the only exception
 
@@ -3839,12 +3901,44 @@ real gates by tests/dogfood.e2e.test.ts:622.
 
 No invented region. The secret gate and gitleaks both report a line and a
 column (vault-guard at src/normalize.ts:348-349, gitleaks `StartLine` at
-src/normalize.ts:883 and `StartColumn` at 888). When `StartColumn` is absent,
-that line sets it to 1. gitleaks also carries
-`endColumn` when the report has `EndColumn` (src/normalize.ts:889, written
-into the region at src/output-sarif.ts:263-264). vault-guard's JSON has no
-match length, so that gate's region has no `endColumn`
-(src/normalize.ts:377-378).
+src/normalize.ts:887-888 and `StartColumn` at 906-909). When `StartColumn` is
+absent, that line sets it to 1. gitleaks also carries `endColumn` when the
+report has a usable `EndColumn` (src/normalize.ts:910-918, written into the
+region at src/output-sarif.ts:264-266). vault-guard's JSON has no match
+length, so that gate's region has no `endColumn` (src/normalize.ts:377-378).
+
+A gitleaks column below 1 never reaches a region (audit 2026-10-18 B1).
+SARIF 2.1.0 gives `startColumn` and `endColumn` a minimum of 1, and
+gitleaks 8.30.1 writes `"EndColumn": 0` on its private-key rule over a PEM
+file, one of its commonest hits; until this fix (from about 2026-09-26)
+that 0 went straight into the region, the file failed schema validation,
+and github/codeql-action/upload-sarif, which the README recipe feeds,
+refuses an invalid file. `StartLine` and `StartColumn` below 1, or not an
+integer, become 1 (startLine has the same minimum). `EndColumn` is kept only when it is an integer, at least 1, at least the
+start column, and the entry's `EndLine` is absent or equals its
+`StartLine`: the subject has no end line, so a region built from it ends
+on its start line and an end column from a later line would mark the
+wrong span. Pinned by tests/normalize.test.ts:1217 ("drops the EndColumn 0
+gitleaks writes on a private key (captured on a public repository)") over
+tests/fixtures/gitleaks-8.30.1-private-key-endcolumn-zero.json, 1223
+("raises a StartColumn 0 to 1"), 1227 ("raises a StartLine below 1, or not
+an integer, to 1 (SARIF startLine has a minimum of 1)"), 1233 ("drops an
+end column before the start column on a single-line finding"), 1238
+("drops a negative or fractional end column") and 1243 ("drops the end
+column of a finding that spans lines, since the subject has no end line"),
+and end to end in SARIF
+by tests/output-sarif.test.ts:774 ("writes a schema-valid region for the
+EndColumn 0 gitleaks reports on a private key (audit 2026-10-18 B1)").
+That SARIF test asserts the region constraints directly, because no SARIF
+schema is vendored here; the fixed output for the whole captured plug
+report was validated once by hand against the 2.1.0 rtm.5 schema with
+ajv (valid, 7 results; the 0.11.1 output for the same report was invalid
+at region.endColumn). Mutations, each run: removing the `>= 1` and
+`>= column` conditions on the end column turned 4 tests red (the capture,
+the before-start case, the negative case and the SARIF test); removing the
+`>= 1` floor on the start column turned "raises a StartColumn 0 to 1" red;
+removing the floor on the start line turned the StartLine test red;
+dropping the one-line condition turned the spans-lines test red.
 
 The reason is narrower than this file used to state it, and the narrower
 version is the useful one. That gate DOES know the match length: it
@@ -4858,22 +4952,96 @@ Known open, each a limit rather than a bypass on a pull request:
    red, which fails closed rather than open.
 4. KNOWN-OPEN: on a LOCAL run a `.gitattributes` binary mark hides a file
    from gitleaks (see above); pull requests are protected.
-5. KNOWN-OPEN: a PULL REQUEST that rewrites a tracked lockfile to `{}`
-   silences the vulnerabilities gate for that lockfile. It is reported as
-   `conductor/lockfiles-empty` naming the file in both shapes: when it is
-   the only lockfile (osv-scanner exits 128, the gate exits 0, and when no
-   other gate checked anything the verdict token is `nothing-checked`) and,
-   since 2026-10-13, when other lockfiles are present (osv-scanner's
-   per-file count of zero; the other files' verdict stands and the
-   `lockfiles` fact marks the file `[no packages read]`). Before that fix
-   the multi-file case was silent: the emptied file was listed as scanned
-   and its advisories vanished with no word (audit finding F2). It is the
-   one visible exception to "a pull request cannot suppress its own
-   finding", and the rewrite is in the diff. The multi-file naming depends
-   on osv-scanner's stderr count line, so a policy that lowers its
-   verbosity, or a future osv-scanner that rewords the line, turns the
-   naming off without failing anything; the real-binary test pins the
-   wording for the version it runs against.
+5. CLOSED UNDER A TRUST BASE (audit 2026-10-18 N1, design
+   docs/superpowers/specs/2026-10-18-emptied-lockfile-under-trust-base.md);
+   KNOWN-OPEN on a plain run and for requirements files. A pull request
+   that rewrote a tracked lockfile to `{}` (or to anything osv-scanner
+   reads no packages from), deleted it, or moved it used to silence the
+   vulnerabilities gate for it, with only a `conductor/lockfiles-empty` or
+   `conductor/lockfile-no-longer-scanned` note: the one visible exception
+   to "a pull request cannot suppress its own finding". On a decided trust
+   base the candidates are the emptied handed lockfiles (every handed one
+   on exit 128) and the base lockfiles the head no longer tracks
+   (`noLongerScannedFiles`). The gate copies their base blobs and runs
+   osv-scanner once on the copies, with the head's argv minus its
+   lockfiles, under what is left of the gate's time limit
+   (`checkEmptiedAgainstBase`, src/osv-baseline.ts:279, driven by
+   `removalCheck`, src/gate-runner.ts:1936, which runs at
+   src/gate-runner.ts:2092 when nothing at all was handed, at
+   src/gate-runner.ts:2335 on exit 128 and at src/gate-runner.ts:2547
+   before the base comparison). A copy with packages makes the gate
+   could-not-run, reason `lockfile-emptied`, naming the file and the base
+   count, even when the head also blocked; a deleted or moved file is
+   cleared only by a head-handed lockfile in the SAME directory that read
+   packages, is not a requirements file, and is absent from the base tree
+   (src/osv-baseline.ts:358): a lockfile the base already had, such as a
+   Cargo.lock beside the deleted package-lock.json, carries another
+   manifest's packages and does not count, and a base listing that errors
+   does not count either. Unlike the base comparison this FAILS CLOSED, reason
+   `lockfile-emptied-unverified`: an unreadable base copy or base tree, an
+   asymmetric command line, a base run that fails or prints no count for a
+   copy, and (src/gate-runner.ts:2526) a head run that printed no count
+   line for a handed non-requirements lockfile, which is what a verbosity
+   option in the policy's osv-scanner options causes; conductor names it
+   and does not edit it. No budget left, or a base run stopped at it, is
+   `timed-out`, step `base-check`. A base copy that is absent or read no
+   packages changes nothing, and a head that could not run is left as it
+   was with no base spawn. Pinned by tests/osv-emptied-base.test.ts:113
+   ("is could-not-run, naming the file and the base count"), 128 ("is
+   could-not-run, not blocked, when the head also blocks"), 139 ("changes
+   nothing on a plain run: the lockfiles-empty line, no base run"), 148
+   ("changes nothing when the head lockfile still has packages"), 160
+   ("changes nothing when the base lockfile was already empty"), 169
+   ("changes nothing when the lockfile is new in this pull request"), 177
+   ("is could-not-run when the base run fails"), 184 ("is timed-out, step
+   base-check, when the base run outlives the remaining limit"), 191
+   ("leaves a head that could not run as it was, and spawns no base run"),
+   199 ("on exit 128 checks the base copy of every handed lockfile"), 218
+   ("is could-not-run after git mv plus an emptied copy (the replacement
+   reads 0)"), 233 ("is could-not-run when the only lockfile is deleted"),
+   242 ("is could-not-run when the replacement sits in another
+   directory"), 254 ("changes nothing when a populated replacement sits in
+   the same directory"), 268 ("is could-not-run when the only
+   same-directory lockfile was already on the base (Cargo.lock)"), 311
+   ("does not count a pinned requirements file the base already had"), 322
+   ("does not count a requirements file new in the pull request"), 331
+   ("does not count a lockfile the base already had in the same
+   directory"), 340 ("counts a populated lockfile new in the pull request
+   in the same directory"), 353 ("is could-not-run, unverified, under a
+   trust base, naming the file"), 362 ("changes nothing on a plain run"),
+   387 ("is timed-out, with nothing spawned, when no budget is left"), 403
+   ("is unverified when the base run printed no count line for a copy")
+   and, through the CLI with the token, 414 ("exits 2 with token could-not-run
+   beside another lockfile and another gate"); and by
+   tests/osv-base-comparison.test.ts:193 ("is could-not-run when the
+   lockfile that left had packages on the base and nothing replaced it").
+   Mutations, each run on the fix-round tree: skipping the base spawn
+   turned 13 red; ignoring the base count turned 8 red; treating a failed
+   or timed-out base check as clear turned 2 red; dropping the budget
+   branch turned 1 red, as did treating a missing base count as clear;
+   running the check on plain runs turned 1 red; skipping the removed
+   candidates turned 5 red; accepting a replacement in any directory
+   turned 2 red; treating a missing head count as clear turned 1 red;
+   dropping the base-absence half of the replacement rule turned 2 red
+   (the two Cargo.lock cases), and dropping the requirements-file half
+   turned 1 red (the requirements file new in the pull request).
+   STILL OPEN: on a plain run there is no base to compare against, so the
+   notes are all there is (and a lowered verbosity turns the
+   lockfiles-empty note off); an emptied, deleted or moved requirements
+   file is not checked under a trust base either (its include closure is
+   out of scope); and when nothing at all was handed the base run has no
+   head command line to be held against, so the symmetry check is skipped
+   there. The replacement rule has no ecosystem or content tie: a new
+   populated lockfile of any ecosystem in the same directory clears a
+   removed one (a one-package Cargo.lock clears a deleted
+   package-lock.json), as does a copy of, or a symbolic link to, a lockfile
+   from elsewhere, and one replacement clears every removed lockfile in its
+   directory. Each needs a deliberate added file visible in the diff, and the
+   `conductor/lockfile-no-longer-scanned` note still fires. Tying the
+   replacement to the removed file's ecosystem is an open operator decision.
+   The fail-closed branch for a base listing error (a replacement whose base
+   lookup errors does not count) has no test; it is reachable only through a
+   symbolic link or submodule parent on the base.
 6. KNOWN-OPEN: a base `.gitleaks.toml` whose `[extend] path` target is a
    symbolic link, or which writes the extend as an inline table or a quoted
    key, fails closed on every pull request (`preparation-failed`, or a
@@ -5165,7 +5333,12 @@ per advisory on one installed package, across lockfiles) is the same kind of
 thing: presentation over unchanged findings. Pinned by "never drops a capped
 finding from the counts, the verdict, the token or SARIF" and "keeps every
 finding behind a grouped line: the count line, SARIF and the verdict are
-unchanged" in tests/readable-reports.test.ts.
+unchanged" in tests/readable-reports.test.ts. The rollup counts FINDINGS
+under the hidden lines, not lines, which differ exactly when a hidden osv
+line groups several lockfiles: pinned by "counts findings, not lines, when
+the hidden osv lines group several lockfiles" in the same file (audit
+2026-10-18 N2; counting entries instead of findings turned it red, and it
+was the only test to go red).
 
 INIT ENABLES AN EXTERNAL GATE ONLY WHEN ITS BINARY IS FOUND, AND SAYS CI MUST
 INSTALL IT (phase 3, item 3.4). `renderPolicy` writes `enabled: true` for a

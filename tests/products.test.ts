@@ -144,6 +144,9 @@ describe('product profiles', () => {
       // 2026-10-13): handing them over would make every such run could-not-run.
       'Podfile.lock',
       'deno.lock',
+      // "could not determine extractor suitable to this file" from 2.4.0
+      // (measured 2026-10-18); named in the unread-manifests note instead.
+      'Gopkg.lock',
     ];
     for (const name of rejected) {
       expect([name, osvLockfileKind(name)]).toEqual([name, null]);

@@ -771,6 +771,49 @@ describe('one SARIF log, one run per gate', () => {
     expect(JSON.stringify(log)).not.toContain('dp.pt.q7ZkR2');
   });
 
+  it('writes a schema-valid region for the EndColumn 0 gitleaks reports on a private key (audit 2026-10-18 B1)', () => {
+    // No SARIF schema is vendored here, so the 2.1.0 constraints on a
+    // region are asserted directly: startColumn and endColumn have a
+    // minimum of 1, and on one line the end is not before the start.
+    const privateKey = normalizeGitleaks(
+      fixture('gitleaks-8.30.1-private-key-endcolumn-zero.json'),
+      '8.30.1',
+      true
+    );
+    const log = JSON.parse(
+      renderSarif(
+        result([
+          outcome({
+            role: 'secrets-history',
+            product: 'gitleaks',
+            productVersion: '8.30.1',
+            stage: 'ci',
+            exitCode: 3,
+            findings: privateKey.findings,
+            run: privateKey.run,
+          }),
+        ]),
+        '0.11.1'
+      )
+    );
+    type Run = { tool: { driver: { name: string } }; results: any[] };
+    const gl = log.runs.find((r: Run) => r.tool.driver.name === 'gitleaks');
+    const region = gl.results[0].locations[0].physicalLocation.region;
+    expect(region).toEqual({ startLine: 1, startColumn: 1 });
+    for (const run of log.runs as Run[]) {
+      for (const entry of run.results ?? []) {
+        for (const location of entry.locations ?? []) {
+          const r = location.physicalLocation?.region;
+          if (r === undefined) continue;
+          expect(r.startColumn).toBeGreaterThanOrEqual(1);
+          if (r.endColumn !== undefined) {
+            expect(r.endColumn).toBeGreaterThanOrEqual(Math.max(1, r.startColumn));
+          }
+        }
+      }
+    }
+  });
+
   it('takes each run tool name and version from that gate, not from the umbrella', () => {
     const versions = log.runs.map(
       (run) => (run.tool as Record<string, Record<string, unknown>>).driver.version

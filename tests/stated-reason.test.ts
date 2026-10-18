@@ -31,6 +31,7 @@ const VAULT_INCOMPLETE = captured('vault-guard-1.10.0-incomplete');
 const VAULT_NOTE_INCOMPLETE = captured('vault-guard-1.10.0-note-then-incomplete');
 const GITLEAKS_OWN_TIMEOUT = captured('gitleaks-8.30.1-own-timeout');
 const GITLEAKS_RENAMES = captured('gitleaks-8.30.1-rename-limit');
+const OSV_TRUNCATED = captured('osv-scanner-2.4.0-truncated-lockfile');
 /** The two rename warnings alone, cut from the capture. */
 const RENAME_LINES_ONLY = GITLEAKS_RENAMES.split('\n').slice(0, 2).join('\n') + '\n';
 /** vault-guard's upgrade note, its three captured lines, colour codes kept. */
@@ -113,6 +114,27 @@ describe('gateStatedReason names the cause, not the first line', () => {
   it('only informational lines and no stdout: no excerpt at all', () => {
     expect(gateStatedReason(RENAME_LINES_ONLY, null, false)).toBeNull();
     expect(gateStatedReason(VAULT_NOTE_ONLY, '', true)).toBeNull();
+  });
+
+  // Audit 2026-10-18 N4: osv-scanner 2.4.0's first stderr line is always
+  // its walk banner, so "gate said" quoted that on every could-not-run.
+  it('captured osv-scanner 2.4.0 truncated lockfile: the extraction error, never the progress lines', () => {
+    expect(gateStatedReason(OSV_TRUNCATED, null, false)).toBe(
+      'Error during extraction: (extracting as javascript/packagelockjson) <repo>/package-lock.json: ' +
+        'could not extract: unexpected end of JSON input'
+    );
+  });
+
+  it('osv-scanner progress lines then a plain failure line (constructed from the capture): the failure line', () => {
+    const progress = OSV_TRUNCATED.split('\n').slice(0, 3).join('\n');
+    expect(gateStatedReason(`${progress}\nextraction failed on specified lockfile\n`, null, false)).toBe(
+      'extraction failed on specified lockfile'
+    );
+  });
+
+  it('osv-scanner progress lines alone (cut from the capture): no excerpt at all', () => {
+    const progress = OSV_TRUNCATED.split('\n').slice(0, 3).join('\n') + '\n';
+    expect(gateStatedReason(progress, null, false)).toBeNull();
   });
 
   it('a plain first line: unchanged from the first-line rule', () => {

@@ -344,7 +344,7 @@ capped run where `categories.constraint_violation` stayed 0. This is the
 fixture for the case the capped-finding fix must not touch: an uncapped
 constraint_violation finding in a run that blocks stays blocking.
 
-## Stated-reason captures (vault-guard 1.10.0, gitleaks 8.30.1)
+## Stated-reason captures (vault-guard 1.10.0, gitleaks 8.30.1, osv-scanner 2.4.0)
 
 `stated-reason-captures.json` holds raw stderr, ANSI colour codes kept and
 written as JSON escapes so the file stays ASCII, for the rule that picks the
@@ -378,6 +378,13 @@ repository's absolute path in one vault-guard error line, replaced with
   change): exit 0, and the first two stderr lines are the WRN "exhaustive
   rename detection was skipped due to too many files." and "you may want to
   set your diff.renameLimit variable to at least 6 and retry the command."
+- osv-scanner 2.4.0, `scan source --format json` with conductor's own
+  `--lockfile` arguments for a truncated, invalid package-lock.json beside a
+  valid requirements.txt, and `--no-resolve` (captured 2026-10-18): exit 127,
+  the walk banner, a "Scanned ... found 1 package" line, an "End status:"
+  line, then "Error during extraction: ..." and "extraction failed on
+  specified lockfile". The scratch directory's path is replaced with
+  `<repo>`.
 
 ## Phase 3 readability captures (osv-scanner 2.4.0, gitleaks 8.30.1)
 
@@ -401,6 +408,13 @@ repository's absolute path in one vault-guard error line, replaced with
   and the merge at line 5. They differ in StartLine, Commit, Date, Message
   and Fingerprint and agree on RuleID, File, StartColumn, EndColumn and
   Entropy. Author and Email removed.
+- `gitleaks-8.30.1-private-key-endcolumn-zero.json`: one entry from
+  `gitleaks git --redact` with conductor's flags over the public
+  elixir-plug/plug repository at 05bde70, captured for the 2026-10-18 audit.
+  gitleaks reports its private-key rule on a PEM file with `"EndColumn": 0`
+  (and StartLine equal to EndLine), which SARIF 2.1.0 forbids: the schema
+  gives region.endColumn a minimum of 1. Author and Email replaced with the
+  fixture placeholders; every other field is as captured.
 
 ## Intent spec selection baseline (2026-10-17)
 

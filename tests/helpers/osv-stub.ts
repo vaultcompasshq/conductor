@@ -42,6 +42,8 @@ export interface OsvSide {
   exit?: number;
   /** Seconds to sleep before answering, to drive a timeout. */
   sleep?: number;
+  /** With `counts`, print no count line on this side (a lowered verbosity). */
+  noCounts?: boolean;
 }
 
 export interface OsvStubOptions {
@@ -50,6 +52,15 @@ export interface OsvStubOptions {
   version?: string;
   /** Directory the stub records into; one subdirectory per side. */
   record: string;
+  /**
+   * Print osv-scanner 2.4.0's per-file stderr line for every handed file,
+   * "Scanned <absolute path> file and found N packages", where N counts the
+   * file's OSV lines and its "PKG <name> <version>" lines (a package with no
+   * advisory). On by default, since the real binary prints it at its
+   * default verbosity and a trust-base run fails closed without it; false
+   * turns it off for every side.
+   */
+  counts?: boolean;
 }
 
 export interface OsvRecord {
@@ -85,6 +96,9 @@ export function stubOsv(binDir: string, options: OsvStubOptions): string {
     `${MKDIR} -p "$dir/bytes"`,
     `printf '%s\\n' "$*" >> "$dir/argv"`,
     'pwd -P >> "$dir/cwd"',
+    `quiet=0`,
+    ...(options.head?.noCounts === true ? ['if [ "$side" = "head" ]; then quiet=1; fi'] : []),
+    ...(options.base?.noCounts === true ? ['if [ "$side" = "base" ]; then quiet=1; fi'] : []),
     'n=0',
     'prev=""',
     'out=""',
@@ -97,6 +111,15 @@ export function stubOsv(binDir: string, options: OsvStubOptions): string {
     `    ${CP} "$f" "$dir/bytes/$n" 2>/dev/null || :`,
     '    case "$f" in /*) abs="$f" ;; *) abs="$(pwd)/$f" ;; esac',
     '    pk=""',
+    ...(options.counts !== false
+      ? [
+          '    c=0',
+          '    if [ -f "$f" ]; then',
+          '      while IFS=" " read -r tag rest; do case "$tag" in OSV|PKG) c=$((c+1)) ;; esac; done < "$f"',
+          '    fi',
+          '    if [ "$quiet" = 0 ]; then printf \'Scanned %s file and found %s packages\\n\' "$abs" "$c" >&2; fi',
+        ]
+      : []),
     '    if [ -f "$f" ]; then',
     '      while IFS=" " read -r tag name version eco id rest; do',
     '        [ "$tag" = "OSV" ] || [ "$tag" = "#OSV" ] || continue',

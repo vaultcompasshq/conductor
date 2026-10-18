@@ -178,7 +178,8 @@ describe('resolution mode, the head half (test 4a)', () => {
 describe('coverage wording (test 5)', () => {
   it('names an unpinned requirements file with the line that stopped it, and counts it in the run details', () => {
     const repo = repoWith({
-      'package-lock.json': '{}\n',
+      // One package, so the stub's count line does not read this as emptied.
+      'package-lock.json': 'PKG left-pad 1.0.0\n',
       'services/api/requirements.txt': 'six==1.16.0\n# web\n\nflask>=2.0\n',
     });
     const { out, head } = runOsv(repo);

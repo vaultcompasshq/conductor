@@ -977,8 +977,8 @@ runs:
         WORKDIR: ${{ inputs.working-directory }}
         ADVISORY: ${{ inputs.advisory }}
         # The versions this action pinned for the three gates, handed to
-        # conductor ONLY so it can warn when a gate it resolved from PATH
-        # reports a different version (some other install earlier on PATH).
+        # conductor ONLY so it can warn when a resolved gate reports another
+        # version (a repo devDependency in node_modules/.bin, or PATH).
         # A warning and nothing else: conductor reads these for no decision,
         # resolution is unchanged, and a wrong value gets a wrong warning.
         CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: ${{ inputs.dep-guard-version }}
