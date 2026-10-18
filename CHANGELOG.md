@@ -14,7 +14,9 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-**A minor release (0.12.0): it adds an exit 2.**
+## [0.12.0] - 2026-10-18
+
+**A minor release: it adds an exit 2.**
 
 ### Security
 
@@ -53,6 +55,25 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   the same pull request, or remove the manifest's dependencies with it. A
   lockfile that is absent on the base, or was already empty there, is
   unaffected.
+
+- **This repository's lockfile now pins `fast-uri` 3.1.8** (through
+  `ajv`), which carries a security fix over 3.1.7, so its own builds and
+  CI no longer run the affected version. The published package does not
+  ship that lockfile and its dependency ranges are unchanged; an install
+  already resolves the newest `fast-uri` the range allows.
+
+### Changed
+
+- **The umbrella now installs `vault-guard` 1.12.1 and `intent-guard`
+  1.10.1 by default, up from 1.12.0 and 1.10.0.** Both are patch releases
+  published with provenance; `dep-guard` stays at 0.15.0. **The consumer
+  cost.** The action tag now ships conductor 0.12.0, so an explicit
+  `conductor-version: 0.11.0` (or any lower version) is refused on pull
+  requests once this tag ships; remove the input or raise it. On a pull
+  request an explicit `vault-guard-version` below 1.12.1 or
+  `intent-guard-version` below 1.10.1 is refused too, so a workflow that
+  pins the previous patch must raise or remove the pin when it moves to
+  this tag. Workflows that leave the inputs unset take the new defaults.
 
 ### Fixed
 

@@ -166,7 +166,7 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.11.0
+   conductor 0.12.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
@@ -1411,7 +1411,7 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.11.1.
+SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.12.0.
 
 ```yaml
 name: guardrails
@@ -1433,7 +1433,7 @@ jobs:
         with:
           node-version: '22.11.0'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.11.1
+        uses: vaultcompasshq/conductor@v0.12.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1508,7 +1508,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.11.1
+        uses: vaultcompasshq/conductor@v0.12.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These three
@@ -1520,8 +1520,8 @@ jobs:
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
           dep-guard-version: 0.15.0
-          vault-guard-version: 1.12.0
-          intent-guard-version: 1.10.0
+          vault-guard-version: 1.12.1
+          intent-guard-version: 1.10.1
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
@@ -1714,7 +1714,7 @@ jobs:
           node-version: '22.11.0'
       - id: conductor
         timeout-minutes: 5
-        uses: vaultcompasshq/conductor@v0.11.1
+        uses: vaultcompasshq/conductor@v0.12.0
         with:
           pr-comment: true
           advisory: true
@@ -1850,7 +1850,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.11.1
+        uses: vaultcompasshq/conductor@v0.12.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1929,12 +1929,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.11.1
+        uses: vaultcompasshq/conductor@v0.12.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.11.1
+        uses: vaultcompasshq/conductor@v0.12.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
@@ -2055,9 +2055,9 @@ an explicit pin is unaffected, which is how a stale pin can sit unnoticed
 until the first pull request after the upgrade.
 
 **Pin the action ref to a full commit SHA** with the tag as a comment, for
-example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.11.1`. To
+example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.12.0`. To
 find the SHA for a tag, run
-`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.11.1` or read it off
+`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.12.0` or read it off
 the Releases page.
 
 **Dependabot or Renovate bumping that SHA changes the action ref only.** It
@@ -2078,6 +2078,7 @@ tag with no row here has an entry that does not state its defaults; read
 
 | Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
 | --- | --- | --- | --- |
+| v0.12.0 | package | 0.12.0 | vault-guard 1.12.1 (from 1.12.0), intent-guard 1.10.1 (from 1.10.0) |
 | v0.11.1 | action-only | 0.11.0 | dep-guard 0.15.0 (from 0.14.0), vault-guard 1.12.0 (from 1.11.0) |
 | v0.11.0 | package | 0.11.0 | dep-guard 0.14.0, intent-guard 1.10.0 |
 | v0.10.0 | package | 0.10.0 | dep-guard 0.13.0, vault-guard 1.11.0 |
