@@ -14,6 +14,74 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+**A minor release (0.13.0): it adds two exit 2 cases.**
+
+### Security
+
+- **On a pull request, a deleted or moved lockfile is cleared only by a
+  replacement of its own ecosystem, and never by a symbolic link.** Since
+  0.12.0 a lockfile the base had packages in and the head deleted or moved
+  is could-not-run unless a populated lockfile new in the pull request sits
+  in the same directory. Any lockfile counted: a new one-package Cargo.lock
+  cleared a deleted package-lock.json, and so did a committed symbolic link
+  named pnpm-lock.yaml pointing at another directory's populated lockfile,
+  which osv-scanner follows. The replacement must now also be of the
+  removed file's ecosystem family (JavaScript, Python, Rust, Go, Ruby,
+  PHP, JVM, .NET, Hex, Dart, Swift, Conan, R or Haskell, read from the same
+  table that lists the lockfile names osv-scanner is handed; a name with no
+  family matches nothing) and a regular file in the head's index (git mode
+  100644 or 100755, not a 120000 symbolic link). An npm-to-pnpm or
+  npm-to-yarn migration in the same directory still passes. A regular-file
+  copy of a same-family lockfile from elsewhere still clears a removed one;
+  that needs a content tie and is still open. (Operator ruling 2026-10-18,
+  from the adversarial review of 0.12.0's lockfile check.)
+
+  **The consumer cost.** A pull request that deletes or moves a lockfile
+  and adds only a lockfile of another ecosystem beside it, or only a
+  symbolic link, now exits 2 with reason `lockfile-emptied` instead of
+  passing. Plain runs are unchanged. **Remedy:** add the real replacement
+  lockfile for the same manifest (a regular file, of the same ecosystem) in
+  the same pull request, or remove the manifest's dependencies with it.
+
+### Changed
+
+- **Under the Action, a gate whose version is not the action's pin is
+  could-not-run (exit 2).** 0.12.0 warned and still ran it; its changelog
+  announced this. When the Action's expected-version signal is set (the
+  `CONDUCTOR_EXPECTED_*_VERSION` variables its run step passes from the
+  `dep-guard-version`, `vault-guard-version` and `intent-guard-version`
+  inputs) and the resolved dep-guard, vault-guard or intent-guard reports
+  another version, wherever it was found (`node_modules/.bin`, `PATH` or a
+  policy `command:`), conductor does not run it: reason `version-skew`,
+  naming the expected and found versions, where the binary came from and
+  the remedy. A gate whose version cannot be read at all under the signal
+  is could-not-run too, reason `version-unverified`: the run was told which
+  build must judge it and cannot show that this is it. Both are enforced
+  whatever the policy's `enforce` says, and `advisory` never touches exit
+  2. The job-log line, annotation and step-summary line 0.12.0 printed as
+  warnings are now errors (`::error::`), and the text report and SARIF note
+  say the gate was not run. Resolution order is unchanged, and a plain
+  `conductor run` without the signal is unchanged.
+
+  **The consumer cost.** A push run whose repository has a gate
+  devDependency at a version other than the action's pin, which
+  `node_modules/.bin` resolves ahead of the action's install, now exits 2
+  instead of running the stale gate with a warning. So does a run with a
+  second install of a gate earlier on `PATH`, or a policy `command:`
+  pointing at another build. **Remedy:** bump the devDependency to the
+  pin, or remove it (the action installs the gate itself); remove the
+  other install from `PATH`; or point the `command:` at the pinned
+  version, or remove it. **Watch the push run, not the pull request.** A
+  pull request never consults `node_modules/.bin`, so the pull request
+  that moves the action, or a gate devDependency, on its own is green, and
+  the exit 2 first shows on the push run to the default branch after
+  merge. The pin includes the action's default gate versions, which move
+  with action releases, so a Dependabot or Renovate bump of the action
+  alone, or of one gate devDependency alone, gives a green pull request and
+  a red default branch: move the action and the gate devDependencies in
+  the same pull request. A version probe that times out under the Action
+  is enforced too, whatever the policy's `enforce` says.
+
 ## [0.12.0] - 2026-10-18
 
 **A minor release: it adds an exit 2.**

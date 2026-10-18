@@ -3334,24 +3334,25 @@ describe('the PATH version-skew warning', () => {
     CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: '1.8.0',
   };
 
-  it('names both versions and where the binary was found, and changes nothing else', () => {
+  it('names both versions and where the binary was found, and is could-not-run with exit 2', () => {
     const bin = stubbed('1.8.5');
     const result = runCli(repoWithPolicy(), ['run', '--staged'], bin, { env: EXPECTED });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain('conductor: warning: vault-guard resolved from PATH reports version 1.8.5');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('conductor: error: vault-guard resolved from PATH reports version 1.8.5');
     expect(result.stderr).toContain('expects 1.9.0');
     expect(result.stderr).toContain(path.join(bin, 'vault-guard'));
-    expect(result.stderr).not.toContain('warning: dep-guard');
-    expect(result.stdout).toMatch(/clean, nothing blocked/);
+    expect(result.stderr).not.toContain('error: dep-guard');
+    expect(result.stderr).toContain('gate secrets (vault-guard 1.8.5): could-not-run (version-skew)');
   });
 
   it('says nothing when the versions match, or when nothing says what to expect', () => {
     const matching = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.9.0'), { env: EXPECTED });
     const unset = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('1.8.5'));
 
-    expect(matching.stderr).not.toContain('warning:');
-    expect(unset.stderr).not.toContain('warning:');
+    expect([matching.status, unset.status]).toEqual([0, 0]);
+    expect(matching.stderr).not.toMatch(/resolved from|version-skew/);
+    expect(unset.stderr).not.toMatch(/resolved from|version-skew/);
   });
 
   it('ignores an expected version that is not an exact x.y.z', () => {
@@ -3360,7 +3361,7 @@ describe('the PATH version-skew warning', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain('warning:');
+    expect(result.stderr).not.toMatch(/resolved from|version-skew/);
   });
 });
 
@@ -3368,7 +3369,8 @@ describe('the PATH version-skew warning', () => {
 // repository's own devDependency in node_modules/.bin outranks the action's
 // global install, by design, and the skew used to be recorded for PATH
 // alone, so every guard repository's own CI ran stale gates with the pins
-// set and nothing printed. Reporting only: which binary runs is unchanged.
+// set and nothing printed. 0.13.0: under the signal it is could-not-run;
+// which binary resolution picks is unchanged.
 describe('the version-skew warning for a node_modules/.bin gate', () => {
   const EXPECTED = {
     CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.0',
@@ -3390,18 +3392,18 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
     return { repo, bin };
   }
 
-  it('warns on a plain run, naming the location, and still runs that binary', () => {
+  it('outside Actions, under the signal, names the location and exits 2 without running that binary', () => {
     const { repo, bin } = setup('1.7.0');
     const result = runCli(repo, ['run', '--staged'], bin, { env: EXPECTED });
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain(
-      'conductor: warning: vault-guard resolved from node_modules/.bin reports version 1.7.0, but this run expects 1.9.0'
+      'conductor: error: vault-guard resolved from node_modules/.bin reports version 1.7.0, but this run expects 1.9.0'
     );
     expect(result.stderr).toContain(`It was found at ${path.join('node_modules', '.bin', 'vault-guard')}.`);
     expect(result.stderr).toContain("the repository's own vault-guard");
-    expect(result.stderr).toContain('gate secrets (vault-guard 1.7.0)');
-    expect(result.stderr).not.toContain('::warning');
+    expect(result.stderr).toContain('gate secrets (vault-guard 1.7.0): could-not-run (version-skew)');
+    expect(result.stderr).not.toContain('::error');
   });
 
   it('puts the skew in the SARIF log and in the gate block of the text report', () => {
@@ -3415,7 +3417,7 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
       { env: EXPECTED }
     );
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(2);
     const log = JSON.parse(readFileSync(sarifPath, 'utf8'));
     const umbrella = log.runs.find((run: { tool: { driver: { name: string } } }) => run.tool.driver.name === 'conductor');
     const notes = umbrella.invocations[0].toolExecutionNotifications.filter(
@@ -3433,11 +3435,11 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
     });
     const text = readFileSync(textPath, 'utf8');
     expect(text).toContain(
-      `  ! conductor/version-skew: vault-guard 1.7.0 ran, from ${path.join('node_modules', '.bin', 'vault-guard')}, but this run expects 1.9.0`
+      `  ! conductor/version-skew: vault-guard 1.7.0, from ${path.join('node_modules', '.bin', 'vault-guard')}, was not run: this run expects 1.9.0`
     );
   });
 
-  it('in GitHub Actions also writes a warning annotation and a step-summary line', () => {
+  it('in GitHub Actions also writes an error annotation and a step-summary line', () => {
     const { repo, bin } = setup('1.7.0');
     const summary = path.join(tempDir(), 'summary.md');
     writeFileSync(summary, '');
@@ -3446,12 +3448,12 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
       env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(2);
     expect(result.stdout).toMatch(
-      /^::warning title=conductor version skew::vault-guard resolved from node_modules\/\.bin reports version 1\.7\.0, but this run expects 1\.9\.0/m
+      /^::error title=conductor version skew::vault-guard resolved from node_modules\/\.bin reports version 1\.7\.0, but this run expects 1\.9\.0/m
     );
     expect(readFileSync(summary, 'utf8')).toContain(
-      'conductor warning: vault-guard 1.7.0 ran from node_modules/.bin, but this run expects 1.9.0 (the version the action pinned).'
+      'conductor error: vault-guard resolved from node_modules/.bin reports version 1.7.0, but this run expects 1.9.0 (the version the action pinned), so conductor did not run it'
     );
   });
 
@@ -3466,9 +3468,9 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
     });
 
     expect(result.stderr).toContain('vault-guard resolved from PATH reports version 1.8.5');
-    expect(result.stdout).toMatch(/^::warning title=conductor version skew::vault-guard resolved from PATH reports version 1\.8\.5/m);
+    expect(result.stdout).toMatch(/^::error title=conductor version skew::vault-guard resolved from PATH reports version 1\.8\.5/m);
     const written = readFileSync(summary, 'utf8');
-    expect(written).toContain('vault-guard 1.8.5 ran from PATH');
+    expect(written).toContain('vault-guard resolved from PATH reports version 1.8.5');
     // An absolute machine path stays in the job log line only.
     expect(written).not.toContain(bin);
   });
@@ -3482,11 +3484,11 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
       env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
     });
 
-    const annotation = result.stdout.split('\n').find((line) => line.startsWith('::warning')) ?? '';
+    const annotation = result.stdout.split('\n').find((line) => line.startsWith('::error')) ?? '';
     expect(annotation).toContain('reports version 1.7.0errorpwnedb0Ax,');
-    expect(annotation.slice('::warning title=conductor version skew::'.length)).not.toContain('::');
+    expect(annotation.slice('::error title=conductor version skew::'.length)).not.toContain('::');
     const written = readFileSync(summary, 'utf8');
-    expect(written).toContain('vault-guard 1.7.0errorpwnedb0Ax ran from');
+    expect(written).toContain('reports version 1.7.0errorpwnedb0Ax,');
     expect(written).not.toMatch(/[<%;]/);
   });
 
@@ -3499,8 +3501,8 @@ describe('the version-skew warning for a node_modules/.bin gate', () => {
       env: { ...EXPECTED, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
     });
 
-    expect(result.stderr).not.toContain('warning:');
-    expect(result.stdout).not.toContain('::warning');
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toMatch(/::warning|::error/);
     expect(readFileSync(summary, 'utf8')).toBe('');
     expect(readFileSync(sarifPath, 'utf8')).not.toContain('conductor/version-skew');
   });
@@ -3594,5 +3596,50 @@ describe('an invalid timeout-seconds', () => {
     expect(result.stdout).toMatch(/secrets {2}vault-guard 1\.10\.0 .* limit 60s \(policy\)/);
     expect(result.stdout).toMatch(/policy changed in this pull request/);
     expect(result.stderr).not.toContain('timeout-seconds must be');
+  });
+});
+
+// 0.13.0 (docs/superpowers/specs/2026-10-18-version-skew-could-not-run.md):
+// the two could-not-run outcomes under the Action's expected-version signal,
+// through the CLI and its exit code. At the end of the file so the cited
+// lines above do not move.
+describe('a gate version that is not the expected one, through the CLI', () => {
+  const EXPECTED = {
+    CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.0',
+    CONDUCTOR_EXPECTED_VAULT_GUARD_VERSION: '1.9.0',
+    CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: '1.8.0',
+  };
+  function stubbed(vaultVersion: string): string {
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, exit: 0, version: vaultVersion });
+    stubGate(bin, 'intent-guard', { stdout: CLEAN_INTENT_GUARD, exit: 0, version: '1.8.0' });
+    return bin;
+  }
+
+  it('exits 2 for a skew even when the policy says enforce: false, and even with --advisory', () => {
+    const policy = ALL_THREE_POLICY.replace('    product: vault-guard\n', '    product: vault-guard\n    enforce: false\n');
+    expect(policy).toContain('enforce: false');
+
+    const plain = runCli(repoWithPolicy(policy), ['run', '--staged'], stubbed('1.8.5'), { env: EXPECTED });
+    const advisory = runCli(repoWithPolicy(policy), ['run', '--staged', '--advisory'], stubbed('1.8.5'), {
+      env: EXPECTED,
+    });
+
+    expect(plain.status).toBe(2);
+    expect(plain.stderr).toContain('gate secrets (vault-guard 1.8.5): could-not-run (version-skew)');
+    expect(plain.stderr).not.toContain('not enforced');
+    expect(advisory.status).toBe(2);
+  });
+
+  it('exits 2 when the version cannot be read under the signal, and 0 without it', () => {
+    const signal = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('not a version'), { env: EXPECTED });
+    const plain = runCli(repoWithPolicy(), ['run', '--staged'], stubbed('not a version'));
+
+    expect(signal.status).toBe(2);
+    expect(signal.stderr).toContain('could-not-run (version-unverified)');
+    expect(signal.stderr).toContain('could not be read, so it is not known to be 1.9.0');
+    expect(plain.status).toBe(0);
+    expect(plain.stderr).not.toContain('version-unverified');
   });
 });

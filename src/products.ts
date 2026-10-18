@@ -137,35 +137,46 @@ export type LockfileKind = 'bare' | 'requirements';
  * named by the unread-manifests note instead). gradle's
  * verification-metadata.xml is read only inside a `gradle` directory and is
  * matched by `osvLockfileKind` rather than listed here.
+ *
+ * ONE TABLE, name to ecosystem family (0.13.0): its keys ARE the name list,
+ * so a name cannot be handed to osv-scanner without a family. The family is
+ * read by the emptied-lockfile replacement rule (src/osv-baseline.ts), where
+ * a replacement must be of the removed file's family; see
+ * `osvLockfileFamily`.
  */
-export const OSV_LOCKFILE_NAMES: readonly string[] = [
-  'package-lock.json',
-  'npm-shrinkwrap.json',
-  'pnpm-lock.yaml',
-  'yarn.lock',
-  'bun.lock',
-  'go.mod',
-  'poetry.lock',
-  'Pipfile.lock',
-  'uv.lock',
-  'pdm.lock',
-  'Cargo.lock',
-  'Gemfile.lock',
-  'composer.lock',
-  'gradle.lockfile',
-  'packages.lock.json',
-  'mix.lock',
-  'pubspec.lock',
-  'Package.resolved',
-  'conan.lock',
-  'renv.lock',
-  'packages.config',
-  'buildscript-gradle.lockfile',
-  'gems.locked',
-  'pylock.toml',
-  'cabal.project.freeze',
-  'stack.yaml.lock',
-];
+export const OSV_LOCKFILE_ECOSYSTEMS = {
+  'package-lock.json': 'javascript',
+  'npm-shrinkwrap.json': 'javascript',
+  'pnpm-lock.yaml': 'javascript',
+  'yarn.lock': 'javascript',
+  'bun.lock': 'javascript',
+  'go.mod': 'go',
+  'poetry.lock': 'python',
+  'Pipfile.lock': 'python',
+  'uv.lock': 'python',
+  'pdm.lock': 'python',
+  'Cargo.lock': 'rust',
+  'Gemfile.lock': 'ruby',
+  'composer.lock': 'php',
+  'gradle.lockfile': 'jvm',
+  'packages.lock.json': 'dotnet',
+  'mix.lock': 'hex',
+  'pubspec.lock': 'dart',
+  'Package.resolved': 'swift',
+  'conan.lock': 'conan',
+  'renv.lock': 'r',
+  'packages.config': 'dotnet',
+  'buildscript-gradle.lockfile': 'jvm',
+  'gems.locked': 'ruby',
+  'pylock.toml': 'python',
+  'cabal.project.freeze': 'haskell',
+  'stack.yaml.lock': 'haskell',
+} as const satisfies Record<string, string>;
+
+/** An ecosystem family, as the replacement rule compares them. */
+export type OsvEcosystemFamily = (typeof OSV_LOCKFILE_ECOSYSTEMS)[keyof typeof OSV_LOCKFILE_ECOSYSTEMS];
+
+export const OSV_LOCKFILE_NAMES: readonly string[] = Object.keys(OSV_LOCKFILE_ECOSYSTEMS);
 
 /** gradle's dependency verification file, which 2.4.0 reads only under a `gradle` directory. */
 const GRADLE_VERIFICATION_METADATA = 'verification-metadata.xml';
@@ -201,6 +212,37 @@ export function osvLockfileKind(file: string): LockfileKind | null {
     return 'bare';
   }
   return REQUIREMENTS_PATTERNS.some((pattern) => pattern.test(basename)) ? 'requirements' : null;
+}
+
+/**
+ * The ecosystem family of a tracked file, or null. DERIVED FROM
+ * `osvLockfileKind`, never a second list: a file with no kind has no family,
+ * a requirements file is python, gradle's verification-metadata.xml (matched
+ * by kind on its parent) is jvm, and every other bare name is looked up in
+ * the one table above. Null means unknown, and an unknown family matches
+ * nothing, itself included: callers compare with `sameOsvFamily`.
+ */
+export function osvLockfileFamily(file: string): OsvEcosystemFamily | null {
+  const kind = osvLockfileKind(file);
+  if (kind === null) {
+    return null;
+  }
+  if (kind === 'requirements') {
+    return 'python';
+  }
+  const basename = file.split('/').pop() ?? '';
+  if (basename === GRADLE_VERIFICATION_METADATA) {
+    return 'jvm';
+  }
+  return Object.hasOwn(OSV_LOCKFILE_ECOSYSTEMS, basename)
+    ? OSV_LOCKFILE_ECOSYSTEMS[basename as keyof typeof OSV_LOCKFILE_ECOSYSTEMS]
+    : null;
+}
+
+/** Whether two tracked files are of one known ecosystem family. Fail closed: unknown never matches. */
+export function sameOsvFamily(a: string, b: string): boolean {
+  const left = osvLockfileFamily(a);
+  return left !== null && left === osvLockfileFamily(b);
 }
 
 /**

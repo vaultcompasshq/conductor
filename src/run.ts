@@ -525,10 +525,12 @@ function splitOnTreeUnchanged(
 
 /**
  * The environment variables the Action sets to say which version of each
- * family gate it pinned, read only to warn when a gate resolved from PATH
- * reports a different one. Not a control input: nothing about resolution or
- * the verdict reads them, so a run that sets them wrongly gets a wrong warning
- * and nothing else.
+ * family gate it pinned. Since 0.13.0 a control input, in ONE DIRECTION
+ * ONLY: a gate that reports another version, or none, is could-not-run
+ * (runGate), and nothing else reads them. They can add a could-not-run and
+ * never clear a gate or drop a finding, so a run that sets them wrongly fails
+ * closed and a run without them is the plain run it always was. Resolution
+ * is unchanged.
  */
 const EXPECTED_VERSION_ENV: Partial<Record<Product, string>> = {
   'dep-guard': 'CONDUCTOR_EXPECTED_DEP_GUARD_VERSION',

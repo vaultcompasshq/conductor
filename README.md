@@ -92,7 +92,9 @@ required.
 
    **Globally, and that is the guidance for CI too.** A devDependency is
    fine beside it for your own pre-commit hook, and nothing about a local
-   run changed. It is not what gates your pull requests: on a pull-request
+   run changed, but under the Action keep it at the Action's pin or a push
+   run is could-not-run (see "The Action" below). It is not what gates
+   your pull requests: on a pull-request
    run the umbrella never looks in `node_modules/.bin` at all, because what
    is installed there is chosen by the head's own manifest and lockfile. The
    Action installs all four packages itself, globally, at versions pinned in
@@ -1319,9 +1321,16 @@ workspace, and prepends that bin directory to `PATH`, so the run step invokes
 is **unconditional**, on push and `pull_request` alike, so there is one code
 path rather than one that matters and one that nobody exercises. On a push
 run, though, a repository's own devDependency on a gate in
-`node_modules/.bin` outranks that install and shadows the action's pin; when
-its version differs from the pin, conductor now warns in the job log, as a
-`::warning::` annotation and in the step summary, and still runs it.
+`node_modules/.bin` outranks that install and shadows the action's pin. Since
+0.13.0, when a gate's version differs from the pin, wherever it was found
+(`node_modules/.bin`, `PATH` or a policy `command:`), conductor does not run
+it: the gate is could-not-run, reason `version-skew`, and the run exits 2,
+whatever the policy's `enforce` and whatever `advisory` say. It is named in
+the job log, as a `::error::` annotation, in the step summary and in the
+reports. A gate whose version cannot be read under the Action is
+could-not-run too, reason `version-unverified`. The fix is to bump the
+devDependency to the pin or remove it. A plain `conductor run` outside the
+Action sets no pin and is unchanged.
 
 **On a pull request those four inputs may not pin backward.** The shape check
 asks whether an input is an exact version; it says nothing about which one, and

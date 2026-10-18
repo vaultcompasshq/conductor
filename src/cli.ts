@@ -918,7 +918,8 @@ export function buildProgram(): Command {
         // STEP-SUMMARY LINE, so a run on a stale gate is visible on the run's
         // page without anybody opening the log (audit 2026-10-18: every guard
         // repository's own push runs used a stale devDependency for weeks and
-        // only the log said which version ran). Reporting only. The
+        // only the log said which version ran). Since 0.13.0 that gate is
+        // could-not-run, decided in runGate; these lines only say so. The
         // annotation goes to stdout when stdout is not the report (--output
         // given, which is how the Action runs), and to stderr otherwise. A
         // summary that cannot be written is skipped: it never changes the

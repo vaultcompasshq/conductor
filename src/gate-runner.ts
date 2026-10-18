@@ -148,6 +148,19 @@ export type CouldNotRunReason =
    */
   | 'lockfile-emptied'
   /**
+   * The run was told which version of this gate must judge it (the Action's
+   * pin, `RunGateOptions.expectedVersion`) and the resolved binary reports
+   * another one, from whichever location resolution took it. The gate's
+   * check was not run. Design:
+   * docs/superpowers/specs/2026-10-18-version-skew-could-not-run.md.
+   */
+  | 'version-skew'
+  /**
+   * The same expectation, and the resolved binary's version could not be
+   * read, so it is not known to be the expected one. Fail closed.
+   */
+  | 'version-unverified'
+  /**
    * The same check could not clear the head: a base copy unreadable, a base
    * run that failed or printed no count, a command-line mismatch, or a head
    * run whose stderr carries no package count (a lowered verbosity).
@@ -247,7 +260,43 @@ export const CONDUCTOR_OWN_REASONS: ReadonlySet<CouldNotRunReason> = new Set<Cou
   'timed-out',
   'lockfile-emptied',
   'lockfile-emptied-unverified',
+  'version-skew',
+  'version-unverified',
 ]);
+
+/**
+ * A probed version as it may be printed. The probe for the family gates
+ * accepts anything after x.y.z on the first line, and the text reaches a
+ * workflow command, the step summary and the reports, so only version
+ * characters are kept.
+ */
+export function versionCharacters(raw: string): string {
+  return raw.replace(/[^0-9A-Za-z.+-]/g, '').slice(0, 64);
+}
+
+/** Where a resolved binary came from, in words. Never a machine path. */
+export function resolutionPlace(source: ResolutionSource): string {
+  return source === 'node_modules' ? 'node_modules/.bin' : source === 'path' ? 'PATH' : 'the policy command';
+}
+
+/**
+ * The remedy for a gate that is not at the expected version, which depends
+ * on where the binary came from. THE ONE PLACE it is written: the
+ * could-not-run detail and every version-skew line in src/output-text.ts
+ * call this.
+ */
+export function versionSkewRemedy(product: string, source: ResolutionSource, expected: string): string {
+  if (source === 'node_modules') {
+    return (
+      `Fix: bump or remove the repository's own ${product} devDependency. node_modules/.bin outranks ` +
+      "PATH outside a pull request, so on a push run it shadows the action's install."
+    );
+  }
+  if (source === 'path') {
+    return `Fix: remove the other ${product} from PATH, or install ${expected}.`;
+  }
+  return `Fix: point the policy command at ${product} ${expected}, or remove the command override.`;
+}
 
 /**
  * A gate's time limit, and where it came from. THE ONE PLACE the precedence
@@ -823,9 +872,9 @@ export interface GateOutcome {
    * Present only when the version this gate reported differs from the one
    * the run was told to expect (the Action's pin, handed over as an
    * environment variable), and both are known, WHEREVER the binary was
-   * resolved from. A statement for a warning, never an input to a decision:
-   * resolution, trust-base handling and the exit code are all settled
-   * without it.
+   * resolved from. Since 0.13.0 it is present exactly on a `version-skew`
+   * could-not-run, and carries the facts the warning surfaces print; it is
+   * the outcome, not this record, that the exit code reads.
    *
    * Every location, not only PATH (audit 2026-10-18, the intent-guard
    * audit's MB3). Outside a pull request a repository's own devDependency in
@@ -866,8 +915,9 @@ export interface RunGateOptions {
   /**
    * The version this run expects of the gate, when something says so (the
    * Action passes its pin). Compared with what the resolved binary reports,
-   * wherever it was found, for a warning only. Absent means no expectation,
-   * which is every local run.
+   * wherever it was found: another version is `version-skew` and an
+   * unreadable one `version-unverified`, both could-not-run (0.13.0). Absent
+   * means no expectation, which is every local run, and changes nothing.
    */
   expectedVersion?: string;
   repoRoot: string;
@@ -1723,13 +1773,15 @@ function runGateInner(
     // would read as trust-base-unverified, a packaging problem that does not
     // exist), and a local run does not go on to scan with the version
     // unknown. Enforced under a trust base, like trust-base-unverified: the
-    // gate could not be placed inside the boundary.
+    // gate could not be placed inside the boundary. Enforced under the
+    // Action's expected-version signal too, like version-unverified: the run
+    // cannot show this is the pinned build.
     const detail = timedOutDetail(gate, 'version-probe', timeLimit, probed.elapsedMs, options.trustBase);
     const timedOut = timedOutRecord('version-probe', timeLimit, probed.elapsedMs, probed.signal);
     return {
       ...base,
       binary,
-      enforce: options.trustBase !== undefined ? true : gate.enforce,
+      enforce: options.trustBase !== undefined || options.expectedVersion !== undefined ? true : gate.enforce,
       durationMs: Date.now() - started,
       exitCode: null,
       couldNotRun: { reason: 'timed-out', detail, timedOut },
@@ -1740,23 +1792,56 @@ function runGateInner(
   }
   const version = probed.kind === 'version' ? probed.value : null;
 
-  // A binary at a different version than the run was told to expect, from
-  // whichever location resolution took it (node_modules/.bin, PATH or a
-  // policy command): a fact for a warning and nothing else. It sits on
-  // `progress` (which `base` is) so every outcome from here on carries it,
-  // and no branch below reads it.
-  if (options.expectedVersion !== undefined && version !== null && version !== options.expectedVersion) {
+  // THE EXPECTED VERSION (0.13.0, design
+  // docs/superpowers/specs/2026-10-18-version-skew-could-not-run.md). When
+  // the run was told which version must judge it (the Action's pin), a
+  // binary at another version, or one whose version cannot be read, is
+  // could-not-run, from whichever location resolution took it
+  // (node_modules/.bin, PATH or a policy command). Resolution itself is
+  // unchanged. Here, right after the probe and before the command-line floor
+  // and decideTrustBase, so nothing past the probe runs. ENFORCED whatever
+  // the policy says, like a refused program: the gate produced no verdict for
+  // `enforce: false` to be a decision about. No expectation (every plain run)
+  // skips all of this.
+  if (options.expectedVersion !== undefined && version !== options.expectedVersion) {
+    const expected = options.expectedVersion;
     const relative = path.relative(options.repoRoot, binary.program);
     const inside =
       relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-    Object.assign(progress, {
-      versionSkew: {
-        expected: options.expectedVersion,
-        found: version,
-        source: binary.source,
-        path: inside ? relative : binary.program,
-      },
-    });
+    // Repository-relative inside the repository; outside it, words only,
+    // because this detail reaches the reports and a published log.
+    const place = binary.source === 'node_modules' && inside ? relative : resolutionPlace(binary.source);
+    const remedy = versionSkewRemedy(gate.product, binary.source, expected);
+    const pinned = `${expected} (the version the action pinned)`;
+    const detail =
+      version === null
+        ? `${gate.product} did not run: the version of the build resolved from ${place} could not be read, ` +
+          `so it is not known to be ${pinned}. ${remedy}`
+        : `${gate.product} did not run: the build resolved from ${place} reports version ` +
+          `${versionCharacters(version)}, but this run expects ${pinned}. ${remedy}`;
+    return {
+      ...base,
+      ...(version === null
+        ? {}
+        : {
+            // Kept for the job-log line, the annotation, the step summary,
+            // the text report line and the SARIF note that 0.12.0 printed.
+            versionSkew: {
+              expected,
+              found: version,
+              source: binary.source,
+              path: inside ? relative : binary.program,
+            },
+          }),
+      productVersion: version,
+      binary,
+      enforce: true,
+      durationMs: Date.now() - started,
+      couldNotRun: { reason: version === null ? 'version-unverified' : 'version-skew', detail },
+      findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
   }
 
   // The command-line floor. Only the external tools have one: the umbrella

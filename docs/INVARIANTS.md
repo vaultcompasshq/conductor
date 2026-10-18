@@ -1385,7 +1385,7 @@ tests/gate-runner-timeout.test.ts:296 ("a head policy raising the limit to
 21600 leaves the scan at the base 10 s, as a proposal") and
 tests/gate-runner-timeout.test.ts:306 ("a key only on the head leaves the
 scan at the gitleaks default"), and for an invalid head value by
-tests/cli.test.ts:3574 ("only in the head of a pull-request run leaves the
+tests/cli.test.ts:3576 ("only in the head of a pull-request run leaves the
 run on the base policy, as a proposal").
 
 ### The branch-name convention is a convenience, not a control
@@ -2077,58 +2077,98 @@ binary of the same product is probed in its place), and by
 tests/policy.test.ts:141 for the absolute-path rule. The candidate table
 itself is pinned at tests/resolve.test.ts:232 and 239.
 
-### A version that is not the pin is said out loud, from every location, and changes nothing
+### Under the Action, a gate that is not at the pin does not run, from every location
 
 The Action hands conductor the versions it pinned
-(CONDUCTOR_EXPECTED_DEP_GUARD_VERSION and its two siblings, exact x.y.z
-only). When a resolved family gate reports a different version, the
-outcome records `versionSkew` with the expected and found versions, the
-resolution source and the path, WHEREVER the binary came from:
-node_modules/.bin, PATH or a policy command (src/gate-runner.ts:1748).
-Until audit 2026-10-18 (the intent-guard audit's MB3) the condition also
-required `binary.source === 'path'`, so the most common skew of all was
-silent: on a push run a repository's own devDependency in node_modules/.bin
-outranks the Action's global install by the rule above, and every guard
-repository's own push-to-main job ran stale gates (intent-guard's ran
-dep-guard 0.6.0, vault-guard 1.7.0 and intent-guard 1.2.1) with the pins
-set and nothing printed. A pull-request run never consults
-node_modules/.bin, so this is a push-run and local-run statement.
+(CONDUCTOR_EXPECTED_DEP_GUARD_VERSION and its two siblings, src/run.ts:535;
+exact x.y.z only, src/run.ts:542, and the Action's validate step refuses
+anything else before conductor runs). Since 0.13.0 (operator ruling
+2026-10-18, design
+docs/superpowers/specs/2026-10-18-version-skew-could-not-run.md), when that
+expectation is present and the resolved family gate reports a different
+version, WHEREVER the binary came from (node_modules/.bin, PATH or a policy
+command), the gate is could-not-run, reason `version-skew`; when the
+version cannot be read at all it is could-not-run, reason
+`version-unverified` (fail closed: the run cannot show the build is the
+pinned one). Both are decided in one place, directly after the version
+probe and before the command-line floor and `decideTrustBase`, so nothing
+past the probe runs (src/gate-runner.ts:1806), and both are ENFORCED
+whatever the policy's `enforce` says; `--advisory` never touches exit 2. A
+timed-out probe stays `timed-out`, and under the expectation it is enforced
+too, for the same reason. With no expectation (every plain CLI run) none of
+this runs and nothing changed. Resolution order is unchanged.
 
-REPORTING ONLY. Which binary runs is unchanged, and skew is never a
-could-not-run: no branch after the record reads it, and the exit code and
-the verdict token are what they would have been without it. Turning skew
-into a could-not-run is an open operator decision, announced in the
-CHANGELOG for the next minor release and not implemented.
+STILL OPEN: on a pull request the intent gate's preparation (import-spec,
+freeze) runs the resolved PATH intent-guard before runGate's check, so a
+skewed PATH intent-guard runs those two commands first. The exit is still 2
+(a prepared gate then reads `version-skew`; a failed preparation is
+enforced under the trust base), but the reason can read
+`preparation-failed` instead of `version-skew`. And a policy `command:`
+naming the legacy intent-guard-check is version-checked through the first
+version-safe `intent-guard` sibling found, which under the Action is the
+pinned install, so an old build named that way is not caught; it needs a
+maintainer-written base policy pointing at a pre-1.2.0 build.
 
-Where it is said: the job-log warning line on stderr
-(`versionSkewWarnings`, src/output-text.ts:927), which names the file and
-the remedy for its source; a `! conductor/version-skew` line under the gate
-header in the text report (`versionSkewLine`, src/output-text.ts:980), and
-so in the pull request comment; a note-level `conductor/version-skew`
-notification in the SARIF umbrella run (src/output-sarif.ts:972); and, in
-GitHub Actions only (GITHUB_ACTIONS=true), a `::warning::` annotation and a
-step-summary paragraph (src/cli.ts:926). The path is repository-relative
-for a node_modules/.bin binary; a PATH binary's absolute machine path is in
-the job-log line only, never in a report, the annotation or the summary.
-The found version is cut to version characters before it reaches any of
-those surfaces, because the family probe accepts anything after x.y.z.
+The expectation is a control input in ONE DIRECTION ONLY: it can add a
+could-not-run and never clear a gate or drop a finding, so a wrong value
+fails closed. History: until audit 2026-10-18 (the intent-guard audit's
+MB3) the 0.12.0 warning fired for PATH alone, so on a push run a
+repository's own devDependency in node_modules/.bin (which outranks the
+Action's global install by the rule above) ran stale gates with nothing
+printed; 0.12.0 warned from every location and announced this change. A
+pull-request run never consults node_modules/.bin, so a skew there comes
+from PATH or a policy command.
 
-Pinned by tests/gate-runner.test.ts:1818 ("records version skew for a
-node_modules/.bin gate, the location named repository-relative"), 1835
-("records version skew for a PATH gate, with its absolute path") and 1849
-("records no skew for a node_modules/.bin gate at the expected version"),
-and through the CLI by tests/cli.test.ts:3393 ("warns on a plain run,
-naming the location, and still runs that binary"), 3407 ("puts the skew in
-the SARIF log and in the gate block of the text report"), 3440 ("in GitHub
-Actions also writes a warning annotation and a step-summary line"), 3458
-("warns for a PATH gate in Actions the same way") and 3493 ("says nothing
-anywhere when the node_modules/.bin gate matches the pin"). Mutation, run:
-restoring `binary.source === 'path'` to the condition turned 4 tests red
-(the gate-runner node_modules case and the first three CLI cases), and the
-PATH and matching cases stayed green, as they should. The version cut
-(`skewFound`, src/output-text.ts:897) is pinned by tests/cli.test.ts:3476
-("cuts a probed version with junk after x.y.z to version characters on
-every GitHub surface"); making it the identity turned that test red.
+Where it is said: the could-not-run detail names the found and expected
+versions, the place in words or repository-relative (never a machine path),
+and the remedy for its source (`versionSkewRemedy`, src/gate-runner.ts:288,
+the one place it is written); the `versionSkew` record is kept on a
+`version-skew` outcome only, for the job-log error line on stderr
+(`versionSkewWarnings`, src/output-text.ts:923), which names the file; a
+`! conductor/version-skew` line under the gate header in the text report
+(`versionSkewLine`, src/output-text.ts:968), and so in the pull request
+comment; a note-level `conductor/version-skew` notification in the SARIF
+umbrella run (src/output-sarif.ts:973) beside the gate's own could-not-run;
+and, in GitHub Actions only (GITHUB_ACTIONS=true), an `::error::`
+annotation and a step-summary paragraph (src/cli.ts:927). The found
+version is cut to version characters (`versionCharacters`,
+src/gate-runner.ts:273) before it reaches any of those surfaces, because
+the family probe accepts anything after x.y.z.
+
+Pinned by tests/gate-runner.test.ts:1918 ("is could-not-run, version-skew,
+for a skewed node_modules/.bin gate, and never runs its scan"), 1944 ("is
+could-not-run for a skewed PATH gate, naming PATH and never its machine
+path"), 1956 ("is enforced even when the policy says enforce: false"), 1970
+("runs a gate at the expected version, with no skew"), 1980 ("changes
+nothing without the signal: the skewed gate runs"), 1993 ("is
+could-not-run, version-unverified, when the version cannot be read under
+the signal"), 2011 ("runs a gate whose version cannot be read when there
+is no signal, as before") and 2021 ("enforces a version probe that timed out
+under the signal, whatever the policy says"); by the record tests 1818 ("records version skew
+for a node_modules/.bin gate, the location named repository-relative") and
+1835 ("records version skew for a PATH gate, with its absolute path"); and
+through the CLI by tests/cli.test.ts:3337 ("names both versions and where
+the binary was found, and is could-not-run with exit 2"), 3349 ("says
+nothing when the versions match, or when nothing says what to expect"),
+3395 ("outside Actions, under the signal, names the location and exits 2
+without running that binary"), 3409 ("puts the skew in the SARIF log and in
+the gate block of the text report"), 3442 ("in GitHub Actions also writes
+an error annotation and a step-summary line"), 3460 ("warns for a PATH gate
+in Actions the same way"), 3495 ("says nothing anywhere when the
+node_modules/.bin gate matches the pin"), 3620 ("exits 2 for a skew even
+when the policy says enforce: false, and even with --advisory") and 3635
+("exits 2 when the version cannot be read under the signal, and 0 without
+it"). Mutations, each run against tests/gate-runner.test.ts and
+tests/cli.test.ts: recording the skew and running the gate anyway (the
+0.12.0 behaviour) turned 8 red; dropping the skew branch and its record
+turned 13 red; dropping the unreadable branch turned 2 red (the two
+version-unverified cases); keeping the policy's `enforce` turned 2 red (the
+two enforce: false cases); leaving a timed-out probe under the signal to
+the policy's `enforce` turned 1 red; failing an unreadable version closed WITHOUT the
+signal turned 6 red (the two no-signal controls and four trust-base and
+plain-run cases elsewhere). The version cut is pinned by
+tests/cli.test.ts:3478 ("cuts a probed version with junk after x.y.z to
+version characters on every GitHub surface").
 
 ## The policy file is a passthrough, and the reserved list is the only exception
 
@@ -4965,54 +5005,79 @@ Known open, each a limit rather than a bypass on a pull request:
    (`noLongerScannedFiles`). The gate copies their base blobs and runs
    osv-scanner once on the copies, with the head's argv minus its
    lockfiles, under what is left of the gate's time limit
-   (`checkEmptiedAgainstBase`, src/osv-baseline.ts:279, driven by
-   `removalCheck`, src/gate-runner.ts:1936, which runs at
-   src/gate-runner.ts:2092 when nothing at all was handed, at
-   src/gate-runner.ts:2335 on exit 128 and at src/gate-runner.ts:2547
+   (`checkEmptiedAgainstBase`, src/osv-baseline.ts:305, driven by
+   `removalCheck`, src/gate-runner.ts:2019, which runs at
+   src/gate-runner.ts:2175 when nothing at all was handed, at
+   src/gate-runner.ts:2418 on exit 128 and at src/gate-runner.ts:2630
    before the base comparison). A copy with packages makes the gate
    could-not-run, reason `lockfile-emptied`, naming the file and the base
    count, even when the head also blocked; a deleted or moved file is
    cleared only by a head-handed lockfile in the SAME directory that read
-   packages, is not a requirements file, and is absent from the base tree
-   (src/osv-baseline.ts:358): a lockfile the base already had, such as a
-   Cargo.lock beside the deleted package-lock.json, carries another
-   manifest's packages and does not count, and a base listing that errors
-   does not count either. Unlike the base comparison this FAILS CLOSED, reason
+   packages, is not a requirements file, is absent from the base tree, is
+   of the removed file's ecosystem family, and is a regular file in the
+   head's index (src/osv-baseline.ts:391-402): a lockfile the base already
+   had, such as a Cargo.lock beside the deleted package-lock.json, carries
+   another manifest's packages and does not count, and a base listing that
+   errors does not count either. The last two halves are 0.13.0 (operator
+   ruling 2026-10-18, from the adversarial review of PR #121). The family
+   comes from the one table that also IS the list of names osv-scanner is
+   handed (`OSV_LOCKFILE_ECOSYSTEMS`, src/products.ts:147, read through
+   `osvLockfileFamily`, src/products.ts:225, which is derived from
+   `osvLockfileKind`: requirements files are python, gradle's
+   verification-metadata.xml is jvm), so a name cannot be handed without a
+   family, and a file with no family matches nothing, itself included
+   (`sameOsvFamily`, src/products.ts:243). The regular-file half reads the
+   head's index, the listing the handed files come from, with a literal
+   pathspec (`regularInHeadIndex`, src/osv-baseline.ts:268): mode 100644 or
+   100755 at stage 0, and a symbolic link (120000), a missing or conflicted
+   entry, or an unreadable index does not count. Unlike the base comparison this FAILS CLOSED, reason
    `lockfile-emptied-unverified`: an unreadable base copy or base tree, an
    asymmetric command line, a base run that fails or prints no count for a
-   copy, and (src/gate-runner.ts:2526) a head run that printed no count
+   copy, and (src/gate-runner.ts:2609) a head run that printed no count
    line for a handed non-requirements lockfile, which is what a verbosity
    option in the policy's osv-scanner options causes; conductor names it
    and does not edit it. No budget left, or a base run stopped at it, is
    `timed-out`, step `base-check`. A base copy that is absent or read no
    packages changes nothing, and a head that could not run is left as it
-   was with no base spawn. Pinned by tests/osv-emptied-base.test.ts:113
-   ("is could-not-run, naming the file and the base count"), 128 ("is
-   could-not-run, not blocked, when the head also blocks"), 139 ("changes
-   nothing on a plain run: the lockfiles-empty line, no base run"), 148
-   ("changes nothing when the head lockfile still has packages"), 160
-   ("changes nothing when the base lockfile was already empty"), 169
-   ("changes nothing when the lockfile is new in this pull request"), 177
-   ("is could-not-run when the base run fails"), 184 ("is timed-out, step
-   base-check, when the base run outlives the remaining limit"), 191
+   was with no base spawn. Pinned by tests/osv-emptied-base.test.ts:114
+   ("is could-not-run, naming the file and the base count"), 129 ("is
+   could-not-run, not blocked, when the head also blocks"), 140 ("changes
+   nothing on a plain run: the lockfiles-empty line, no base run"), 149
+   ("changes nothing when the head lockfile still has packages"), 161
+   ("changes nothing when the base lockfile was already empty"), 170
+   ("changes nothing when the lockfile is new in this pull request"), 178
+   ("is could-not-run when the base run fails"), 185 ("is timed-out, step
+   base-check, when the base run outlives the remaining limit"), 192
    ("leaves a head that could not run as it was, and spawns no base run"),
-   199 ("on exit 128 checks the base copy of every handed lockfile"), 218
+   200 ("on exit 128 checks the base copy of every handed lockfile"), 219
    ("is could-not-run after git mv plus an emptied copy (the replacement
-   reads 0)"), 233 ("is could-not-run when the only lockfile is deleted"),
-   242 ("is could-not-run when the replacement sits in another
-   directory"), 254 ("changes nothing when a populated replacement sits in
-   the same directory"), 268 ("is could-not-run when the only
-   same-directory lockfile was already on the base (Cargo.lock)"), 311
-   ("does not count a pinned requirements file the base already had"), 322
-   ("does not count a requirements file new in the pull request"), 331
+   reads 0)"), 234 ("is could-not-run when the only lockfile is deleted"),
+   243 ("is could-not-run when the replacement sits in another
+   directory"), 255 ("changes nothing when a populated replacement sits in
+   the same directory"), 269 ("is could-not-run when the only
+   same-directory lockfile was already on the base (Cargo.lock)"), 312
+   ("does not count a pinned requirements file the base already had"), 323
+   ("does not count a requirements file new in the pull request"), 332
    ("does not count a lockfile the base already had in the same
-   directory"), 340 ("counts a populated lockfile new in the pull request
-   in the same directory"), 353 ("is could-not-run, unverified, under a
-   trust base, naming the file"), 362 ("changes nothing on a plain run"),
-   387 ("is timed-out, with nothing spawned, when no budget is left"), 403
+   directory"), 341 ("counts a populated lockfile new in the pull request
+   in the same directory"), 354 ("is could-not-run, unverified, under a
+   trust base, naming the file"), 363 ("changes nothing on a plain run"),
+   388 ("is timed-out, with nothing spawned, when no budget is left"), 404
    ("is unverified when the base run printed no count line for a copy")
-   and, through the CLI with the token, 414 ("exits 2 with token could-not-run
-   beside another lockfile and another gate"); and by
+   and, through the CLI with the token, 415 ("exits 2 with token could-not-run
+   beside another lockfile and another gate"); for the 0.13.0 halves by
+   478 ("is could-not-run when the only replacement is a new lockfile of
+   another ecosystem (Cargo.lock)"), 489 ("does not count a new lockfile of
+   another ecosystem, called directly"), 498 ("is could-not-run when the
+   only replacement is a symbolic link to a populated lockfile elsewhere"),
+   517 ("does not count a symbolic link, called directly"), 527 ("does not
+   count a replacement with no entry in the head index"), 534 ("changes
+   nothing for an npm-to-pnpm rename with a populated regular file"), 546
+   ("counts a same-family regular file new in the pull request, called
+   directly"), 555 ("does not clear when the replacement has no ecosystem
+   family"), 564 ("does not clear when neither side has an ecosystem family
+   (two unknown kinds never match)") and 573 ("gives every handed name a
+   family, from the one table, and none to an unknown name"); and by
    tests/osv-base-comparison.test.ts:193 ("is could-not-run when the
    lockfile that left had packages on the base and nothing replaced it").
    Mutations, each run on the fix-round tree: skipping the base spawn
@@ -5024,21 +5089,32 @@ Known open, each a limit rather than a bypass on a pull request:
    turned 2 red; treating a missing head count as clear turned 1 red;
    dropping the base-absence half of the replacement rule turned 2 red
    (the two Cargo.lock cases), and dropping the requirements-file half
-   turned 1 red (the requirements file new in the pull request).
+   turned 1 red (the requirements file new in the pull request). 0.13.0
+   mutations, each run against tests/osv-emptied-base.test.ts: dropping
+   the family half turned 4 red (the two new-Cargo.lock cases and the two
+   no-family cases); letting an unknown family match an unknown family
+   turned 1 red (the two-unknown-kinds case); dropping the regular-file
+   half turned 3 red (the two symbolic-link cases and the no-index-entry
+   case); accepting mode 120000 inside it turned 2 red (the two
+   symbolic-link cases).
+   CLOSED in 0.13.0: a new populated lockfile of ANOTHER ecosystem in the
+   same directory (a one-package Cargo.lock beside a deleted
+   package-lock.json) and a symbolic link to a populated lockfile from
+   elsewhere no longer clear a removed one.
    STILL OPEN: on a plain run there is no base to compare against, so the
    notes are all there is (and a lowered verbosity turns the
    lockfiles-empty note off); an emptied, deleted or moved requirements
    file is not checked under a trust base either (its include closure is
    out of scope); and when nothing at all was handed the base run has no
    head command line to be held against, so the symmetry check is skipped
-   there. The replacement rule has no ecosystem or content tie: a new
-   populated lockfile of any ecosystem in the same directory clears a
-   removed one (a one-package Cargo.lock clears a deleted
-   package-lock.json), as does a copy of, or a symbolic link to, a lockfile
-   from elsewhere, and one replacement clears every removed lockfile in its
-   directory. Each needs a deliberate added file visible in the diff, and the
-   `conductor/lockfile-no-longer-scanned` note still fires. Tying the
-   replacement to the removed file's ecosystem is an open operator decision.
+   there. The replacement rule has no content tie: a regular-file COPY of a
+   same-family lockfile from elsewhere (another directory's
+   package-lock.json committed as pnpm-lock.yaml beside the deleted one)
+   still clears it, and one replacement clears every removed lockfile of
+   its family in its directory (not ruled, kept). Each needs a deliberate
+   added file visible in the diff, and the
+   `conductor/lockfile-no-longer-scanned` note still fires. Closing the
+   copy residual needs a content tie, an open operator decision.
    The fail-closed branch for a base listing error (a replacement whose base
    lookup errors does not count) has no test; it is reachable only through a
    symbolic link or submodule parent on the base.
