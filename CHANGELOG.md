@@ -14,6 +14,56 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-17
+
+**An action-only release. The tag moves; the npm package does not.**
+`@vaultcompass/conductor` stays at 0.11.0 on npm and the action's
+`conductor-version` default stays `0.11.0`.
+
+### Changed
+
+- **The umbrella now installs `vault-guard` 1.12.0 by default, up from
+  1.11.0.** vault-guard 1.12.0 lowers to low a key-shaped match that is
+  entirely base64, sits strictly inside a base64 run of 1024 or more
+  characters, and whose run decodes to the binary format its declared media
+  type names (or to a PNG or JPEG header for a run with no data: prefix). It
+  also shows five or more matches of one rule in one column of a data file as
+  one grouped finding in the text output. No finding is removed, fingerprints
+  and baselines are unchanged, and every match stays in JSON and SARIF. JSON
+  `results[].file` and text paths are now relative to the scan root. The
+  `TAG_VAULT_GUARD_*` constants in `action.yml` move in lockstep with the
+  default, since those constants are what the pull-request backward-pin rule
+  measures a pin against; the vault-guard pull-request-mode floor
+  (`TRUST_BASE_MIN_VERSION` in `src/gate-runner.ts`) stays at 1.9.1.
+
+  **What can newly turn a run green.** Under the default gate (medium), and
+  under fail-on high or critical, a demoted finding no longer blocks. Under
+  fail-on low it still blocks. **The consumer cost.** On a pull request, an
+  explicit `vault-guard-version` below `1.12.0` is refused; remove the input
+  or raise it. Outside a pull request an explicit pin is unaffected. To hold
+  back, stay on the previous action tag, v0.11.0.
+
+- **The umbrella now installs `dep-guard` 0.15.0 by default, up from
+  0.14.0.** dep-guard 0.15.0 makes a manifest that does not parse fatal
+  (exit 2) in more positions on every side and scan prefix, whatever
+  `ignorePaths` says: a `pyproject.toml`, `Pipfile` or `uv.toml` beside a
+  Python or npm-family lockfile or named by a uv workspace's `members`, a
+  Python manifest under a skipped directory name beside a Python lockfile,
+  and the target of a `file:`, `link:` or `portal:` dependency. It lists every
+  such manifest in one error instead of the first only, and adds `notParsed`
+  counts to the JSON ecosystem summaries. No verdict is loosened. The
+  `TAG_DEP_GUARD_*` constants in `action.yml` move in lockstep with the
+  default, since those constants are what the pull-request backward-pin rule
+  measures a pin against; the dep-guard pull-request-mode floor
+  (`TRUST_BASE_MIN_VERSION` in `src/gate-runner.ts`) stays at 0.10.1.
+
+  **What can newly turn a run red.** A repository that is green today and
+  carries a deliberately broken manifest in one of those positions can newly
+  exit 2. Fix the file it names. **The consumer cost.** On a pull request, an
+  explicit `dep-guard-version` below `0.15.0` is refused; remove the input or
+  raise it. Outside a pull request an explicit pin is unaffected. To hold
+  back, stay on the previous action tag, v0.11.0.
+
 ## [0.11.0] - 2026-10-18
 
 **A minor release.** The intent gate's branch-name spec match moves to whole
