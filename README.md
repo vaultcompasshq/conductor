@@ -359,11 +359,17 @@ gates:
   secrets-history:
     product: gitleaks
     enabled: true
+    # Enabled because gitleaks was found on the machine that ran init. CI must
+    # install gitleaks itself (conductor does not); without it this gate
+    # reports conductor/gate-missing and the run exits 2.
     stage: ci
     enforce: true
   vulnerabilities:
     product: osv-scanner
     enabled: true
+    # Enabled because osv-scanner was found on the machine that ran init. CI must
+    # install osv-scanner itself (conductor does not); without it this gate
+    # reports conductor/gate-missing and the run exits 2.
     stage: ci
     enforce: true
     present-on-base: report
@@ -1092,6 +1098,29 @@ could-not-run until TMPDIR names one outside it.
 gate (gitleaks) enabled, because conductor hands it `git log --diff-merges`,
 which arrived in git 2.31. Only that gate checks: an older git makes it
 could-not-run, naming the version, and the other gates run.
+
+### Trying pull-request mode locally
+
+To see roughly what CI would say about a branch, check it out and name the
+base as the trust base:
+
+```
+conductor run --trust-base refs/remotes/origin/main --verbose
+```
+
+`--trust-base` takes any ref git resolves in your clone, so use a clone with
+the base branch present (the CI recipes use `fetch-depth: 0` for the same
+reason). With no `GITHUB_BASE_REF` set, as on a laptop, the change set for the
+intent gate is measured from the trust base, so `--base` is optional; add
+`--base <ref>` to measure from a different ref. Add `--stage ci` to run at
+the stage the Action runs at.
+
+The gotcha is the same locally as in CI: the policy and the other control
+files are read from the base ref, not from your working tree. A local edit to
+`.guardrails.yaml` has no effect on a `--trust-base` run until the change is
+on the base; it shows up as a proposal line in the report instead. To preview
+a policy edit, run `conductor run` without `--trust-base`, as in "Adopting
+conductor" above.
 
 ## Intent at a pull request
 
@@ -2000,6 +2029,62 @@ This is a substitute for code-scanning alerts, not the same thing. A comment
 is one snapshot of one run: no per-finding state, nothing to dismiss, no
 history between runs, and a new comment every time rather than an alert that
 closes when the finding goes away.
+
+## Upgrading
+
+An adopter pins two numbers, and they control different things.
+
+- **The action ref**, `uses: vaultcompasshq/conductor@<tag or SHA>`, picks
+  which `action.yml` runs. That file carries the defaults for the four
+  version inputs and the constants the pull-request backward-pin rule
+  measures a pin against.
+- **The `conductor-version` input** picks which `@vaultcompass/conductor`
+  the install step installs. The same step installs the three gates at
+  `dep-guard-version`, `vault-guard-version` and `intent-guard-version`.
+  Each input defaults to the version the tag shipped.
+
+**The recommended shape is to leave all four version inputs unset** and move
+only the action ref. On a pull request, the validate step refuses an input
+naming a version below the one the tag ships, so an explicit old pin breaks
+the day you upgrade the ref (see "The Action" above). Outside a pull request
+an explicit pin is unaffected, which is how a stale pin can sit unnoticed
+until the first pull request after the upgrade.
+
+**Pin the action ref to a full commit SHA** with the tag as a comment, for
+example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.11.1`. To
+find the SHA for a tag, run
+`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.11.1` or read it off
+the Releases page.
+
+**Dependabot or Renovate bumping that SHA changes the action ref only.** It
+does not touch a `dep-guard-version`, `vault-guard-version`,
+`intent-guard-version` or `conductor-version` you set by hand, so such a pin
+must be raised or removed by hand in the same pull request, or that pull
+request is refused by the rule above.
+
+**An action-only tag moves the tag while the npm package stays.** The
+CHANGELOG marks these as "An action-only release" and says which
+`conductor-version` default stays. `@vaultcompass/conductor` does not change
+on those, so `conductor-version` need not change either; the gate defaults
+may.
+
+Defaults per tag, taken only from CHANGELOG.md entries that state them. A
+tag with no row here has an entry that does not state its defaults; read
+`action.yml` at that tag.
+
+| Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
+| --- | --- | --- | --- |
+| v0.11.1 | action-only | 0.11.0 | dep-guard 0.15.0 (from 0.14.0), vault-guard 1.12.0 (from 1.11.0) |
+| v0.11.0 | package | 0.11.0 | dep-guard 0.14.0, intent-guard 1.10.0 |
+| v0.10.0 | package | 0.10.0 | dep-guard 0.13.0, vault-guard 1.11.0 |
+| v0.8.2 | action-only | 0.8.1 | dep-guard 0.11.1 (from 0.10.1) |
+| v0.8.1 | package | 0.8.1 | dep-guard 0.10.1, vault-guard 1.9.1, intent-guard 1.8.1 |
+| v0.8.0 | package | 0.8.0 | dep-guard 0.10.0, vault-guard 1.9.0, intent-guard 1.8.0 |
+| v0.7.0 | package | 0.7.0 | none |
+| v0.6.0 | package | 0.6.0 | dep-guard 0.9.0 (from 0.8.0), intent-guard 1.7.0 (from 1.6.0) |
+| v0.5.1 | action-only | 0.5.0 | dep-guard 0.8.0 (from 0.7.0), intent-guard 1.6.0 (from 1.5.2) |
+| v0.4.4 | action-only | 0.4.0 | dep-guard 0.7.0 (from 0.6.0), vault-guard 1.8.0 (from 1.7.0) |
+| v0.4.3 | action-only | 0.4.0 | intent-guard 1.5.2 (from 1.4.0) |
 
 ## What is in and what is out
 
