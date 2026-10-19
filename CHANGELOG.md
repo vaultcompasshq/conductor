@@ -14,6 +14,33 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-19
+
+**An action-only release. The tag moves; the npm package does not.**
+`@vaultcompass/conductor` stays at 0.13.0 on npm and the action's
+`conductor-version` default stays `0.13.0`.
+
+### Changed
+
+- **The umbrella now installs `dep-guard` 0.16.1 by default, up from
+  0.15.0.** This covers dep-guard 0.16.0 and 0.16.1 together. The gate now
+  judges a manifest under `ignorePaths` when the change makes it a project,
+  follows symbolic links physically, fails closed on an online name it could
+  not check, and holds Python commit pins to a strict form. The
+  `TAG_DEP_GUARD_*` constants in `action.yml` move in lockstep with the
+  default, since those constants are what the pull-request backward-pin rule
+  measures a pin against; the dep-guard pull-request-mode floor
+  (`TRUST_BASE_MIN_VERSION` in `src/gate-runner.ts`) stays at 0.10.1.
+
+  **What can newly turn a run red.** A repository that is green today can
+  newly fail where a manifest sits under an ignored path, where a symbolic
+  link led the old scan elsewhere, where an online name could not be
+  checked, or where a Python commit pin is not in the strict form. **The
+  consumer cost.** On a pull request, an explicit `dep-guard-version` below
+  `0.16.1` is refused; remove the input or raise it. Outside a pull request
+  an explicit pin is unaffected. To hold back, stay on the previous action
+  tag, v0.13.0.
+
 ## [0.13.0] - 2026-10-18
 
 **A minor release: it adds two exit 2 cases.**
