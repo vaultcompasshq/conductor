@@ -69,7 +69,7 @@ inputs:
     description: >-
       The exact version of the dependency gate this action installs. Same
       rule as conductor-version.
-    default: 0.15.0
+    default: 0.16.1
   vault-guard-version:
     description: >-
       The exact version of the secrets gate this action installs. Same rule
@@ -312,7 +312,7 @@ runs:
         # THE TESTED VERSIONS THIS TAG SHIPS, and they move with the pins
         # above. One constant serving both is how raising one silently raises
         # the other. As of this tag dep-guard shows the difference: its constant
-        # here is 0.15.0, floor 0.10.1; vault-guard 1.12.1, floor 1.9.1;
+        # here is 0.16.1, floor 0.10.1; vault-guard 1.12.1, floor 1.9.1;
         # intent-guard 1.10.1, floor 1.8.1. Raising a constant need not raise one.
         #
         # COMPARED AGAINST THESE HARDCODED CONSTANTS, never against anything
@@ -334,8 +334,8 @@ runs:
         TAG_CONDUCTOR_MINOR=13
         TAG_CONDUCTOR_PATCH=0
         TAG_DEP_GUARD_MAJOR=0
-        TAG_DEP_GUARD_MINOR=15
-        TAG_DEP_GUARD_PATCH=0
+        TAG_DEP_GUARD_MINOR=16
+        TAG_DEP_GUARD_PATCH=1
         TAG_VAULT_GUARD_MAJOR=1
         TAG_VAULT_GUARD_MINOR=12
         TAG_VAULT_GUARD_PATCH=1
