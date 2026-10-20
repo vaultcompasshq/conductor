@@ -2092,18 +2092,38 @@ version cannot be read at all it is could-not-run, reason
 `version-unverified` (fail closed: the run cannot show the build is the
 pinned one). Both are decided in one place, directly after the version
 probe and before the command-line floor and `decideTrustBase`, so nothing
-past the probe runs (src/gate-runner.ts:1806), and both are ENFORCED
-whatever the policy's `enforce` says; `--advisory` never touches exit 2. A
-timed-out probe stays `timed-out`, and under the expectation it is enforced
-too, for the same reason. With no expectation (every plain CLI run) none of
-this runs and nothing changed. Resolution order is unchanged.
+past the probe runs (src/gate-runner.ts:1933, one builder at
+src/gate-runner.ts:1411), and both are ENFORCED whatever the policy's
+`enforce` says; `--advisory` never touches exit 2. A timed-out probe stays
+`timed-out`, and under the expectation it is enforced too, for the same
+reason. With no expectation (every plain CLI run) none of this runs and
+nothing changed. Resolution order is unchanged.
 
-STILL OPEN: on a pull request the intent gate's preparation (import-spec,
-freeze) runs the resolved PATH intent-guard before runGate's check, so a
-skewed PATH intent-guard runs those two commands first. The exit is still 2
-(a prepared gate then reads `version-skew`; a failed preparation is
-enforced under the trust base), but the reason can read
-`preparation-failed` instead of `version-skew`. And a policy `command:`
+The intent gate's preparation is no exception (residual 3, closed
+2026-10-20). On a pull-request-shaped run the preparation spawns the
+resolved intent-guard for import-spec and freeze before runGate, and a
+failed or timed-out preparation ends the gate there. Before this fix that
+skipped the version decision entirely: on an Action push run (no trust
+base, so node_modules/.bin outranks the Action's install) with the `spec`
+or `base-ref` input set and `enforce: false`, an off-pin devDependency
+whose import-spec failed read `preparation-failed`, not enforced, exit 0.
+Now runAll makes the same decision first, after the head-controlled
+program check and before any preparation spawn
+(`expectedVersionBeforePreparation`, src/gate-runner.ts:1479, called at
+src/run.ts:603), with the same probe and the same builder, so an off-pin
+or unreadable build is `version-skew` or `version-unverified`, enforced,
+and only its `--version` is ever spawned. An on-pin build whose
+preparation fails keeps the existing rule: enforced under a trust base,
+the policy's `enforce` otherwise. Pinned by
+tests/intent-run.test.ts:1615 ("is version-skew and exit 2 for an off-pin intent-guard whose preparation would fail, with enforce: false and no trust base"),
+tests/intent-run.test.ts:1630 ("never spawns an off-pin intent-guard for import-spec or freeze, even when its preparation would succeed"),
+tests/intent-run.test.ts:1642 ("is version-unverified before the preparation when the version cannot be read under the expectation"),
+tests/intent-run.test.ts:1654 ("is an enforced time-out before the preparation when the version probe is stopped under the expectation"),
+tests/intent-run.test.ts:1679 ("is version-skew, not preparation-failed, for an off-pin PATH intent-guard under a trust base"),
+tests/intent-run.test.ts:1705 ("keeps the policy enforce for an on-pin intent-guard whose preparation fails with no trust base")
+and tests/intent-run.test.ts:1721 ("changes nothing without the expectation: an off-pin intent-guard is prepared as before").
+
+STILL OPEN: a policy `command:`
 naming the legacy intent-guard-check is version-checked through the first
 version-safe `intent-guard` sibling found, which under the Action is the
 pinned install, so an old build named that way is not caught; it needs a

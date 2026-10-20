@@ -1566,3 +1566,187 @@ describe('the branch-name convention on every report surface', () => {
     expect(JSON.stringify(weak)).not.toContain('`');
   });
 });
+
+/**
+ * The expected version is decided BEFORE the intent preparation (residual 3,
+ * 2026-10-20). The preparation spawns the resolved intent-guard twice
+ * (import-spec, freeze) before runGate reaches the version check, and a
+ * failed preparation then `continue`d past it. On an Action push run (no
+ * trust base, so node_modules/.bin outranks the Action's install) with the
+ * spec or base-ref input set and `enforce: false`, an off-pin devDependency
+ * whose import-spec failed read preparation-failed, not enforced, exit 0,
+ * where runGate would have said version-skew, exit 2. At the end of the file
+ * so the cited lines above do not move.
+ */
+describe('the expected intent-guard version, before the preparation', () => {
+  const PIN = { CONDUCTOR_EXPECTED_INTENT_GUARD_VERSION: '1.9.0' };
+
+  /** The repository's own intent-guard in node_modules/.bin, logging every non-version invocation. */
+  function devDependency(
+    root: string,
+    version: string,
+    importSpec: { stdout?: string; stderr?: string; exit?: number }
+  ): string {
+    const log = path.join(tempDir(), 'invocations.txt');
+    stubIntentGuard(path.join(root, 'node_modules', '.bin'), {
+      importSpec,
+      freeze: { stdout: FREEZE },
+      check: { stdout: CHECK_PASSING },
+      version,
+      argvLog: log,
+    });
+    return log;
+  }
+
+  /** A push-shaped run: a base ref (the Action's base-ref input) and no trust base. */
+  function pushRun(root: string, options: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): RunResult {
+    return runAll(INTENT_UNENFORCED, {
+      repoRoot: root,
+      staged: false,
+      pathValue: tempDir(),
+      env: options.env ?? PIN,
+      base: 'main',
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    });
+  }
+
+  const FAILING = { stderr: 'import-spec: no.', exit: 2 };
+
+  it('is version-skew and exit 2 for an off-pin intent-guard whose preparation would fail, with enforce: false and no trust base', () => {
+    const root = repo();
+    devDependency(root, '1.4.0', FAILING);
+
+    const result = pushRun(root);
+
+    expect(result.gates[0].couldNotRun?.reason).toBe('version-skew');
+    expect(result.gates[0].couldNotRun?.detail).toContain(
+      `intent-guard did not run: the build resolved from ${path.join('node_modules', '.bin', 'intent-guard')} reports version 1.4.0, but this run expects 1.9.0 (the version the action pinned).`
+    );
+    expect(result.gates[0].versionSkew).toMatchObject({ expected: '1.9.0', found: '1.4.0', source: 'node_modules' });
+    expect(result.gates[0].enforce).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('never spawns an off-pin intent-guard for import-spec or freeze, even when its preparation would succeed', () => {
+    const root = repo();
+    const log = devDependency(root, '1.4.0', { stdout: IMPORT_DRY_RUN });
+
+    const result = pushRun(root);
+
+    expect(existsSync(log)).toBe(false);
+    expect(result.gates[0].couldNotRun?.reason).toBe('version-skew');
+    expect(result.gates[0].productVersion).toBe('1.4.0');
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('is version-unverified before the preparation when the version cannot be read under the expectation', () => {
+    const root = repo();
+    const log = devDependency(root, 'not a version', FAILING);
+
+    const result = pushRun(root);
+
+    expect(existsSync(log)).toBe(false);
+    expect(result.gates[0].couldNotRun?.reason).toBe('version-unverified');
+    expect(result.gates[0].enforce).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('is an enforced time-out before the preparation when the version probe is stopped under the expectation', () => {
+    const root = repo();
+    const log = path.join(tempDir(), 'invocations.txt');
+    const planted = path.join(root, 'node_modules', '.bin', 'intent-guard');
+    mkdirSync(path.dirname(planted), { recursive: true });
+    writeFileSync(
+      planted,
+      [
+        '#!/bin/sh',
+        `if [ "$1" != "--version" ]; then printf '%s\\n' "$1" >> ${JSON.stringify(log)}; exit 2; fi`,
+        'sleep 5',
+        'echo "1.9.0"',
+      ].join('\n') + '\n'
+    );
+    chmodSync(planted, 0o755);
+
+    const result = pushRun(root, { timeoutMs: 300 });
+
+    expect(existsSync(log)).toBe(false);
+    expect(result.gates[0].couldNotRun?.reason).toBe('timed-out');
+    expect(result.gates[0].couldNotRun?.timedOut?.step).toBe('version-probe');
+    expect(result.gates[0].enforce).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('is version-skew, not preparation-failed, for an off-pin PATH intent-guard under a trust base', () => {
+    const root = repo();
+    const bin = tempDir();
+    const log = path.join(tempDir(), 'invocations.txt');
+    stubIntentGuard(bin, {
+      importSpec: FAILING,
+      freeze: { stdout: FREEZE },
+      check: { stdout: CHECK_PASSING },
+      version: '1.8.0',
+      argvLog: log,
+    });
+
+    const result = runAll(INTENT_UNENFORCED, {
+      repoRoot: root,
+      staged: false,
+      pathValue: bin,
+      env: PIN,
+      base: 'main',
+      trustBase: { ref: 'main', policyChanged: false, refusal: null },
+    });
+
+    expect(existsSync(log)).toBe(false);
+    expect(result.gates[0].couldNotRun?.reason).toBe('version-skew');
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('keeps the policy enforce for an on-pin intent-guard whose preparation fails with no trust base', () => {
+    // Unchanged by this fix, pinned on purpose. The build IS the pinned one,
+    // so the version decision has nothing to say, and off a trust base an
+    // unenforced gate that could not be prepared is a note, the same as any
+    // other could-not-run of an on-pin gate under enforce: false.
+    const root = repo();
+    const log = devDependency(root, '1.9.0', FAILING);
+
+    const result = pushRun(root);
+
+    expect(readFileSync(log, 'utf8')).toContain('import-spec');
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+    expect(result.gates[0].enforce).toBe(false);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('changes nothing without the expectation: an off-pin intent-guard is prepared as before', () => {
+    const root = repo();
+    const log = devDependency(root, '1.4.0', FAILING);
+
+    const result = pushRun(root, { env: {} });
+
+    expect(readFileSync(log, 'utf8')).toContain('import-spec');
+    expect(result.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+    expect(result.gates[0].enforce).toBe(false);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('is version-skew for an off-pin intent-guard even when the repository has no spec, and a skip without the expectation', () => {
+    // The version is decided before preparation, so an off-pin build never
+    // reaches the no-contract skip under the action: the same answer runGate
+    // gives a run that is not pull-request shaped. Without the expectation
+    // the skip is unchanged.
+    const root = repo({ spec: false });
+    const log = devDependency(root, '1.4.0', FAILING);
+
+    const pinned = pushRun(root);
+
+    expect(existsSync(log)).toBe(false);
+    expect(pinned.gates[0].couldNotRun?.reason).toBe('version-skew');
+    expect(pinned.exitCode).toBe(2);
+
+    const unpinned = pushRun(root, { env: {} });
+
+    expect(unpinned.gates).toHaveLength(0);
+    expect(unpinned.exitCode).toBe(0);
+  });
+});
