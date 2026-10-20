@@ -14,6 +14,29 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An off-pin intent-guard whose preparation fails is now version-skew,
+  exit 2, instead of a pass.** On a pull-request-shaped run the intent
+  gate's preparation (import-spec, then freeze) ran the resolved
+  intent-guard before the expected-version check, and a failed preparation
+  ended the gate before that check was reached. So on an Action push run
+  with the `spec` or `base-ref` input set, `enforce: false` on the intent
+  gate, and an older intent-guard devDependency in node_modules/.bin whose
+  import-spec or freeze failed, the run reported an unenforced
+  preparation-failed and exited 0. The version is now decided before the
+  preparation, with the same probe and the same message as every other
+  gate: an off-pin build is `version-skew` and an unreadable one
+  `version-unverified`, both enforced, and neither is spawned for
+  import-spec or freeze. This can turn a green push run red. Under a trust
+  base the exit was already 2; the reason now reads `version-skew` instead
+  of `preparation-failed`. Because the version is decided first, an
+  off-pin build is `version-skew` on a pull-request-shaped run even when
+  the repository has no spec or waives it, where it used to be skipped;
+  that matches what the gate already reported on any other run. Runs
+  without the Action's expected version are unchanged, and so is an on-pin
+  build whose preparation fails.
+
 ## [0.13.1] - 2026-10-19
 
 **An action-only release. The tag moves; the npm package does not.**

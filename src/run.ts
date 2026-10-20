@@ -4,6 +4,7 @@ import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_COULD_NOT_RUN, composeExitCode, gateExitBlocks } from './exit-codes.js';
 import {
   type GateOutcome,
+  expectedVersionBeforePreparation,
   gateProgramRefused,
   preparationFailed,
   preparationTimedOut,
@@ -527,7 +528,8 @@ function splitOnTreeUnchanged(
  * The environment variables the Action sets to say which version of each
  * family gate it pinned. Since 0.13.0 a control input, in ONE DIRECTION
  * ONLY: a gate that reports another version, or none, is could-not-run
- * (runGate), and nothing else reads them. They can add a could-not-run and
+ * (runGate, and for the intent gate also before its preparation, below), and
+ * nothing else reads them. They can add a could-not-run and
  * never clear a gate or drop a finding, so a run that sets them wrongly fails
  * closed and a run without them is the plain run it always was. Resolution
  * is unchanged.
@@ -585,6 +587,27 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
             const refusal = refuseHeadControlledBinary(options.repoRoot, trustBaseRef, binary);
             if (refusal !== null) {
               outcomes.push(gateProgramRefused(gate, trustBaseRef, refusal, binary));
+              continue;
+            }
+          }
+
+          // THEN THE EXPECTED VERSION, still before the preparation spawns
+          // anything (residual 3, 2026-10-20). A failed or timed-out
+          // preparation ends this gate below, before runGate's own version
+          // check, so an off-pin build whose import-spec failed on a run with
+          // no trust base and enforce: false read as an unenforced
+          // preparation-failed, exit 0, instead of version-skew, exit 2. Same
+          // probe and same builder as runGate's. No expectation, no change.
+          const expected = expectedVersionOption(gate.product, env).expectedVersion;
+          if (expected !== undefined) {
+            const notExpected = expectedVersionBeforePreparation(gate, binary, {
+              repoRoot: options.repoRoot,
+              expectedVersion: expected,
+              ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+              ...(trustBaseRef === undefined ? {} : { trustBase: trustBaseRef }),
+            });
+            if (notExpected !== null) {
+              outcomes.push(notExpected);
               continue;
             }
           }

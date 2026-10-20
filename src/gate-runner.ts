@@ -1396,6 +1396,133 @@ function probeVersion(
 }
 
 /**
+ * The could-not-run for a gate whose version is not the expected one
+ * (`version-skew`) or cannot be read (`version-unverified`).
+ *
+ * ONE BUILDER, TWO CALLERS, like gateProgramRefused: runGate reaches it right
+ * after its version probe, and runAll reaches it earlier, through
+ * `expectedVersionBeforePreparation`, before the intent gate's preparation
+ * spawns the same binary. Two copies of the sentence would be two chances for
+ * the reason, the detail or the enforce override to drift apart.
+ *
+ * ENFORCED whatever the policy says: the gate produced no verdict for
+ * `enforce: false` to be a decision about.
+ */
+function versionNotExpected(
+  gate: GatePolicy,
+  binary: ResolvedBinary,
+  version: string | null,
+  expected: string,
+  repoRoot: string
+): GateOutcome {
+  const relative = path.relative(repoRoot, binary.program);
+  const inside =
+    relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  // Repository-relative inside the repository; outside it, words only,
+  // because this detail reaches the reports and a published log.
+  const place = binary.source === 'node_modules' && inside ? relative : resolutionPlace(binary.source);
+  const remedy = versionSkewRemedy(gate.product, binary.source, expected);
+  const pinned = `${expected} (the version the action pinned)`;
+  const detail =
+    version === null
+      ? `${gate.product} did not run: the version of the build resolved from ${place} could not be read, ` +
+        `so it is not known to be ${pinned}. ${remedy}`
+      : `${gate.product} did not run: the build resolved from ${place} reports version ` +
+        `${versionCharacters(version)}, but this run expects ${pinned}. ${remedy}`;
+  return {
+    role: gate.role,
+    product: gate.product,
+    stage: gate.stage,
+    argv: [],
+    exitCode: null,
+    durationMs: 0,
+    stderr: '',
+    ...(version === null
+      ? {}
+      : {
+          // Kept for the job-log line, the annotation, the step summary,
+          // the text report line and the SARIF note that 0.12.0 printed.
+          versionSkew: {
+            expected,
+            found: version,
+            source: binary.source,
+            path: inside ? relative : binary.program,
+          },
+        }),
+    productVersion: version,
+    binary,
+    enforce: true,
+    couldNotRun: { reason: version === null ? 'version-unverified' : 'version-skew', detail },
+    findings: [normalizeFailedGate(gate.role, gate.product, detail)],
+    run: EMPTY_RUN,
+    diagnostics: [],
+  };
+}
+
+/**
+ * The expected-version decision for the intent gate, made BEFORE its
+ * preparation (residual 3, 2026-10-20).
+ *
+ * The preparation spawns the resolved binary for import-spec and freeze, and
+ * a failed or timed-out preparation ends the gate there, so without this the
+ * version check in runGate was never reached: an off-pin build whose
+ * preparation failed on a run with no trust base and `enforce: false` read
+ * preparation-failed, not enforced, exit 0, where runGate would have said
+ * version-skew, exit 2. Here the same probe and the same builder as runGate's
+ * decide first, and only the probe is spawned.
+ *
+ * Null when the version is the expected one: the preparation and runGate then
+ * go on as before, and runGate probes again (one cheap spawn) and reaches the
+ * same answer. The caller only calls this when an expectation is set; a run
+ * without one never reaches it, and nothing about it changes.
+ */
+export function expectedVersionBeforePreparation(
+  gate: GatePolicy,
+  binary: ResolvedBinary,
+  options: { repoRoot: string; expectedVersion: string; timeoutMs?: number; trustBase?: string }
+): GateOutcome | null {
+  const timeLimit = resolveTimeLimit(gate, options.timeoutMs);
+  // What runGate's outcome carries on the same path, so the two report alike.
+  const skipped = options.trustBase === undefined ? null : nodeModulesCandidate(gate, options.repoRoot);
+  const carried = { timeLimit, ...(skipped === null ? {} : { nodeModulesSkipped: skipped }) };
+  const started = Date.now();
+  const probed = probeVersion(binary, gate.product, options.repoRoot, timeLimit.ms);
+  if (probed.kind === 'timed-out') {
+    // The same outcome runGate builds for a stopped probe under the
+    // expectation: enforced, because the run cannot show this is the pinned
+    // build.
+    const detail = timedOutDetail(gate, 'version-probe', timeLimit, probed.elapsedMs, options.trustBase);
+    const timedOut = timedOutRecord('version-probe', timeLimit, probed.elapsedMs, probed.signal);
+    return {
+      role: gate.role,
+      product: gate.product,
+      stage: gate.stage,
+      enforce: true,
+      productVersion: null,
+      argv: [],
+      binary,
+      exitCode: null,
+      durationMs: Date.now() - started,
+      stderr: '',
+      ...carried,
+      couldNotRun: { reason: 'timed-out', detail, timedOut },
+      findings: [timedOutFinding(gate, detail, timedOut)],
+      run: EMPTY_RUN,
+      diagnostics: [],
+    };
+  }
+  const version = probed.kind === 'version' ? probed.value : null;
+  if (version === options.expectedVersion) {
+    return null;
+  }
+  return {
+    ...versionNotExpected(gate, binary, version, options.expectedVersion, options.repoRoot),
+    ...carried,
+    durationMs: Date.now() - started,
+  };
+}
+
+/**
  * `context.blocked` is whether the gate's exit said it blocked. The npm gates
  * carry that in their own JSON and ignore it; the external tools' reports do
  * not, so their normalizers take it from here.
@@ -1804,43 +1931,10 @@ function runGateInner(
   // `enforce: false` to be a decision about. No expectation (every plain run)
   // skips all of this.
   if (options.expectedVersion !== undefined && version !== options.expectedVersion) {
-    const expected = options.expectedVersion;
-    const relative = path.relative(options.repoRoot, binary.program);
-    const inside =
-      relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-    // Repository-relative inside the repository; outside it, words only,
-    // because this detail reaches the reports and a published log.
-    const place = binary.source === 'node_modules' && inside ? relative : resolutionPlace(binary.source);
-    const remedy = versionSkewRemedy(gate.product, binary.source, expected);
-    const pinned = `${expected} (the version the action pinned)`;
-    const detail =
-      version === null
-        ? `${gate.product} did not run: the version of the build resolved from ${place} could not be read, ` +
-          `so it is not known to be ${pinned}. ${remedy}`
-        : `${gate.product} did not run: the build resolved from ${place} reports version ` +
-          `${versionCharacters(version)}, but this run expects ${pinned}. ${remedy}`;
     return {
       ...base,
-      ...(version === null
-        ? {}
-        : {
-            // Kept for the job-log line, the annotation, the step summary,
-            // the text report line and the SARIF note that 0.12.0 printed.
-            versionSkew: {
-              expected,
-              found: version,
-              source: binary.source,
-              path: inside ? relative : binary.program,
-            },
-          }),
-      productVersion: version,
-      binary,
-      enforce: true,
+      ...versionNotExpected(gate, binary, version, options.expectedVersion, options.repoRoot),
       durationMs: Date.now() - started,
-      couldNotRun: { reason: version === null ? 'version-unverified' : 'version-skew', detail },
-      findings: [normalizeFailedGate(gate.role, gate.product, detail)],
-      run: EMPTY_RUN,
-      diagnostics: [],
     };
   }
 
