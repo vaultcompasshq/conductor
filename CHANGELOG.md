@@ -14,6 +14,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-20
+
+**A patch package release that can turn a green run red.**
+`@vaultcompass/conductor` moves to 0.13.2 on npm and the action's
+`conductor-version` default moves to `0.13.2` in lockstep. The gate defaults
+are unchanged (dep-guard 0.16.1, vault-guard 1.12.1, intent-guard 1.10.1).
+
 ### Fixed
 
 - **An off-pin intent-guard whose preparation fails is now version-skew,
@@ -36,6 +43,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   that matches what the gate already reported on any other run. Runs
   without the Action's expected version are unchanged, and so is an on-pin
   build whose preparation fails.
+
+### Changed
+
+- **The action tag now ships conductor 0.13.2, and the gate defaults are
+  unchanged.** **The consumer cost.** An explicit `conductor-version` below
+  `0.13.2` (0.13.0 or 0.13.1 included) is refused on pull requests once this
+  tag ships; remove the input or raise it. Workflows that leave the input
+  unset take the new default.
 
 ## [0.13.1] - 2026-10-19
 
