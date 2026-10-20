@@ -371,15 +371,22 @@ jobs:
           # Two minutes was too short a budget to hang a red release run on:
           # intent-guard has watched one of its packages take about six
           # minutes to appear. Leave the registry room to be slow.
-          ATTEMPTS=36
-          DELAY=10
+          #
+          # About 20 minutes now: the registry has served version metadata
+          # about 9 minutes and the tarball about 15 minutes after publish.
+          # "npm install" fetches the tarball, so wait for both.
+          ATTEMPTS=80
+          DELAY=15
           BUDGET=$(( (ATTEMPTS - 1) * DELAY ))
           FOUND=0
           for i in $(seq 1 "${ATTEMPTS}"); do
             if [[ "$(npm view "@vaultcompass/conductor@${VERSION}" version 2>/dev/null)" == "${VERSION}" ]]; then
-              echo "Package visible on registry."
-              FOUND=1
-              break
+              TARBALL="$(npm view "@vaultcompass/conductor@${VERSION}" dist.tarball 2>/dev/null || true)"
+              if [[ -n "${TARBALL}" ]] && curl -sfI -o /dev/null "${TARBALL}"; then
+                echo "Package and tarball visible on registry."
+                FOUND=1
+                break
+              fi
             fi
             # No sleep after the last attempt: the loop is about to give up,
             # and sleeping first only makes the timeout later than it says.
