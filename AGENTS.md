@@ -3,7 +3,7 @@
 `@vaultcompass/conductor` is the umbrella over three independently
 installable guardrail gates (dep-guard, vault-guard, intent-guard): one
 policy file, one init, one hook, and one report across all three. See
-README.md for the full shape of the policy file, the hook, and the Action.
+README.md for the Action and docs/ for the policy file and the hook.
 
 ## The one rule that matters here
 
