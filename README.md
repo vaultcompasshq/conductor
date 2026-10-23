@@ -1,10 +1,10 @@
 # conductor
 
 conductor is the one required check for a repository an AI agent edits. It
-runs the scanners a maintainer already trusts, and adds the checks those
-scanners cannot do on their own: a hallucinated package name, a credential
-caught before the edit lands, a pull request that edits its own gate, a
-change that reaches outside what was approved for it.
+runs the scanners a maintainer already trusts beside the three family
+gates, which check what those scanners do not: a hallucinated package name,
+a credential caught before the edit lands, a pull request that edits its
+own gate, a change that reaches outside what was approved for it.
 
 It does that by running five gates over one policy file, one init, one
 hook and one report: three from this family, and two the adopter already
@@ -33,9 +33,69 @@ and osv-scanner, so both see a credential shape, a credential in history,
 and a known advisory. The other three are what a scanner that only knows
 about vulnerabilities and secrets has no way to know.
 
+## Quick start
+
+Install the umbrella and the three gates, look at what init would write, then
+write it with one pre-commit hook:
+
+```sh
+npm install -g @vaultcompass/conductor @vaultcompass/dep-guard @vaultcompass/vault-guard @vaultcompass/intent-guard
+conductor init --dry-run   # prints every file it would write, writes nothing
+conductor init --hook      # writes .guardrails.yaml and one pre-commit hook
+```
+
+The hook runs every enabled gate on each commit and prints one line when the
+commit is clean. Each gate can also be installed and run on its own.
+
+Then the same gates on every pull request, as one pinned workflow:
+
+```yaml
+name: guardrails
+on: [pull_request, push]
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks and osv-scanner
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/external-gates"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          curl -sSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C "$bin" gitleaks
+          curl -sSL -o "$bin/osv-scanner" https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64
+          echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  $bin/osv-scanner" | sha256sum -c -
+          chmod +x "$bin/osv-scanner"
+          echo "$bin" >> "$GITHUB_PATH"
+      - uses: vaultcompasshq/conductor@f2fa77069594c4ae4e8df2561924fc4e6a94fac0 # v0.13.2
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: conductor.sarif
+```
+
+One pin, not five: the action tag decides which version of each of the four
+npm packages is installed. The install step for gitleaks and osv-scanner is
+needed when the policy enables the secrets-history and vulnerabilities gates,
+and it pins both by version and checksum. On a pull request every gate reads
+its rules from the base branch, so a change cannot turn off the check that
+exists to catch it. The first pull request under a new policy cannot be judged
+by that policy, so read the careful path below before you make the check
+required.
+
+## Part of the Vault & Compass guardrails
+
 <!-- guardrails-family: shared block, keep it identical in dep-guard, vault-guard, intent-guard and conductor -->
 The Vault & Compass guardrails are three gates over an AI-assisted coding
-session: [dep-guard](https://www.npmjs.com/package/@vaultcompass/dep-guard)
+session, plus an optional umbrella: [dep-guard](https://www.npmjs.com/package/@vaultcompass/dep-guard)
 checks what comes in (hallucinated package names, typosquats, tampered
 lockfile entries),
 [vault-guard](https://www.npmjs.com/package/@vaultcompass/vault-guard) checks
@@ -53,7 +113,7 @@ vulnerabilities. conductor scans nothing itself and installs nothing that
 is not its own.
 <!-- /guardrails-family -->
 
-## Adopting conductor
+## Adopting conductor: the careful path
 
 The first pull request under a policy conductor just added cannot be judged
 by that policy, so plan for a short, ordered sequence rather than one
@@ -98,8 +158,9 @@ required.
    run the umbrella never looks in `node_modules/.bin` at all, because what
    is installed there is chosen by the head's own manifest and lockfile. The
    Action installs all four packages itself, globally, at versions pinned in
-   your workflow file. See "The pull-request trust boundary" and "The
-   Action" below.
+   your workflow file. See
+   [The pull-request trust boundary](docs/pull-request-trust-boundary.md) and
+   [The Action](#the-action) below.
 
    From the repository root, look before you write:
 
@@ -172,11 +233,11 @@ required.
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.7.0  exit 0  153ms  via dep-guard on path
+   dependencies  dep-guard 0.16.1  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
      mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online-flag not passed
 
-   secrets  vault-guard 1.8.0  exit 1  105ms  via vault-guard on path
+   secrets  vault-guard 1.12.1  exit 1  105ms  via vault-guard on path
      BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:14:12
          Possible secret of type 'anthropic'
      threshold medium   suppressed 0   ignored not reported
@@ -212,7 +273,8 @@ required.
    gate `skipped ... no contract` and never reaches the exit code. So a
    first pull request with no contract yet is not blocked by the intent gate
    on the pull request, whatever the local preview showed a moment before.
-   See "Intent at a pull request" below for the full mechanism.
+   See [Intent at a pull request](docs/intent-at-a-pull-request.md) for the
+   full mechanism.
 
 2. **Open the first pull request in advisory mode.** Add `.guardrails.yaml`
    and the workflow together, with `advisory: true` and `pr-comment: true`
@@ -250,7 +312,7 @@ A repository with history will not start clean, and a gate that is red on its
 first pull request gets switched off. The order that works:
 
 1. **Advisory first.** The first pull request runs with `advisory: true` and
-   `pr-comment: true`, as in "Adopting conductor" above. Findings print and
+   `pr-comment: true`, as in "Adopting conductor: the careful path" above. Findings print and
    are commented, and none of them fails the run.
 
 2. **Record what is already there, in each gate's own file.** conductor does
@@ -328,974 +390,14 @@ It does not overrule a gate. A gate that says a commit is blocked blocks
 the commit. The umbrella can add to that decision and never subtracts from
 it.
 
-## The policy file
-
-`.guardrails.yaml`, at the repository root. `conductor init` writes one with
-every gate listed and only the ones it found switched on.
-
-```yaml
-version: 1
-
-gates:
-  dependencies:
-    product: dep-guard
-    enabled: true
-    stage: commit
-    enforce: true
-    options:
-      fail-on: high
-  secrets:
-    product: vault-guard
-    enabled: true
-    stage: commit
-    enforce: true
-  intent:
-    product: intent-guard
-    enabled: true
-    stage: ci
-    # It runs and reports in CI without failing the run. Flip it to
-    # true once a few pull requests show the signal is worth blocking on.
-    enforce: false
-    options:
-      require-frozen: false
-  secrets-history:
-    product: gitleaks
-    enabled: true
-    # Enabled because gitleaks was found on the machine that ran init. CI must
-    # install gitleaks itself (conductor does not); without it this gate
-    # reports conductor/gate-missing and the run exits 2.
-    stage: ci
-    enforce: true
-  vulnerabilities:
-    product: osv-scanner
-    enabled: true
-    # Enabled because osv-scanner was found on the machine that ran init. CI must
-    # install osv-scanner itself (conductor does not); without it this gate
-    # reports conductor/gate-missing and the run exits 2.
-    stage: ci
-    enforce: true
-    present-on-base: report
-
-report:
-  format: text
-```
-
-**Gates are keyed by role**, not by product. `dependencies` (dep-guard),
-`secrets` (vault-guard), `intent` (intent-guard), `secrets-history`
-(gitleaks, scanning git history) and `vulnerabilities` (osv-scanner, over
-the resolved dependency tree). The `product` field says which binary fills
-that role today. The last two are external tools you install yourself.
-
-**`enabled`** defaults to true. A gate that is enabled and whose binary
-cannot be found is a blocking finding of the umbrella's own
-(`conductor/gate-missing`), never a silent skip.
-
-**`stage`** says when a gate runs: `commit`, `push`, or `ci`. Stages are
-**cumulative** in that order, so a gate runs at its own stage and at every
-later one, and a run at `ci` runs everything that is enabled. The defaults
-are `commit` for `dependencies` and `secrets`, and `ci` for `intent`,
-`secrets-history` and `vulnerabilities`: a history scan and a registry
-lookup are pull-request work, not commit-time work.
-
-A gate held back by the stage filter is never silent. It is one line in the
-text report naming the stage it is waiting for, and a `conductor/gate-deferred`
-notification in the SARIF log's `conductor` run. Its binary is not even looked
-for, so a gate installed only on the CI image does not fail a developer's
-commit.
-
-**`enforce`** defaults to true. A gate with `enforce: false` runs, reports,
-and its findings appear in the text report and the SARIF log exactly as an
-enforced gate's do. The only thing it cannot do is change the exit code: its
-blocking findings do not raise it, and its failing to run at all does not
-make the run exit 2. That is the adoption ramp, so a gate can be switched on
-and read for a few weeks before it is allowed to refuse anybody's commit.
-`init` writes it out for every gate. For the intent gate it writes `true`
-(and see `present-on-base` below for the vulnerabilities gate)
-when a frozen contract already exists at init time
-(`.intent-guard/intent-contract.yaml`, or the pre-1.3.0
-`.conductor/intent-contract.yaml`), since the ramp is already climbed by
-then, and leaving it unenforced would silently let a frozen contract's
-protected paths produce findings that never fail the check. It writes
-`false`, with a comment explaining why, when there is no contract yet to
-enforce against, and in that case it also writes `require-frozen: false`
-under `options`, since intent-guard otherwise blocks on a missing contract.
-The `options` comment is written per gate: gitleaks and osv-scanner have no
-severity floor, so their comments point at `.gitleaks.toml` and
-`osv-scanner.toml` rather than at `fail-on`.
-
-**`options`** is handed to that gate unchanged. Each key is one of that
-gate's own long flags with the leading dashes stripped: `fail-on: high`
-becomes `--fail-on high`, `online: true` becomes `--online`,
-`require-frozen: false` becomes `--no-require-frozen`, and a list becomes
-one flag per entry. The handful of flags the umbrella supplies itself (the
-JSON format flag, `--staged`, and the intent gate's `--project`) are
-rejected if you also set them, rather than being silently overridden. For
-the external gates the umbrella writes `--report-format`, `--report-path`,
-`--exit-code`, `--log-opts`, `--config`, `--gitleaks-ignore-path`,
-`--ignore-gitleaks-allow`, `--log-level`, `--redact` and `--no-banner` to
-gitleaks, and
-`--format`, `--config` and `--lockfile` to osv-scanner, so those are
-reserved too. Narrow what either
-tool reports in its own config file (`.gitleaks.toml`, `osv-scanner.toml`)
-instead. Two osv-scanner flags are written without being reserved: a run
-that scans a requirements file always gets `--no-resolve`, and a
-`no-resolve` key here is dropped from that run with a note; and a
-pull-request run gets `--no-call-analysis=all` unless this block names
-`call-analysis` or `no-call-analysis`, in which case that value is used.
-`timeout-seconds` is refused under `options` on every gate, and `timeout`
-on every gate but gitleaks, where it is gitleaks' own `--timeout` flag and
-is passed through (see `timeout-seconds` below and "What a history scan
-costs").
-
-**`present-on-base`** (the `vulnerabilities` gate only, beside `enforce`,
-never under `options`) is `block` or `report`. On a pull-request run whose
-osv-scanner scan blocked, the umbrella also scans the base branch copies of
-the lockfiles that carry findings and labels each finding `introduced` or
-`present-on-base`. `block` blocks on every finding; `report` reports the
-present-on-base ones without blocking and blocks only on what the pull
-request introduced. A policy without the key blocks on every finding, so no
-existing policy is loosened; `init` writes `report` for a new repository.
-On a pull request the key is read from the base branch's policy like every
-other key, so a pull request cannot set it for itself. A run with no base (a
-local run, a push) has no labels, and every finding blocks. The key on any
-other gate is an error, and an older conductor rejects it, so move the
-Action first.
-
-**`timeout-seconds`** (any gate, beside `enforce`, never under `options`)
-is how long conductor lets that gate run before stopping it: a whole number
-of seconds from 10 to 21600. The floor is there because the same limit
-bounds the gate's version probe, and a limit of a second or two can stop the
-probe of a gate that starts slowly before it ever scans. The ceiling is the
-six hours after which a GitHub-hosted job is cancelled; a larger limit could
-never fire there. Without the key each gate keeps the default for its
-product: 120 seconds for dep-guard, vault-guard and intent-guard, 600 for
-gitleaks, 300 for osv-scanner. There is no policy-wide default, for the same
-reason there is no shared severity threshold: the five gates differ in cost
-by orders of magnitude. Every spawn of the gate gets the full limit (the
-version probe, the scan, the intent gate's preparation steps, osv-scanner's
-base run on a pull request). A gate stopped at its limit could not run, with
-the reason `timed-out` and what to do about it, and an enforced one makes
-the run exit 2. On a pull request the key is read from the base branch's
-policy like every other key, so a pull request cannot raise, lower or
-remove its own limit; an invalid value on the base fails every pull request
-with exit 2 until the base is fixed, and an invalid value only on the head
-is a policy proposal there and fails the push run after merge. An older
-conductor rejects the key, so move the Action first.
-
-**There is no shared severity threshold, on purpose.** One top-level
-`failOn` would read as one decision and mean five different things, so
-setting one is an error rather than a knob that half works. Each gate keeps
-its own threshold in its own `options` block, spelled the way that gate
-spells it.
-
-**`command`** takes an absolute path and overrides binary resolution for
-that gate, for pointing at a build that is not installed anywhere. `args`
-beside it sets the argument prefix. conductor's history gate assumes
-gitleaks' `git` mode; an `args` that switches it to `dir` mode changes what
-gitleaks' own `--timeout` does (in `dir` mode it exits 0 after a partial
-scan, with no warning).
-
-**`report.format`** is `text` or `sarif`, and `--format` overrides it.
-
-## Commands
-
-`conductor init` writes the policy file and `.guardrails/manifest.json`, the
-record `--revert` reads back later. The manifest currently records absolute
-machine paths rather than repo-relative ones (see "Adopting conductor"
-above); do not commit it. When git does not already ignore it, init appends
-`.guardrails/` to `.gitignore` (or creates one) and says so; a `.gitignore`
-that is a symbolic link or not a regular file is left alone and the line is
-printed for you to add. On a policy file that already exists, init lists the
-gate roles it has no entry for, with the two lines that add each. An external
-gate (gitleaks, osv-scanner) is written enabled only when its binary is found
-on the machine running init, with a comment under it that CI must install it;
-a CI job without it gets `conductor/gate-missing` and exit 2.
-
-- `--hook` also writes one pre-commit hook running every enabled gate whose
-  stage is `commit`. Without it, init writes only the policy file and the
-  manifest: no hook, and none of the hook-manager detection below runs
-  either. `.git/hooks` is never part of a clone, so a hook one checkout has
-  does not follow a teammate's clone, or a fresh clone of your own; each
-  needs its own `conductor init --hook`. `--revert` still removes a hook a
-  previous `--hook` run left behind, whether or not this invocation passes
-  `--hook` itself.
-- `--dry-run` prints every file it would write or change and writes nothing.
-- `--revert` removes exactly what a previous init wrote, and nothing else.
-  A file changed since init is reported and left alone. The one exception is
-  the `.guardrails/` line init appends to `.gitignore`: `--revert` does not
-  remove it.
-- `--adopt` replaces one gate's own pre-commit hook with the umbrella hook.
-  Without it, init reports the collision and stops rather than stacking a
-  second invocation of a gate that is already hooked. A hook the umbrella
-  does not recognise is never replaced, with or without `--adopt`. Only
-  meaningful together with `--hook`; without it, init errors rather than
-  silently ignoring the flag, because there is no hook for it to act on.
-- `--force` acts on a file **conductor itself wrote** and that has changed
-  since: on its own it replaces a managed hook somebody has edited, and with
-  `--revert` it removes one, restoring an adopted hook if there was one. It
-  never overrides a foreign-hook or gate-hook refusal, with or without
-  `--adopt`: those hooks were never conductor's, and no flag here turns
-  somebody else's file into one this tool may overwrite. Like `--adopt`,
-  only meaningful together with `--hook` on an init (not on a `--revert`);
-  without it, init errors.
-- `--project <dir>` writes into that repository instead of the current
-  directory, resolved to its git top level the same way the current
-  directory already is, so a script can point init at a repository without a
-  `cd` compound.
-
-The rest of this section, on hook managers already wired into the
-repository, applies only when `--hook` is given: none of it is consulted,
-and none of it can block the policy file from being written, on a plain
-`conductor init`.
-
-Init recognises the hook manager already wired into the repository. husky is
-redirected to the tracked hook it maintains rather than the generated
-dispatcher git runs. On a fresh clone, where husky's install has not set
-`core.hooksPath` yet, husky is recognised from `package.json` (a `husky`
-dependency or devDependency, or a `prepare` script that runs husky) or a
-tracked `.husky/` directory, and init writes `.husky/pre-commit` and says the
-install still has to run, rather than writing `.git/hooks/pre-commit`, which
-husky's install would bypass. This applies only when `core.hooksPath` is not
-set at all: one set by hand, even to `.git/hooks`, is left alone. A prepare
-script counts only when it runs husky as a command. lefthook and the pre-commit framework are refused, with
-the stanza to add to their own config file. simple-git-hooks and yorkie are
-refused too, and recognised from the declaration as well as from the hook
-file, because the declaration is there on a fresh clone where the generated
-hook is not yet: the `simple-git-hooks` or `gitHooks` key in package.json, or
-any of the standalone config files simple-git-hooks reads. Their hook text
-lives in package.json, which conductor does not write, so the guidance names
-the entry to add and `--force` does not override the refusal.
-
-That refusal applies only where git actually runs `.git/hooks`. Both managers
-write that directory and neither reads `core.hooksPath`, so a repository that
-has pointed git somewhere else has taken their file out of play, and init
-proceeds normally without mentioning them.
-
-`conductor run` runs every enabled gate and prints one report.
-
-- `--staged` gates the git index against HEAD, which is what the hook does.
-- `--format text|sarif`.
-- `--stage commit|push|ci` runs the gates at that stopping point and every
-  earlier one. With no `--stage` at all, every enabled gate runs, whatever
-  its stage. An unknown value is a usage error and exits 2 rather than
-  quietly running everything or nothing: a typo in a CI file that runs every
-  gate and one that runs none both look like a passing build.
-- `--base <ref>` measures the intent gate against what this branch changed
-  since `<ref>`, rather than against the index. See "Intent at a pull
-  request" below.
-- `--trust-base <ref>` reads the **rules** from `<ref>` instead of from the
-  tree being judged: this repository's own `.guardrails.yaml`, and every
-  control input of the gates that support it. See "The pull-request trust
-  boundary" below. `--base` and `--trust-base` are independent and a
-  pull-request run passes both: `--base` decides which paths are judged,
-  `--trust-base` decides what they are judged by. When `GITHUB_BASE_REF` is
-  set, an explicit `--trust-base` is accepted only when it resolves to the
-  same commit as `refs/remotes/origin/$GITHUB_BASE_REF`, or is the Action's
-  private `refs/conductor/trust-base` (issue #58); anyone invoking the
-  CLI directly on a pull request, rather than through the Action, gets this
-  as its own refusal, named below.
-- `--spec <path>` names the spec the intent gate imports its contract from.
-- `--output <path>` writes the report to a file instead of to stdout, for a
-  CI step that uploads it. One line still goes to stdout, because a job whose
-  only product is an uploaded artifact otherwise reads as a job that did
-  nothing. A path that cannot be written is exit 2, not a green run beside a
-  report nobody can read. A relative value resolves against the current
-  directory the command was invoked from, not against `--project` or the
-  repository root: with `--project` pointing elsewhere, a relative
-  `--output` still lands next to where you are, not next to the repository
-  being judged.
-- `--text-report <path>`, with `--format sarif`, also writes the text report
-  to that file **from the same run**: exactly what `--format text` would have
-  rendered for this result (`--verbose`, `--compact-on-refusal` and
-  `--advisory` respected), and no gate is run a second time. This is how the
-  Action gets a SARIF log, a comment body and a verdict token that are one
-  run's answer. With `--format text` it is refused as a usage error (exit 2),
-  before any gate runs: the text report is the output already, so a second
-  copy in a file would only duplicate it. A path that cannot be written is
-  exit 2, like `--output`. See "The verdict token" below.
-- `--verbose` prints the full per-gate report even when the run is clean.
-  Text output only; the SARIF log never changes shape with it. Without it a
-  gate prints its first 20 findings, blocking first, and one line saying how
-  many more there are; every count, the verdict and SARIF include all of
-  them. `--verbose` also lists the lockfiles behind an osv-scanner line
-  that groups one advisory across several ("lodash@4.17.20 2 lockfiles
-  fix 4.17.21"). A gitleaks finding shows its short commit and the
-  fingerprint `.gitleaksignore` takes.
-- `--compact-on-refusal` shrinks the report to the version, the verdict and
-  the refusal reason when the trust base was refused and no gate ran,
-  instead of the full per-gate report. Built for the pull-request-comment
-  step. It has no effect on a run that was not refused, whatever `--verbose`
-  says. Text output only; it has no effect on the SARIF log and never
-  changes the exit code.
-- `--gate <role>`, repeatable. A gate the policy file enables and this flag
-  leaves out is named as excluded, on one line in the text report and as a
-  `conductor/gate-excluded` notification in the SARIF log's `conductor` run.
-  It never reaches the exit code.
-- `--advisory` maps exit 1 to exit 0: a run whose only failure is a blocking
-  finding no longer fails. A gate that could not run is unaffected and still
-  exits 2, so a crashed install or a missing policy still shows red rather
-  than a silent green: this flag changes what a **finding** does, never what
-  a **broken gate** does. The report is unchanged, a blocking finding still
-  prints with its `BLOCKING` marker, and only the process exit and the
-  verdict line's own wording (it says findings were advisory and did not
-  block) change. Text output only; the SARIF log has no verdict line to
-  change and its `properties.blocking` on each result is unaffected.
-- `--project <dir>` runs against that repository instead of the current
-  directory, resolved to its git top level the same way the current
-  directory already is, so a subdirectory resolves to that repository's top
-  level. A relative value resolves against the current directory. A path
-  that does not exist, is not a directory, or is not inside a git repository
-  is a usage error naming the path and exits 2 rather than falling back to
-  the current directory.
-
-### Exit codes
-
-- **0** every enabled gate ran and none blocked.
-- **1** every enabled gate ran and at least one blocked.
-- **2** an enabled gate could not run: its binary is missing, it exited with
-  its own could-not-run code, it exited 1 with nothing parseable on
-  stdout, which is what a rejected config file looks like from two of the
-  three family gates, or conductor stopped it at its time limit
-  (`timed-out`, see `timeout-seconds` in the policy file).
-
-The external gates' exits are read per tool. gitleaks exits 1 for an error
-as well as for a leak, so the umbrella hands it `--exit-code 3`: 3 is a leak
-(blocked), 1 is could-not-run. gitleaks also exits 0 with an empty report
-when git itself fails (a base ref the checkout never fetched), so a clean
-exit that logged an `ERR` line is could-not-run too, never a pass. A
-gitleaks exit with no report file behind it is could-not-run. osv-scanner is
-handed every tracked lockfile by name, at any depth, never under
-`node_modules`: `package-lock.json`, `npm-shrinkwrap.json`,
-`pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `go.mod`, `poetry.lock`,
-`Pipfile.lock`, `uv.lock`, `pdm.lock`, `Cargo.lock`, `Gemfile.lock`,
-`composer.lock`, `gradle.lockfile`, `packages.lock.json`, `mix.lock`,
-`pubspec.lock`, `Package.resolved`, `conan.lock`, `renv.lock`,
-`packages.config`, `buildscript-gradle.lockfile`, `gems.locked`,
-`pylock.toml`, `cabal.project.freeze`, `stack.yaml.lock` and
-`verification-metadata.xml` inside a `gradle` directory, and pip
-requirements files (`requirements.txt`, `requirements-dev.txt`,
-`requirements_test.txt`, `requirements.prod.txt`, `dev-requirements.txt`)
-whose every requirement, includes followed, is pinned with `==`. `go.sum`
-is never handed over: osv-scanner reads `go.mod` for Go. A requirements
-file with an unpinned line, or an include that is missing, untracked or
-outside the repository, is not scanned and is named in a
-`conductor/requirements-not-scanned` note with the line that stopped it,
-because any version osv-scanner reported for it would be a guess.
-Requirements files are scanned with `--no-resolve`: direct requirements
-only, as written, and the report says so per file. On a pull request a
-requirements file that is pinned on the base stays scanned even when the
-pull request adds an unpinned line to it. When the repository tracks none
-of these, osv-scanner is not spawned at all and the gate is reported clean
-with a `conductor/nothing-to-scan` note, so a docs-only repository is not
-red on every pull request. The note says that nothing was scanned and names
-the tracked manifests that were not handed to osv-scanner (a
-`pyproject.toml`, a `go.sum`, a `Dockerfile`, a workflow, or a requirements
-file the pin check left out), so a green gate is not read as a scan of
-them. A `go.mod` or a pinned requirements file is handed over and so is
-never on that list. It says nothing about what other gates read. When
-other lockfiles WERE handed over, the same list (a `Podfile.lock` beside a
-scanned `mix.lock`, say) is printed as a `conductor/manifests-not-handed`
-note under the gate instead. Its 1 is
-blocked. Its own 128 ("no package sources found") on lockfiles it WAS
-handed means they parsed to no packages; that is clean too, with a distinct
-`conductor/lockfiles-empty` note naming the files. When some handed
-lockfiles had packages and one had none (a lockfile rewritten to `{}` beside
-others), the same note names the empty one and the `lockfiles` line marks it
-`[no packages read]`; the verdict over the other files is unchanged. That
-naming reads osv-scanner's own per-file count, which it prints at its
-default verbosity. Lockfiles inside git
-submodules are never listed. In a sparse
-checkout a tracked lockfile that is not on disk is still handed over and
-osv-scanner exits 127 on it, a false could-not-run that fails closed. Any other osv-scanner exit
-(127 is its error code) is could-not-run. A gitleaks older than 8.19 or an
-osv-scanner older than 2.0 is could-not-run, naming the floor.
-
-`run --advisory` maps exit 1 to exit 0. It never touches exit 2: a gate that
-could not run is a different failure from a blocking finding, and advisory
-mode exists to leave that one alone. See "Running the gates as an advisory
-check" below.
-
-### The verdict token
-
-The text report carries one more line: `verdict-token: <token>`, the **second
-line**, directly under the version line (the closing `verdict:` sentence is
-unchanged). It is a label for the umbrella's own exit decision, in a closed
-set, so a person or a script can read the state without parsing a sentence.
-It decides nothing and never overrules a gate: it is derived from the exit
-code and the `enforce` flags the run already had.
-
-- `pass`: exit 0, and no gate, enforced or not, has a blocking finding or
-  could not run. Under `present-on-base: report` a `pass` can carry known
-  vulnerabilities already on the base branch, reported and not blocking;
-  the report's third line then says `present-on-base: N reported, not
-  blocking`, the verdict sentence says the same, and the Action copies that
-  line to the job summary under the token. When the intent gate's spec was
-  chosen weakly, differently than before 0.11.0, or not at all because of a
-  tie or a branch 0.10.0 bound, the line after the token (after the
-  present-on-base line, when there is one) is one of four fixed
-  `intent-spec:` lines naming no branch or file, and the Action copies that
-  one too.
-- `nothing-checked`: exit 0, but nothing was checked. Either no gate ran at
-  all (none is enabled, or every enabled one was deferred to a later stage,
-  had nothing to judge, or was skipped), or every gate that ran examined
-  nothing: the vulnerabilities gate with no lockfile it reads, or the intent
-  gate with no contract to check against. The second case was `pass` in
-  0.8.x. The exit status is unchanged, since nothing failed, but this is not
-  a pass: nothing was verified. In the Action the `verdict` output carries
-  this token, so a workflow can tell it apart from `pass`.
-- `advisory-blocked (N)`: the run would have exited 1, and `--advisory` made
-  it exit 0. N is the blocking findings on enforced gates.
-- `unenforced-findings (N)`: exit 0, but a gate with `enforce: false` had
-  blocking findings or could not run. N counts those findings plus those
-  gates. Exit 0 here is not a pass, and the token says so.
-- `blocked (N)`: exit 1. N as for `advisory-blocked`.
-- `could-not-run`: exit 2, a refused trust base included.
-
-When several apply the order is `could-not-run`, then `blocked` or
-`advisory-blocked`, then `unenforced-findings`, then `nothing-checked` (no gate
-ran, or none that ran checked anything) or `pass`. A run with
-`--advisory` whose only blocking findings sit on an unenforced gate is
-`unenforced-findings`, not `advisory-blocked`, because the flag did nothing
-there. A gate skipped for want of a contract does not by itself move the token
-off `pass` when another gate ran and checked something; when no gate ran, or
-every gate that ran checked nothing, the token is `nothing-checked` and the
-verdict sentence says "nothing was checked". A
-gate that exited non-zero with no finding marked blocking counts as one in N,
-so a state that is not a pass never prints a count of zero. The one-line
-summary of a clean, non-verbose run has no token line, since it is one line by
-design. `conductor run` also prints the token on its job-log line,
-`conductor run: 4 gate(s), 1 finding(s); verdict-token advisory-blocked (1); sarif report written to conductor.sarif`.
-
-## The pull-request trust boundary
-
-Every gate reads its own rules out of the repository it is judging. On a pull
-request the author controls that repository, so without this a pull request
-could turn a gate off in the same commit that carries the thing the gate
-exists to catch, and the report would say the run was clean. For the umbrella
-the sharpest version is `command:`, which names a program to run: a pull
-request could point a gate at a script it added in the same commit.
-
-**On a pull-request run the rules come from the base branch.** With
-`--trust-base <ref>` the umbrella reads `.guardrails.yaml` from that ref with
-git and judges the head tree against it. A trusted file at the base that git
-cannot read as a regular file (a symlink, a directory, a submodule, or a file
-below a symlinked or submodule directory) is could-not-run, never replaced by
-a default. Clear it by making the file a regular file on the base branch; the
-pull request that does so is judged against that same base, so it has to be
-merged by someone allowed to merge without this check passing. A `.guardrails.yaml` in the
-pull request never takes effect for that run, `command:` and `args:`
-included, so **a pull request cannot change the rules it is judged by, and
-cannot choose the program that judges it, as long as that program is
-self-contained** (see the directory rule below). The same ref is passed
-down to every gate that supports it, so their contracts, configs and
-baselines come from the base branch too.
-
-**The program is checked as well as the rules.** Reading the rules from the
-base ref is worth nothing if the pull request supplies the binary that
-applies them, and without this it could, two ways that both look ordinary in
-a diff: a base `command:` pointing at a path inside the repository, where the
-head replaces the file behind the approved path; and no `command:` at all,
-where a head-committed `node_modules/.bin/<gate>` shadows the real gate,
-because resolution prefers the repository's own copy over PATH so that a
-project pin beats a global install.
-
-**On a pull-request run `node_modules/.bin` is not consulted at all.** That
-second shape is closed one step earlier than the first, and this is why: what
-is installed there is chosen by the head's own manifest and lockfile, so it is
-never approved by any ref, and a repository whose gates are devDependencies
-would otherwise meet the program refusal on every ordinary pull request. So
-that location is simply not searched when a trust base is set. PATH and an
-absolute `command:` remain, and both still go through the program check below.
-The skip is never silent: one line in the full report and one
-`conductor/node-modules-skipped` note in the SARIF log name each gate and the
-copy that was not taken, and a gate with nothing on PATH either is
-could-not-run with `npm install -g` and the Action's version input named as
-the remedy. **Outside pull-request mode nothing changes**: your own checkout
-and your pre-commit hook still run the pin, which is what `pnpm exec` does in
-the same repository.
-
-**The versions that judge a pull request are pinned in the workflow file**,
-and that is the point: the pull request can change its own lockfile,
-manifest and `node_modules`, and none of those decide which conductor and
-which gates run over it any more. Be clear about what that does not cover.
-On a `pull_request` event GitHub runs the workflow as it is in the pull
-request's merge commit, so a pull request that edits the workflow file can
-change the pins or remove the gates step, exactly as it could rewrite any
-other step in your CI. The boundary here is against the tree choosing its
-own judge; the control for a workflow edit is branch protection on your
-base branch with review required for `.github/workflows`, and no action can
-provide that for you. Only `pull_request_target` runs the base branch's copy
-of a workflow, and that event exposes the base's secrets to the pull
-request's code, which is the wrong trade for a gate over untrusted changes.
-
-One part of that is closed, and only one. Because the pins are written in a
-file the pull request controls, a pull request could otherwise pin a gate
-**backward** to a published version that predates the rule which would have
-caught it: an exact version, so the validate step's shape check accepts it,
-and a change that reads as ordinary version management. **On a pull request
-the action now refuses any of the four `*-version` inputs naming a version
-below the one the action tag ships.** Pinning forward is still accepted.
-See "The Action" below.
-
-So on a pull-request run a gate's program must be **outside the working tree**
-(on PATH, or an absolute `command:` elsewhere on the machine), or else meet
-**both** of these:
-
-- it is a **tracked regular file whose contents are identical** at the base
-  ref and at the head commit; and
-- **the tree object id of its containing directory is identical** at those
-  two refs, which is to say the pull request changed nothing anywhere in that
-  directory's subtree.
-
-Both are compared with `git ls-tree` on both refs and never read from the
-working tree. The second is not belt and braces. A vendored gate is rarely
-one file: `vendor/vault-guard` execs `vendor/impl.sh`, and a pull request
-that leaves the wrapper byte for byte alone and rewrites the helper beside it
-passes a per-file check while running its own code. Comparing the directory
-covers every file under it at once, without this tool having to know what a
-wrapper calls.
-
-**What is and is not vetted**, exactly: the program file and everything in
-its directory subtree. Anything the program reaches **outside** that
-directory is not vetted at all, so an in-repo gate must be **self-contained
-within its own directory**. A program at the repository ROOT is refused, and
-the message says to give it a directory: at the root the containing directory
-is the whole repository, so the rule would mean "no pull request may change
-anything".
-
-A symlink inside the repository is refused on **its own entry**, before its
-target is considered: it is either untracked, or its tree entry is a link
-rather than a regular file, and either refuses. (A symlink whose own path is
-outside the tree but which points into it has its target vetted; that is the
-case following the link exists for.)
-
-Anything else is could-not-run for that gate, naming the path, and it reaches
-the exit code even where the policy sets `enforce: false`, because the gate
-produced no findings to un-enforce: the umbrella declined to run a program
-the pull request chose.
-
-Nothing under `node_modules` is ever base-approved, which is why the rule
-above does not look there at all. Were it to look, the answer would always be
-the same refusal: what is there is chosen by the head's own manifest and
-lockfile and installed by a step that runs before the gates, so git has no
-record of those bytes at either ref. A pull request that edits its lockfile to
-pull a different build of a gate has chosen its own judge just as surely as
-one that commits a stub. **Vendoring a gate still works**, on those
-terms: put it in its own directory, keep everything it needs inside that
-directory, and leave the whole directory alone in a pull request the gate is
-meant to judge. Changing it is not forbidden, it just has to land on the base
-branch first, like any other rule change.
-
-**A change to the rules is not refused, it is proposed.** Rules legitimately
-change, and a gate that blocked every such pull request would train people to
-bypass it. So a policy file that differs from the base ref's is reported as
-one line, `policy changed in this pull request`, the run continues under the
-base ref's rules, and the change takes effect **after merge**, on the first
-run whose base branch carries it. The gates' own proposals are summed with it
-into one sentence, `N control change(s) proposed in this pull request`, on the
-one-line summary and on the verdict, with a line each under `--verbose` and a
-`conductor/control-change-proposed` notification each in the SARIF log. A
-reflow, a re-quote or an edited comment is not a proposal: the two files are
-compared as parsed documents.
-
-**An explicit `--trust-base` redirect gets a refusal on a pull request, at two
-places (issue #58), and neither closes the whole hole by itself.**
-`refuseTrustBaseRef` above only refuses a ref that resolves to HEAD's own
-commit or to HEAD's own tree, which covers HEAD itself and an *unmoved*
-`origin/<pr-branch>`. Once the base branch has moved, `origin/<pr-branch>` no
-longer matches either test, so a same-repo pull request could set
-`trust-base` to its own branch, in its own workflow file, and have conductor
-read `.guardrails.yaml` from the pull request after all, at which point the
-pull request controls the whole policy. dep-guard's own base input took the
-stronger line for its base input in 0.8.0: on a `pull_request` event an
-explicit value is refused outright.
-
-**The Action refuses an explicit redirect on `pull_request` and
-`pull_request_target` events.** Its validate step refuses a `trust-base`
-input outright on those events, naming the value given and the fix, which is
-to remove the input; see "The Action" below.
-
-**The CLI check catches a misconfigured or innocent-looking redirect when
-`GITHUB_BASE_REF` is set**, for anyone invoking the CLI directly in CI. When
-that variable is set, an explicit `--trust-base` is accepted only when it is
-`refs/conductor/trust-base`, the private ref the Action fetches the base
-branch into and always passes (that ref is the authority and is not compared
-with anything), or resolves to the same commit as
-`refs/remotes/origin/$GITHUB_BASE_REF`. So an ordinary pull-request run is
-unaffected. A ref naming the pull request's own branch, or anything else that
-disagrees, is refused with both refs and both commits named, through the same
-could-not-run path as every other trust-base refusal: exit 2, the report
-leads with the reason, and nothing is checked. A short name that matches both
-a tag and a branch or remote-tracking ref (a tag named `origin/main`) is
-refused as ambiguous: spell the ref in full. When neither resolves, this fails
-closed too, naming it, for the same reason the fetch-depth remedy below
-exists.
-
-**Neither layer closes anything against a pull request that edits its own
-workflow file.** A CLI invocation on a pull request can simply omit
-`--trust-base`, or a workflow step can blank `GITHUB_BASE_REF` in its own env,
-and nothing here refuses either; the Action has the matching gap, since a
-pull request can pin `uses:` to a tag published before this fix, in its own
-workflow file. This is exactly the boundary "On a pull request those four
-inputs may not pin backward" (below, under "The Action") already draws for
-the four `*-version` inputs: the control for a workflow edit is branch
-protection on the base branch with review required for `.github/workflows`,
-and nothing in this section, or in that one, substitutes for it.
-
-**It fails closed.** A `--trust-base` that does not resolve is not a reason to
-fall back to the pull request's own file, because that fallback is the hole:
-the run exits 2 and the report **leads with the refusal**, naming the ref and
-the remedy, whether or not it can name any gate. That last part matters: with
-no base ref there is no base policy, so the only list of gates available is
-the head's, and a head that switches every gate off leaves it empty. So is a
-base ref that resolves to the head commit, or to a different commit carrying
-the head's tree, both of which would put the rules back inside the tree being
-judged while still reporting pull-request mode as on. Pass the base
-**branch**, never a SHA: on a `pull_request` event `github.sha` is the merge
-commit, which is HEAD. If the base branch has no `.guardrails.yaml` at all,
-the run has no rules and exits 2 rather than using the pull request's; the
-file the pull request adds decides what runs once it is on the base branch.
-
-**One narrow exception to the equal-tree refusal (issue #69).** When a pull
-request's net diff is empty -- a value committed and then backed out inside
-the same pull request -- the merge ref GitHub builds has a tree
-byte-identical to the base's, and the refusal above would stop
-secrets-history from running on exactly the shape it exists to catch: the
-value is gone from the tree but still in the history between the base and
-HEAD. So the refusal makes one exception, and only one: when HEAD is a real
-merge commit (two or more parents) and `--trust-base` resolves to HEAD's
-**first** parent, the run is not refused. First-parent identity is the
-discriminator, not ancestry, because GitHub always builds the merge ref with
-the base branch as the first parent and the pull request's own head as the
-second: a trust base resolving to HEAD's **second** parent is also an
-ancestor and also carries the same tree, and it is exactly the ref this rule
-must keep refusing. In the accepted shape the umbrella still does not judge
-the unchanged tree as if it were the change: it runs every enabled gate
-whose input is git history rather than the tree -- gitleaks today -- with its
-ordinary arguments (already scoped to `<base>..HEAD`), and every other
-enabled gate is reported as tree-unchanged rather than spawned: one line in
-the full report, a clause on the one-line summary, and a
-`conductor/tree-unchanged` notification in the SARIF log, never reaching the
-exit code. Every other equal-tree shape -- a non-merge HEAD, the second
-parent, any other ancestor -- keeps refusing exactly as before.
-
-The exception needs HEAD's own parents, so it needs the same non-shallow
-checkout the rest of pull-request mode already requires: `fetch-depth: 0`
-(see below). On a depth-1 checkout git reports the merge commit with no
-parents at all, so the first-parent check cannot match and the run keeps
-refusing with the ordinary equal-tree message -- it fails closed rather than
-guessing. That loss costs nothing real: at depth 1 gitleaks could not have
-seen the backed-out commit either, since its own history scan has nothing
-before HEAD to scope `<base>..HEAD` against.
-
-That is why adopting conductor takes one merge before the gates can judge
-anything, and it is not an oversight: the policy file can name a program to
-run, so a run that read it from the pull request would let the pull request
-choose its own judge on exactly the repositories that have no rules yet. See
-"Adopting conductor" below for the sequence and for how to see what your
-policy will do before you merge it.
-
-**Which gates are covered.** All five: dep-guard from **0.10.1**,
-intent-guard from **1.8.1**, vault-guard from **1.9.1**, and the two
-external gates at their command-line floors, gitleaks **8.19.0** and
-osv-scanner **2.0.0**. On a pull-request run an older family gate is
-could-not-run rather than run outside pull-request mode.
-
-**The external gates get their pull-request mode from the umbrella.**
-Neither tool has a `--trust-base`, and both auto-load a config from the tree
-they scan, which on a pull request is the head: a pull request could add an
-allowlist entry for exactly the secret or advisory it introduces. So on a
-pull-request run the umbrella reads `.gitleaks.toml` and `osv-scanner.toml`
-from the base ref with `git show` and passes each tool that copy with
-`--config`. When the base has none, the tool gets a neutral one (gitleaks'
-built-in rules, an empty osv-scanner config) rather than nothing, because
-nothing would let it find the head's file on its own. gitleaks'
-`.gitleaksignore` is handled the same way, and because gitleaks also loads
-the ignore file at the root of whatever it scans, the umbrella scans the
-repository's git directory instead of the working tree on a pull request:
-the same history, without the head's ignore file. A head-side change to any
-of these files is reported as a proposal line and takes effect after merge,
-exactly like a change to `.guardrails.yaml`. History is scoped to
-`<base>..HEAD` on a pull request and to `HEAD` locally, so a secret on
-another branch never reddens this one. Merge commits are scanned by their
-first-parent diff, so a secret added inside a merge (while resolving a
-conflict, say) is found; the same leak seen in a pull request's commit and
-again in its merge is reported once, with the other commit listed.
-
-A base `.gitleaks.toml` can name another file with `[extend] path`, which
-gitleaks resolves against its working directory. On a pull request
-conductor copies every file in that chain from the base ref into a
-directory of its own and runs gitleaks from there, so the head's copy of an
-extended file is never read; a head-side edit to one is a proposal, and an
-extended file the base does not have makes the gate could-not-run, naming
-it. gitleaks' log level is pinned at `info` and `log-level` is reserved,
-because conductor reads gitleaks' error lines to tell a failed scan from a
-clean one. Write the extend as a plain relative path in an `[extend]` table:
-a base `.gitleaks.toml` whose extend target is a symbolic link, or which
-writes the extend as an inline table or a quoted key, fails closed on every
-pull request until it is rewritten that way.
-
-**Local runs and `.gitattributes`.** On a pull request gitleaks scans the
-repository's git directory, where the head's `.gitattributes` is not read.
-A local run scans the working tree, so a file your own `.gitattributes`
-marks `binary` is skipped by gitleaks there. Pull requests are not affected.
-
-On a pull request gitleaks is also passed `--ignore-gitleaks-allow`, so an
-inline `gitleaks:allow` comment does not hide a secret: an inline allow
-lives in the tree being judged, so the pull request controls it. A
-legitimate allow belongs in the base branch's `.gitleaks.toml` allowlist or
-`.gitleaksignore`, both of which conductor already reads from the base.
-Local runs keep inline allows.
-
-osv-scanner is never pointed at a directory to walk, because its own walk
-skips anything `.gitignore` matches, tracked or not, so one ignore line in a
-pull request could hide a committed lockfile. conductor lists the tracked
-lockfiles with `git ls-files` and hands each one over with `--lockfile`. On
-a pull request that list comes from the head's index, not the base ref: the
-lockfiles are the tree being judged, and adding or removing one is visible
-in the diff. Only the root `osv-scanner.toml` is read from the base and
-passed with `--config`, which overrides any nested one for the run; a
-nested one the pull request adds or edits is reported as a proposal.
-
-The umbrella asks each gate its version before it runs it. On a run with a
-trust base, a gate older than its pull-request-mode minimum (intent-guard
-1.8.1, vault-guard 1.9.1, dep-guard 0.10.1) is could-not-run (exit 2),
-never run without the flag: without it the gate would take its rules from
-the tree being judged. The fix is to install that minimum or newer, or to
-remove an explicit older version pin. A version that cannot be read at all
-is could-not-run too: the umbrella cannot establish that the gate would
-take its rules from the base ref. The one gate that runs without the flag
-is an intent gate judging a contract imported from the base for the run,
-whose project is a temporary directory with no repository to resolve a ref
-in; that is never silent: it gets a line in the report, a clause on the
-clean one-line summary, and a `conductor/trust-base-not-passed`
-notification in the SARIF log.
-
-Outside pull-request mode nothing changes. A pre-commit hook and a direct run
-on your own checkout are already inside the trust boundary, and neither passes
-the flag.
-
-**In CI, pull-request mode needs a trust base.** A run in GitHub Actions with
-`GITHUB_BASE_REF` set and no `--trust-base` is could-not-run (exit 2): its
-rules have to come from the base branch, and no base was named. Pass `--trust-base
-refs/remotes/origin/<base branch>` with `fetch-depth: 0`, or use the Action,
-which always passes one. A pre-commit hook run inside a pull-request job hits
-this too: skip the hook in CI, or pass the trust base to it.
-
-**On a pull-request run PATH holds only absolute entries, and conductor's own
-git comes from outside the repository.** Empty and relative entries are
-removed for conductor and every gate it starts, with one notice naming them,
-and conductor runs the first git on PATH that lives outside the repository's
-work tree; with none, the run is could-not-run and says to put git's own
-directory on PATH. A gate found only through a removed entry is reported
-missing; put it on an absolute PATH entry or name it with an absolute
-`command:`. Every gate conductor starts, and everything a gate starts, gets
-a PATH whose first entry is a private directory outside the repository
-holding only that same git, so a gate that runs git by name runs it too; on
-Windows no such directory is made and the gates look git up through the
-cleaned PATH, and a system temp directory inside the repository is
-could-not-run until TMPDIR names one outside it.
-
-**git 2.31 or later** is needed on a pull-request run with the secrets-history
-gate (gitleaks) enabled, because conductor hands it `git log --diff-merges`,
-which arrived in git 2.31. Only that gate checks: an older git makes it
-could-not-run, naming the version, and the other gates run.
-
-### Trying pull-request mode locally
-
-To see roughly what CI would say about a branch, check it out and name the
-base as the trust base:
-
-```
-conductor run --trust-base refs/remotes/origin/main --verbose
-```
-
-`--trust-base` takes any ref git resolves in your clone, so use a clone with
-the base branch present (the CI recipes use `fetch-depth: 0` for the same
-reason). With no `GITHUB_BASE_REF` set, as on a laptop, the change set for the
-intent gate is measured from the trust base, so `--base` is optional; add
-`--base <ref>` to measure from a different ref. Add `--stage ci` to run at
-the stage the Action runs at.
-
-The gotcha is the same locally as in CI: the policy and the other control
-files are read from the base ref, not from your working tree. A local edit to
-`.guardrails.yaml` has no effect on a `--trust-base` run until the change is
-on the base; it shows up as a proposal line in the report instead. To preview
-a policy edit, run `conductor run` without `--trust-base`, as in "Adopting
-conductor" above.
-
-## Intent at a pull request
-
-The intent gate is the only one of the five with any ceremony: its native
-flow wants a contract approved before the work starts, which is a per-task
-human step. That step is exactly what a pull request cannot carry, so at the
-`ci` stage the umbrella stands in for it.
-
-**What it measures.** With `--base <ref>`, the changed-path set is what this
-branch changed since it forked, from
-`git diff --name-only --no-renames <base>...HEAD` in the repository root.
-
-With no `--base`, `GITHUB_BASE_REF` is used when it is set, spelled in full:
-`refs/conductor/trust-base` (the Action's private fetch of the base) if that
-exists, else `refs/remotes/origin/<value>`, so a tag of that name cannot
-shadow it. The text report says which. An explicit `--base` that matches both
-a tag and a branch is refused as ambiguous. With neither but a `--trust-base`
-(merge_group, workflow_dispatch, a CLI run), the change set is measured from
-the trust base. With none of the three, the intent gate runs the way
-it does at a commit: against the staged index, or the paths you name.
-
-**This is why a local preview and a pull-request run can disagree about a
-missing contract.** The contract-discovery rules below (`--spec`, a frozen
-native contract, a `Spec:` line, the `docs/superpowers/specs` convention)
-only engage once `--base` resolves to something, or `--spec` is given.
-Neither is true of a plain `conductor run` on your own checkout, so a
-repository with no contract gets intent-guard's own native answer instead:
-`BLOCKING critical intent-guard/gate-blocked`, because that flow wants an
-approved contract and none exists. On a pull request `--base` is set, this
-whole section's machinery engages, and a branch with nothing to import
-lands in the no-contract state below instead: reported, and never reaching
-the exit code. Read a local `BLOCKING` line on the intent gate as "there is
-no contract for the umbrella to import here yet," not as "this pull request
-will fail."
-
-A git failure here is **fail-closed**: could-not-run, so exit 2 for an
-enforced gate and a note for an unenforced one. There is deliberately no
-fallback to an empty path set, because an empty path set is what a passing
-gate looks like. In Actions this is almost always a shallow checkout, so
-**`actions/checkout` needs `fetch-depth: 0`** for the merge base to exist.
-
-**On a pull-request run the base decides.** With `--trust-base`, whether a
-frozen contract governs the pull request is read from the base ref alone. A
-frozen contract on the base is used, ahead of everything in the list below,
-`--spec` included (the report says so when `--spec` was given), and the gate
-judges any edit to it against the base copy. That holds for every
-intent-guard that can run on a pull-request run, since one older than its
-pull-request-mode minimum is could-not-run rather than run without the base
-ref. With no frozen contract on the
-base, nothing in the pull request becomes the contract: a spec on the base,
-found by rules 1, 3 and 4 below, is imported from its base copy (so on such a
-run `--spec` must be a plain path inside the repository that the base
-carries), and otherwise
-the gate is skipped with "No contract on the base". A contract or spec the
-pull request adds is reported as a proposal, so adopting the intent gate
-merges, and the next pull request is judged against it. Retiring or replacing
-a frozen contract through a judged pull request is refused by the intent gate
-itself and needs an administrator to merge it.
-
-**Where the contract comes from**, in order:
-
-1. `--spec <path>` on the umbrella's own command line. Typed just now, so it
-   outranks everything else in this list, and a path here that is not on
-   disk is reported rather than replaced: running a different contract than
-   the one somebody named is the wrong kindness. On a pull-request run it is
-   read from the base, and a frozen contract on the base takes precedence.
-2. `<repo>/.intent-guard/intent-contract.yaml`, when it is **frozen**, and
-   `<repo>/.conductor/intent-contract.yaml` after it. The native flow wins
-   wherever a team has done it. Frozen is the test rather than present: an
-   unfrozen contract is a draft somebody left behind, and running the gate
-   against it fails every pull request on "not frozen by user" without
-   checking anything.
-
-   The second path is the directory intent-guard used before 1.3.0, which
-   renamed it because `.conductor` had become the name of a different product
-   in this family. Both are read, so a repository on either version is
-   checked rather than blocked, and a run that used the old one says so: one
-   line on the gate's contract line in the text report, and an
-   `intent-guard/legacy-state-dir` notification in the SARIF log. If the
-   repository holds **both** directories, the gate does not run and says so,
-   naming both: that is the state intent-guard itself refuses every command
-   in, so the umbrella refuses on exactly the gate's rule rather than a
-   softer one. A `.conductor` holding nothing intent-guard wrote belongs to
-   something else and is ignored.
-3. The **first** `Spec: <path>` line in the pull request body, read from the
-   event payload at `GITHUB_EVENT_PATH`. A path here that is not on disk, or
-   one that leaves the repository, falls through to the next rule.
-   `Spec: none` is a **waiver**: it says this pull request deliberately has
-   no spec, so rule 4 is not tried and the gate reports itself skipped with
-   `intent-guard/contract-waived` instead of `intent-guard/no-contract`. The
-   token is exact and lowercase, a frozen contract at rule 2 still wins over
-   it, and `--spec` at rule 1 still overrides it.
-4. A markdown file **directly under** `docs/superpowers/specs` whose name
-   matches the branch on **whole words**. The branch slug is the branch name
-   with its first segment (`feat/`, `fix/`) removed; a filename is reduced by
-   stripping a `YYYY-MM-DD-` prefix and a trailing `-design`. Both have their
-   ASCII letters lower-cased and are split into words on `-`, `_`, `/` and
-   spaces. A spec is a candidate when one name's words appear, in order and
-   together, inside the other's, and at least one shared word is three or
-   more characters, contains a letter, and is not a common branch word
-   (`fix`, `feat`, `wip`, `docs`, and the rest of the list in
-   `src/intent-spec.ts`). Candidates are ranked by an equal name first, then
-   the most shared words, then the longest shared word, then the lexically
-   greatest filename among files with the same name (the newest date when
-   every spec is dated `YYYY-MM-DD-`, so **date every spec** in that form).
-   Two different specs that tie are **not** guessed between: the gate is
-   skipped as `intent-guard/spec-ambiguous`, naming both. A spec chosen on
-   one shared word, or on word length alone, is used and the report says the
-   match is weak. Branch names like `pr` or `fix/wip` choose nothing. When
-   the choice matters, say it: a `Spec:` line in the pull request body, or a
-   branch named after the spec.
-
-**A branch with neither** is a third state beside deferred and could-not-run:
-the gate is switched on, it ran, and it had nothing to check. It gets one
-line in the text report and one `intent-guard/no-contract` notification
-in the `conductor` run, and it **never** reaches the exit code, enforced or
-not. A branch with no spec is a branch this gate has no opinion about, and
-turning that into a failed build is how a gate gets switched off across a
-repository. A waived pull request lands in the same state and is reported
-under its own `intent-guard/contract-waived` id, with its own wording on the
-skipped line, in the verdict and on the one-line summary of a clean run, so a
-reader can tell "nobody has written one" from "somebody decided against one"
-wherever they meet it. An ambiguous branch, one two specs match equally,
-lands in the same advisory state under its own `intent-guard/spec-ambiguous`
-id, and never reaches the exit code either.
-
-**A repository with no contract yet is not a repository this gate can act
-on**, and the no-contract skip line names `docs/superpowers/specs`, which is
-a convention from this family's own tooling and not one an outside adopter
-has reason to recognise. The next step, if you want this gate to have an
-opinion here, is the one intent-guard's own documentation describes: draft a
-contract naming the paths worth protecting, then freeze it, and keep the
-frozen file committed so rule 2 above finds it on every pull request from
-then on. Until you do that, a project rule that lives only in `AGENTS.md`
-never blocks anything through this gate. intent-guard does read prose rules
-files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, cursor rules) as constraint
-sources, but by its own design a constraint from that source is advisory
-and leaves the exit code alone; only a user-stated constraint, or one
-promoted with `intent-guard correct --promote`, can block. Conductor itself
-never opens that file. What is enforced is the frozen contract or the
-imported spec, never project convention documented in prose.
-
-**A waiver is a decision, recorded by whoever wrote the pull request body,
-and that includes a contributor from a fork.** On the ordinary path, where a
-repository has no frozen contract of its own, `Spec: none` means the intent
-gate does not run at all on that pull request, and budget breaches are the
-thing this gate blocks on. The one thing a waiver cannot override is a frozen
-native contract, under either of the two paths above, which is checked first:
-a repository that wants the gate to be non-waivable freezes a native contract
-and keeps it committed. The branch-name convention is not a control either:
-whoever names the branch chooses among the base's specs.
-
-**What blocks is unchanged.** Blocking stays where intent-guard puts it:
-budget breaches block, subject to `enforce`. Drift on its own is reported and
-not blocked, which is already intent-guard's own behaviour. The umbrella adds
-no severity threshold of its own here either, and intent-guard 1.7.0's own
-advance-notice warnings about an unmatchable `protected_paths` or
-`allowed_paths` entry never reach the exit code either, right up until the
-2.0.0 release where intent-guard turns that same shape into a blocking
-reason. Where they print depends on how much of the report is showing: as a
-note under the intent gate in the full report (`--verbose`, a non-clean run,
-or the pull-request comment, which the Action always renders with
-`--verbose`), and, on an otherwise-clean run with neither, counted without
-their text in the one-line summary's own note count instead.
-
-**A prose-sourced constraint finding is never marked blocking, even when the
-run blocks for an unrelated reason.** intent-guard 1.6.0 caps a constraint
-whose source is one of those same prose rules files at advisory: a strong
-match is still reported, but it never raises the gate's own exit code. A run
-that blocks on scope creep alone still carries that capped finding in its
-report, and it is rendered as a non-blocking, lower-severity line in the text
-report and with `properties.blocking: false` in SARIF, rather than inheriting
-the run's own blocking flag the way every other drift finding does.
+## Reference
+
+- The policy file: see [docs/policy-file.md](docs/policy-file.md).
+- Commands, exit codes and the verdict token: see [docs/commands.md](docs/commands.md).
+- The pull-request trust boundary: see [docs/pull-request-trust-boundary.md](docs/pull-request-trust-boundary.md).
+- Intent at a pull request: see [docs/intent-at-a-pull-request.md](docs/intent-at-a-pull-request.md).
+- Upgrading and the defaults per action tag: see [docs/upgrading.md](docs/upgrading.md).
+- The Action recipes and inputs are the section [The Action](#the-action) below.
 
 ## The Action
 
@@ -1392,7 +494,8 @@ rather than running without a trust base; the token exists only in that fetch
 step and never in the gates), so the run takes
 its configuration from the base branch and the pull request cannot change the
 rules it is judged by; a change to the rules shows as a proposal line and
-takes effect after merge. See "The pull-request trust boundary" above. On any
+takes effect after merge. See
+[The pull-request trust boundary](docs/pull-request-trust-boundary.md). On any
 other event it passes nothing and behaviour is unchanged. The `trust-base`
 input names the ref explicitly, for a platform where `GITHUB_BASE_REF` is not
 set. **On a `pull_request` or `pull_request_target` event this input is
@@ -1809,7 +912,7 @@ change and forget the other half.
 
 ### Adopting conductor
 
-See "Adopting conductor" near the top of this README for the ordered
+See "Adopting conductor: the careful path" near the top of this README for the ordered
 walkthrough: init, a first pull request in advisory mode, merge, then go
 required. This subsection is the mechanism behind two of those steps.
 
@@ -1881,7 +984,7 @@ comment every time, the way the manual recipe below does. It runs on a
 gates step passed or failed, since a blocking run is the one an advisory
 check most needs a developer to actually see. The first line of every
 comment carries the version of conductor that produced it, the second line
-carries the verdict token (see "The verdict token" above), and when the
+carries the verdict token (see [The verdict token](docs/commands.md#the-verdict-token)), and when the
 trust base was refused and no gate ran at all, the comment shrinks to the
 version, the verdict, and the refusal reason (with its remedy, when one
 applies) rather than the full per-gate report, so an adopter with no policy
@@ -2042,66 +1145,6 @@ This is a substitute for code-scanning alerts, not the same thing. A comment
 is one snapshot of one run: no per-finding state, nothing to dismiss, no
 history between runs, and a new comment every time rather than an alert that
 closes when the finding goes away.
-
-## Upgrading
-
-An adopter pins two numbers, and they control different things.
-
-- **The action ref**, `uses: vaultcompasshq/conductor@<tag or SHA>`, picks
-  which `action.yml` runs. That file carries the defaults for the four
-  version inputs and the constants the pull-request backward-pin rule
-  measures a pin against.
-- **The `conductor-version` input** picks which `@vaultcompass/conductor`
-  the install step installs. The same step installs the three gates at
-  `dep-guard-version`, `vault-guard-version` and `intent-guard-version`.
-  Each input defaults to the version the tag shipped.
-
-**The recommended shape is to leave all four version inputs unset** and move
-only the action ref. On a pull request, the validate step refuses an input
-naming a version below the one the tag ships, so an explicit old pin breaks
-the day you upgrade the ref (see "The Action" above). Outside a pull request
-an explicit pin is unaffected, which is how a stale pin can sit unnoticed
-until the first pull request after the upgrade.
-
-**Pin the action ref to a full commit SHA** with the tag as a comment, for
-example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.13.2`. To
-find the SHA for a tag, run
-`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.12.0` or read it off
-the Releases page.
-
-**Dependabot or Renovate bumping that SHA changes the action ref only.** It
-does not touch a `dep-guard-version`, `vault-guard-version`,
-`intent-guard-version` or `conductor-version` you set by hand, so such a pin
-must be raised or removed by hand in the same pull request, or that pull
-request is refused by the rule above.
-
-**An action-only tag moves the tag while the npm package stays.** The
-CHANGELOG marks these as "An action-only release" and says which
-`conductor-version` default stays. `@vaultcompass/conductor` does not change
-on those, so `conductor-version` need not change either; the gate defaults
-may.
-
-Defaults per tag, taken only from CHANGELOG.md entries that state them. A
-tag with no row here has an entry that does not state its defaults; read
-`action.yml` at that tag.
-
-| Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
-| --- | --- | --- | --- |
-| v0.13.2 | package | 0.13.2 | none (gate defaults unchanged) |
-| v0.13.1 | action-only | 0.13.0 | dep-guard 0.16.1 (from 0.15.0) |
-| v0.13.0 | package | 0.13.0 | none (gate defaults unchanged) |
-| v0.12.0 | package | 0.12.0 | vault-guard 1.12.1 (from 1.12.0), intent-guard 1.10.1 (from 1.10.0) |
-| v0.11.1 | action-only | 0.11.0 | dep-guard 0.15.0 (from 0.14.0), vault-guard 1.12.0 (from 1.11.0) |
-| v0.11.0 | package | 0.11.0 | dep-guard 0.14.0, intent-guard 1.10.0 |
-| v0.10.0 | package | 0.10.0 | dep-guard 0.13.0, vault-guard 1.11.0 |
-| v0.8.2 | action-only | 0.8.1 | dep-guard 0.11.1 (from 0.10.1) |
-| v0.8.1 | package | 0.8.1 | dep-guard 0.10.1, vault-guard 1.9.1, intent-guard 1.8.1 |
-| v0.8.0 | package | 0.8.0 | dep-guard 0.10.0, vault-guard 1.9.0, intent-guard 1.8.0 |
-| v0.7.0 | package | 0.7.0 | none |
-| v0.6.0 | package | 0.6.0 | dep-guard 0.9.0 (from 0.8.0), intent-guard 1.7.0 (from 1.6.0) |
-| v0.5.1 | action-only | 0.5.0 | dep-guard 0.8.0 (from 0.7.0), intent-guard 1.6.0 (from 1.5.2) |
-| v0.4.4 | action-only | 0.4.0 | dep-guard 0.7.0 (from 0.6.0), vault-guard 1.8.0 (from 1.7.0) |
-| v0.4.3 | action-only | 0.4.0 | intent-guard 1.5.2 (from 1.4.0) |
 
 ## What is in and what is out
 
