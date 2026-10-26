@@ -894,6 +894,8 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     bySeverity,
   };
   const proposals = collectProposals(outcomes, options.trustBase, preparationProposals);
+  // Before the preview too, so a preview of up to 300 s cannot move it.
+  const generatedAt = (options.now?.() ?? new Date()).toISOString();
 
   // LAST, after outcomes, findings, summary, exitCode and proposals are
   // fixed, and nothing above reads it. Inside the throw wrapper, so a throw
@@ -916,7 +918,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
 
   return {
     schemaVersion: 1,
-    generatedAt: (options.now?.() ?? new Date()).toISOString(),
+    generatedAt,
     gates: outcomes,
     // Absent rather than empty when nothing is disabled, so a run with every
     // gate on serialises exactly as it did before this field existed.

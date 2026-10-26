@@ -10,7 +10,7 @@
 // the proposed rules, a run that decides nothing.
 
 import type { GatePolicy, GateRole, Policy } from './policy.js';
-import { DEFAULT_STAGE_FOR_ROLE, GATE_ROLES } from './policy.js';
+import { GATE_ROLES, PRODUCT_FOR_ROLE, parsePolicy } from './policy.js';
 
 export interface PolicyKeyChange {
   /** The gate role the key belongs to, or null for a key outside any gate. */
@@ -171,22 +171,24 @@ export function previewPolicy(base: Policy, head: Policy, roles: GateRole[]): Po
       if (b !== undefined) gates[role] = { ...b, enabled: false };
       continue;
     }
-    const from: GatePolicy = b ?? productDefault(role, h);
+    const from: GatePolicy = b ?? productDefault(role);
     gates[role] = { ...from, enabled: h.enabled, stage: h.stage, enforce: h.enforce };
   }
   return { version: 1, gates, report: base.report };
 }
 
-/** The gate parsePolicy gives for `product: <product>` alone. */
-function productDefault(role: GateRole, head: GatePolicy): GatePolicy {
-  return {
-    role,
-    product: head.product,
-    enabled: true,
-    stage: DEFAULT_STAGE_FOR_ROLE[role],
-    enforce: true,
-    excludedByCli: false,
-    options: {},
-    ...(role === 'vulnerabilities' ? { presentOnBase: 'block' as const } : {}),
-  };
+/**
+ * The gate parsePolicy gives for `product: <product>` alone, built by
+ * parsePolicy itself so its defaults have one source. The product is
+ * PRODUCT_FOR_ROLE's, which parsePolicy already required the head to match.
+ */
+function productDefault(role: GateRole): GatePolicy {
+  const gate = parsePolicy(
+    `version: 1\ngates:\n  ${role}:\n    product: ${PRODUCT_FOR_ROLE[role]}\n`,
+    'the preview default'
+  ).gates[role];
+  if (gate === undefined) {
+    throw new Error(`no default gate for the ${role} role`);
+  }
+  return gate;
 }

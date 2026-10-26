@@ -2087,6 +2087,21 @@ describe('pull-request mode through the CLI', () => {
       expect(result.status).toBe(0);
     });
 
+    it('a role the head switches off stays off in the preview whatever --gate names', () => {
+      // The base runs secrets; the head sets enabled: false on it. --gate
+      // secrets runs it in the primary run, and must not switch it back on
+      // in the preview: the preview of a role switched off is not a run of it.
+      const { repo, bin, argvLog } = attackRepo({
+        headPolicy: 'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n    enabled: false\n',
+      });
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--gate', 'secrets', '--preview', '--verbose'], bin);
+      expect(result.status).toBe(0);
+      const lines = readFileSync(argvLog, 'utf8').trim().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^scan -f json --trust-base /);
+      expect(previewSpawns(argvLog)).toEqual([]);
+    });
+
     it('an unparseable head runs no preview', () => {
       const { repo, bin, argvLog } = attackRepo({ basePolicy: SECRETS_OFF_BASE, headPolicy: 'version: 1\ngates:\n  secrets:\n    product: vault-guard\n    command: relative/gate\n' });
       const result = runCli(repo, ['run', '--trust-base', 'base', '--preview', '--verbose'], bin);

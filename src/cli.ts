@@ -516,15 +516,7 @@ function policyForRun(
   return {
     kind: 'policy',
     policy: applyCliOverrides(baseParsed, overrides),
-    previewPolicy:
-      preview === null
-        ? null
-        : applyCliOverrides(
-            preview,
-            overrides.gates === undefined
-              ? overrides
-              : { ...overrides, gates: overrides.gates.filter((role) => preview.gates[role] !== undefined) }
-          ),
+    previewPolicy: preview === null ? null : previewWithOverrides(preview, overrides),
     trustBase: {
       ref: trustBase,
       // A head file git could not read is reported as a change, the
@@ -540,6 +532,28 @@ function policyForRun(
       treeUnchanged: headTreeEqualsBase(root, trustBase),
     },
   };
+}
+
+/**
+ * The --gate overrides on the preview policy. Restricted to the roles it
+ * holds, so a --gate role it does not hold leaves its roles excluded rather
+ * than throwing. And a role the head switched off stays off: applyCliOverrides
+ * turns a named role on, and the preview of a role switched off is not a run
+ * of it, so runPreview lists it as disabled.
+ */
+function previewWithOverrides(preview: Policy, overrides: CliOverrides): Policy {
+  if (overrides.gates === undefined) {
+    return preview;
+  }
+  const applied = applyCliOverrides(preview, {
+    ...overrides,
+    gates: overrides.gates.filter((role) => preview.gates[role] !== undefined),
+  });
+  const gates: Policy['gates'] = {};
+  for (const [role, gate] of Object.entries(applied.gates) as Array<[GateRole, NonNullable<Policy['gates'][GateRole]>]>) {
+    gates[role] = preview.gates[role]?.enabled === false ? { ...gate, enabled: false, excludedByCli: false } : gate;
+  }
+  return { ...applied, gates };
 }
 
 /**

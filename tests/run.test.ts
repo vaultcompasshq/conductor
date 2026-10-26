@@ -974,9 +974,18 @@ describe('pull-request mode through a whole run', () => {
 
     it('a preview that throws leaves the exit code, the verdict token and lines 1-4 identical to the run without it', () => {
       const boom = { version: 1, report: { format: 'text' }, get gates() { throw new Error('boom'); } } as unknown as Policy;
-      const without = previewRun(SECRETS, FAMILY, { preview: undefined });
-      const result = previewRun(SECRETS, boom);
+      // One shared clock that only the preview advances: generatedAt is read
+      // before the preview starts, so it is the value a run without one gives.
+      let previewTicks = 0;
+      const clocks = {
+        now: () => new Date(previewTicks * 1000),
+        previewClock: () => ++previewTicks,
+      };
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined, ...clocks });
+      const result = previewRun(SECRETS, boom, clocks);
       expect(result.preview).toEqual({ gates: [], findings: [], skipped: [], deferred: [], overBudget: [], threw: 'boom' });
+      expect(previewTicks).toBe(1);
+      expect(result.generatedAt).toBe(without.generatedAt);
       expect(result.exitCode).toBe(without.exitCode);
       expect(verdictToken(result, false)).toBe(verdictToken(without, false));
       expect(renderText(result).split('\n').slice(0, 4)).toEqual(renderText(without).split('\n').slice(0, 4));
@@ -1015,6 +1024,31 @@ describe('pull-request mode through a whole run', () => {
         trustBase: PR_TRUST_BASE, preview: { policy: SECRETS } });
       expect(refused.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
       expect(existsSync(marker)).toBe(false);
+    });
+
+    it('preview refuses a base command inside the working tree before any spawn', () => {
+      const repo = prRepo();
+      const program = path.join(repo, 'tools', 'base-gate.sh');
+      const programLog = path.join(tempDir(), 'base-gate.txt');
+      mkdirSync(path.dirname(program), { recursive: true });
+      writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(programLog)}\necho '9.9.9'\n`);
+      chmodSync(program, 0o755);
+      const withCommand = (enabled: boolean) =>
+        P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}    command: ${program}\n    args: []\n`);
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      const result = runAll(withCommand(false), {
+        repoRoot: repo, staged: false, pathValue: bin,
+        trustBase: PR_TRUST_BASE, preview: { policy: withCommand(true) },
+      });
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+      expect(result.preview?.gates[0].couldNotRun?.detail).toBe(
+        `preview under the proposed rules: the base command ${program} is inside the working tree, so this gate was not run`
+      );
+      // Nothing spawned for it, the version probe included.
+      expect(existsSync(programLog)).toBe(false);
+      expect(existsSync(lastArgvLog)).toBe(false);
     });
   });
 });

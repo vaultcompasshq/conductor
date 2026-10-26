@@ -677,7 +677,7 @@ shape assumption on the init side, and that one predates this release.
 
 `revertInit` used to parse that file with a bare `JSON.parse` and no
 guard, so a corrupt manifest made `--revert` throw. The throw was caught
-in `main` and printed as one line with exit 2 (src/cli.ts:812-828), so
+in `main` and printed as one line with exit 2 (src/cli.ts:826-842), so
 nothing leaked a stack, but the message was a JSON parser's: a user whose
 manifest was truncated by a crash or a bad merge got `Unexpected end of
 JSON input` and no indication which file was unreadable or that the fix
@@ -1397,7 +1397,7 @@ tests/gate-runner-timeout.test.ts:307 ("a head policy raising the limit to
 21600 leaves the scan at the base 10 s, as a proposal") and
 tests/gate-runner-timeout.test.ts:317 ("a key only on the head leaves the
 scan at the gitleaks default"), and for an invalid head value by
-tests/cli.test.ts:3754 ("only in the head of a pull-request run leaves the
+tests/cli.test.ts:3769 ("only in the head of a pull-request run leaves the
 run on the base policy, as a proposal").
 
 ### The branch-name convention is a convenience, not a control
@@ -1857,7 +1857,7 @@ THE CLI CHECK CATCHES A MISCONFIGURED OR INNOCENT-LOOKING REDIRECT WHEN
 or not the Action's validate step ran first
 (`refuseTrustBaseForPullRequest`, src/trust-base.ts:385-491, wired into
 `policyForRun` in src/cli.ts:363-364 and read from `process.env` at
-src/cli.ts:685). `GITHUB_BASE_REF` is Actions' own pull-request signal: the
+src/cli.ts:699). `GITHUB_BASE_REF` is Actions' own pull-request signal: the
 base branch's NAME on `pull_request` and `pull_request_target`, empty
 everywhere else. When it is set, the given `--trust-base` is accepted only
 when it resolves to the SAME COMMIT as `origin/<githubBaseRef>`, which is
@@ -2162,7 +2162,7 @@ the one place it is written); the `versionSkew` record is kept on a
 comment; a note-level `conductor/version-skew` notification in the SARIF
 umbrella run (src/output-sarif.ts:973) beside the gate's own could-not-run;
 and, in GitHub Actions only (GITHUB_ACTIONS=true), an `::error::`
-annotation and a step-summary paragraph (src/cli.ts:973). The found
+annotation and a step-summary paragraph (src/cli.ts:987). The found
 version is cut to version characters (`versionCharacters`,
 src/gate-runner.ts:277) before it reaches any of those surfaces, because
 the family probe accepts anything after x.y.z.
@@ -2179,16 +2179,16 @@ is no signal, as before") and 2025 ("enforces a version probe that timed out
 under the signal, whatever the policy says"); by the record tests 1818 ("records version skew
 for a node_modules/.bin gate, the location named repository-relative") and
 1835 ("records version skew for a PATH gate, with its absolute path"); and
-through the CLI by tests/cli.test.ts:3515 ("names both versions and where
-the binary was found, and is could-not-run with exit 2"), 3527 ("says
+through the CLI by tests/cli.test.ts:3530 ("names both versions and where
+the binary was found, and is could-not-run with exit 2"), 3542 ("says
 nothing when the versions match, or when nothing says what to expect"),
-3573 ("outside Actions, under the signal, names the location and exits 2
-without running that binary"), 3587 ("puts the skew in the SARIF log and in
-the gate block of the text report"), 3620 ("in GitHub Actions also writes
-an error annotation and a step-summary line"), 3638 ("warns for a PATH gate
-in Actions the same way"), 3673 ("says nothing anywhere when the
-node_modules/.bin gate matches the pin"), 3800 ("exits 2 for a skew even
-when the policy says enforce: false, and even with --advisory") and 3815
+3588 ("outside Actions, under the signal, names the location and exits 2
+without running that binary"), 3602 ("puts the skew in the SARIF log and in
+the gate block of the text report"), 3635 ("in GitHub Actions also writes
+an error annotation and a step-summary line"), 3653 ("warns for a PATH gate
+in Actions the same way"), 3688 ("says nothing anywhere when the
+node_modules/.bin gate matches the pin"), 3815 ("exits 2 for a skew even
+when the policy says enforce: false, and even with --advisory") and 3830
 ("exits 2 when the version cannot be read under the signal, and 0 without
 it"). Mutations, each run against tests/gate-runner.test.ts and
 tests/cli.test.ts: recording the skew and running the gate anyway (the
@@ -2199,7 +2199,7 @@ two enforce: false cases); leaving a timed-out probe under the signal to
 the policy's `enforce` turned 1 red; failing an unreadable version closed WITHOUT the
 signal turned 6 red (the two no-signal controls and four trust-base and
 plain-run cases elsewhere). The version cut is pinned by
-tests/cli.test.ts:3656 ("cuts a probed version with junk after x.y.z to
+tests/cli.test.ts:3671 ("cuts a probed version with junk after x.y.z to
 version characters on every GitHub surface").
 
 ## The policy file is a passthrough, and the reserved list is the only exception
@@ -2285,7 +2285,7 @@ messages have been rewritten.
 Two more facts about dep-guard's `--base`, recorded for completeness;
 neither changes behaviour.
 
-- Conductor's own `--base <ref>` option (src/cli.ts:630-633) feeds only
+- Conductor's own `--base <ref>` option (src/cli.ts:644-647) feeds only
   the intent gate: it becomes `RunOptions.base` (src/run.ts:221) and is
   passed straight through to `prepareIntent` (src/run.ts:553-561), which
   resolves it into the base ref the intent gate diffs against.
@@ -2849,9 +2849,9 @@ reported as removed when it went).
 
 A PARTIAL REVERT IS NOT A SUCCESS. It returns `ok: false`, so the exit
 code is non-zero and a script does not read "some of it" as "all of it"
-(src/cli.ts:585), and the human rendering goes to stderr rather than
+(src/cli.ts:599), and the human rendering goes to stderr rather than
 stdout so a pipe cannot carry it past the reader who needed it
-(src/cli.ts:577-584).
+(src/cli.ts:591-598).
 
 AN ADOPTED HOOK IS NOT WRITTEN BACK WHILE THE UMBRELLA HOOK SURVIVES, or
 the user ends up with two hooks at one path and the edit they asked to
@@ -3011,7 +3011,7 @@ writes are the file removals at src/init.ts:1071-1073, the adopted-hook
 restore at src/init.ts:1111-1114, the manifest removal at src/init.ts:1125-1127 and its rewrite at
 src/init.ts:1171-1176). `ok` is unchanged by the flag, so `--revert --dry-run` exits
 the way the revert it previews would: the CLI threads the flag through
-(src/cli.ts:570-573) and maps `ok` to the exit code as always.
+(src/cli.ts:584-587) and maps `ok` to the exit code as always.
 
 One prediction cannot be read off the disk. Whether an adopted hook would
 be restored turns on whether the umbrella hook would be gone after the
@@ -3852,7 +3852,7 @@ not that.
 
 SARIF IS UNAFFECTED BY IT. `renderSarif` takes no verbosity argument at
 all (src/output-sarif.ts:971), and the format branch in the CLI passes the
-flag only to `renderText` (src/cli.ts:721-729). Pinned by
+flag only to `renderText` (src/cli.ts:735-743). Pinned by
 tests/cli.test.ts:276, 288 and 295, and by
 tests/output-sarif.test.ts:526, which asserts the log is byte for byte
 what it was before the summary line existed, against a literal written
@@ -4334,7 +4334,7 @@ The umbrella anchors everything at the working-tree root as reported by
 git, so a run from a subdirectory behaves exactly like a run from the top
 (`repoRoot`, src/cli.ts:153-187). A relative `--output` is the one exception: it
 resolves against the directory the command was typed in
-(src/cli.ts:734-742), which is the conventional reading of a path a human
+(src/cli.ts:748-756), which is the conventional reading of a path a human
 typed, and the generated hook always runs from the root, so only a human
 running the CLI by hand from a subdirectory ever hits the difference. The
 test proves content equality against absolute paths, which is what keeps
@@ -4440,7 +4440,7 @@ not rules; the rule that stays is that a timeout is could-not-run
 (`timed-out`), never a clean exit.
 
 `report.format` in the policy file is a default that `--format` overrides
-(src/cli.ts:687). There is no rule about which one a repository should
+(src/cli.ts:701). There is no rule about which one a repository should
 choose.
 
 The `dist/` directory and `schema/` are the published files
@@ -5189,10 +5189,10 @@ conflict. The fix, and the invariant this section now states: `src/cli.ts`
 calls `resolveProjectRoot` for `init` ONLY when `options.project` is
 defined; when it is not, `process.cwd()` is passed straight through to
 `planInit`/`applyInit`/`revertInit` exactly as it was before this flag
-existed, byte for byte (src/cli.ts:563-565, the `options.project ===
+existed, byte for byte (src/cli.ts:577-579, the `options.project ===
 undefined` branch of the ternary that assigns `cwd`). `run` has no
 equivalent structured-conflict path to preserve -- it always threw through
-`repoRoot` before this flag existed -- so its own call (src/cli.ts:678)
+`repoRoot` before this flag existed -- so its own call (src/cli.ts:692)
 passes `options.project` to `resolveProjectRoot` unconditionally and that
 was correct from the start.
 

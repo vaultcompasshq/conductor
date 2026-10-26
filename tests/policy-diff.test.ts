@@ -96,6 +96,13 @@ describe('the preview policy', () => {
     const preview = previewPolicy(base, head, ['vulnerabilities', 'secrets']);
     expect(preview.gates.vulnerabilities).toEqual({ ...base.gates.vulnerabilities, enabled: true, stage: 'ci', enforce: false });
     expect(preview.gates.secrets).toEqual({ ...ONLY('secrets', 'vault-guard').secrets, enforce: false });
+    // A second head-only role, pinned literally: parsePolicy's own defaults,
+    // presentOnBase 'block' included, and nothing else from the head.
+    const vulnHead = parsePolicy('version: 1\ngates:\n  vulnerabilities:\n    product: osv-scanner\n    stage: push\n    timeout-seconds: 21600\n    present-on-base: report\n    options:\n      call-analysis: all\n', 'h2');
+    expect(previewPolicy(BASE, vulnHead, ['vulnerabilities']).gates.vulnerabilities).toEqual({
+      role: 'vulnerabilities', product: 'osv-scanner', enabled: true, stage: 'push', enforce: true,
+      excludedByCli: false, options: {}, presentOnBase: 'block',
+    });
   });
   it('holds only the previewed roles, and previews a removed role as disabled', () => {
     const base = parsePolicy('version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n', 'b');
