@@ -1136,6 +1136,36 @@ changes:` in a text block, with a `(n more in the report)` line when there are
 more. This does not depend on `pr-comment`. A proposed line that holds a
 backtick or a character outside printable ASCII is replaced by a placeholder.
 
+### The preview under the proposed rules
+
+A pull request that switches a gate on or off, or moves its `stage`, is judged
+under the base's rules, so the author would not otherwise see what the
+proposed rules say until after merge. With the preview, each role whose
+`enabled` or `stage` changed runs once more, after the verdict, under the base
+policy with only `enabled`, `stage` and `enforce` taken from the head. Every
+other head value, `command:`, `args:`, `options` and `timeout-seconds`
+included, never reaches it: the base's command and the base's limit are what
+run, and a base `command:` that resolves inside the working tree is refused
+there. The intent gate is deferred and not previewed.
+
+**The preview decides nothing.** The exit code, the verdict token, the SARIF
+results and the first four lines of the report are those of the run under the
+base rules, whatever the preview finds or however it fails. It prints after
+the verdict under `Preview under the proposed rules (does not affect the
+verdict)`, as `conductor: preview ...` lines in the job log, as note-level
+`conductor/preview-under-proposed-rules` notifications on the umbrella's SARIF
+run, and as one `preview: N gate(s), M finding(s), K could-not-run` line in
+the step summary. The whole preview has a hard deadline of 300 seconds; a
+gate that does not fit is listed as over budget. A gate section in the preview
+uses the same words as a primary section, so a finding may read `BLOCKING`
+there: it means the finding would block under the proposed rules, and it does
+not affect this run. A pull-request comment is cut at 60000 characters, the
+preview block first.
+
+Ask for it with `--preview` on `conductor run`, or with the Action's `preview`
+input, which defaults to `true`; any other value turns it off. There is no
+preview when the head `.guardrails.yaml` does not parse.
+
 ## Intent at a pull request
 
 The intent gate is the only one of the five with any ceremony: its native
@@ -1710,7 +1740,12 @@ caused that; `continue-on-error` is the thing that let it happen, so the two
 do not belong in the same recipe. Set a step `timeout-minutes` as well: the
 Action already caps each gate's own subprocess at 120 seconds and reports one
 that exceeds it as could-not-run, so the timeout is an outer bound around the
-whole run rather than the primary control.
+whole run rather than the primary control. Make it at least what the primary
+run needs plus 300 seconds (5 minutes), because the preview under the
+proposed rules can use up to that much on a pull request that changes a
+gate's `enabled` or `stage`; a step killed mid-preview has no verdict. Check
+out with `persist-credentials: false` so the gates never run with a token
+left in the checkout's git config.
 
 A complete copy-paste job, rather than the one step above in isolation:
 
@@ -1730,11 +1765,13 @@ jobs:
           # From 0.8.0 a shallow checkout on a pull-request run is
           # could-not-run for the history gate.
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: '22.11.0'
       - id: conductor
-        timeout-minutes: 5
+        # The primary run's need (here 5 minutes) plus 300 seconds.
+        timeout-minutes: 10
         uses: vaultcompasshq/conductor@v0.13.2
         with:
           pr-comment: true

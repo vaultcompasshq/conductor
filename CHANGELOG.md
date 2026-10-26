@@ -16,6 +16,21 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Added
 
+- A preview under the proposed rules on pull-request runs (issue 100). Each
+  gate whose `enabled` or `stage` the pull request changes runs once more
+  under the base policy with only `enabled`, `stage` and `enforce` taken from
+  the head, and what it would have said prints after the verdict, in the job
+  log, as note-level `conductor/preview-under-proposed-rules` SARIF
+  notifications and as one line in the step summary. It decides nothing: the
+  exit code, the verdict token, the SARIF results and report lines 1 to 4 are
+  unchanged. The intent gate is deferred. New `conductor run --preview` flag
+  and Action `preview` input, which defaults to `true`.
+- The whole preview has a hard deadline of 300 seconds, each spawn is killed
+  with SIGKILL at it, and the pull-request comment is cut at 60000 characters,
+  preview block first.
+- README recommendations: set the job's `timeout-minutes` to at least the
+  primary run's need plus 300 seconds, and check out with
+  `persist-credentials: false`.
 - SARIF run properties carry the rendered per-key policy change lines under
   policyChanges.
 - The Action's job log and step summary now print the control changes a pull

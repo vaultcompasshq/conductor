@@ -211,8 +211,8 @@ broken config as a policy violation.
 Because 2 covers cases the products themselves report as 1, the umbrella
 cannot read the child's exit code alone. "Exited 1 and printed nothing
 parseable on stdout" is the reliable signature of a rejected config, and
-it is treated as could-not-run (src/gate-runner.ts:1462-1483 for an exit
-outside the product's clean and blocked codes, 1414-1435 for unparseable
+it is treated as could-not-run (src/gate-runner.ts:2754-2786 for an exit
+outside the product's clean and blocked codes, 2836-2856 for unparseable
 output). So the composed code can differ from the maximum of the children's,
 deliberately.
 
@@ -274,8 +274,8 @@ with the exit code: the not-enforced note, `unenforcedClauses`,
 `blockingCount` (the token's count), the mismatch sentence on an exit 1
 with nothing marked blocking, and the SARIF `gate-not-enforced`
 notification. Two readers keep the raw exit on purpose, because they ask
-"did this gate say anything at all": the job-log outcome in `gateLogLines`
-and `isFullyClean`. A report-mode run with present-on-base findings has
+"did this gate say anything at all": the job-log outcome (the words come from `gateOutcomeWords`
+in src/output-text.ts, which `gateLogLines` uses) and `isFullyClean`. A report-mode run with present-on-base findings has
 findings and a non-zero child exit, so it is never "ok" and never folded
 into the one-line summary. Pinned by tests/osv-exit.test.ts ("finds no
 reader of a gate exit code compared with 0 outside gateExitBlocks and the
@@ -904,14 +904,20 @@ request's own rules.
 With `--trust-base <ref>` the policy is read from that ref and the head
 tree is judged against it (`policyForRun` in src/cli.ts, reading through
 `readFileAtRef` in src/trust-base.ts). THE HEAD'S POLICY FILE IS NEVER
-PARSED INTO A RUN in that mode, which is the whole of the fix. It is read
-for exactly two things, and neither can change what happens: a comparison
-so the difference can be reported, and, when the ref itself cannot be used,
-an inventory of gate names so the report can say which gates did not run.
-For the comparison the head file is also parsed, into a local variable of
-`policyForRun`, and that parsed document is used by `diffPolicies` (src/policy-diff.ts) and by nothing
-else: it is never handed to a run, and a head that will not parse gives null,
-not an error.
+PARSED INTO THE RUN THAT DECIDES in that mode, which is the whole of the
+fix. It is read for three things, and none can change what that run does: a
+comparison so the difference can be reported; when the ref itself cannot be
+used, an inventory of gate names so the report can say which gates did not
+run; and, when it parses, a preview policy (`previewPolicy`,
+src/policy-diff.ts) that takes only `enabled`, `stage` and `enforce` from
+it, for the preview under the proposed rules, which decides nothing (see the
+subsection of that name below). Pinned by tests/policy-diff.test.ts ("takes
+only enabled, stage and enforce from the head"). For the comparison and the
+preview the head file is parsed into a local variable of `policyForRun`, and
+that parsed document is used by `diffPolicies` and `previewPolicy`
+(src/policy-diff.ts) and by nothing else: it is never handed to the run that
+decides the exit code, the verdict token and the report's first four lines,
+and a head that will not parse gives null, not an error.
 
 READS ONLY, AND NEVER INTO THE REPOSITORY: `git rev-parse`, `git show-ref`,
 `git rev-list`, `git ls-tree` and `git cat-file`. No checkout switch, no
@@ -1301,7 +1307,11 @@ WITHHOLDING IS NEVER SILENT. A gate that was not handed the base ref gets a
 line in the full report, a clause on the clean one-line summary, and a
 `conductor/trust-base-not-passed` notification (`withheldTrustBase` and
 `trustBaseLines` in src/output-text.ts, and
-`trustBaseWithheldNotifications` in src/output-sarif.ts).
+`trustBaseWithheldNotifications` in src/output-sarif.ts). The one exception
+is a preview gate: its `PREVIEW_WITHHELD` (dep-guard and vault-guard in the
+preview, which are not handed `--trust-base`) is shown in the preview block
+and never as `conductor/trust-base-not-passed`, because preview outcomes are
+never in `result.gates`, which is what both renderers read.
 
 Both new SARIF statements are NOTIFICATIONS by the discriminator further
 down this file, and neither is a close call once that rule is applied. A
@@ -1309,7 +1319,13 @@ proposed control change is a statement about configuration: nothing went
 wrong, it did not take effect, and it stays true of every push to the
 branch until it merges, so as a result it would be a fingerprint-less alert
 reappearing on every run. A gate that was not handed the base ref is a
-coverage statement in the same shape.
+coverage statement in the same shape. A third notification joins them, the
+preview under the proposed rules: `conductor/preview-under-proposed-rules`,
+level note, one per previewed gate, on the umbrella's run only. It adds no
+run, result, rule, fingerprint or category, and never changes
+`executionSuccessful`. Pinned by tests/output-sarif.test.ts ("a run with a
+preview renders SARIF whose runs, results and partialFingerprints deep-equal
+the same run without it, apart from umbrella notifications").
 
 Pinned at four levels. The decisions: tests/trust-base.test.ts, against real
 git repositories rather than a mock. The capability gate:
@@ -1320,7 +1336,12 @@ tests/run.test.ts:587-653 (the refusal, including that a head policy of
 all-unenforced or of no enabled gate still exits 2) and 693-877. The CLI,
 against a real repository whose feature commit rewrites the policy to point
 the secrets gate at a script it adds: tests/cli.test.ts:1626-1648, where the
-marker file appears without `--trust-base` and does not appear with it. End
+marker file appears without `--trust-base` and does not appear with it, and
+the same script does not run during the preview either, whose spawns are the
+base's command under the base's policy (tests/cli.test.ts ("the head-policy
+attacker script does not run during the preview"), and a base `command:`
+inside the working tree is refused there, tests/cli.test.ts ("preview refuses
+a base command inside the working tree")). End
 to end against the real gates, tests/dogfood.e2e.test.ts:461-647. The
 proposal notifications are pinned separately at
 tests/output-sarif.test.ts:1877-1986, and the `Self-approval refused:` reason
@@ -1386,19 +1407,168 @@ sibling builds through `command:` and once against whatever is on PATH, and
 the PATH half skips loudly when a binary is below its floor.
 
 A GATE'S TIME LIMIT, `timeout-seconds`, COMES FROM THE POLICY THE RUN WAS
-JUDGED BY: the base ref's on a pull request. No path builds a GatePolicy
-from the head policy on a pull-request run: only the base text is parsed
-into a run (`baseParsed`, src/cli.ts:500). The head text is also parsed, for
-the key comparison only and never acted on, and goes to `policyDiffers`; on every refusal
-path the head's gates are reported as not run and never spawned. So a pull
-request cannot raise, lower or remove its own limits; a head-side edit is a
-policy proposal. Pinned through the CLI path with the spawnSync spy by
+JUDGED BY: the base ref's on a pull request. Only the preview builds a
+GatePolicy from the head policy on a pull-request run, and it takes
+`enabled`, `stage` and `enforce` from it and nothing else: its
+`timeout-seconds` is the base's, or the profile default for a head-only
+role, and every preview spawn is further capped at what is left of a hard
+300 s deadline and killed with SIGKILL. The run that decides parses only the
+base text (`baseParsed`, src/cli.ts:500). The head text is also parsed, for
+the key comparison and the preview policy only, and goes to `policyDiffers`;
+on every refusal path the head's gates are reported as not run and never
+spawned. So a pull request cannot raise, lower or remove its own limits; a
+head-side edit is a policy proposal. Pinned through the CLI path with the
+spawnSync spy by
 tests/gate-runner-timeout.test.ts:307 ("a head policy raising the limit to
 21600 leaves the scan at the base 10 s, as a proposal") and
 tests/gate-runner-timeout.test.ts:317 ("a key only on the head leaves the
 scan at the gitleaks default"), and for an invalid head value by
 tests/cli.test.ts:3812 ("only in the head of a pull-request run leaves the
-run on the base policy, as a proposal").
+run on the base policy, as a proposal"). The preview twins:
+tests/gate-runner-timeout.test.ts ("the preview of a gate the head switches
+on keeps the base 10 s limit, never 21600"), ("the preview of a head-only
+gate stays inside the 300 s budget, never the 600 s default or 21600") and
+("a preview gate whose base limit is 21600 is killed when the 300 s budget
+runs out").
+
+### The preview under the proposed rules never decides anything
+
+New with issue 100. On a pull-request run the gates whose `enabled` or
+`stage` the pull request changes run once more under a preview policy built
+from the base with only `enabled`, `stage` and `enforce` taken from the head
+(`previewPolicy`, src/policy-diff.ts; `runPreview`, src/run.ts), so the
+author sees what the proposed rules would say. Nothing in it is an answer:
+the exit code, the verdict token, `result.gates`, the SARIF runs and results
+and report lines 1 to 4 are the primary run's alone. The head's policy file
+is attacker-controlled input to this code path, so nine constraints hold,
+one per finding of the Task 3 security review.
+
+1. THE TRUST BASE STAYS SET; ONLY THE FLAG IS WITHHELD. Every
+pull-request protection keys off `options.trustBase`: the node_modules skip,
+the program refusal, the history-gate checks, forced enforce and the
+intent-program refusal. A preview spawn keeps `options.trustBase` and the
+`CONDUCTOR_EXPECTED_*` pins. `decideTrustBase` returns `PREVIEW_WITHHELD`
+for dep-guard and vault-guard only, after the version floor and the
+unreadable-version refusal, so a refused gate stays refused; for those two
+only the `--trust-base` argv flag is removed, and dep-guard keeps `--base`.
+gitleaks and osv-scanner are never withheld and get exactly the primary
+run's scope, `--ignore-gitleaks-allow` and base config. The safety of the
+two withheld gates rests on neither gate's control files being able to name
+a program, a network endpoint or a credential source; if either ever can,
+preview spawns of that gate must strip CI tokens from the environment.
+Pinned by tests/gate-runner.test.ts ("withholds only the flag, for dep-guard
+and vault-guard only, in the preview"), tests/gate-runner.test.ts ("refuses
+a gate below its floor or with no readable version in the preview exactly as
+in the primary run"), tests/gate-runner.test.ts ("keeps --base for dep-guard
+when the preview withholds --trust-base"), tests/run.test.ts ("preview omits
+--trust-base only for dep-guard and vault-guard"), tests/run.test.ts
+("preview hands gitleaks and osv-scanner the same trust inputs as the
+primary run") and tests/run.test.ts ("preview of a family gate keeps the
+node_modules skip and refuses a head-controlled program").
+
+2. THE PREVIEW HAS A HARD 300 SECOND DEADLINE. A head control file can make
+a gate slow without running code (dep-guard's `online` with a large budget,
+vault-guard's `extra_patterns_unsafe`), and a gate has up to three spawns.
+Each preview spawn's timeout is the smaller of the gate's base limit and
+what is left of the budget (`PREVIEW_BUDGET_MS`, src/run.ts), is killed with
+SIGKILL, and a spawn with no budget left is not started; the gates left
+over are listed as over budget. Preview spawns get a fresh temporary
+`XDG_CACHE_HOME`, removed afterwards, so dep-guard's online cache cannot
+persist on a self-hosted runner. Pinned by tests/gate-runner.test.ts
+("gives a preview spawn the smaller of its limit and the budget left, and
+SIGKILL"), tests/gate-runner-timeout.test.ts ("a preview gate whose base
+limit is 21600 is killed when the 300 s budget runs out"),
+tests/gate-runner-timeout.test.ts ("preview spawns get a temporary
+XDG_CACHE_HOME and SIGKILL, and primary spawns get neither") and
+tests/run.test.ts ("stops the preview at the budget and lists the rest as
+over budget").
+
+3. A THROW IN THE PREVIEW CANNOT CHANGE THE RUN. Reports are written only
+after `runAll` returns, so a throw in preview code would otherwise land in
+the CLI catch as exit 2 with no report. Every preview entry point (the pass
+in `runAll`, its text block, its SARIF notifications, its log lines) runs
+inside `guardPreview` (src/run.ts), and a throw becomes one printed preview
+line and `RunResult.preview.threw`. The exit code, the findings and the
+summary are computed before the preview runs and nothing reads it back. The
+Action's render-step fallback runs with the preview off, and the README
+tells adopters to give the job `timeout-minutes` of at least the primary
+run's need plus 300 seconds. Pinned by tests/run.test.ts ("a preview that
+throws leaves the exit code, the verdict token and lines 1-4 identical to
+the run without it"), tests/run.test.ts ("never lets a blocking or
+could-not-run preview gate change the primary result") and
+tests/action-pr-comment.test.ts ("never passes --preview from the render
+step, so the fallback run has the preview off").
+
+4. PREVIEW OUTCOMES NEVER BECOME SARIF RUNS OR RESULTS. SARIF has one run
+per entry of `result.gates`, and `executionSuccessful` and the exit code come
+from the same outcomes, so appending preview outcomes there would create
+duplicate alerts and flip both. They live in `RunResult.preview` and render
+only as note-level `toolExecutionNotifications` on the umbrella's run, never
+creating that run on their own: no new run, result, rule, fingerprint or
+category. Pinned by tests/output-sarif.test.ts ("a run with a preview renders
+SARIF whose runs, results and partialFingerprints deep-equal the same run
+without it, apart from umbrella notifications"), tests/output-sarif.test.ts
+("a preview could-not-run leaves executionSuccessful and the exit code
+unchanged") and tests/output-sarif.test.ts ("never creates the umbrella run
+on its own").
+
+5. HEAD-DERIVED TEXT IS CLEANED AND BOUNDED. The preview's gate output can
+carry text the head chose (vault-guard's rule ids take the head's
+`extra_patterns` type names). Every `conductor: preview` log line and every
+line of the preview block goes through `cleanOutputLine`
+(src/gate-runner.ts), which neutralises workflow commands. The PR comment is
+cut to `COMMENT_LIMIT` (60000, scripts/lib/pr-comment.mjs) before fencing,
+cutting the preview block first, at the last preview header, and the primary
+report only if it alone is over the limit. Only the fixed-shape
+`preview: N gate(s), M finding(s), K could-not-run` line reaches the step
+summary. Pinned by tests/output-text.test.ts ("a preview log line carrying
+::error:: is neutralised"), tests/output-text.test.ts ("cleans every preview
+line of the report, the gate sections included"),
+scripts/tests/pr-comment.test.mjs ("a comment over 60000 characters keeps
+the primary report and cuts the preview first"),
+scripts/tests/pr-comment.test.mjs ("cuts at the last preview header, so a
+header-shaped line in the primary report cannot cut it short"),
+tests/action.test.ts ("copies only the fixed-shape preview line to the step
+summary") and tests/action.test.ts ("copies no preview line whose shape is
+not the fixed one").
+
+6. THE PREVIEW ADDS NO CREDENTIAL EXPOSURE, AND THE CHECKOUT SHOULD NOT
+LEAVE ONE. The gates step has no token of its own, but a job-level token the
+caller sets is inherited, and a failing gate's stderr summary could quote a
+prefix of a file the head symlinked; the normalizers never copy match bytes.
+This is an existing risk, not a new one, and the control is documentation:
+the README recommends `actions/checkout` with `persist-credentials: false`.
+No test can pin a recommendation; the README section "The Action" carries
+it, and constraint 1 above states what would make a preview spawn need more.
+
+7. A BASE COMMAND INSIDE THE REPOSITORY IS REFUSED IN THE PREVIEW.
+`refuseHeadControlledProgram` checks only the program file's blob, while its
+imports and `node_modules` come from the head tree, and the preview widens
+the exposure to roles the base has disabled, whose `command:` nobody has
+exercised. In the preview, a base `command:` that resolves inside the
+working tree is could-not-run `gate-program-refused` with no spawn. Pinned by
+tests/cli.test.ts ("preview refuses a base command inside the working tree")
+and tests/run.test.ts ("preview refuses a base command inside the working
+tree before any spawn").
+
+8. THE PREVIEW CAN BE TURNED OFF AND NEVER RUNS ON A HEAD THAT DOES NOT PARSE.
+A one-line stage flip triggers a preview of up to 300 seconds, so the Action
+has a `preview` input (default `true`) that passes `--preview` only when it
+is true and the installed conductor lists the flag. A head `.guardrails.yaml`
+that does not parse gives no preview policy and so no preview. Pinned by
+tests/action.test.ts ("declares the preview input, defaulting to true"),
+tests/action.test.ts ("passes --preview only when the input is true and the
+installed conductor lists it"), tests/cli.test.ts ("an unparseable head runs
+no preview") and tests/cli.test.ts ("starts no preview without --preview, on
+--staged, or when only report.format changed").
+
+9. THE INTENT GATE IS DEFERRED, NEVER PREVIEWED. `prepareIntent` spawns the
+intent program, and the preview never reaches it: the intent role is listed
+as deferred before the preview loop and never enters it. A role the head
+switches off stays off in the preview whatever `--gate` names. Pinned by
+tests/run.test.ts ("the preview never calls prepareIntent and prints the
+deferred line") and tests/cli.test.ts ("a role the head switches off stays
+off in the preview whatever --gate names").
 
 ### The branch-name convention is a convenience, not a control
 
@@ -3880,7 +4050,7 @@ rather than cosmetic: `conductor/gate-failed` in the umbrella's run is
 then the only place in the whole log that can say anything about the
 failure, which is why that finding carries the failing child's own stderr
 (`normalizeFailedGate`, src/normalize.ts:1394-1409, fed from
-src/gate-runner.ts:1475). Before it did, a dogfood run against a
+src/gate-runner.ts:2784). Before it did, a dogfood run against a
 repository with an unparseable lockfile printed dep-guard naming the file
 and the reason in the text report, and put "the gate exited 2, which it
 uses for could not run" and nothing else in both `message.text` and
@@ -3893,8 +4063,8 @@ the rule, the role and the product and never over the message.
 
 `conductor/gate-output-unparseable` CARRIES IT TOO, for the same reason
 and through the same helper (`normalizeUnparseableGate`,
-src/normalize.ts:1318-1339, fed from src/gate-runner.ts:1553, 1478 and the
-backstop at 842). That
+src/normalize.ts:1318-1339, fed from src/gate-runner.ts:3041, 2854 and the
+backstop at 1827). That
 result had the identical gap and one very live case: a gate refusing to
 run at all exits 1 with no JSON and says why on stderr, which is exactly
 what a state-directory conflict looks like from the umbrella's side.
@@ -4304,7 +4474,7 @@ so) and 460 (the umbrella's own deterministic fingerprint).
 ## No stack trace reaches a terminal or a report
 
 An error's message, never its stack (`messageOf`,
-src/gate-runner.ts:745-758; src/normalize.ts:1318-1339; src/cli.ts:480-483
+src/gate-runner.ts:1717-1723; src/normalize.ts:1318-1339; src/cli.ts:480-483
 and 790-792). A stack
 reaching the terminal puts a local filesystem path in front of a user who
 cannot act on any of it, and puts one into a report that gets uploaded.
@@ -4625,7 +4795,13 @@ outranking everything else: it checks for an `EXIT_COULD_NOT_RUN` condition
 before it checks for an `EXIT_BLOCKED` one, so a could-not-run gate wins the
 composed code over any blocking finding (src/exit-codes.ts, and the comment
 above `composeExitCode`). Advisory mode is not permitted to reopen that hole
-from a different angle.
+from a different angle. A preview could-not-run is the other way round: it
+is advisory and never produces exit 2, with or without `--advisory`, because
+preview outcomes are never in `result.gates` and the exit code is composed
+from `result.gates` alone. A primary could-not-run is unchanged. Pinned by
+tests/run.test.ts ("never lets a blocking or could-not-run preview gate
+change the primary result") and tests/output-sarif.test.ts ("a preview
+could-not-run leaves executionSuccessful and the exit code unchanged").
 
 THE PROCESS EXIT CODE AND THE VERDICT LINE ARE DECIDED FROM THE SAME
 `result.exitCode`, deliberately, so they cannot say two different things
@@ -5330,9 +5506,15 @@ deadline budget). A token copied from that comment would have been a token
 for a run that did not decide the job.
 
 THE RULE. The run that sets the exit code is the run that writes the text
-report: `conductor run --format sarif --text-report PATH`, one invocation,
-each gate spawned once (`--text-report` in src/cli.ts renders the SAME
-`RunResult` a second time and never calls `runAll` again). The gates step in
+report: `conductor run --format sarif --text-report PATH`, one invocation. The run
+that decides spawns each gate once, and the preview in the same invocation
+may spawn a previewed gate once more; the preview never reaches the token,
+the exit code or report lines 1 to 4 (`--text-report` in src/cli.ts renders
+the SAME `RunResult` a second time and never calls `runAll` again). Pinned
+by tests/run.test.ts ("a preview that throws leaves the exit code, the
+verdict token and lines 1-4 identical to the run without it") and
+tests/output-text.test.ts ("prints the preview after the verdict and leaves
+lines 1 to 4 and the token alone"). The gates step in
 action.yml reads the token from line 2 of that file for the summary and the
 `verdict` output, and the comment step posts that file byte for byte and
 invokes conductor ZERO times on that path. The token function
