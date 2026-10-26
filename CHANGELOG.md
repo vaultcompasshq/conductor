@@ -14,6 +14,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-26
+
+**A package release.** `@vaultcompass/conductor` moves to 0.14.0 on npm and the
+action's `conductor-version` default moves to `0.14.0` in lockstep, because the
+new `preview` input needs a CLI that understands `--preview`. The gate defaults
+are unchanged.
+
 ### Added
 
 - A preview under the proposed rules on pull-request runs (issue 100). Each
