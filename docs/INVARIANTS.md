@@ -1311,9 +1311,10 @@ line in the full report, a clause on the clean one-line summary, and a
 is a preview gate: dep-guard and vault-guard are not handed `--trust-base`
 in the preview (`PREVIEW_WITHHELD`), and that withholding is not stated per
 gate, because preview outcomes are never in `result.gates`, which is what
-both renderers read. The preview header says the block runs under the
-proposed rules, dep-guard and vault-guard read their head control files by
-design in that block, and nothing in it reaches the verdict.
+both renderers read. What the reader sees instead is the preview header,
+which says the block runs under the proposed rules and does not affect the
+verdict. That dep-guard and vault-guard read their head control files in
+that block is the preview's definition, not a per-gate statement.
 
 Both new SARIF statements are NOTIFICATIONS by the discriminator further
 down this file, and neither is a close call once that rule is applied. A
