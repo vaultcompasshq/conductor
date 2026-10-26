@@ -146,8 +146,10 @@ export interface RunTrustBase {
   /**
    * The keys that differ, when `policyChanged` is true: one entry per key,
    * computed from the parsed base and head files before any CLI override.
-   * Absent or empty on a changed policy means the keys are not known, and the
-   * report falls back to the one-line POLICY_PROPOSAL_LINE.
+   * Empty or absent on a changed policy means no effective key differs (a
+   * default spelled out, or the YAML reordered), and the report falls back to
+   * the one-line POLICY_PROPOSAL_LINE. A head whose keys are not known is not
+   * an empty list: it is the single not-known entry.
    */
   policyChanges?: PolicyKeyChange[];
   /**

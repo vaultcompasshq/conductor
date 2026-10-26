@@ -125,6 +125,7 @@ import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js'
 import { INTENT_WARNING } from './normalize.js';
 import { skewFound, skewPlace } from './output-text.js';
 import { POLICY_FILE_NAME } from './policy.js';
+import { policyChangeLine } from './policy-diff.js';
 import type { RunResult } from './run.js';
 
 const SARIF_SCHEMA =
@@ -454,6 +455,17 @@ interface Invocation {
    */
   executionSuccessful: boolean;
   notifications: Notification[];
+}
+
+/**
+ * The trust base as the log carries it: the per-key changes become their
+ * rendered lines (escaped and truncated), never the raw head values.
+ */
+function sarifTrustBase(trustBase: NonNullable<RunResult['trustBase']>): Record<string, unknown> {
+  const { policyChanges, ...rest } = trustBase;
+  return policyChanges === undefined
+    ? rest
+    : { ...rest, policyChanges: policyChanges.map(policyChangeLine) };
 }
 
 function makeRun(
@@ -1217,7 +1229,9 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
         // fact about the whole run: every gate that could take the flag was
         // handed this same ref. A consumer reading only the log can then tell
         // a pull-request run from an ordinary one without parsing sentences.
-        result.trustBase === null ? undefined : { trustBase: result.trustBase },
+        result.trustBase === null
+          ? undefined
+          : { trustBase: sarifTrustBase(result.trustBase) },
         {
           // A claim about whether the analysis completed, taken from the
           // gates rather than from the exit code: an unenforced gate that

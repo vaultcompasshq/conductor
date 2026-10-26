@@ -306,7 +306,7 @@ export function rendersToTerminal(output: string | undefined, stdoutIsTTY: boole
  * the head's file.
  */
 type PolicyForRun =
-  | { kind: 'policy'; policy: Policy; headPolicy: Policy | null; trustBase?: RunTrustBase }
+  | { kind: 'policy'; policy: Policy; trustBase?: RunTrustBase }
   /** The trust base could not be judged against. `inventory` only names gates. */
   | { kind: 'refused'; ref: string; detail: string; inventory: Policy; notGiven?: boolean };
 
@@ -389,7 +389,6 @@ function policyForRun(
     return {
       kind: 'policy',
       policy: applyCliOverrides(loadPolicy(root), overrides),
-      headPolicy: null,
     };
   }
 
@@ -495,7 +494,6 @@ function policyForRun(
   return {
     kind: 'policy',
     policy: applyCliOverrides(baseParsed, overrides),
-    headPolicy,
     trustBase: {
       ref: trustBase,
       // A head file git could not read is reported as a change, the

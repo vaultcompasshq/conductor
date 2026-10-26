@@ -1078,7 +1078,7 @@ describeComposed('the composed test: a pull request that tries to mute all three
     run(['commit', '--quiet', '-m', 'base: three gates, a frozen contract']);
     run(['branch', 'base']);
 
-    // -- the pull request: four control changes and three things to hide --
+    // -- the pull request: five control changes (two policy keys, three gate proposals) and three things to hide --
 
     // 1. conductor's own policy, pointing the secrets gate at a script this
     //    same commit adds. The script writes a marker and reports clean.
@@ -1238,7 +1238,7 @@ describeComposed('the composed test: a pull request that tries to mute all three
         const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
 
         expect(existsSync(fixture.marker)).toBe(false);
-        expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
+        expect(proposalCount(result.stdout)).toBe(5);
         expect(result.stdout).toMatch(/vault-guard\/github-token/);
         expect(result.stdout).toMatch(/lodahs/);
         expect(result.stdout).toMatch(/Self-approval refused:/);

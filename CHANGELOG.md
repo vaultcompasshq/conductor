@@ -16,12 +16,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Added
 
+- SARIF run properties carry the rendered per-key policy change lines under
+  policyChanges.
 - The Action's job log and step summary now print the control changes a pull
   request proposes (issue 100). `conductor run` writes the count and one
   `conductor: proposed <product> <line>` line per proposal to stderr, and the
   gates step copies the count line and up to 50 proposed lines into the step
   summary under `control changes:`, with `pr-comment` off or on. A line that
-  holds a backtick or a non-printable character is replaced by a placeholder.
+  holds a backtick or a character outside printable ASCII is replaced by a placeholder.
 
 ### Changed
 

@@ -44,7 +44,10 @@ function gateKeys(gate: GatePolicy | undefined, optionNames: string[]): Array<[s
       case 'timeout-seconds':
         return gate.timeoutSeconds;
       default:
-        return gate.options[key.slice('options.'.length)];
+        {
+          const name = key.slice('options.'.length);
+          return Object.hasOwn(gate.options, name) ? gate.options[name] : undefined;
+        }
     }
   };
   const keys = [
@@ -103,12 +106,29 @@ export function diffPolicies(base: Policy, head: Policy | null): PolicyKeyChange
 function renderValue(value: unknown): string {
   if (value === undefined) return '(absent)';
   const text = JSON.stringify(value) ?? '(absent)';
-  return text.length > MAX_VALUE_LENGTH ? `${text.slice(0, MAX_VALUE_LENGTH - 3)}...` : text;
+  // Every character outside printable ASCII becomes a \uXXXX escape (an
+  // astral character as its two surrogate escapes), so a head option value
+  // cannot smuggle a bidi override or a zero-width character into the report.
+  const escaped = text.replace(
+    /[^\x20-\x7e]/g,
+    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+  if (escaped.length <= MAX_VALUE_LENGTH) return escaped;
+  // Keep whole tokens up to 77 characters, so no escape sequence is split.
+  let kept = '';
+  for (const token of escaped.match(/\\u[0-9a-f]{4}|\\.|[^\\]/g) ?? []) {
+    if (kept.length + token.length > MAX_VALUE_LENGTH - 3) break;
+    kept += token;
+  }
+  return `${kept}...`;
 }
 
 /** One proposal line for one changed key. */
 export function policyChangeLine(change: PolicyKeyChange): string {
   if (change.key === HEAD_POLICY_KEY) {
+    // One text for every case where the head's keys cannot be read: the file
+    // is absent, it is not YAML, it parses as YAML but fails policy
+    // validation, or git could not read it at all.
     return `policy: the head ${HEAD_POLICY_KEY} is absent or does not parse, so its changes are not known`;
   }
   const where = change.role === null ? change.key : `gates.${change.role}.${change.key}`;

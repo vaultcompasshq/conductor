@@ -908,8 +908,8 @@ PARSED INTO A RUN in that mode, which is the whole of the fix. It is read
 for exactly two things, and neither can change what happens: a comparison
 so the difference can be reported, and, when the ref itself cannot be used,
 an inventory of gate names so the report can say which gates did not run.
-For the comparison the head file is also parsed, into `headPolicy`, and that
-parsed document is used by `diffPolicies` (src/policy-diff.ts) and by nothing
+For the comparison the head file is also parsed, into a local variable of
+`policyForRun`, and that parsed document is used by `diffPolicies` (src/policy-diff.ts) and by nothing
 else: it is never handed to a run, and a head that will not parse gives null,
 not an error.
 
@@ -1380,7 +1380,7 @@ secrets gate at a script the same commit adds, and carries a real-shaped
 secret, a dependency name the committed fixture corpus does not know, and a
 file outside the contract's scope. Without a trust base the run is green and
 the pull request's own script has executed; with one, the script never runs,
-all four control changes are reported as proposed, and the run blocks on the
+all five control changes are reported as proposed, and the run blocks on the
 secret, the dependency and the self-approval. It runs twice, once against the
 sibling builds through `command:` and once against whatever is on PATH, and
 the PATH half skips loudly when a binary is below its floor.

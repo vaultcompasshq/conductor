@@ -2194,3 +2194,36 @@ describe('a gate that could not run says nothing about proposals in the SARIF lo
     expect(text).not.toMatch(/none proposed|no control change|0 control change/i);
   });
 });
+
+describe('policy changes in the SARIF log', () => {
+  it('carries only the rendered per-key policy change lines under policyChanges', () => {
+    const log = sarif({
+      ...result([outcome({ exitCode: 0, findings: [] })]),
+      proposals: [
+        { product: 'conductor', role: null, line: 'policy: gates.dependencies.enabled true -> false' },
+      ],
+      trustBase: {
+        ref: 'origin/main',
+        policyChanged: true,
+        refusal: null,
+        policyChanges: [
+          { role: 'dependencies', key: 'enabled', old: true, new: false },
+          { role: 'dependencies', key: 'options.x', old: undefined, new: 'a\u202eb' },
+        ],
+      },
+    });
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+
+    expect((umbrella?.properties as Record<string, unknown>).trustBase).toEqual({
+      ref: 'origin/main',
+      policyChanged: true,
+      refusal: null,
+      policyChanges: [
+        'policy: gates.dependencies.enabled true -> false',
+        'policy: gates.dependencies.options.x (absent) -> "a\\u202eb"',
+      ],
+    });
+  });
+});

@@ -61,4 +61,28 @@ describe('diffPolicies', () => {
     const line = policyChangeLine({ role: null, key: 'x', old: long, new: 1 });
     expect(line).toBe(`policy: x ${JSON.stringify(long).slice(0, 77)}... -> 1`);
   });
+  it('escapes characters outside printable ASCII so the line is printable ASCII', () => {
+    const head = parsePolicy(
+      'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n    options:\n      fail-on: "a\\u202Eb\\u200Bc"\n',
+      'head'
+    );
+    const line = diffPolicies(BASE, head).map(policyChangeLine)[0] as string;
+    expect(line).toMatch(/^[\x20-\x7e]+$/);
+    expect(line).toContain('\\u202e');
+    expect(line).toContain('\\u200b');
+  });
+  it('never cuts through an escape sequence when truncating', () => {
+    const long = `${'a'.repeat(75)}\u202e${'b'.repeat(10)}`;
+    const line = policyChangeLine({ role: null, key: 'x', old: long, new: 1 });
+    expect(line).toBe(`policy: x ${JSON.stringify('a'.repeat(75)).slice(0, -1)}... -> 1`);
+  });
+  it('does not read an inherited property as an option value', () => {
+    const base = parsePolicy(
+      'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n    options:\n      constructor: 1\n',
+      'base'
+    );
+    expect(diffPolicies(base, BASE).map(policyChangeLine)).toEqual([
+      'policy: gates.dependencies.options.constructor 1 -> (absent)',
+    ]);
+  });
 });
