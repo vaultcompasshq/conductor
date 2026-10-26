@@ -1234,7 +1234,7 @@ runs:
               # printable ASCII is replaced by a placeholder and never
               # copied, since the report can carry text from the scanned
               # repository and the block is a code fence. At most 50 lines.
-              count_shape='^  pull-request mode: rules from [ -~]{1,200}\. [0-9]+ control change\(s\) [ -~]*\.$'
+              count_shape='^  pull-request mode: rules from [ -_a-~]{1,200}\. [0-9]+ control change\(s\) [ -_a-~]*\.$'
               proposed_shape='^  proposed  (conductor|dep-guard|vault-guard|intent-guard|gitleaks|osv-scanner) +(.*)$'
               printable_shape='^[ -~]*$'
               proposal_count_line=""

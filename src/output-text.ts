@@ -27,7 +27,6 @@ import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, gateExitBlocks } from './exit-codes.j
 import {
   CONDUCTOR_OWN_REASONS,
   type GateOutcome,
-  breakWorkflowMarkers,
   cleanOutputLine,
   conductorStatedReason,
   resolutionPlace,
@@ -802,7 +801,7 @@ export function jobLogSummary(result: RunResult): string {
  * proposed control change. Empty outside pull-request mode, and empty when
  * the trust base was refused or never given, because no rules were read and
  * there is nothing proposed to count. Each line goes through
- * breakWorkflowMarkers, since a proposal carries text a gate printed.
+ * cleanOutputLine, since a proposal carries text a gate printed.
  */
 export function proposalLogLines(result: RunResult): string[] {
   const trust = result.trustBase;
@@ -810,9 +809,9 @@ export function proposalLogLines(result: RunResult): string[] {
     return [];
   }
   return [
-    breakWorkflowMarkers(`conductor: ${proposalCount(result)}.`),
+    cleanOutputLine(`conductor: ${proposalCount(result)}.`),
     ...result.proposals.map((proposal) =>
-      breakWorkflowMarkers(`conductor: proposed ${proposal.product} ${proposal.line}`)
+      cleanOutputLine(`conductor: proposed ${proposal.product} ${proposal.line}`)
     ),
   ];
 }

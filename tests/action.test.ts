@@ -2356,6 +2356,29 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(run.summary).toContain('(3 more in the report)\n');
   });
 
+  it('never copies a count line that holds a backtick, or one over 700 characters', () => {
+    const tick = `  pull-request mode: rules from a\`b. 1 control change(s) proposed in this pull request.`;
+    const long = `  pull-request mode: rules from main. 1 control change(s) proposed ${'x'.repeat(700)}.`;
+    for (const count of [tick, long]) {
+      const run = runGatesForVerdict({
+        exit: 0,
+        body: `conductor 9.9.9\nverdict-token: pass\nx\n${count}\n`,
+      });
+      expect(run.summary).toBe('conductor verdict: pass\n\n');
+    }
+  });
+
+  it('writes the block with just the count line when nothing is proposed', () => {
+    const zero = '  pull-request mode: rules from main. 0 control change(s) proposed in this pull request.';
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: `conductor 9.9.9\nverdict-token: pass\nx\n${zero}\n`,
+    });
+    expect(run.summary).toBe(
+      'conductor verdict: pass\n\ncontrol changes:\n\n```text\n' + zero.trimStart() + '\n```\n\n'
+    );
+  });
+
   describe('against an installed conductor that predates --text-report', () => {
     it('never passes the flag, marks the fallback, and leaves conductor\'s own exit status alone', () => {
       for (const exit of [0, 1, 2]) {

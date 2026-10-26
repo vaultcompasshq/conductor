@@ -2058,4 +2058,13 @@ describe('proposalLogLines', () => {
     );
     expect(line).not.toContain('::error::');
   });
+
+  it('cleans control characters out of a proposal so it stays one log line', () => {
+    const lines = proposalLogLines(
+      prResult([{ product: 'dep-guard', role: 'dependencies', line: 'a\nb\r\x1b[31m ::error::c' }])
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(lines[1]).not.toContain('::error::');
+  });
 });

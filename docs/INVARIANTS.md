@@ -1385,7 +1385,7 @@ tests/gate-runner-timeout.test.ts:296 ("a head policy raising the limit to
 21600 leaves the scan at the base 10 s, as a proposal") and
 tests/gate-runner-timeout.test.ts:306 ("a key only on the head leaves the
 scan at the gitleaks default"), and for an invalid head value by
-tests/cli.test.ts:3602 ("only in the head of a pull-request run leaves the
+tests/cli.test.ts:3623 ("only in the head of a pull-request run leaves the
 run on the base policy, as a proposal").
 
 ### The branch-name convention is a convenience, not a control
@@ -2167,16 +2167,16 @@ is no signal, as before") and 2021 ("enforces a version probe that timed out
 under the signal, whatever the policy says"); by the record tests 1818 ("records version skew
 for a node_modules/.bin gate, the location named repository-relative") and
 1835 ("records version skew for a PATH gate, with its absolute path"); and
-through the CLI by tests/cli.test.ts:3363 ("names both versions and where
-the binary was found, and is could-not-run with exit 2"), 3375 ("says
+through the CLI by tests/cli.test.ts:3384 ("names both versions and where
+the binary was found, and is could-not-run with exit 2"), 3396 ("says
 nothing when the versions match, or when nothing says what to expect"),
-3421 ("outside Actions, under the signal, names the location and exits 2
-without running that binary"), 3435 ("puts the skew in the SARIF log and in
-the gate block of the text report"), 3468 ("in GitHub Actions also writes
-an error annotation and a step-summary line"), 3486 ("warns for a PATH gate
-in Actions the same way"), 3521 ("says nothing anywhere when the
-node_modules/.bin gate matches the pin"), 3646 ("exits 2 for a skew even
-when the policy says enforce: false, and even with --advisory") and 3661
+3442 ("outside Actions, under the signal, names the location and exits 2
+without running that binary"), 3456 ("puts the skew in the SARIF log and in
+the gate block of the text report"), 3489 ("in GitHub Actions also writes
+an error annotation and a step-summary line"), 3507 ("warns for a PATH gate
+in Actions the same way"), 3542 ("says nothing anywhere when the
+node_modules/.bin gate matches the pin"), 3667 ("exits 2 for a skew even
+when the policy says enforce: false, and even with --advisory") and 3682
 ("exits 2 when the version cannot be read under the signal, and 0 without
 it"). Mutations, each run against tests/gate-runner.test.ts and
 tests/cli.test.ts: recording the skew and running the gate anyway (the
@@ -2187,7 +2187,7 @@ two enforce: false cases); leaving a timed-out probe under the signal to
 the policy's `enforce` turned 1 red; failing an unreadable version closed WITHOUT the
 signal turned 6 red (the two no-signal controls and four trust-base and
 plain-run cases elsewhere). The version cut is pinned by
-tests/cli.test.ts:3504 ("cuts a probed version with junk after x.y.z to
+tests/cli.test.ts:3525 ("cuts a probed version with junk after x.y.z to
 version characters on every GitHub surface").
 
 ## The policy file is a passthrough, and the reserved list is the only exception
