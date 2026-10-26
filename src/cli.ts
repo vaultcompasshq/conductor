@@ -364,12 +364,18 @@ function inventoryFromHead(root: string, overrides: CliOverrides): Policy {
   }
 }
 
-function policyForRun(
+/**
+ * Exported so a test can see that no preview policy is built unless one was
+ * asked for (`preview`): a run without --preview never reaches that code.
+ */
+export function policyForRun(
   root: string,
   trustBase: string | undefined,
   overrides: CliOverrides,
   githubBaseRef: string | undefined,
-  githubActions: string | undefined
+  githubActions: string | undefined,
+  /** Whether this run asked for the preview under the proposed rules. */
+  preview = false
 ): PolicyForRun {
   if (trustBase === undefined) {
     // A PULL-REQUEST JOB WITH NO TRUST BASE would take its rules from the
@@ -511,13 +517,15 @@ function policyForRun(
   // head (previewPolicy). A head that does not parse gets none (spec 5.2,
   // finding 8). The same --gate overrides, restricted to the roles the
   // preview holds: a --gate role it does not hold leaves its roles excluded.
-  const roles = headPolicy === null ? [] : previewRoles(diffPolicies(baseParsed, headPolicy));
-  const preview =
+  // Built only when the run asked for a preview, so nothing here can fail a
+  // run that did not.
+  const roles = !preview || headPolicy === null ? [] : previewRoles(diffPolicies(baseParsed, headPolicy));
+  const proposed =
     headPolicy === null || roles.length === 0 ? null : previewPolicy(baseParsed, headPolicy, roles);
   return {
     kind: 'policy',
     policy: applyCliOverrides(baseParsed, overrides),
-    previewPolicy: preview === null ? null : previewWithOverrides(preview, overrides),
+    previewPolicy: proposed === null ? null : previewWithOverrides(proposed, overrides),
     trustBase: {
       ref: trustBase,
       // A head file git could not read is reported as a change, the
@@ -872,7 +880,8 @@ export function buildProgram(): Command {
           options.trustBase,
           overrides,
           process.env.GITHUB_BASE_REF,
-          process.env.GITHUB_ACTIONS
+          process.env.GITHUB_ACTIONS,
+          options.preview === true && options.staged !== true
         );
         const policy = source.kind === 'policy' ? source.policy : source.inventory;
         const format = parseFormat(options.format ?? policy.report.format);

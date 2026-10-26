@@ -394,6 +394,12 @@ function timedOutDetail(
     limit.source === 'preview-budget'
       ? 'The preview under the proposed rules has 300 s in all, whatever each gate\'s own limit.'
       : profileFor(gate.product).timeoutRemedies(gate.role);
+  // A preview spawn with no budget left was never started (spawnLimits):
+  // there is no elapsed time or limit to report.
+  if (limit.source === 'preview-budget' && limit.ms === 0) {
+    const what = step === 'version-probe' ? `the version probe of ${gate.product}` : gate.product;
+    return `${what} was not started: the preview budget was spent, so nothing was checked by it. ${remedies}`;
+  }
   if (step === 'version-probe') {
     return (
       `the version probe of ${gate.product} was stopped at ${limitSeconds} s (${where}), so the gate ` +
@@ -1851,6 +1857,21 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
         detail: `preview under the proposed rules: option ${name} has a value starting with "-", so this gate was not run`,
       };
     }
+  }
+  // osv-scanner's call analysis builds the project it scans, and in the
+  // preview that is the head's code (a Rust build.rs, for one). Off (`none`,
+  // or false, which renders --no-call-analysis) is the only value it runs with.
+  const callAnalysis = gate.options['call-analysis'];
+  if (
+    gate.product === 'osv-scanner' &&
+    callAnalysis !== undefined &&
+    callAnalysis !== false &&
+    !(Array.isArray(callAnalysis) ? callAnalysis : [callAnalysis]).every((item) => item === 'none')
+  ) {
+    return {
+      reason: 'preparation-failed',
+      detail: "the preview does not run call analysis, because it would build the head's code",
+    };
   }
   if (gate.command !== undefined && realPathInside(repoRoot, gate.command)) {
     return {

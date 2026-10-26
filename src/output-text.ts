@@ -867,6 +867,7 @@ export function previewLines(result: RunResult, verbose: boolean): string[] {
       const lines = [
         `preview: ${preview.gates.length} gate(s), ${preview.findings.length} finding(s), ${couldNotRun} could-not-run`,
         ...preview.gates.flatMap((gate) => gateSection(gate, verbose)),
+        ...preview.skipped.map((skip) => `preview: ${skip.role} (${skip.product}) would not run: ${skip.reason}`),
       ];
       if (preview.deferred.includes('intent')) {
         lines.push('preview: intent (intent-guard) deferred, the preview does not prepare the intent gate');

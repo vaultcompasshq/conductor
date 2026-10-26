@@ -1036,6 +1036,39 @@ describe('pull-request mode through a whole run', () => {
       expect(existsSync(marker)).toBe(false);
     });
 
+    it("preview refuses osv-scanner call analysis, because it would build the head's code", () => {
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', stdout: CLEAN_OSV_SCANNER, argvLog: lastArgvLog });
+      const vulns = (enabled: boolean) =>
+        `  vulnerabilities:\n    product: osv-scanner\n${enabled ? '' : '    enabled: false\n'}    options:\n      call-analysis: all\n`;
+      const result = runAll(P(`  secrets:\n    product: vault-guard\n${vulns(false)}`), {
+        repoRoot: prRepo(), staged: false, pathValue: bin, tempRoot: tempDir(),
+        trustBase: PR_TRUST_BASE, preview: { policy: P(vulns(true)) },
+      });
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+      expect(result.preview?.gates[0].couldNotRun?.detail).toBe(
+        "the preview does not run call analysis, because it would build the head's code"
+      );
+      // Only the primary vault-guard ran: osv-scanner was never spawned.
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual(['scan -f json --trust-base origin/main']);
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('a mismatched version pin makes the preview gate could-not-run and leaves the primary result alone', () => {
+      // The pin names dep-guard, which only the preview runs; the stub reports 9.9.9.
+      const env = { CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.5' };
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined, env });
+      const result = previewRun(SECRETS, FAMILY, { env });
+      expect(result.preview?.gates[0].role).toBe('dependencies');
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('version-skew');
+      expect(result.exitCode).toBe(without.exitCode);
+      expect(result.exitCode).toBe(0);
+      expect(result.gates[0].couldNotRun).toBeNull();
+      expect(result.findings).toEqual(without.findings);
+    });
+
     it('preview refuses a base command inside the working tree before any spawn', () => {
       const repo = prRepo();
       const program = path.join(repo, 'tools', 'base-gate.sh');

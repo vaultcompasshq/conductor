@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { policyForRun } from '../src/cli.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
 import {
   CLEAN_DEP_GUARD,
@@ -2102,6 +2103,14 @@ describe('pull-request mode through the CLI', () => {
       expect(lines).toHaveLength(1);
       expect(lines[0]).toMatch(/^scan -f json --trust-base /);
       expect(previewSpawns(argvLog)).toEqual([]);
+    });
+
+    it('builds no preview policy unless --preview asked for one', () => {
+      const { repo } = attackRepo({ basePolicy: SECRETS_OFF_BASE, headPolicy: SECRETS_OFF_BASE.replace('    enabled: false\n', '') });
+      const asked = policyForRun(repo, 'base', {}, undefined, undefined, true);
+      const notAsked = policyForRun(repo, 'base', {}, undefined, undefined, false);
+      expect(asked.kind === 'policy' && asked.previewPolicy !== null).toBe(true);
+      expect(notAsked.kind === 'policy' && notAsked.previewPolicy === null).toBe(true);
     });
 
     it('an unparseable head runs no preview', () => {

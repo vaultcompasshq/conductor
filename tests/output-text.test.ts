@@ -2163,6 +2163,42 @@ describe('the preview under the proposed rules', () => {
     ]);
   });
 
+  it('keeps the one-line clean report a byte-for-byte prefix of the report with a preview', () => {
+    const without = renderText(prResult([]));
+    const withPreview = renderText({ ...prResult([]), preview: ONE_CLEAN_PREVIEW_GATE });
+    expect(withPreview.startsWith(without)).toBe(true);
+    expect(withPreview.slice(without.length)).toContain(PREVIEW_HEADER);
+  });
+
+  it('prints one fixed-shape line per preview role that would not run', () => {
+    const text = renderText({
+      ...prResult([]),
+      preview: {
+        gates: [],
+        findings: [],
+        skipped: [
+          { role: 'secrets', product: 'vault-guard', reason: 'disabled' },
+          { role: 'secrets-history', product: 'gitleaks', reason: 'stage' },
+          { role: 'vulnerabilities', product: 'osv-scanner', reason: 'excluded' },
+        ],
+        deferred: ['intent'],
+        overBudget: [],
+        threw: null,
+      },
+    });
+    expect(text).toContain(
+      [
+        '',
+        'preview: 0 gate(s), 0 finding(s), 0 could-not-run',
+        'preview: secrets (vault-guard) would not run: disabled',
+        'preview: secrets-history (gitleaks) would not run: stage',
+        'preview: vulnerabilities (osv-scanner) would not run: excluded',
+        'preview: intent (intent-guard) deferred, the preview does not prepare the intent gate',
+        '',
+      ].join('\n')
+    );
+  });
+
   it('prints nothing for a run without a preview', () => {
     expect(renderText(prResult([]))).not.toContain(PREVIEW_HEADER);
   });

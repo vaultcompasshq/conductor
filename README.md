@@ -1146,11 +1146,18 @@ policy with only `enabled`, `stage` and `enforce` taken from the head. Every
 other head value, `command:`, `args:`, `options` and `timeout-seconds`
 included, never reaches it: the base's command and the base's limit are what
 run, and a base `command:` that resolves inside the working tree is refused
-there. The intent gate is deferred and not previewed.
+there. A gate's own config is another matter: in the preview, dep-guard and
+vault-guard read their own `.dep-guard.json` and `.vault-guard.json` from the
+head, because previewing the proposed rules means their rules too, while
+gitleaks and osv-scanner keep the base's config. osv-scanner call analysis is
+refused in the preview, because it would build the head's code. The intent
+gate is deferred and not previewed.
 
-**The preview decides nothing.** The exit code, the verdict token, the SARIF
-results and the first four lines of the report are those of the run under the
-base rules, whatever the preview finds or however it fails. It prints after
+**The preview decides nothing.** The exit code, the verdict token and the SARIF
+results are those of the run under the base rules, whatever the preview finds
+or however it fails. In the full report (`--verbose`, the form the Action
+reads) the first four lines are untouched; in the one-line clean form the
+primary report is a byte-for-byte prefix and the preview follows it. It prints after
 the verdict under `Preview under the proposed rules (does not affect the
 verdict)`, as `conductor: preview ...` lines in the job log, as note-level
 `conductor/preview-under-proposed-rules` notifications on the umbrella's SARIF

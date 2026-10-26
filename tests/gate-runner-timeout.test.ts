@@ -6,7 +6,7 @@
 // the options, so the stub gates still run as real subprocesses.
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -373,15 +373,39 @@ describe('the preview under the proposed rules runs under a hard 300 s budget', 
     expect(result.exitCode).toBe(0);
   });
 
+  it('a preview spawn with no budget left is not started, and says so', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    // The start, the budget check and the version probe read 0; the scan
+    // reads 300 000, so the budget is spent before it.
+    const ticks = [0, 0, 0];
+    const result = runAll(P('  dependencies:\n    product: dep-guard\n    enabled: false\n'), {
+      repoRoot: gitRepo(), staged: false, pathValue: bin,
+      trustBase: { ref: 'HEAD', policyChanged: true, refusal: null },
+      preview: { policy: P('  secrets:\n    product: vault-guard\n') },
+      previewClock: () => ticks.shift() ?? 300_000,
+    });
+    expect(spawnsOf(bin, 'vault-guard').filter((call) => call.args.includes('-f'))).toEqual([]);
+    const out = result.preview?.gates[0];
+    expect(out?.couldNotRun?.reason).toBe('timed-out');
+    expect(out?.couldNotRun?.detail).toContain('vault-guard was not started: the preview budget was spent');
+    expect(out?.couldNotRun?.detail).not.toContain('0 s limit');
+    expect(result.exitCode).toBe(0);
+  });
+
   it('preview spawns get a temporary XDG_CACHE_HOME and SIGKILL, and primary spawns get neither', () => {
     const bin = tempDir();
     stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    const tempRoot = tempDir();
     runAll(P('  secrets:\n    product: vault-guard\n'), {
-      repoRoot: gitRepo(), staged: false, pathValue: bin,
+      repoRoot: gitRepo(), staged: false, pathValue: bin, tempRoot,
       trustBase: { ref: 'HEAD', policyChanged: true, refusal: null },
       preview: { policy: P('  secrets:\n    product: vault-guard\n') },
       previewClock: () => 0,
     });
+    // The preview's cache directory was made under tempRoot and removed.
+    expect(spawnsOf(bin, 'vault-guard')[3]?.env?.XDG_CACHE_HOME?.startsWith(tempRoot)).toBe(true);
+    expect(readdirSync(tempRoot).filter((name) => name.startsWith('conductor-preview-'))).toEqual([]);
     const spawns = spawnsOf(bin, 'vault-guard');
     // version probe and scan, once for the primary run and once for the preview
     expect(spawns).toHaveLength(4);

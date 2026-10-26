@@ -23,9 +23,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   the head, and what it would have said prints after the verdict, in the job
   log, as note-level `conductor/preview-under-proposed-rules` SARIF
   notifications and as one line in the step summary. It decides nothing: the
-  exit code, the verdict token, the SARIF results and report lines 1 to 4 are
-  unchanged. The intent gate is deferred. New `conductor run --preview` flag
-  and Action `preview` input, which defaults to `true`.
+  exit code, the verdict token and the SARIF results are unchanged; in the
+  full (`--verbose`) report lines 1 to 4 are untouched, and in the one-line
+  clean form the primary report is a byte-for-byte prefix. The intent gate is
+  deferred. New `conductor run --preview` flag and Action `preview` input,
+  which defaults to `true`.
+- Upgrading: a workflow on the old `timeout-minutes: 5` recipe can be killed
+  mid-preview on a pull request that flips a gate's `enabled` or `stage`.
+  Raise it to the primary run's need plus 5 minutes, or set `preview: 'false'`.
 - The whole preview has a hard deadline of 300 seconds, each spawn is killed
   with SIGKILL at it, and the pull-request comment is cut at 60000 characters,
   preview block first.
