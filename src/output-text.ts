@@ -36,7 +36,8 @@ import {
 import { isLegacyContractPath, legacyChangedSentence } from './intent-prepare.js';
 import type { ReportedMatch } from './intent-prepare.js';
 import { SPEC_DIR } from './intent-spec.js';
-import type { RunResult } from './run.js';
+import { PRODUCT_FOR_ROLE } from './policy.js';
+import { type RunResult, guardPreview } from './run.js';
 
 function subjectLabel(finding: Finding): string {
   const subject = finding.subject;
@@ -817,6 +818,102 @@ export function proposalLogLines(result: RunResult): string[] {
 }
 
 /**
+ * A gate's outcome in the job log's words: `ok`, `findings (N, M blocking)`
+ * with dep-guard's deadline clause when it said so, `could-not-run (reason)`
+ * or `missing (reason)`. Shared by the per-gate lines and the preview's.
+ */
+export function gateOutcomeWords(gate: GateOutcome): string {
+  if (gate.couldNotRun !== null) {
+    const reason = gate.couldNotRun.reason;
+    return reason === 'binary-missing' || reason === 'configured-command-missing'
+      ? `missing (${reason})`
+      : `could-not-run (${reason})`;
+  }
+  const total = gate.findings.length;
+  const blocking = gate.findings.filter((finding) => finding.blocking).length;
+  let outcome = total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
+  // Only when the gate said so; the outcome word above is unchanged.
+  const coverage = deadlineCoverage(gate);
+  if (coverage !== null) {
+    outcome += `, ${coverage}`;
+  }
+  return outcome;
+}
+
+/**
+ * The header the preview block starts with, in the report and the comment.
+ * scripts/lib/pr-comment.mjs spells it too, to cut the preview first from a
+ * comment over the limit, and action.yml stops its summary scan at it.
+ */
+export const PREVIEW_HEADER = 'Preview under the proposed rules (does not affect the verdict)';
+
+/**
+ * The preview under the proposed rules, as report lines: empty without a
+ * preview, otherwise a blank line, the header, the fixed-shape count line,
+ * one gate section per preview gate, then the deferred, over-budget, threw
+ * and advisory lines. Printed only AFTER the verdict line, and read by
+ * nothing that decides one. Every line goes through cleanOutputLine: a
+ * preview runs under head-proposed keys, so its gate text is not trusted to
+ * be free of a workflow command.
+ */
+export function previewLines(result: RunResult, verbose: boolean): string[] {
+  const preview = result.preview;
+  if (preview === undefined) {
+    return [];
+  }
+  const body = guardPreview(
+    (): string[] => {
+      const couldNotRun = preview.gates.filter((gate) => gate.couldNotRun !== null).length;
+      const lines = [
+        `preview: ${preview.gates.length} gate(s), ${preview.findings.length} finding(s), ${couldNotRun} could-not-run`,
+        ...preview.gates.flatMap((gate) => gateSection(gate, verbose)),
+        ...preview.skipped.map((skip) => `preview: ${skip.role} (${skip.product}) would not run: ${skip.reason}`),
+      ];
+      if (preview.deferred.includes('intent')) {
+        lines.push('preview: intent (intent-guard) deferred, the preview does not prepare the intent gate');
+      }
+      if (preview.overBudget.length > 0) {
+        lines.push(
+          `preview skipped: over budget (${preview.overBudget
+            .map((role) => `${role} (${PRODUCT_FOR_ROLE[role]})`)
+            .join(', ')})`
+        );
+      }
+      if (preview.threw !== null) {
+        lines.push(`preview: could not be completed (${preview.threw})`);
+      }
+      if (couldNotRun > 0) {
+        lines.push('  a could-not-run in the preview is advisory: it does not change the exit code.');
+      }
+      return lines;
+    },
+    (message) => [`preview: could not be completed (${message})`]
+  );
+  return ['', PREVIEW_HEADER, ...body].map(cleanOutputLine);
+}
+
+/**
+ * The preview's job log lines: one per preview gate in the per-gate lines'
+ * outcome words, one per over-budget role, and one for a deferred intent
+ * gate. Empty without a preview. Each line goes through cleanOutputLine.
+ */
+export function previewLogLines(result: RunResult): string[] {
+  const preview = result.preview;
+  if (preview === undefined) {
+    return [];
+  }
+  const lines = guardPreview(
+    (): string[] => [
+      ...preview.gates.map((gate) => `conductor: preview ${gate.role} (${gate.product}) ${gateOutcomeWords(gate)}`),
+      ...preview.overBudget.map((role) => `conductor: preview ${role} (${PRODUCT_FOR_ROLE[role]}) over budget`),
+      ...(preview.deferred.includes('intent') ? ['conductor: preview intent (intent-guard) deferred'] : []),
+    ],
+    (message) => [`conductor: preview could not be completed (${message})`]
+  );
+  return lines.map(cleanOutputLine);
+}
+
+/**
  * One plain line per gate, for the job log: which gate, which version, what
  * happened, and the exit code. Written to stderr by cli.ts on EVERY run, so
  * an adopter reading the log learns which gate did what without opening a
@@ -849,24 +946,7 @@ export function gateLogLines(result: RunResult, options: { terminal?: boolean } 
   for (const gate of result.gates) {
     const version = gate.productVersion === null ? 'version unknown' : gate.productVersion;
     const exit = gate.exitCode === null ? 'no exit code' : `exit ${gate.exitCode}`;
-    let outcome: string;
-    if (gate.couldNotRun !== null) {
-      const reason = gate.couldNotRun.reason;
-      outcome =
-        reason === 'binary-missing' || reason === 'configured-command-missing'
-          ? `missing (${reason})`
-          : `could-not-run (${reason})`;
-    } else {
-      const total = gate.findings.length;
-      const blocking = gate.findings.filter((finding) => finding.blocking).length;
-      outcome =
-        total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
-      // Only when the gate said so; the outcome word above is unchanged.
-      const coverage = deadlineCoverage(gate);
-      if (coverage !== null) {
-        outcome += `, ${coverage}`;
-      }
-    }
+    const outcome = gateOutcomeWords(gate);
     // conductor's own refusals (a git below the floor, a path list it cannot
     // pass, a PATH or git-directory failure, a gate below its minimum) carry
     // their reason the same way, since no gate said anything for them.
@@ -1717,8 +1797,15 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
     return `${lines.join('\n')}\n`;
   }
 
+  // The preview, when there is one, goes after everything else: after the
+  // one-line summary here and after the verdict line below, so every report
+  // line above it is byte for byte the same run's without one.
+  const preview = previewLines(result, Boolean(options.verbose));
+  const withPreview = (report: string): string =>
+    preview.length === 0 ? report : `${report}${preview.join('\n')}\n`;
+
   if (refusal.length === 0 && !options.verbose && isFullyClean(result)) {
-    return `${summaryLine(result)}\n`;
+    return withPreview(`${summaryLine(result)}\n`);
   }
 
   // Counted over EVERY gate, unenforced ones included, and deliberately not
@@ -1780,5 +1867,5 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   }
 
   lines.push('', verdict(result, Boolean(options.advisory)));
-  return `${lines.join('\n')}\n`;
+  return withPreview(`${lines.join('\n')}\n`);
 }

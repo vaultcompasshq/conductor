@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { diffPolicies, policyChangeLine } from '../src/policy-diff.js';
+import { diffPolicies, policyChangeLine, previewPolicy, previewRoles } from '../src/policy-diff.js';
 import { parsePolicy } from '../src/policy.js';
 
 const BASE = parsePolicy('version: 1\ngates:\n  dependencies:\n    product: dep-guard\n', 'base');
@@ -84,5 +84,47 @@ describe('diffPolicies', () => {
     expect(diffPolicies(base, BASE).map(policyChangeLine)).toEqual([
       'policy: gates.dependencies.options.constructor 1 -> (absent)',
     ]);
+  });
+});
+
+describe('the preview policy', () => {
+  const ONLY = (role: string, product: string) =>
+    parsePolicy(`version: 1\ngates:\n  ${role}:\n    product: ${product}\n`, 'only').gates;
+  it('takes only enabled, stage and enforce from the head', () => {
+    const base = parsePolicy('version: 1\ngates:\n  vulnerabilities:\n    product: osv-scanner\n    enabled: false\n    timeout-seconds: 60\n', 'b');
+    const head = parsePolicy('version: 1\ngates:\n  vulnerabilities:\n    product: osv-scanner\n    stage: ci\n    enforce: false\n    timeout-seconds: 21600\n    options:\n      call-analysis: all\n      output: /x/y\n  secrets:\n    product: vault-guard\n    enforce: false\n    command: /x/evil\n    args: [a]\n    options:\n      fail-on: none\n', 'h');
+    const preview = previewPolicy(base, head, ['vulnerabilities', 'secrets']);
+    expect(preview.gates.vulnerabilities).toEqual({ ...base.gates.vulnerabilities, enabled: true, stage: 'ci', enforce: false });
+    expect(preview.gates.secrets).toEqual({ ...ONLY('secrets', 'vault-guard').secrets, enforce: false });
+    // A second head-only role, pinned literally: parsePolicy's own defaults,
+    // presentOnBase 'block' included, and nothing else from the head.
+    const vulnHead = parsePolicy('version: 1\ngates:\n  vulnerabilities:\n    product: osv-scanner\n    stage: push\n    timeout-seconds: 21600\n    present-on-base: report\n    options:\n      call-analysis: all\n', 'h2');
+    expect(previewPolicy(BASE, vulnHead, ['vulnerabilities']).gates.vulnerabilities).toEqual({
+      role: 'vulnerabilities', product: 'osv-scanner', enabled: true, stage: 'push', enforce: true,
+      excludedByCli: false, options: {}, presentOnBase: 'block',
+    });
+  });
+  it('holds only the previewed roles, and previews a removed role as disabled', () => {
+    const base = parsePolicy('version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n', 'b');
+    const head = parsePolicy('version: 1\ngates:\n  dependencies:\n    product: dep-guard\n', 'h');
+    const preview = previewPolicy(base, head, ['secrets']);
+    expect(Object.keys(preview.gates)).toEqual(['secrets']);
+    expect(preview.gates.secrets).toEqual({ ...base.gates.secrets, enabled: false });
+    expect(preview.report).toEqual(base.report);
+  });
+  it('previews only a role with an enabled or stage change', () => {
+    expect(previewRoles([
+      { role: 'dependencies', key: 'enforce', old: true, new: false },
+      { role: 'dependencies', key: 'command', old: undefined, new: '/x' },
+      { role: 'secrets', key: 'options.fail-on', old: undefined, new: 'none' },
+      { role: null, key: 'report.format', old: 'text', new: 'sarif' },
+    ])).toEqual([]);
+    expect(previewRoles([
+      { role: 'secrets', key: 'stage', old: 'commit', new: 'ci' },
+      { role: 'secrets', key: 'enabled', old: false, new: true },
+      { role: 'dependencies', key: 'enabled', old: false, new: true },
+    ])).toEqual(['dependencies', 'secrets']);
+    const head = parsePolicy('version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets-history:\n    product: gitleaks\n', 'h');
+    expect(previewRoles(diffPolicies(BASE, head))).toEqual(['secrets-history']);
   });
 });

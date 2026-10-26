@@ -42,11 +42,53 @@ export function fenceReport(reportText) {
 }
 
 /**
+ * The longest report a comment carries, in characters. GitHub refuses a
+ * comment body over 65536 characters, and the marker, the heading and the
+ * fence take a few of those.
+ */
+export const COMMENT_LIMIT = 60000;
+
+/**
+ * The preview block's header, spelled exactly as src/output-text.ts spells
+ * it (a test pins the two together).
+ */
+export const PREVIEW_HEADER = 'Preview under the proposed rules (does not affect the verdict)';
+
+/**
+ * The report cut to fit a comment. Unchanged at or under the limit. Over it,
+ * the preview block goes first, because it decides nothing and the primary
+ * report above it is the run's answer: everything from the blank line before
+ * the preview header is replaced by one line saying it was omitted. Only when
+ * that is still over the limit, or there is no preview block, is the report
+ * itself cut at the limit, with a note.
+ */
+export function truncateReport(reportText, limit = COMMENT_LIMIT) {
+  const text = String(reportText);
+  if (text.length <= limit) {
+    return text;
+  }
+  // The LAST one: the preview is the report's last block and its lines are
+  // cleaned to one line each, so a header-shaped line that text from the
+  // scanned repository put higher up cannot cut the primary report short.
+  const at = text.lastIndexOf(`\n\n${PREVIEW_HEADER}\n`);
+  if (at !== -1) {
+    const cut =
+      text.slice(0, at + 1) +
+      `\n(preview under the proposed rules omitted: the report is over ${limit} characters)\n`;
+    if (cut.length <= limit) {
+      return cut;
+    }
+  }
+  return `${text.slice(0, limit)}\n\n(report truncated at ${limit} characters)`;
+}
+
+/**
  * The full comment body: the marker first, so `findMarkedCommentId` can
- * find it in the body GitHub hands back, then the fenced report.
+ * find it in the body GitHub hands back, then the fenced report, cut to fit
+ * a comment by truncateReport.
  */
 export function buildCommentBody(reportText, marker = MARKER) {
-  return [marker, '### Conductor report', '', fenceReport(reportText), ''].join('\n');
+  return [marker, '### Conductor report', '', fenceReport(truncateReport(reportText)), ''].join('\n');
 }
 
 /**

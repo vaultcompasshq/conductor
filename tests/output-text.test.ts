@@ -13,8 +13,15 @@ import {
   normalizeOsvScanner,
   normalizeVaultGuard,
 } from '../src/normalize.js';
-import { gateLogLines, proposalLogLines, renderText } from '../src/output-text.js';
-import type { RunResult } from '../src/run.js';
+import {
+  PREVIEW_HEADER,
+  gateLogLines,
+  previewLogLines,
+  proposalLogLines,
+  renderText,
+  verdictToken,
+} from '../src/output-text.js';
+import type { RunPreview, RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -2066,5 +2073,133 @@ describe('proposalLogLines', () => {
     expect(lines).toHaveLength(2);
     expect(lines[1]).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     expect(lines[1]).not.toContain('::error::');
+  });
+});
+
+describe('the preview under the proposed rules', () => {
+  function prResult(proposals: RunResult['proposals']): RunResult {
+    return {
+      ...result([], 0),
+      trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+      proposals,
+    };
+  }
+
+  function previewOf(gate: GateOutcome): RunPreview {
+    return { gates: [gate], findings: gate.findings, skipped: [], deferred: [], overBudget: [], threw: null };
+  }
+
+  const ONE_CLEAN_PREVIEW_GATE = previewOf(outcome({ exitCode: 0, findings: [] }));
+  const ONE_COULD_NOT_RUN_PREVIEW_GATE = previewOf(
+    outcome({
+      exitCode: null,
+      couldNotRun: { reason: 'gate-program-refused', detail: 'the base command is inside the working tree' },
+    })
+  );
+  // The hostile text goes into the reason itself, the one gate-derived word
+  // a preview log line carries, so the line is only safe if it is cleaned.
+  function previewWithDetail(detail: string): RunPreview {
+    return previewOf(
+      outcome({
+        exitCode: null,
+        couldNotRun: { reason: detail as never, detail, gateSaid: detail },
+      })
+    );
+  }
+
+  it('prints the preview after the verdict and leaves lines 1 to 4 and the token alone', () => {
+    const without = renderText(prResult([]), { verbose: true });
+    const withPreview = renderText({ ...prResult([]), preview: ONE_CLEAN_PREVIEW_GATE }, { verbose: true });
+    expect(withPreview.startsWith(without)).toBe(true);
+    expect(withPreview.split('\n').slice(0, 4)).toEqual(without.split('\n').slice(0, 4));
+    expect(withPreview.slice(without.length).split('\n').slice(0, 3)).toEqual([
+      '',
+      PREVIEW_HEADER,
+      'preview: 1 gate(s), 0 finding(s), 0 could-not-run',
+    ]);
+    expect(verdictToken({ ...prResult([]), preview: ONE_CLEAN_PREVIEW_GATE }, false)).toBe(
+      verdictToken(prResult([]), false)
+    );
+  });
+
+  it('prints the deferred, over-budget, threw and advisory lines in their fixed shapes', () => {
+    const text = renderText({
+      ...prResult([]),
+      preview: { ...ONE_COULD_NOT_RUN_PREVIEW_GATE, deferred: ['intent'], overBudget: ['secrets-history'], threw: 'boom' },
+    });
+    expect(text).toContain('\npreview: 1 gate(s), 0 finding(s), 1 could-not-run\n');
+    expect(text).toContain('\npreview: intent (intent-guard) deferred, the preview does not prepare the intent gate\n');
+    expect(text).toContain('\npreview skipped: over budget (secrets-history (gitleaks))\n');
+    expect(text).toContain('\npreview: could not be completed (boom)\n');
+    expect(text).toContain('\n  a could-not-run in the preview is advisory: it does not change the exit code.\n');
+  });
+
+  it('a preview log line carrying ::error:: is neutralised', () => {
+    const lines = previewLogLines({ ...prResult([]), preview: previewWithDetail('x ::error::y\u001b[31m') });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^conductor: preview dependencies \(dep-guard\) /);
+    expect(lines[0]).not.toContain('::');
+    expect(lines[0]).not.toContain('\u001b');
+    expect(previewLogLines(prResult([]))).toEqual([]);
+  });
+
+  it('cleans every preview line of the report, the gate sections included', () => {
+    const text = renderText({ ...prResult([]), preview: previewWithDetail('x ::error::y\u001b[31m') }, { verbose: true });
+    const shown = text.slice(text.indexOf(PREVIEW_HEADER));
+    expect(shown).toContain('x : :error: :y');
+    expect(shown).not.toContain('::');
+    expect(shown).not.toContain('\u001b');
+  });
+
+  it('writes the over-budget and deferred log lines, and nothing when there is no preview', () => {
+    const lines = previewLogLines({
+      ...prResult([]),
+      preview: { ...ONE_CLEAN_PREVIEW_GATE, deferred: ['intent'], overBudget: ['vulnerabilities'] },
+    });
+    expect(lines).toEqual([
+      'conductor: preview dependencies (dep-guard) ok',
+      'conductor: preview vulnerabilities (osv-scanner) over budget',
+      'conductor: preview intent (intent-guard) deferred',
+    ]);
+  });
+
+  it('keeps the one-line clean report a byte-for-byte prefix of the report with a preview', () => {
+    const without = renderText(prResult([]));
+    const withPreview = renderText({ ...prResult([]), preview: ONE_CLEAN_PREVIEW_GATE });
+    expect(withPreview.startsWith(without)).toBe(true);
+    expect(withPreview.slice(without.length)).toContain(PREVIEW_HEADER);
+  });
+
+  it('prints one fixed-shape line per preview role that would not run', () => {
+    const text = renderText({
+      ...prResult([]),
+      preview: {
+        gates: [],
+        findings: [],
+        skipped: [
+          { role: 'secrets', product: 'vault-guard', reason: 'disabled' },
+          { role: 'secrets-history', product: 'gitleaks', reason: 'stage' },
+          { role: 'vulnerabilities', product: 'osv-scanner', reason: 'excluded' },
+        ],
+        deferred: ['intent'],
+        overBudget: [],
+        threw: null,
+      },
+    });
+    expect(text).toContain(
+      [
+        '',
+        'preview: 0 gate(s), 0 finding(s), 0 could-not-run',
+        'preview: secrets (vault-guard) would not run: disabled',
+        'preview: secrets-history (gitleaks) would not run: stage',
+        'preview: vulnerabilities (osv-scanner) would not run: excluded',
+        'preview: intent (intent-guard) deferred, the preview does not prepare the intent gate',
+        '',
+      ].join('\n')
+    );
+  });
+
+  it('prints nothing for a run without a preview', () => {
+    expect(renderText(prResult([]))).not.toContain(PREVIEW_HEADER);
   });
 });

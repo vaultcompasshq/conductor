@@ -872,6 +872,13 @@ describe('action.yml: the render step is tokenless and the post step is the only
   });
 });
 
+describe('action.yml: the render step and the preview', () => {
+  it('never passes --preview from the render step, so the fallback run has the preview off', () => {
+    expect(prCommentScript).not.toContain('--preview');
+    expect(stepEnv('pr-render').PREVIEW).toBeUndefined();
+  });
+});
+
 describe('action.yml: the pr-comment step mirrors --advisory', () => {
   // The comment step re-runs the umbrella purely to render text, so its
   // rendered verdict has to say the same thing the gates step's own exit

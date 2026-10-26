@@ -1962,6 +1962,10 @@ describe('action.yml: the verdict token from the gates step', () => {
     /** Where GITHUB_STEP_SUMMARY points; 'none' leaves it unset. */
     summaryPath?: string | 'none';
     advisory?: string;
+    /** Does the installed conductor's `run --help` also list --preview? */
+    previewFlag?: boolean;
+    /** The preview input; undefined is the input's own default, 'true'. */
+    preview?: string;
   }): VerdictRun {
     const supportsFlag = options.supportsFlag ?? true;
     const dir = tempDir();
@@ -1990,6 +1994,7 @@ describe('action.yml: the verdict token from the gates step', () => {
           : supportsFlag || options.help === 'exits-1'
             ? "  printf '  --text-report <path>  write the text report too\\n'"
             : "  printf '  --output <path>\\n'",
+        options.previewFlag === true ? "  printf '  --preview  run the preview under the proposed rules\\n'" : '  :',
         options.help === 'exits-1' ? '  exit 1' : '  exit 0',
         'fi',
         `printf 'run\\n' >> ${JSON.stringify(runsLog)}`,
@@ -2025,6 +2030,7 @@ describe('action.yml: the verdict token from the gates step', () => {
       OUTPUT: 'conductor.sarif',
       WORKDIR: '.',
       ADVISORY: options.advisory ?? 'false',
+      PREVIEW: options.preview ?? 'true',
       TEXT_REPORT: textReport,
     };
     if (options.summaryPath !== 'none') {
@@ -2427,6 +2433,79 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(env['TEXT_REPORT']).toBe('${{ steps.gates.outputs.text-report }}');
     expect(env['REPORT_FALLBACK']).toBe('${{ steps.gates.outputs.report-fallback }}');
     expect(stepEnv('gates')['TEXT_REPORT']).toMatch(/runner\.temp/);
+  });
+
+  it('copies only the fixed-shape preview line to the step summary', () => {
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        COUNT,
+        '',
+        'conductor verdict: pass',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'preview: 1 gate(s), 0 finding(s), 0 could-not-run',
+        '  proposed  dep-guard     smuggled after the header',
+        '  secrets  vault-guard  ::error::x',
+        '',
+      ].join('\n'),
+    });
+    expect(run.summary).toBe(
+      'conductor verdict: pass\n\ncontrol changes:\n\n```text\n' +
+        COUNT.trimStart() +
+        '\n```\n\n' +
+        'preview under the proposed rules:\n\n```text\npreview: 1 gate(s), 0 finding(s), 0 could-not-run\n```\n\n'
+    );
+  });
+
+  it('copies no preview line whose shape is not the fixed one', () => {
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'preview: 1 gate(s) `x`',
+        '',
+      ].join('\n'),
+    });
+    expect(run.summary).toBe('conductor verdict: pass\n\n');
+    const later = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'something else first',
+        'preview: 1 gate(s), 0 finding(s), 0 could-not-run',
+        '',
+      ].join('\n'),
+    });
+    expect(later.summary).toBe('conductor verdict: pass\n\n');
+  });
+
+  it('passes --preview only when the input is true and the installed conductor lists it', () => {
+    const OK = 'conductor 9.9.9\nverdict-token: pass\n';
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: true }).argv).toContain('--preview');
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: true, preview: 'false' }).argv).not.toContain('--preview');
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: true, preview: 'TRUE' }).argv).not.toContain('--preview');
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: false }).argv).not.toContain('--preview');
+    expect(
+      runGatesForVerdict({ exit: 0, body: OK, previewFlag: true, help: 'exits-1' }).argv
+    ).not.toContain('--preview');
+  });
+
+  it('declares the preview input, defaulting to true', () => {
+    expect(action.inputs?.preview?.default).toBe('true');
+    expect(stepEnv('gates').PREVIEW).toBe('${{ inputs.preview }}');
   });
 });
 

@@ -46,6 +46,7 @@ import { renderSarif } from './output-sarif.js';
 import {
   gateLogLines,
   jobLogSummary,
+  previewLogLines,
   proposalLogLines,
   renderText,
   verdictToken,
@@ -63,7 +64,7 @@ import {
   parsePolicy,
 } from './policy.js';
 import type { CliOverrides, GateRole, GateStage, Policy } from './policy.js';
-import { diffPolicies } from './policy-diff.js';
+import { diffPolicies, previewPolicy, previewRoles } from './policy-diff.js';
 import { refusedTrustBase, runAll } from './run.js';
 import type { RunTrustBase } from './run.js';
 import {
@@ -257,6 +258,7 @@ interface RunCliOptions {
   compactOnRefusal?: boolean;
   advisory?: boolean;
   project?: string;
+  preview?: boolean;
 }
 
 const PROJECT_OPTION_HELP =
@@ -306,7 +308,18 @@ export function rendersToTerminal(output: string | undefined, stdoutIsTTY: boole
  * the head's file.
  */
 type PolicyForRun =
-  | { kind: 'policy'; policy: Policy; trustBase?: RunTrustBase }
+  | {
+      kind: 'policy';
+      policy: Policy;
+      trustBase?: RunTrustBase;
+      /**
+       * The policy of the preview under the proposed rules, built here from
+       * the parsed head, which itself is never returned. Null without a trust
+       * base, when the head does not parse, and when no role's `enabled` or
+       * `stage` changed.
+       */
+      previewPolicy: Policy | null;
+    }
   /** The trust base could not be judged against. `inventory` only names gates. */
   | { kind: 'refused'; ref: string; detail: string; inventory: Policy; notGiven?: boolean };
 
@@ -351,12 +364,18 @@ function inventoryFromHead(root: string, overrides: CliOverrides): Policy {
   }
 }
 
-function policyForRun(
+/**
+ * Exported so a test can see that no preview policy is built unless one was
+ * asked for (`preview`): a run without --preview never reaches that code.
+ */
+export function policyForRun(
   root: string,
   trustBase: string | undefined,
   overrides: CliOverrides,
   githubBaseRef: string | undefined,
-  githubActions: string | undefined
+  githubActions: string | undefined,
+  /** Whether this run asked for the preview under the proposed rules. */
+  preview = false
 ): PolicyForRun {
   if (trustBase === undefined) {
     // A PULL-REQUEST JOB WITH NO TRUST BASE would take its rules from the
@@ -389,6 +408,7 @@ function policyForRun(
     return {
       kind: 'policy',
       policy: applyCliOverrides(loadPolicy(root), overrides),
+      previewPolicy: null,
     };
   }
 
@@ -479,8 +499,9 @@ function policyForRun(
   }
 
   // Parsed once, before applyCliOverrides, so a --gate override never shows up
-  // as a policy change. The head is parsed for the comparison alone and its
-  // result is never handed to a run.
+  // as a policy change. The parsed head is never handed to a run: the
+  // comparison reads it, and the preview policy below takes only enabled,
+  // stage and enforce from it.
   const baseParsed = parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`);
   const policyChanged = headRead.kind === 'error' ? true : policyDiffers(baseText, headText);
   let headPolicy: Policy | null = null;
@@ -491,9 +512,20 @@ function policyForRun(
       if (!(error instanceof PolicyError)) throw error;
     }
   }
+  // The preview under the proposed rules: only the roles whose enabled or
+  // stage the head changes, and only enabled, stage and enforce from the
+  // head (previewPolicy). A head that does not parse gets none (spec 5.2,
+  // finding 8). The same --gate overrides, restricted to the roles the
+  // preview holds: a --gate role it does not hold leaves its roles excluded.
+  // Built only when the run asked for a preview, so nothing here can fail a
+  // run that did not.
+  const roles = !preview || headPolicy === null ? [] : previewRoles(diffPolicies(baseParsed, headPolicy));
+  const proposed =
+    headPolicy === null || roles.length === 0 ? null : previewPolicy(baseParsed, headPolicy, roles);
   return {
     kind: 'policy',
     policy: applyCliOverrides(baseParsed, overrides),
+    previewPolicy: proposed === null ? null : previewWithOverrides(proposed, overrides),
     trustBase: {
       ref: trustBase,
       // A head file git could not read is reported as a change, the
@@ -509,6 +541,28 @@ function policyForRun(
       treeUnchanged: headTreeEqualsBase(root, trustBase),
     },
   };
+}
+
+/**
+ * The --gate overrides on the preview policy. Restricted to the roles it
+ * holds, so a --gate role it does not hold leaves its roles excluded rather
+ * than throwing. And a role the head switched off stays off: applyCliOverrides
+ * turns a named role on, and the preview of a role switched off is not a run
+ * of it, so runPreview lists it as disabled.
+ */
+function previewWithOverrides(preview: Policy, overrides: CliOverrides): Policy {
+  if (overrides.gates === undefined) {
+    return preview;
+  }
+  const applied = applyCliOverrides(preview, {
+    ...overrides,
+    gates: overrides.gates.filter((role) => preview.gates[role] !== undefined),
+  });
+  const gates: Policy['gates'] = {};
+  for (const [role, gate] of Object.entries(applied.gates) as Array<[GateRole, NonNullable<Policy['gates'][GateRole]>]>) {
+    gates[role] = preview.gates[role]?.enabled === false ? { ...gate, enabled: false, excludedByCli: false } : gate;
+  }
+  return { ...applied, gates };
 }
 
 /**
@@ -739,6 +793,10 @@ export function buildProgram(): Command {
     .command('run')
     .description('Run every enabled gate and print one combined report.')
     .option('--staged', 'gate the git index against HEAD, the way the pre-commit hook does')
+    .option(
+      '--preview',
+      'pull-request mode only: when the pull request changes a gate\'s enabled or stage, run those gates once more under the proposed values, as a preview that never changes the exit code or the verdict. Every other policy key still comes from the base ref, and so do the gitleaks and osv-scanner configs; dep-guard and vault-guard read their own config files from the head. Not on --staged.'
+    )
     .option('--format <format>', 'output format: text or sarif')
     .option(
       '--stage <stage>',
@@ -822,7 +880,8 @@ export function buildProgram(): Command {
           options.trustBase,
           overrides,
           process.env.GITHUB_BASE_REF,
-          process.env.GITHUB_ACTIONS
+          process.env.GITHUB_ACTIONS,
+          options.preview === true && options.staged !== true
         );
         const policy = source.kind === 'policy' ? source.policy : source.inventory;
         const format = parseFormat(options.format ?? policy.report.format);
@@ -852,6 +911,15 @@ export function buildProgram(): Command {
                 ...(options.base === undefined ? {} : { base: options.base }),
                 ...(options.spec === undefined ? {} : { spec: options.spec }),
                 ...(source.trustBase === undefined ? {} : { trustBase: source.trustBase }),
+                // Only on request, never on --staged, and only with a trust
+                // base and a preview policy: a head that parsed and changed
+                // at least one role's enabled or stage.
+                ...(options.preview === true &&
+                options.staged !== true &&
+                source.trustBase !== undefined &&
+                source.previewPolicy !== null
+                  ? { preview: { policy: source.previewPolicy } }
+                  : {}),
               });
 
         const advisory = Boolean(options.advisory);
@@ -926,6 +994,7 @@ export function buildProgram(): Command {
         const logLines = [
           ...gateLogLines(result, process.stderr.isTTY === true ? { terminal: true } : {}),
           ...proposalLogLines(result),
+          ...previewLogLines(result),
           ...versionSkewWarnings(result),
         ];
         if (logLines.length > 0) {

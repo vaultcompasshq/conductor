@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { Diagnostic, Finding, RunSummary } from './envelope.js';
-import { runGit } from './git.js';
+import { realPathInside, runGit } from './git.js';
 import { NormalizeError } from './envelope.js';
 import {
   describeLockfiles,
@@ -167,8 +167,12 @@ export type CouldNotRunReason =
    */
   | 'lockfile-emptied-unverified';
 
-/** Where a gate's time limit came from: the test hook, the policy, or the product default. */
-export type TimeLimitSource = 'override' | 'policy' | 'default';
+/**
+ * Where a gate's time limit came from: the test hook, the policy, the product
+ * default, or, in the preview under the proposed rules, what was left of the
+ * preview's own budget when that was the smaller limit.
+ */
+export type TimeLimitSource = 'override' | 'policy' | 'default' | 'preview-budget';
 
 export interface TimeLimit {
   ms: number;
@@ -351,6 +355,9 @@ function limitSourcePhrase(gate: GatePolicy, source: TimeLimitSource, trustBase:
       ? `gates.${gate.role}.timeout-seconds`
       : `gates.${gate.role}.timeout-seconds on ${trustBase}`;
   }
+  if (source === 'preview-budget') {
+    return 'what was left of the 300 s preview budget';
+  }
   return source === 'default' ? 'the default for this gate' : 'set by the caller';
 }
 
@@ -381,7 +388,18 @@ function timedOutDetail(
   const elapsedSeconds = Math.round(elapsedMs / 1000);
   const where = limitSourcePhrase(gate, limit.source, trustBase);
   const own = gateOwnTimeoutNote(gate, limit, trustBase);
-  const remedies = profileFor(gate.product).timeoutRemedies(gate.role);
+  // A preview stopped by its own budget has no limit to raise: the budget is
+  // fixed, and the gate's own limit was not what stopped it.
+  const remedies =
+    limit.source === 'preview-budget'
+      ? 'The preview under the proposed rules has 300 s in all, whatever each gate\'s own limit.'
+      : profileFor(gate.product).timeoutRemedies(gate.role);
+  // A preview spawn with no budget left was never started (spawnLimits):
+  // there is no elapsed time or limit to report.
+  if (limit.source === 'preview-budget' && limit.ms === 0) {
+    const what = step === 'version-probe' ? `the version probe of ${gate.product}` : gate.product;
+    return `${what} was not started: the preview budget was spent, so nothing was checked by it. ${remedies}`;
+  }
   if (step === 'version-probe') {
     return (
       `the version probe of ${gate.product} was stopped at ${limitSeconds} s (${where}), so the gate ` +
@@ -732,6 +750,14 @@ export interface GateTrustBase {
 }
 
 /**
+ * Why dep-guard and vault-guard are not handed `--trust-base` in the preview
+ * under the proposed rules: the preview shows what the head's rules would do,
+ * and their own control files are part of those rules.
+ */
+export const PREVIEW_WITHHELD =
+  'preview under the proposed rules: this gate read its own control files from the head';
+
+/**
  * Whether this gate can be handed `--trust-base`, and why not when it cannot.
  *
  * Exported so the decision can be tested directly rather than only through a
@@ -749,7 +775,14 @@ export function decideTrustBase(
   gate: GatePolicy,
   intent: IntentPreparation | undefined,
   trustBase: string | undefined,
-  productVersion: string | null
+  productVersion: string | null,
+  /**
+   * The preview under the proposed rules. dep-guard and vault-guard then read
+   * their own control files from the head, so the flag is withheld from them;
+   * the trust base itself stays set on the run, and every other product is
+   * decided exactly as without it.
+   */
+  preview = false
 ): GateTrustBase | undefined {
   if (trustBase === undefined) {
     return undefined;
@@ -801,6 +834,16 @@ export function decideTrustBase(
         `was checked by it. Fix: install ${gate.product} ${minimum} or newer, or remove an ` +
         'explicit older version pin.'
     );
+  }
+
+  // AFTER both version refusals, so a gate refused in the primary run is
+  // refused in the preview too. Only the --trust-base flag is withheld: the
+  // run keeps its trust base, and with it the node_modules skip, the program
+  // refusal and the forced enforce, and dep-guard keeps --base (gateArgs'
+  // changeBase). gitleaks and osv-scanner never reach this: the umbrella
+  // itself is their pull-request mode, and it stays the base's.
+  if (preview && (gate.product === 'dep-guard' || gate.product === 'vault-guard')) {
+    return withheld(PREVIEW_WITHHELD);
   }
 
   // AFTER the version checks, so an imported contract cannot let an older
@@ -954,6 +997,76 @@ export interface RunGateOptions {
    * inject one so they can see that nothing is left behind.
    */
   tempRoot?: string;
+  /**
+   * Set only in the preview under the proposed rules. Every spawn of this
+   * gate then takes its timeout, kill signal and environment from
+   * `previewSpawnOptions`, and two refusals run before any spawn.
+   */
+  preview?: PreviewSpawn;
+}
+
+/** The preview's hard deadline, its clock, and its private cache directory. */
+export interface PreviewSpawn {
+  /** In the clock's own units (milliseconds): the whole preview ends here. */
+  deadline: number;
+  clock: () => number;
+  /** XDG_CACHE_HOME for every preview spawn, removed when the preview ends. */
+  cacheDir: string;
+}
+
+/** The smaller of a spawn's own limit and what is left of the preview budget, never negative. */
+export function previewSpawnTimeout(limitMs: number, preview: PreviewSpawn): number {
+  return Math.max(0, Math.min(limitMs, preview.deadline - preview.clock()));
+}
+
+/**
+ * The spawn options of every preview spawn: the timeout above, SIGKILL, so a
+ * child that traps SIGTERM cannot outlive the budget, and the spawn's own
+ * environment with XDG_CACHE_HOME pointed at the preview's private cache, so
+ * nothing the head's rules fetched persists on a shared runner.
+ */
+export function previewSpawnOptions(
+  limitMs: number,
+  preview: PreviewSpawn,
+  env: NodeJS.ProcessEnv
+): { timeout: number; killSignal: 'SIGKILL'; env: NodeJS.ProcessEnv } {
+  return {
+    timeout: previewSpawnTimeout(limitMs, preview),
+    killSignal: 'SIGKILL',
+    env: { ...env, XDG_CACHE_HOME: preview.cacheDir },
+  };
+}
+
+/**
+ * The options one spawn passes to spawnSync beside its own, and the limit it
+ * ran under. Outside the preview: the full limit and nothing else, exactly as
+ * before. In the preview: `previewSpawnOptions`, and the limit's source is
+ * `preview-budget` when the budget left was the smaller. `start` false means
+ * no budget is left, and the spawn must not be started: a spawnSync timeout
+ * of 0 is no timeout at all.
+ */
+function spawnLimits(
+  limit: TimeLimit,
+  preview: PreviewSpawn | undefined,
+  env: NodeJS.ProcessEnv | undefined
+): { start: boolean; limit: TimeLimit; options: { timeout: number; killSignal?: 'SIGKILL'; env?: NodeJS.ProcessEnv } } {
+  if (preview === undefined) {
+    return { start: true, limit, options: { timeout: limit.ms, ...(env === undefined ? {} : { env }) } };
+  }
+  const options = previewSpawnOptions(limit.ms, preview, env ?? process.env);
+  return {
+    start: options.timeout > 0,
+    limit: options.timeout < limit.ms ? { ms: options.timeout, source: 'preview-budget' } : limit,
+    options,
+  };
+}
+
+/** A spawnSync-shaped result for a preview spawn that was never started: no budget left. */
+function notStartedResult(): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } {
+  const error = Object.assign(new Error('spawnSync ETIMEDOUT: the preview budget was spent'), { code: 'ETIMEDOUT' });
+  return { pid: 0, output: [], stdout: '', stderr: '', status: null, signal: null, error } as unknown as ReturnType<
+    typeof spawnSync
+  > & { stdout: string; stderr: string };
 }
 
 /**
@@ -1162,7 +1275,22 @@ export function gateArgs(
    * For the intent gate on a prepared run: hand it this base with its own
    * `--base` in place of `--paths`. Decided by `intentChangeChannel`.
    */
-  intentBase?: string
+  intentBase?: string,
+  /**
+   * dep-guard's `--base` when `trustBase` is withheld from it in the preview
+   * under the proposed rules: the change is still measured against the base
+   * ref, only the rules are the head's. Ignored when `trustBase` is set, and
+   * by every other product.
+   */
+  changeBase?: string,
+  /**
+   * True for a spawn of the preview under the proposed rules. osv-scanner
+   * then gets `--no-call-analysis=all` appended after the base's own options,
+   * whatever they say: call analysis builds the project it scans, which in
+   * the preview is the head's code, and osv-scanner applies its disables
+   * after its enables, so the appended flag wins.
+   */
+  preview = false
 ): string[] {
   const passthrough = renderOptionFlags(gate.options);
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
@@ -1188,7 +1316,8 @@ export function gateArgs(
       // name incompatible comparisons -- the git index versus an arbitrary
       // ref. A staged run already has its own comparison and --trust-base
       // is unaffected, since it answers a different question.
-      const base = trustBase !== undefined && !staged ? ['--base', trustBase] : [];
+      const baseRef = trustBase ?? changeBase;
+      const base = baseRef !== undefined && !staged ? ['--base', baseRef] : [];
       return [...(staged ? ['--staged'] : []), '--format', 'json', ...trust, ...base, ...passthrough];
     }
     case 'vault-guard':
@@ -1342,6 +1471,7 @@ export function gateArgs(
         ...(noResolve ? ['--no-resolve'] : []),
         ...callAnalysis,
         ...renderOptionFlags(options),
+        ...(preview ? ['--no-call-analysis=all'] : []),
       ];
     }
   }
@@ -1357,30 +1487,37 @@ export function gateArgs(
 type ProbeResult =
   | { kind: 'version'; value: string }
   | { kind: 'unreadable' }
-  /** The probe was stopped at the gate's limit: ETIMEDOUT, whatever its status. */
-  | { kind: 'timed-out'; elapsedMs: number; signal: string | null };
+  /**
+   * The probe was stopped at the gate's limit: ETIMEDOUT, whatever its status.
+   * `limit` is the one it ran under, the preview budget when that was smaller.
+   */
+  | { kind: 'timed-out'; elapsedMs: number; signal: string | null; limit: TimeLimit };
 
 function probeVersion(
   binary: ResolvedBinary,
   product: Product,
   repoRoot: string,
-  timeoutMs: number
+  timeLimit: TimeLimit,
+  preview?: PreviewSpawn
 ): ProbeResult {
   const spec = profileFor(product).versionProbe;
   if (binary.versionProbe === null || spec === null) {
     return { kind: 'unreadable' };
   }
+  const limits = spawnLimits(timeLimit, preview, undefined);
   const probeStarted = Date.now();
-  const probe = spawnSync(binary.versionProbe.command, binary.versionProbe.argv, {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    timeout: timeoutMs,
-  });
+  const probe = limits.start
+    ? spawnSync(binary.versionProbe.command, binary.versionProbe.argv, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        ...limits.options,
+      })
+    : notStartedResult();
   // FIRST, before the status: a probe that handled SIGTERM can exit 0 with a
   // version on stdout, and it was still stopped at the limit.
   const failure = spawnFailure(probe);
   if (failure !== null && failure.reason === 'timed-out') {
-    return { kind: 'timed-out', elapsedMs: Date.now() - probeStarted, signal: failure.signal };
+    return { kind: 'timed-out', elapsedMs: Date.now() - probeStarted, signal: failure.signal, limit: limits.limit };
   }
   if (probe.status !== 0 || typeof probe.stdout !== 'string') {
     return { kind: 'unreadable' };
@@ -1486,7 +1623,7 @@ export function expectedVersionBeforePreparation(
   const skipped = options.trustBase === undefined ? null : nodeModulesCandidate(gate, options.repoRoot);
   const carried = { timeLimit, ...(skipped === null ? {} : { nodeModulesSkipped: skipped }) };
   const started = Date.now();
-  const probed = probeVersion(binary, gate.product, options.repoRoot, timeLimit.ms);
+  const probed = probeVersion(binary, gate.product, options.repoRoot, timeLimit);
   if (probed.kind === 'timed-out') {
     // The same outcome runGate builds for a stopped probe under the
     // expectation: enforced, because the run cannot show this is the pinned
@@ -1709,6 +1846,63 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
   }
 }
 
+function callAnalysisOff(options: Record<string, unknown>): boolean {
+  const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+  for (const key of Object.keys(options)) {
+    if (!key.includes('call-analysis')) continue;
+    const value = options[key];
+    if (key === 'no-call-analysis' && (value === true || asList(value).some((item) => item === 'all'))) continue;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The three refusals only the preview under the proposed rules makes.
+ *
+ * An option value starting with "-" would render as a flag of its own
+ * (renderOptionFlags), so a value the base never ran with could add an output
+ * path or a second --log-opts. A base `command:` inside the working tree is
+ * checked by refuseHeadControlledProgram for its own blob only, while what it
+ * imports comes from the head, and the preview can reach a role the base has
+ * switched off, whose command nobody has exercised (spec 5.2, finding 7).
+ * osv-scanner call analysis builds the project it scans, here the head's
+ * code, so only the all-off form of it is allowed (callAnalysisOff), and
+ * gateArgs forces it off on every preview spawn besides.
+ */
+function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null {
+  for (const name of Object.keys(gate.options).sort()) {
+    const value = gate.options[name];
+    const values = Array.isArray(value) ? value : [value];
+    if (values.some((item) => typeof item === 'string' && item.startsWith('-'))) {
+      return {
+        reason: 'preparation-failed',
+        detail: `preview under the proposed rules: option ${name} has a value starting with "-", so this gate was not run`,
+      };
+    }
+  }
+  // osv-scanner's call analysis builds the project it scans, and in the
+  // preview that is the head's code (a Rust build.rs, for one).
+  // Every option key is rendered as a flag, so the check is by key match:
+  // any key containing "call-analysis" is refused unless it is the one
+  // unambiguous all-off form, `no-call-analysis: true` or `all`. An absent
+  // key is fine. Belt and braces: gateArgs appends --no-call-analysis=all
+  // to every osv-scanner preview spawn as well.
+  if (gate.product === 'osv-scanner' && !callAnalysisOff(gate.options)) {
+    return {
+      reason: 'preparation-failed',
+      detail: "the preview does not run call analysis, because it would build the head's code",
+    };
+  }
+  if (gate.command !== undefined && realPathInside(repoRoot, gate.command)) {
+    return {
+      reason: 'gate-program-refused',
+      detail: `preview under the proposed rules: the base command ${gate.command} is inside the working tree, so this gate was not run`,
+    };
+  }
+  return null;
+}
+
 /**
  * Whether git says the repository at `repoRoot` is shallow. Anything other
  * than a clear "true" (no git, an old git that does not know the flag) is
@@ -1740,9 +1934,10 @@ function runGateInner(
 ): GateOutcome {
   // Every spawn of this gate gets the FULL limit, not a share of it: the
   // version probe, the scan and, on a compared pull request, osv-scanner's
-  // base run. Onto `progress` so every outcome from here on carries it.
+  // base run. Onto `progress` so every outcome from here on carries it. In
+  // the preview each spawn gets the smaller of this and what is left of the
+  // preview's budget (spawnLimits), and the outcome says which it was.
   const timeLimit = resolveTimeLimit(gate, options.timeoutMs);
-  const timeoutMs = timeLimit.ms;
   Object.assign(progress, { timeLimit });
   const ownOption = gateOwnTimeoutNote(gate, timeLimit, options.trustBase);
   if (ownOption !== null) {
@@ -1763,6 +1958,25 @@ function runGateInner(
     Object.assign(progress, { nodeModulesSkipped: skipped });
   }
   const base = progress;
+
+  // THE PREVIEW'S OWN REFUSALS, before resolution and before any spawn, the
+  // version probe included. The primary run needs neither.
+  if (options.preview !== undefined) {
+    const refused = previewRefusal(gate, options.repoRoot);
+    if (refused !== null) {
+      return {
+        ...base,
+        // Enforced under a trust base, like every refusal there; the preview
+        // never reaches the exit code either way.
+        enforce: options.trustBase !== undefined ? true : gate.enforce,
+        durationMs: Date.now() - started,
+        couldNotRun: refused,
+        findings: [normalizeFailedGate(gate.role, gate.product, refused.detail)],
+        run: EMPTY_RUN,
+        diagnostics: [],
+      };
+    }
+  }
 
   let binary: ResolvedBinary | null;
   try {
@@ -1893,8 +2107,11 @@ function runGateInner(
     };
   }
 
-  const probed = probeVersion(binary, gate.product, options.repoRoot, timeoutMs);
+  const probed = probeVersion(binary, gate.product, options.repoRoot, timeLimit, options.preview);
   if (probed.kind === 'timed-out') {
+    // The limit the probe ran under, which in the preview can be what was
+    // left of the budget; onto `progress` so the outcome says so.
+    Object.assign(progress, { timeLimit: probed.limit });
     // Stopped here, before the version floor and before decideTrustBase: a
     // timed-out probe is not an unreadable version (which on a pull request
     // would read as trust-base-unverified, a packaging problem that does not
@@ -1903,8 +2120,8 @@ function runGateInner(
     // gate could not be placed inside the boundary. Enforced under the
     // Action's expected-version signal too, like version-unverified: the run
     // cannot show this is the pinned build.
-    const detail = timedOutDetail(gate, 'version-probe', timeLimit, probed.elapsedMs, options.trustBase);
-    const timedOut = timedOutRecord('version-probe', timeLimit, probed.elapsedMs, probed.signal);
+    const detail = timedOutDetail(gate, 'version-probe', probed.limit, probed.elapsedMs, options.trustBase);
+    const timedOut = timedOutRecord('version-probe', probed.limit, probed.elapsedMs, probed.signal);
     return {
       ...base,
       binary,
@@ -1970,7 +2187,7 @@ function runGateInner(
   // decision reads the version. That ordering is the whole capability gate:
   // a gate IN the table whose version is below its minimum, or could not be
   // read, is refused rather than run outside the boundary.
-  const trustBase = decideTrustBase(gate, options.intent, options.trustBase, version);
+  const trustBase = decideTrustBase(gate, options.intent, options.trustBase, version, options.preview !== undefined);
 
   if (trustBase !== undefined && trustBase.refused !== null) {
     return {
@@ -2128,7 +2345,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     }
     const baseArgv = (copies: readonly string[]): string[] => [
       ...binary.argvPrefix,
-      ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: [...copies] }),
+      ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: [...copies] }, undefined, undefined, options.preview !== undefined),
     ];
     const checked: EmptiedCheckResult =
       removed === null
@@ -2146,12 +2363,15 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
               baseArgv,
               budgetMs: input.budgetMs,
               spawn: (argv, cwd, budget) => {
-                const baseChild = spawnSync(binary.command, [...argv], {
-                  cwd,
-                  encoding: 'utf8',
-                  timeout: budget,
-                  maxBuffer: 64 * 1024 * 1024,
-                });
+                const limits = spawnLimits({ ...timeLimit, ms: budget }, options.preview, undefined);
+                const baseChild = limits.start
+                  ? spawnSync(binary.command, [...argv], {
+                      cwd,
+                      encoding: 'utf8',
+                      maxBuffer: 64 * 1024 * 1024,
+                      ...limits.options,
+                    })
+                  : notStartedResult();
                 return {
                   status: baseChild.status,
                   stderr: stripAnsi(baseChild.stderr ?? ''),
@@ -2405,6 +2625,11 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   // intentChangeChannel is pure, and runGateInner already returned on the one
   // outcome that does not spawn.
   const channel = intentChangeChannel(gate, options.intent, version);
+  // In the preview, dep-guard and vault-guard are not handed --trust-base
+  // (decideTrustBase), and dep-guard still measures the change against the
+  // base ref: --base comes from the run's trust base, which stays set.
+  const changeBase =
+    options.preview !== undefined && trustBase?.withheld === PREVIEW_WITHHELD ? options.trustBase : undefined;
   const argv = [
     ...binary.argvPrefix,
     ...gateArgs(
@@ -2413,24 +2638,35 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       options.intent,
       decidedRef,
       external,
-      channel.kind === 'base' ? channel.ref : undefined
+      channel.kind === 'base' ? channel.ref : undefined,
+      changeBase,
+      options.preview !== undefined
     ),
   ];
 
+  // A history gate reads git history, and replace refs or grafts can cut
+  // that history without making the repository shallow. Ignoring replace
+  // objects makes it read the real commits. Other gates keep the inherited
+  // environment untouched, outside the preview.
+  const scanLimits = spawnLimits(
+    timeLimit,
+    options.preview,
+    profile.readsHistory ? { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } : undefined
+  );
+  if (scanLimits.limit !== timeLimit) {
+    Object.assign(progress, { timeLimit: scanLimits.limit });
+  }
   // Taken just before the call, so a timed-out message's elapsed time is the
   // scan's own and not resolution plus the version probe.
   const spawnStarted = Date.now();
-  const child = spawnSync(binary.command, argv, {
-    cwd: spawnCwd,
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    maxBuffer: 64 * 1024 * 1024,
-    // A history gate reads git history, and replace refs or grafts can cut
-    // that history without making the repository shallow. Ignoring replace
-    // objects makes it read the real commits. Other gates keep the
-    // inherited environment untouched.
-    ...(profile.readsHistory ? { env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } } : {}),
-  });
+  const child = scanLimits.start
+    ? spawnSync(binary.command, argv, {
+        cwd: spawnCwd,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+        ...scanLimits.options,
+      })
+    : notStartedResult();
 
   const withRun = {
     ...base,
@@ -2480,8 +2716,8 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
   if (failure !== null) {
     if (failure.reason === 'timed-out') {
       const elapsedMs = Date.now() - spawnStarted;
-      const detail = timedOutDetail(gate, 'scan', timeLimit, elapsedMs, options.trustBase);
-      const timedOut = timedOutRecord('scan', timeLimit, elapsedMs, failure.signal);
+      const detail = timedOutDetail(gate, 'scan', scanLimits.limit, elapsedMs, options.trustBase);
+      const timedOut = timedOutRecord('scan', scanLimits.limit, elapsedMs, failure.signal);
       return {
         ...withRun,
         exitCode: null,
@@ -2749,15 +2985,18 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
         headArgv: argv,
         baseArgv: (copies) => [
           ...binary.argvPrefix,
-          ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: copies }),
+          ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: copies }, undefined, undefined, options.preview !== undefined),
         ],
         spawn: (baseArgv, cwd) => {
-          const baseChild = spawnSync(binary.command, [...baseArgv], {
-            cwd,
-            encoding: 'utf8',
-            timeout: timeoutMs,
-            maxBuffer: 64 * 1024 * 1024,
-          });
+          const limits = spawnLimits(timeLimit, options.preview, undefined);
+          const baseChild = limits.start
+            ? spawnSync(binary.command, [...baseArgv], {
+                cwd,
+                encoding: 'utf8',
+                maxBuffer: 64 * 1024 * 1024,
+                ...limits.options,
+              })
+            : notStartedResult();
           return { status: baseChild.status, stdout: baseChild.stdout ?? '', error: baseChild.error };
         },
         rootSpellings,

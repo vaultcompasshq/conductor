@@ -4,10 +4,13 @@
 // never acts on it. This file only turns "it differs" into "these keys
 // differ", so a reader sees which gate, which key, and the old and new value
 // without opening the diff. Both arguments are parsed documents; the head is
-// parsed for this comparison alone and never reaches a run.
+// parsed for this comparison and never reaches the run that decides the
+// verdict. The one place a head value goes further is `previewPolicy`, which
+// takes only `enabled`, `stage` and `enforce` from it for the preview under
+// the proposed rules, a run that decides nothing.
 
 import type { GatePolicy, GateRole, Policy } from './policy.js';
-import { GATE_ROLES } from './policy.js';
+import { GATE_ROLES, PRODUCT_FOR_ROLE, parsePolicy } from './policy.js';
 
 export interface PolicyKeyChange {
   /** The gate role the key belongs to, or null for a key outside any gate. */
@@ -133,4 +136,59 @@ export function policyChangeLine(change: PolicyKeyChange): string {
   }
   const where = change.role === null ? change.key : `gates.${change.role}.${change.key}`;
   return `policy: ${where} ${renderValue(change.old)} -> ${renderValue(change.new)}`;
+}
+
+/**
+ * The roles a preview under the proposed rules runs: every role with an
+ * `enabled` or `stage` change, in GATE_ROLES order. A role whose only changes
+ * are `enforce` or keys the preview takes from the base would preview as the
+ * primary run again, so it is left out, and so is `report.format`.
+ */
+export function previewRoles(changes: PolicyKeyChange[]): GateRole[] {
+  const wanted = new Set(
+    changes
+      .filter((change) => change.role !== null && (change.key === 'enabled' || change.key === 'stage'))
+      .map((change) => change.role as GateRole)
+  );
+  return GATE_ROLES.filter((role) => wanted.has(role));
+}
+
+/**
+ * The policy a preview runs under. Only `enabled`, `stage` and `enforce` come
+ * from the head: `command`, `args`, `options`, `timeout-seconds` and
+ * `present-on-base` come from the base role, or, for a role only the head
+ * has, from what the policy file gives for its product alone. A role the head
+ * removed is the base role switched off. Only the roles in `roles` are held,
+ * with the base `report`.
+ */
+export function previewPolicy(base: Policy, head: Policy, roles: GateRole[]): Policy {
+  const gates: Partial<Record<GateRole, GatePolicy>> = {};
+  for (const role of GATE_ROLES) {
+    if (!roles.includes(role)) continue;
+    const b = base.gates[role];
+    const h = head.gates[role];
+    if (h === undefined) {
+      if (b !== undefined) gates[role] = { ...b, enabled: false };
+      continue;
+    }
+    const from: GatePolicy = b ?? productDefault(role);
+    gates[role] = { ...from, enabled: h.enabled, stage: h.stage, enforce: h.enforce };
+  }
+  return { version: 1, gates, report: base.report };
+}
+
+/**
+ * The gate parsePolicy gives for `product: <product>` alone, built by
+ * parsePolicy itself so its defaults have one source. The product is
+ * PRODUCT_FOR_ROLE's, which parsePolicy already required the head to match.
+ */
+function productDefault(role: GateRole): GatePolicy {
+  const gate = parsePolicy(
+    `version: 1\ngates:\n  ${role}:\n    product: ${PRODUCT_FOR_ROLE[role]}\n`,
+    'the preview default'
+  ).gates[role];
+  if (gate === undefined) {
+    throw new Error(`no default gate for the ${role} role`);
+  }
+  return gate;
 }
