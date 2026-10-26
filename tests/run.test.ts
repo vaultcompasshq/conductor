@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { POLICY_FILE_NAME, applyCliOverrides, parsePolicy } from '../src/policy.js';
-import { refusedTrustBase, runAll } from '../src/run.js';
+import { PREVIEW_WITHHELD } from '../src/gate-runner.js';
+import { renderText, verdictToken } from '../src/output-text.js';
+import { POLICY_FILE_NAME, type Policy, applyCliOverrides, parsePolicy } from '../src/policy.js';
+import { type RunOptions, refusedTrustBase, runAll } from '../src/run.js';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -876,6 +878,145 @@ describe('pull-request mode through a whole run', () => {
     expect(result.trustBase).toBeNull();
     expect(result.proposals).toEqual([]);
   });
+  describe('the preview under the proposed rules', () => {
+    const P = (body: string) => parsePolicy(`version: 1\ngates:\n${body}`, 'preview-test');
+    const SECRETS = P('  secrets:\n    product: vault-guard\n');
+    const SECRETS_OFF = P('  secrets:\n    product: vault-guard\n    enabled: false\n');
+    const FAMILY = P('  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n');
+    const HISTORY = P('  secrets-history:\n    product: gitleaks\n  vulnerabilities:\n    product: osv-scanner\n');
+    const PR_TRUST_BASE = { ref: 'origin/main', policyChanged: true, refusal: null };
+
+    function previewRun(base: Policy, preview: Policy, extra: Partial<RunOptions> = {}, depGuard: { stdout: string; exit: number } = { stdout: CLEAN_DEP_GUARD, exit: 0 }) {
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'dep-guard', { ...depGuard, argvLog: lastArgvLog });
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      stubGate(bin, 'intent-guard', { stdout: PROPOSING_INTENT, version: '1.8.1', argvLog: lastArgvLog });
+      return runAll(base, {
+        repoRoot: prRepo(), staged: false, pathValue: bin,
+        trustBase: PR_TRUST_BASE,
+        preview: { policy: preview }, ...extra,
+      });
+    }
+
+    /** dep-guard blocking (exit 1, one finding) for the preview only: the base does not enable it. */
+    function blockingDepGuardPreviewRun(base: Policy, preview: Policy) {
+      return previewRun(base, preview, {}, {
+        stdout: readFileSync(path.join(FIXTURES, 'dep-guard-0.2.0-blocking.json'), 'utf8'),
+        exit: 1,
+      });
+    }
+
+    /** fiveStubs() on PATH, prRepo(), and the same history policy as the base and as the preview. */
+    function historyPreviewRun() {
+      return runAll(HISTORY, {
+        repoRoot: prRepo(), staged: false, pathValue: fiveStubs(), tempRoot: tempDir(),
+        trustBase: PR_TRUST_BASE, preview: { policy: HISTORY },
+      });
+    }
+
+    /** A clean vault-guard on a PATH outside any repository. */
+    function cleanBin(): string {
+      const bin = tempDir();
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+      return bin;
+    }
+
+    /**
+     * prRepo() plus, in the head commit only, node_modules/.bin/vault-guard
+     * and tools/bin/vault-guard, both writing `marker` when run.
+     */
+    function familyRepo(): { repo: string; marker: string } {
+      const repo = prRepo();
+      const marker = path.join(tempDir(), 'family-ran.txt');
+      for (const rel of ['node_modules/.bin/vault-guard', 'tools/bin/vault-guard']) {
+        const file = path.join(repo, rel);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, `#!/bin/sh\nprintf 'ran\\n' > ${JSON.stringify(marker)}\necho '9.9.9'\n`);
+        chmodSync(file, 0o755);
+      }
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: repo });
+      git('add', '-A', '-f');
+      git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'plant');
+      return { repo, marker };
+    }
+
+    it('preview omits --trust-base only for dep-guard and vault-guard', () => {
+      const result = previewRun(SECRETS, FAMILY);
+      // The stubs log their whole argv, the npm gates' `scan` subcommand
+      // included: the primary vault-guard, then the preview's two.
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual([
+        'scan -f json --trust-base origin/main',
+        'scan --format json --base origin/main',
+        'scan -f json',
+      ]);
+      expect(result.preview?.gates.map((gate) => gate.trustBase?.withheld)).toEqual([PREVIEW_WITHHELD, PREVIEW_WITHHELD]);
+    });
+
+    it('preview hands gitleaks and osv-scanner the same trust inputs as the primary run', () => {
+      const result = historyPreviewRun();
+      const strip = (argv: string[]) => argv.map((arg) => (arg.startsWith(os.tmpdir()) ? '<tmp>' : arg));
+      expect(result.preview?.gates.map((gate) => strip(gate.argv))).toEqual(result.gates.map((gate) => strip(gate.argv)));
+      expect(result.preview?.gates.map((gate) => gate.trustBase?.withheld)).toEqual([null, null]);
+      expect(result.preview?.gates[0].argv).toContain('--diff-merges=first-parent origin/main..HEAD');
+      expect(result.preview?.gates[0].argv).toContain('--ignore-gitleaks-allow');
+    });
+
+    it('never lets a blocking or could-not-run preview gate change the primary result', () => {
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined });
+      const result = blockingDepGuardPreviewRun(SECRETS, FAMILY);
+      expect(result.preview?.gates[0].findings.some((finding) => finding.blocking)).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.findings).toEqual([]);
+      expect(result.summary).toEqual(without.summary);
+      expect(result.proposals).toEqual(without.proposals);
+    });
+
+    it('a preview that throws leaves the exit code, the verdict token and lines 1-4 identical to the run without it', () => {
+      const boom = { version: 1, report: { format: 'text' }, get gates() { throw new Error('boom'); } } as unknown as Policy;
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined });
+      const result = previewRun(SECRETS, boom);
+      expect(result.preview).toEqual({ gates: [], findings: [], skipped: [], deferred: [], overBudget: [], threw: 'boom' });
+      expect(result.exitCode).toBe(without.exitCode);
+      expect(verdictToken(result, false)).toBe(verdictToken(without, false));
+      expect(renderText(result).split('\n').slice(0, 4)).toEqual(renderText(without).split('\n').slice(0, 4));
+    });
+
+    it('the preview never calls prepareIntent and prints the deferred line', () => {
+      const result = previewRun(SECRETS, P('  intent:\n    product: intent-guard\n'));
+      expect(result.preview?.deferred).toEqual(['intent']);
+      expect(result.preview?.gates).toEqual([]);
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual(['scan -f json --trust-base origin/main']);
+    });
+
+    it('stops the preview at the budget and lists the rest as over budget', () => {
+      // The clock reads 0 until the preview dep-guard has written its argv line,
+      // then 300 000: dependencies runs inside the budget, secrets finds none left.
+      const result = previewRun(SECRETS, FAMILY, {
+        previewClock: () => (readFileSync(lastArgvLog, 'utf8').includes('--format json --base') ? 300_000 : 0),
+      });
+      expect(result.preview?.gates.map((gate) => gate.role)).toEqual(['dependencies']);
+      expect(result.preview?.overBudget).toEqual(['secrets']);
+    });
+
+    it('refuses a preview option value that starts with a dash without spawning the gate', () => {
+      const result = previewRun(SECRETS, P('  dependencies:\n    product: dep-guard\n    options:\n      fail-on: "--output=/tmp/x"\n'));
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual(['scan -f json --trust-base origin/main']);
+    });
+
+    it('preview of a family gate keeps the node_modules skip and refuses a head-controlled program', () => {
+      const { repo, marker } = familyRepo();
+      const skip = runAll(SECRETS_OFF, { repoRoot: repo, staged: false, pathValue: cleanBin(),
+        trustBase: PR_TRUST_BASE, preview: { policy: SECRETS } });
+      expect(skip.preview?.gates[0].nodeModulesSkipped).toBeDefined();
+      expect(skip.preview?.gates[0].couldNotRun).toBeNull();
+      const refused = runAll(SECRETS_OFF, { repoRoot: repo, staged: false, pathValue: path.join(repo, 'tools', 'bin'),
+        trustBase: PR_TRUST_BASE, preview: { policy: SECRETS } });
+      expect(refused.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+      expect(existsSync(marker)).toBe(false);
+    });
+  });
 });
 
 describe('the equal-tree exception (issue #69)', () => {
@@ -973,6 +1114,7 @@ describe('the equal-tree exception (issue #69)', () => {
     expect(result.gates).toHaveLength(5);
     expect(result.treeUnchanged).toEqual([]);
   });
+
 });
 
 /**

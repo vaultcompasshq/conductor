@@ -35,8 +35,10 @@ export interface StubOptions {
   reportBody?: string;
   /** File to append each non-version invocation's working directory to. */
   cwdLog?: string;
-  /** File to append GIT_NO_REPLACE_OBJECTS=<value> to for each non-version invocation. */
+  /** File to append <envVar>=<value> to for each non-version invocation. */
   envLog?: string;
+  /** The variable `envLog` records. Defaults to GIT_NO_REPLACE_OBJECTS. */
+  envVar?: string;
 }
 
 export function stubGate(binDir: string, name: string, options: StubOptions = {}): string {
@@ -60,8 +62,12 @@ export function stubGate(binDir: string, name: string, options: StubOptions = {}
     lines.push(`if ! { ${versionTest}; }; then pwd -P >> ${JSON.stringify(options.cwdLog)}; fi`);
   }
   if (options.envLog !== undefined) {
+    const envVar = options.envVar ?? 'GIT_NO_REPLACE_OBJECTS';
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(envVar)) {
+      throw new Error(`stubGate: ${envVar} is not an environment variable name`);
+    }
     lines.push(
-      `if ! { ${versionTest}; }; then printf 'GIT_NO_REPLACE_OBJECTS=%s\\n' "$GIT_NO_REPLACE_OBJECTS" >> ${JSON.stringify(options.envLog)}; fi`
+      `if ! { ${versionTest}; }; then printf '${envVar}=%s\\n' "$${envVar}" >> ${JSON.stringify(options.envLog)}; fi`
     );
   }
   const versionLine = options.versionLine ?? options.version ?? '9.9.9';

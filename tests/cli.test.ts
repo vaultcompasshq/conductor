@@ -1554,6 +1554,8 @@ describe('pull-request mode through the CLI', () => {
     repo: string;
     bin: string;
     marker: string;
+    /** Every non-version invocation of the two stub gates, one line each. */
+    argvLog: string;
   }
 
   /**
@@ -1564,13 +1566,14 @@ describe('pull-request mode through the CLI', () => {
     const repo = tempDir();
     const bin = tempDir();
     const marker = path.join(tempDir(), 'attacker-ran.txt');
+    const argvLog = path.join(tempDir(), 'argv.txt');
 
     git(repo, ['init', '--quiet', '-b', 'main']);
     git(repo, ['config', 'user.email', 'test@example.com']);
     git(repo, ['config', 'user.name', 'Test']);
 
-    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
-    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, argvLog });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog });
 
     const basePolicy = options.basePolicy === undefined ? BASE_POLICY : options.basePolicy;
     if (basePolicy !== null) {
@@ -1597,8 +1600,9 @@ describe('pull-request mode through the CLI', () => {
     );
     chmodSync(attacker, 0o755);
 
+    // A head policy may name the attacker's script as {{attacker}}.
     const headPolicy =
-      options.headPolicy ??
+      options.headPolicy?.replaceAll('{{attacker}}', attacker) ??
       [
         'version: 1',
         'gates:',
@@ -1616,7 +1620,7 @@ describe('pull-request mode through the CLI', () => {
     git(repo, ['add', '-A']);
     git(repo, ['commit', '--quiet', '-m', 'the pull request']);
 
-    return { repo, bin, marker };
+    return { repo, bin, marker, argvLog };
   }
 
   it('runs the attacker script when there is no trust base, which is the hole', () => {
@@ -2062,6 +2066,46 @@ describe('pull-request mode through the CLI', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/"trust-base" under gates\.intent\.options is reserved/);
     expect(result.stderr).toMatch(/where a gate reads its rules from/);
+  });
+
+  describe('the preview under the proposed rules', () => {
+    const SECRETS_OFF_BASE = 'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n    enabled: false\n';
+    // The preview's vault-guard is the one invocation without --trust-base:
+    // the preview withholds the flag from it, and the primary run never does.
+    const previewSpawns = (argvLog: string): string[] =>
+      (existsSync(argvLog) ? readFileSync(argvLog, 'utf8').trim().split('\n') : []).filter((line) => /(^| )-f json/.test(line) && !line.includes('--trust-base'));
+
+    it('the head-policy attacker script does not run during the preview', () => {
+      const { repo, bin, marker, argvLog } = attackRepo({
+        basePolicy: SECRETS_OFF_BASE,
+        headPolicy: 'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n    command: {{attacker}}\n    args: []\n',
+      });
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--preview', '--verbose'], bin);
+      expect(existsSync(marker)).toBe(false);
+      // The preview ran the base's own vault-guard, on PATH, once.
+      expect(previewSpawns(argvLog)).toEqual(['scan -f json']);
+      expect(result.status).toBe(0);
+    });
+
+    it('an unparseable head runs no preview', () => {
+      const { repo, bin, argvLog } = attackRepo({ basePolicy: SECRETS_OFF_BASE, headPolicy: 'version: 1\ngates:\n  secrets:\n    product: vault-guard\n    command: relative/gate\n' });
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--preview', '--verbose'], bin);
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain('Preview under the proposed rules');
+      expect(previewSpawns(argvLog)).toEqual([]);
+    });
+
+    it('starts no preview without --preview, on --staged, or when only report.format changed', () => {
+      const { repo, bin, argvLog } = attackRepo({ basePolicy: SECRETS_OFF_BASE, headPolicy: SECRETS_OFF_BASE.replace('    enabled: false\n', '') });
+      for (const args of [['run', '--trust-base', 'base'], ['run', '--staged', '--trust-base', 'base', '--preview']]) {
+        expect(runCli(repo, args, bin).stdout).not.toContain('Preview under the proposed rules');
+      }
+      expect(previewSpawns(argvLog)).toEqual([]);
+      const format = attackRepo({ basePolicy: SECRETS_OFF_BASE, headPolicy: `${SECRETS_OFF_BASE}report:\n  format: sarif\n` });
+      expect(runCli(format.repo, ['run', '--trust-base', 'base', '--preview', '--format', 'text'], format.bin).stdout)
+        .not.toContain('Preview under the proposed rules');
+      expect(previewSpawns(format.argvLog)).toEqual([]);
+    });
   });
 });
 
@@ -2958,6 +3002,45 @@ describe('the program a pull-request run is allowed to execute', () => {
       expect(existsSync(marker)).toBe(true);
       expect(result.stdout).not.toMatch(/gate-program-refused/);
     });
+  });
+
+  it('preview refuses a base command inside the working tree', () => {
+    // Base: secrets disabled, command: <repo>/tools/base-gate.sh, committed on the
+    // base so refuseHeadControlledProgram alone would let it run. Head: enabled.
+    const repo = tempDir();
+    const bin = tempDir();
+    const baseGateMarker = path.join(tempDir(), 'base-gate-ran.txt');
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    const program = path.join(repo, 'tools', 'base-gate.sh');
+    mkdirSync(path.dirname(program), { recursive: true });
+    writeFileSync(
+      program,
+      [
+        '#!/bin/sh',
+        `printf 'ran\\n' > ${JSON.stringify(baseGateMarker)}`,
+        'if [ "$1" = "--version" ]; then echo "1.9.1"; exit 0; fi',
+        `echo ${JSON.stringify(CLEAN_SECRETS)}`,
+        'exit 0',
+      ].join('\n') + '\n'
+    );
+    chmodSync(program, 0o755);
+    const policy = (enabled: boolean): string =>
+      ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', ...(enabled ? [] : ['    enabled: false']),
+        `    command: ${program}`, '    args: []', ''].join('\n');
+    writeFileSync(path.join(repo, '.guardrails.yaml'), policy(false));
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), policy(true));
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+
+    const result = runCli(repo, ['run', '--trust-base', 'base', '--preview', '--verbose'], bin);
+    expect(existsSync(baseGateMarker)).toBe(false);
+    expect(result.stdout).toContain('policy: gates.secrets.enabled false -> true');
+    expect(result.status).toBe(0);
   });
 });
 
