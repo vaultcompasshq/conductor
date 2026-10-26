@@ -1808,7 +1808,11 @@ describe('pull-request mode through the CLI', () => {
     const result = runCli(repo, ['run', '--staged', '--trust-base', 'base', '--verbose'], bin);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/policy: the head \.guardrails\.yaml is absent or does not parse/);
+    expect(result.stdout).toContain(
+      'policy: the head .guardrails.yaml is absent or does not parse, so its changes are not known'
+    );
+    expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+    expect(result.stdout.match(/proposed {2}conductor /g)).toHaveLength(1);
   });
 
   it('reports no proposal when the head policy only differs in formatting', () => {

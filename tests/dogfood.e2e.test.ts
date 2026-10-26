@@ -1190,10 +1190,11 @@ describeComposed('the composed test: a pull request that tries to mute all three
       expect(result.stdout).toMatch(/secrets\s+vault-guard/);
     });
 
-    it('reports all four control changes as proposed', () => {
+    it('reports every control change as proposed, the policy one key per line', () => {
       const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
 
-      expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
+      // Two policy keys (command, args) plus the contract, vault-guard and dep-guard.
+      expect(proposalCount(result.stdout)).toBe(5);
       const attacker = path.join(fixture.repo, 'tools', 'nice-gate.sh');
       for (const line of [
         `policy: gates.secrets.command ${shown(SIBLING_COMMANDS['vault-guard'])} -> ${shown(attacker)}`,

@@ -1388,7 +1388,8 @@ the PATH half skips loudly when a binary is below its floor.
 A GATE'S TIME LIMIT, `timeout-seconds`, COMES FROM THE POLICY THE RUN WAS
 JUDGED BY: the base ref's on a pull request. No path builds a GatePolicy
 from the head policy on a pull-request run: only the base text is parsed
-(src/cli.ts:468), the head text goes to `policyDiffers`, and on every refusal
+into a run (`baseParsed`, src/cli.ts:485). The head text is also parsed, for
+the key comparison only and never acted on, and goes to `policyDiffers`; on every refusal
 path the head's gates are reported as not run and never spawned. So a pull
 request cannot raise, lower or remove its own limits; a head-side edit is a
 policy proposal. Pinned through the CLI path with the spawnSync spy by
@@ -1396,7 +1397,7 @@ tests/gate-runner-timeout.test.ts:296 ("a head policy raising the limit to
 21600 leaves the scan at the base 10 s, as a proposal") and
 tests/gate-runner-timeout.test.ts:306 ("a key only on the head leaves the
 scan at the gitleaks default"), and for an invalid head value by
-tests/cli.test.ts:3667 ("only in the head of a pull-request run leaves the
+tests/cli.test.ts:3671 ("only in the head of a pull-request run leaves the
 run on the base policy, as a proposal").
 
 ### The branch-name convention is a convenience, not a control
@@ -1681,7 +1682,7 @@ tests/cli.test.ts ("changes nothing outside pull-request mode"). End to
 end against the real gates: tests/dogfood.e2e.test.ts ("the gates also
 installed as devDependencies, which is every repository here"), which
 plants two marker binaries in the dogfood clone's own `node_modules/.bin`,
-and the composed test's PATH variant, tests/dogfood.e2e.test.ts:1234
+and the composed test's PATH variant, tests/dogfood.e2e.test.ts:1235
 ("reaches the same verdict with no command: override anywhere"), asserts
 the line is ABSENT, which is what keeps it from being decoration that
 appears on every run. The action itself: tests/action.test.ts ("action.yml
@@ -2178,16 +2179,16 @@ is no signal, as before") and 2021 ("enforces a version probe that timed out
 under the signal, whatever the policy says"); by the record tests 1818 ("records version skew
 for a node_modules/.bin gate, the location named repository-relative") and
 1835 ("records version skew for a PATH gate, with its absolute path"); and
-through the CLI by tests/cli.test.ts:3428 ("names both versions and where
-the binary was found, and is could-not-run with exit 2"), 3440 ("says
+through the CLI by tests/cli.test.ts:3432 ("names both versions and where
+the binary was found, and is could-not-run with exit 2"), 3444 ("says
 nothing when the versions match, or when nothing says what to expect"),
-3486 ("outside Actions, under the signal, names the location and exits 2
-without running that binary"), 3500 ("puts the skew in the SARIF log and in
-the gate block of the text report"), 3533 ("in GitHub Actions also writes
-an error annotation and a step-summary line"), 3551 ("warns for a PATH gate
-in Actions the same way"), 3586 ("says nothing anywhere when the
-node_modules/.bin gate matches the pin"), 3713 ("exits 2 for a skew even
-when the policy says enforce: false, and even with --advisory") and 3728
+3490 ("outside Actions, under the signal, names the location and exits 2
+without running that binary"), 3504 ("puts the skew in the SARIF log and in
+the gate block of the text report"), 3537 ("in GitHub Actions also writes
+an error annotation and a step-summary line"), 3555 ("warns for a PATH gate
+in Actions the same way"), 3590 ("says nothing anywhere when the
+node_modules/.bin gate matches the pin"), 3717 ("exits 2 for a skew even
+when the policy says enforce: false, and even with --advisory") and 3732
 ("exits 2 when the version cannot be read under the signal, and 0 without
 it"). Mutations, each run against tests/gate-runner.test.ts and
 tests/cli.test.ts: recording the skew and running the gate anyway (the
@@ -2198,7 +2199,7 @@ two enforce: false cases); leaving a timed-out probe under the signal to
 the policy's `enforce` turned 1 red; failing an unreadable version closed WITHOUT the
 signal turned 6 red (the two no-signal controls and four trust-base and
 plain-run cases elsewhere). The version cut is pinned by
-tests/cli.test.ts:3569 ("cuts a probed version with junk after x.y.z to
+tests/cli.test.ts:3573 ("cuts a probed version with junk after x.y.z to
 version characters on every GitHub surface").
 
 ## The policy file is a passthrough, and the reserved list is the only exception
