@@ -1837,8 +1837,20 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
   }
 }
 
+function callAnalysisOff(options: Record<string, unknown>): boolean {
+  const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+  for (const key of Object.keys(options)) {
+    if (!key.includes('call-analysis')) continue;
+    const value = options[key];
+    if (key === 'call-analysis' && (value === false || asList(value).every((item) => item === 'none'))) continue;
+    if (key === 'no-call-analysis' && (value === true || asList(value).some((item) => item === 'all'))) continue;
+    return false;
+  }
+  return true;
+}
+
 /**
- * The two refusals only the preview under the proposed rules makes.
+ * The three refusals only the preview under the proposed rules makes.
  *
  * An option value starting with "-" would render as a flag of its own
  * (renderOptionFlags), so a value the base never ran with could add an output
@@ -1846,6 +1858,8 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
  * checked by refuseHeadControlledProgram for its own blob only, while what it
  * imports comes from the head, and the preview can reach a role the base has
  * switched off, whose command nobody has exercised (spec 5.2, finding 7).
+ * osv-scanner call analysis builds the project it scans, here the head's
+ * code, so only an all-off form of it is allowed (callAnalysisOff).
  */
 function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null {
   for (const name of Object.keys(gate.options).sort()) {
@@ -1861,13 +1875,12 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
   // osv-scanner's call analysis builds the project it scans, and in the
   // preview that is the head's code (a Rust build.rs, for one). Off (`none`,
   // or false, which renders --no-call-analysis) is the only value it runs with.
-  const callAnalysis = gate.options['call-analysis'];
-  if (
-    gate.product === 'osv-scanner' &&
-    callAnalysis !== undefined &&
-    callAnalysis !== false &&
-    !(Array.isArray(callAnalysis) ? callAnalysis : [callAnalysis]).every((item) => item === 'none')
-  ) {
+  // Every option key is rendered as a flag, so the check is by key match:
+  // any key containing "call-analysis" is refused unless it is an all-off
+  // form (`call-analysis: none`, `call-analysis: false`, or
+  // `no-call-analysis: true` / `all`). An absent key is fine: the
+  // pull-request argv already passes --no-call-analysis=all then.
+  if (gate.product === 'osv-scanner' && !callAnalysisOff(gate.options)) {
     return {
       reason: 'preparation-failed',
       detail: "the preview does not run call analysis, because it would build the head's code",

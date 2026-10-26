@@ -1056,6 +1056,36 @@ describe('pull-request mode through a whole run', () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it('preview refuses any call-analysis option key that is not an all-off form', () => {
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', stdout: CLEAN_OSV_SCANNER, argvLog: lastArgvLog });
+      const vulns = (enabled: boolean, option: string) =>
+        `  vulnerabilities:\n    product: osv-scanner\n${enabled ? '' : '    enabled: false\n'}    options:\n      ${option}\n`;
+      const run = (option: string) =>
+        runAll(P(`  secrets:\n    product: vault-guard\n${vulns(false, option)}`), {
+          repoRoot: prRepo(), staged: false, pathValue: bin, tempRoot: tempDir(),
+          trustBase: PR_TRUST_BASE, preview: { policy: P(vulns(true, option)) },
+        });
+      // Another spelling of the key renders as a flag of its own and is refused.
+      for (const option of ['experimental-call-analysis: true', 'no-call-analysis: rust', 'call-analysis: [none, go]']) {
+        const result = run(option);
+        expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+        expect(result.exitCode).toBe(0);
+      }
+      expect(readFileSync(lastArgvLog, 'utf8')).not.toMatch(/call-analysis/);
+      // The all-off forms are not refused: osv-scanner is spawned, with call
+      // analysis off (what the stub's output then earns is not the point here).
+      for (const option of ['no-call-analysis: true', 'call-analysis: none', 'call-analysis: false']) {
+        const result = run(option);
+        expect(result.preview?.gates[0].couldNotRun?.reason).not.toBe('preparation-failed');
+      }
+      const argv = readFileSync(lastArgvLog, 'utf8');
+      expect(argv).toMatch(/--no-call-analysis/);
+      expect(argv).not.toMatch(/--call-analysis (?!none)/);
+    });
+
     it('a mismatched version pin makes the preview gate could-not-run and leaves the primary result alone', () => {
       // The pin names dep-guard, which only the preview runs; the stub reports 9.9.9.
       const env = { CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.5' };

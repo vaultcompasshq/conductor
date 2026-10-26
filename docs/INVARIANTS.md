@@ -1571,9 +1571,13 @@ tests/cli.test.ts ("preview refuses a base command inside the working tree")
 and tests/run.test.ts ("preview refuses a base command inside the working
 tree before any spawn"). For the same reason osv-scanner's call analysis,
 which builds the project it scans, here the head's code, is could-not-run
-`preparation-failed` in the preview for any `call-analysis` value other
-than `none`, with no spawn. Pinned by tests/run.test.ts ("preview refuses
-osv-scanner call analysis, because it would build the head's code").
+`preparation-failed` in the preview for any option key containing
+`call-analysis` that is not an all-off form (`call-analysis: none` or
+`false`, `no-call-analysis: true` or `all`), with no spawn; every option key
+renders as a flag, so the check is by key match, not by one spelling. Pinned
+by tests/run.test.ts ("preview refuses osv-scanner call analysis, because it
+would build the head's code") and tests/run.test.ts ("preview refuses any
+call-analysis option key that is not an all-off form").
 
 8. THE PREVIEW CAN BE TURNED OFF AND NEVER RUNS ON A HEAD THAT DOES NOT PARSE.
 A one-line stage flip triggers a preview of up to 300 seconds, so the Action
