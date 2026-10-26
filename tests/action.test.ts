@@ -2305,6 +2305,57 @@ describe('action.yml: the verdict token from the gates step', () => {
     }
   });
 
+  const COUNT = `  pull-request mode: rules from ${'a'.repeat(40)}. 1 control change(s) proposed in this pull request.`;
+
+  it('copies the count line and the proposed lines to the step summary in a fenced block', () => {
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        COUNT,
+        '  proposed  dep-guard     config changed in this pull request (proposed: minAgeDays raised to 7)',
+        '',
+      ].join('\n'),
+    });
+    expect(run.summary).toBe(
+      'conductor verdict: pass\n\ncontrol changes:\n\n```text\n' +
+        COUNT.trimStart() +
+        '\n' +
+        'proposed  dep-guard     config changed in this pull request (proposed: minAgeDays raised to 7)\n```\n\n'
+    );
+  });
+
+  it('replaces an unsafe proposed line with a placeholder and never copies it', () => {
+    for (const bad of ['  proposed  dep-guard     a `b` c', '  proposed  dep-guard     x\r::warning::y']) {
+      const run = runGatesForVerdict({
+        exit: 0,
+        body: `conductor 9.9.9\nverdict-token: pass\nx\n${COUNT}\n${bad}\n`,
+      });
+      expect(run.summary).toContain('proposed  dep-guard  (line omitted: unsafe characters)\n');
+      expect(run.summary).not.toContain('::warning::');
+      expect(run.summary).not.toContain('`b`');
+    }
+    expect(
+      runGatesForVerdict({
+        exit: 0,
+        body: `conductor 9.9.9\nverdict-token: pass\n  proposed  evil-gate     x\n`,
+      }).summary
+    ).toBe('conductor verdict: pass\n\n');
+  });
+
+  it('copies at most 50 proposed lines and says how many more are in the report', () => {
+    const many = Array.from({ length: 53 }, (_, i) => `  proposed  dep-guard     change ${i}`);
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: ['conductor 9.9.9', 'verdict-token: pass', 'x', COUNT, ...many, ''].join('\n'),
+    });
+    expect(run.summary.match(/^proposed {2}/gm)).toHaveLength(50);
+    expect(run.summary).toContain('(3 more in the report)\n');
+  });
+
   describe('against an installed conductor that predates --text-report', () => {
     it('never passes the flag, marks the fallback, and leaves conductor\'s own exit status alone', () => {
       for (const exit of [0, 1, 2]) {

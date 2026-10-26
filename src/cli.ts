@@ -46,6 +46,7 @@ import { renderSarif } from './output-sarif.js';
 import {
   gateLogLines,
   jobLogSummary,
+  proposalLogLines,
   renderText,
   verdictToken,
   versionSkewAnnotations,
@@ -909,6 +910,7 @@ export function buildProgram(): Command {
         // for an unwritable file.
         const logLines = [
           ...gateLogLines(result, process.stderr.isTTY === true ? { terminal: true } : {}),
+          ...proposalLogLines(result),
           ...versionSkewWarnings(result),
         ];
         if (logLines.length > 0) {

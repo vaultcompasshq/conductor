@@ -27,6 +27,7 @@ import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, gateExitBlocks } from './exit-codes.j
 import {
   CONDUCTOR_OWN_REASONS,
   type GateOutcome,
+  breakWorkflowMarkers,
   cleanOutputLine,
   conductorStatedReason,
   resolutionPlace,
@@ -794,6 +795,26 @@ export function jobLogSummary(result: RunResult): string {
       : `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
   }
   return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
+}
+
+/**
+ * The proposal lines for a job log: the count sentence, then one line per
+ * proposed control change. Empty outside pull-request mode, and empty when
+ * the trust base was refused or never given, because no rules were read and
+ * there is nothing proposed to count. Each line goes through
+ * breakWorkflowMarkers, since a proposal carries text a gate printed.
+ */
+export function proposalLogLines(result: RunResult): string[] {
+  const trust = result.trustBase;
+  if (trust === null || trust.notGiven === true || (trust.refusal !== null && trust.refusal !== undefined)) {
+    return [];
+  }
+  return [
+    breakWorkflowMarkers(`conductor: ${proposalCount(result)}.`),
+    ...result.proposals.map((proposal) =>
+      breakWorkflowMarkers(`conductor: proposed ${proposal.product} ${proposal.line}`)
+    ),
+  ];
 }
 
 /**

@@ -1226,6 +1226,53 @@ runs:
                   printf '%s\n\n' "$summary_line" >> "$GITHUB_STEP_SUMMARY"
                 fi
               done
+              # The pull-request control changes, from the report's own count
+              # line and its "  proposed  <product>" lines. Each line is
+              # matched whole; the product must be one of the six fixed
+              # names (bounded by length checks rather than large regex repeat
+              # counts, which some regex libraries cap at 255); a rest holding a backtick, a CR or anything outside
+              # printable ASCII is replaced by a placeholder and never
+              # copied, since the report can carry text from the scanned
+              # repository and the block is a code fence. At most 50 lines.
+              count_shape='^  pull-request mode: rules from [ -~]{1,200}\. [0-9]+ control change\(s\) [ -~]*\.$'
+              proposed_shape='^  proposed  (conductor|dep-guard|vault-guard|intent-guard|gitleaks|osv-scanner) +(.*)$'
+              printable_shape='^[ -~]*$'
+              proposal_count_line=""
+              proposal_lines=()
+              proposal_total=0
+              while IFS= read -r report_line || [ -n "$report_line" ]; do
+                if [ -z "$proposal_count_line" ] && [ "${#report_line}" -le 700 ] && [[ "$report_line" =~ $count_shape ]]; then
+                  proposal_count_line="${report_line#  }"
+                elif [[ "$report_line" =~ $proposed_shape ]]; then
+                  proposal_product="${BASH_REMATCH[1]}"
+                  proposal_rest="${BASH_REMATCH[2]}"
+                  proposal_total=$((proposal_total + 1))
+                  if [ "$proposal_total" -le 50 ]; then
+                    if [[ "$proposal_rest" == *'`'* ]] || ! [[ "$proposal_rest" =~ $printable_shape ]]; then
+                      proposal_lines+=("proposed  ${proposal_product}  (line omitted: unsafe characters)")
+                    else
+                      proposal_lines+=("${report_line#  }")
+                    fi
+                  fi
+                fi
+              done < "$TEXT_REPORT"
+              if [ -n "$proposal_count_line" ] || [ "${#proposal_lines[@]}" -gt 0 ]; then
+                {
+                  printf 'control changes:\n\n```text\n'
+                  if [ -n "$proposal_count_line" ]; then
+                    printf '%s\n' "$proposal_count_line"
+                  fi
+                  if [ "${#proposal_lines[@]}" -gt 0 ]; then
+                    for proposal_line in "${proposal_lines[@]}"; do
+                      printf '%s\n' "$proposal_line"
+                    done
+                  fi
+                  if [ "$proposal_total" -gt 50 ]; then
+                    printf '(%s more in the report)\n' "$((proposal_total - 50))"
+                  fi
+                  printf '```\n\n'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
             fi
           fi
         fi

@@ -1700,6 +1700,32 @@ describe('pull-request mode through the CLI', () => {
     expect(result.stdout.trimEnd().split('\n')).toHaveLength(1);
   });
 
+  it('prints the proposal lines on stderr when the report goes to a file', () => {
+    const { repo, bin } = attackRepo({
+      headPolicy: [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '    options:',
+        '      fail-on: none',
+        '',
+      ].join('\n'),
+    });
+    const target = path.join(tempDir(), 'conductor.sarif');
+
+    const result = runCli(
+      repo,
+      ['run', '--staged', '--trust-base', 'base', '--format', 'sarif', '--output', target],
+      bin
+    );
+
+    expect(result.stderr).toMatch(/^conductor: 1 control change\(s\) proposed in this pull request\.$/m);
+    expect(result.stderr).toMatch(/^conductor: proposed conductor policy changed in this pull request/m);
+  });
+
   it('reports a proposal when only an option changed, with no gate added or removed', () => {
     const { repo, bin } = attackRepo({
       headPolicy: [
