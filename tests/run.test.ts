@@ -988,7 +988,17 @@ describe('pull-request mode through a whole run', () => {
       expect(result.generatedAt).toBe(without.generatedAt);
       expect(result.exitCode).toBe(without.exitCode);
       expect(verdictToken(result, false)).toBe(verdictToken(without, false));
-      expect(renderText(result).split('\n').slice(0, 4)).toEqual(renderText(without).split('\n').slice(0, 4));
+      // A clean run without --verbose is one summary line, so line 2 onward
+      // is the preview block itself: that form is pinned by its prefix. The
+      // full report (--verbose, the form the Action and the comment use) is
+      // compared with the same result rendered without its preview, since
+      // the two runs' durations differ.
+      expect(renderText(result).startsWith(renderText(without))).toBe(true);
+      const { preview: _preview, ...unpreviewed } = result;
+      const full = renderText(result, { verbose: true });
+      expect(full.startsWith(renderText(unpreviewed, { verbose: true }))).toBe(true);
+      expect(full.split('\n').slice(0, 4)).toEqual(renderText(unpreviewed, { verbose: true }).split('\n').slice(0, 4));
+      expect(renderText(result)).toContain('\npreview: could not be completed (boom)\n');
     });
 
     it('the preview never calls prepareIntent and prints the deferred line', () => {

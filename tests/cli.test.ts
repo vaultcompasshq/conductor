@@ -2084,6 +2084,8 @@ describe('pull-request mode through the CLI', () => {
       expect(existsSync(marker)).toBe(false);
       // The preview ran the base's own vault-guard, on PATH, once.
       expect(previewSpawns(argvLog)).toEqual(['scan -f json']);
+      expect(result.stdout).toContain('\nPreview under the proposed rules (does not affect the verdict)\n');
+      expect(result.stdout).toContain('\npreview: 1 gate(s), 0 finding(s), 0 could-not-run\n');
       expect(result.status).toBe(0);
     });
 
@@ -3055,6 +3057,14 @@ describe('the program a pull-request run is allowed to execute', () => {
     const result = runCli(repo, ['run', '--trust-base', 'base', '--preview', '--verbose'], bin);
     expect(existsSync(baseGateMarker)).toBe(false);
     expect(result.stdout).toContain('policy: gates.secrets.enabled false -> true');
+    // The refused gate's own conductor/gate-failed finding is the one finding.
+    expect(result.stdout).toContain('\npreview: 1 gate(s), 1 finding(s), 1 could-not-run\n');
+    expect(result.stdout).toContain(
+      `preview under the proposed rules: the base command ${program} is inside the working tree, so this gate was not run`
+    );
+    expect(result.stdout.indexOf('Preview under the proposed rules (does not affect the verdict)')).toBeGreaterThan(
+      result.stdout.indexOf('verdict: ')
+    );
     expect(result.status).toBe(0);
   });
 });
@@ -3478,6 +3488,38 @@ describe('a pull-request job with no trust base', () => {
 });
 
 describe('the per-gate job log lines on stderr', () => {
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  it('writes one conductor: preview line per preview gate after the proposal lines', () => {
+    // The base switches secrets off; the head only switches it on.
+    const repo = tempDir();
+    const bin = tempDir();
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    const base = 'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n    enabled: false\n';
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), base);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base']);
+    writeFileSync(path.join(repo, '.guardrails.yaml'), base.replace('    enabled: false\n', ''));
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+
+    const result = runCli(repo, ['run', '--trust-base', 'base', '--preview'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toMatch(/^conductor: preview secrets \(vault-guard\) /m);
+    expect(result.stderr.indexOf('conductor: preview ')).toBeGreaterThan(result.stderr.indexOf('conductor: proposed '));
+  });
+
   it('prints one line per gate on a clean run and leaves stdout as it was', () => {
     const bin = tempDir();
     stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0, version: '0.10.0' });

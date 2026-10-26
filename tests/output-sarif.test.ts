@@ -15,7 +15,7 @@ import {
   normalizeVaultGuard,
 } from '../src/normalize.js';
 import { fingerprintKey, placeArtifact, renderSarif } from '../src/output-sarif.js';
-import type { RunResult } from '../src/run.js';
+import type { RunPreview, RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -2225,5 +2225,80 @@ describe('policy changes in the SARIF log', () => {
         'policy: gates.dependencies.options.x (absent) -> "a\\u202eb"',
       ],
     });
+  });
+});
+
+describe('the preview under the proposed rules in the SARIF log', () => {
+  const PR_FIELDS: Partial<RunResult> = {
+    trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+    proposals: [{ product: 'conductor', role: null, line: 'policy: gates.secrets.enabled false -> true' }],
+  };
+  const BLOCKING_PR_RESULT: RunResult = {
+    ...result([outcome({ findings: depGuard.findings })]),
+    ...PR_FIELDS,
+    exitCode: 1,
+  };
+  const CLEAN_PR_RESULT: RunResult = {
+    ...result([outcome({ exitCode: 0, findings: [] })]),
+    ...PR_FIELDS,
+    exitCode: 0,
+  };
+
+  function previewOf(gate: GateOutcome): RunPreview {
+    return { gates: [gate], findings: gate.findings, skipped: [], deferred: [], overBudget: [], threw: null };
+  }
+  const ONE_BLOCKING_PREVIEW_GATE = previewOf(outcome({ findings: depGuard.findings }));
+  const ONE_COULD_NOT_RUN_PREVIEW_GATE = previewOf(
+    outcome({ exitCode: null, couldNotRun: { reason: 'gate-error', detail: 'it broke' } })
+  );
+  const PREVIEW_ID = 'conductor/preview-under-proposed-rules';
+
+  it('a run with a preview renders SARIF whose runs, results and partialFingerprints deep-equal the same run without it, apart from umbrella notifications', () => {
+    const plain = JSON.parse(renderSarif(BLOCKING_PR_RESULT, '9.9.9'));
+    const shown = JSON.parse(renderSarif({ ...BLOCKING_PR_RESULT, preview: ONE_BLOCKING_PREVIEW_GATE }, '9.9.9'));
+    // The notification and its declaration beside the rules, which is what
+    // makes its descriptor reference resolve.
+    const dropPreview = (log: any) => {
+      for (const run of log.runs) {
+        for (const invocation of run.invocations ?? []) {
+          invocation.toolExecutionNotifications = (invocation.toolExecutionNotifications ?? []).filter(
+            (n: any) => n.descriptor?.id !== PREVIEW_ID
+          );
+        }
+        if (run.tool.driver.notifications !== undefined) {
+          run.tool.driver.notifications = run.tool.driver.notifications.filter(
+            (n: any) => n.id !== PREVIEW_ID
+          );
+        }
+      }
+      return log;
+    };
+    // On copies: dropPreview edits the log in place, and the notes are read from `shown` below.
+    expect(dropPreview(structuredClone(shown))).toEqual(dropPreview(structuredClone(plain)));
+    expect(shown.runs).toHaveLength(plain.runs.length);
+    const notes = shown.runs
+      .at(-1)
+      .invocations[0].toolExecutionNotifications.filter((n: any) => n.descriptor?.id === PREVIEW_ID);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].level).toBe('note');
+    expect(notes[0].message.text).toBe(
+      `Preview under the proposed rules, which does not affect the verdict: dependencies (dep-guard) ` +
+        `findings (${depGuard.findings.length}, ${depGuard.findings.filter((f) => f.blocking).length} blocking), ` +
+        `${depGuard.findings.length} finding(s).`
+    );
+  });
+
+  it('a preview could-not-run leaves executionSuccessful and the exit code unchanged', () => {
+    const result = { ...CLEAN_PR_RESULT, preview: ONE_COULD_NOT_RUN_PREVIEW_GATE };
+    const umbrella = JSON.parse(renderSarif(result, '9.9.9')).runs.at(-1);
+    expect(umbrella.invocations[0].executionSuccessful).toBe(true);
+    expect(result.exitCode).toBe(CLEAN_PR_RESULT.exitCode);
+  });
+
+  it('never creates the umbrella run on its own', () => {
+    const lone = { ...result([outcome({ exitCode: 0, findings: [] })]), exitCode: 0 };
+    const plain = JSON.parse(renderSarif(lone, '9.9.9'));
+    const shown = JSON.parse(renderSarif({ ...lone, preview: ONE_COULD_NOT_RUN_PREVIEW_GATE }, '9.9.9'));
+    expect(shown).toEqual(plain);
   });
 });
