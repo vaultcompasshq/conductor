@@ -569,8 +569,15 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     it('sums the umbrella own proposal and the gate own into one sentence', () => {
       const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
 
-      expect(result.stdout).toMatch(/2 control change\(s\) proposed in this pull request\./);
-      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      expect(result.stdout).toMatch(/5 control change\(s\) proposed in this pull request\./);
+      for (const line of [
+        'policy: gates.dependencies.enabled true -> false',
+        `policy: gates.dependencies.options.corpus-dir ${shown(DEP_GUARD_CORPUS)} -> (absent)`,
+        `policy: gates.secrets.command (absent) -> ${shown(attacker)}`,
+        'policy: gates.secrets.args (absent) -> []',
+      ]) {
+        expect(result.stdout).toMatch(new RegExp(`proposed\\s+conductor\\s+${literal(line)}`));
+      }
       expect(result.stdout).toMatch(
         /proposed\s+intent-guard\s+contract changed in this pull request/
       );
@@ -876,11 +883,22 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
         // own line is absent and the only proposal is the gate's.
         const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
 
-        expect(result.stdout).not.toMatch(/policy changed in this pull request/);
+        expect(result.stdout).not.toMatch(/proposed\s+conductor\s/);
       });
     }
   );
 });
+
+/** A value as a proposed policy line shows it: JSON, cut to 77 characters plus an ellipsis past 80. */
+function shown(value: unknown): string {
+  const text = JSON.stringify(value);
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+
+/** Escapes text for use inside a RegExp. */
+function literal(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * THE COMPOSED TEST. The design document calls this the acceptance criterion
@@ -1060,7 +1078,7 @@ describeComposed('the composed test: a pull request that tries to mute all three
     run(['commit', '--quiet', '-m', 'base: three gates, a frozen contract']);
     run(['branch', 'base']);
 
-    // -- the pull request: four control changes and three things to hide --
+    // -- the pull request: five control changes (two policy keys, three gate proposals) and three things to hide --
 
     // 1. conductor's own policy, pointing the secrets gate at a script this
     //    same commit adds. The script writes a marker and reports clean.
@@ -1172,11 +1190,18 @@ describeComposed('the composed test: a pull request that tries to mute all three
       expect(result.stdout).toMatch(/secrets\s+vault-guard/);
     });
 
-    it('reports all four control changes as proposed', () => {
+    it('reports every control change as proposed, the policy one key per line', () => {
       const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
 
-      expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
-      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      // Two policy keys (command, args) plus the contract, vault-guard and dep-guard.
+      expect(proposalCount(result.stdout)).toBe(5);
+      const attacker = path.join(fixture.repo, 'tools', 'nice-gate.sh');
+      for (const line of [
+        `policy: gates.secrets.command ${shown(SIBLING_COMMANDS['vault-guard'])} -> ${shown(attacker)}`,
+        'policy: gates.secrets.args (absent) -> []',
+      ]) {
+        expect(result.stdout).toMatch(new RegExp(`proposed\\s+conductor\\s+${literal(line)}`));
+      }
       expect(result.stdout).toMatch(/proposed\s+intent-guard\s+contract changed/);
       expect(result.stdout).toMatch(/proposed\s+vault-guard\s+config added/);
       expect(result.stdout).toMatch(/proposed\s+dep-guard\s+config added/);
@@ -1213,7 +1238,7 @@ describeComposed('the composed test: a pull request that tries to mute all three
         const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
 
         expect(existsSync(fixture.marker)).toBe(false);
-        expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
+        expect(proposalCount(result.stdout)).toBe(5);
         expect(result.stdout).toMatch(/vault-guard\/github-token/);
         expect(result.stdout).toMatch(/lodahs/);
         expect(result.stdout).toMatch(/Self-approval refused:/);

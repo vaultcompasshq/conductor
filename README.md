@@ -889,7 +889,11 @@ branch first, like any other rule change.
 **A change to the rules is not refused, it is proposed.** Rules legitimately
 change, and a gate that blocked every such pull request would train people to
 bypass it. So a policy file that differs from the base ref's is reported as
-one line, `policy changed in this pull request`, the run continues under the
+one line per changed key, `policy: gates.<role>.<key> <old> -> <new>`, counted
+as one proposal each; a head `.guardrails.yaml` that is absent or does not
+parse gives one line saying its changes are not known, and when no effective
+key differs (a default spelled out, or the YAML reordered) the old single line,
+`policy changed in this pull request`, is kept. The run continues under the
 base ref's rules, and the change takes effect **after merge**, on the first
 run whose base branch carries it. The gates' own proposals are summed with it
 into one sentence, `N control change(s) proposed in this pull request`, on the

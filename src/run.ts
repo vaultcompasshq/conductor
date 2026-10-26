@@ -24,6 +24,8 @@ import { GATE_ROLES, enabledGates, runsAtStage } from './policy.js';
 import { profileFor } from './products.js';
 import { ResolveError, resolveGateBinary } from './resolve.js';
 import { POLICY_PROPOSAL_LINE } from './trust-base.js';
+import type { PolicyKeyChange } from './policy-diff.js';
+import { policyChangeLine } from './policy-diff.js';
 
 /**
  * An enabled gate the stage filter held back.
@@ -141,6 +143,15 @@ export interface RunTrustBase {
   ref: string;
   /** Whether the head commit's own policy file differs from that one. */
   policyChanged: boolean;
+  /**
+   * The keys that differ, when `policyChanged` is true: one entry per key,
+   * computed from the parsed base and head files before any CLI override.
+   * Empty or absent on a changed policy means no effective key differs (a
+   * default spelled out, or the YAML reordered), and the report falls back to
+   * the one-line POLICY_PROPOSAL_LINE. A head whose keys are not known is not
+   * an empty list: it is the single not-known entry.
+   */
+  policyChanges?: PolicyKeyChange[];
   /**
    * Why this ref could not be used at all, or null when it was.
    *
@@ -465,7 +476,13 @@ function collectProposals(
 ): ControlProposal[] {
   const proposals: ControlProposal[] = [];
   if (trustBase?.policyChanged === true) {
-    proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
+    const changes = trustBase.policyChanges ?? [];
+    if (changes.length === 0) {
+      proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
+    }
+    for (const change of changes) {
+      proposals.push({ product: 'conductor', role: null, line: policyChangeLine(change) });
+    }
   }
   proposals.push(...preparation);
   for (const outcome of outcomes) {
