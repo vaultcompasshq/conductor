@@ -1282,7 +1282,15 @@ export function gateArgs(
    * ref, only the rules are the head's. Ignored when `trustBase` is set, and
    * by every other product.
    */
-  changeBase?: string
+  changeBase?: string,
+  /**
+   * True for a spawn of the preview under the proposed rules. osv-scanner
+   * then gets `--no-call-analysis=all` appended after the base's own options,
+   * whatever they say: call analysis builds the project it scans, which in
+   * the preview is the head's code, and osv-scanner applies its disables
+   * after its enables, so the appended flag wins.
+   */
+  preview = false
 ): string[] {
   const passthrough = renderOptionFlags(gate.options);
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
@@ -1463,6 +1471,7 @@ export function gateArgs(
         ...(noResolve ? ['--no-resolve'] : []),
         ...callAnalysis,
         ...renderOptionFlags(options),
+        ...(preview ? ['--no-call-analysis=all'] : []),
       ];
     }
   }
@@ -1842,7 +1851,6 @@ function callAnalysisOff(options: Record<string, unknown>): boolean {
   for (const key of Object.keys(options)) {
     if (!key.includes('call-analysis')) continue;
     const value = options[key];
-    if (key === 'call-analysis' && (value === false || (asList(value).length > 0 && asList(value).every((item) => item === 'none')))) continue;
     if (key === 'no-call-analysis' && (value === true || asList(value).some((item) => item === 'all'))) continue;
     return false;
   }
@@ -1859,7 +1867,8 @@ function callAnalysisOff(options: Record<string, unknown>): boolean {
  * imports comes from the head, and the preview can reach a role the base has
  * switched off, whose command nobody has exercised (spec 5.2, finding 7).
  * osv-scanner call analysis builds the project it scans, here the head's
- * code, so only an all-off form of it is allowed (callAnalysisOff).
+ * code, so only the all-off form of it is allowed (callAnalysisOff), and
+ * gateArgs forces it off on every preview spawn besides.
  */
 function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null {
   for (const name of Object.keys(gate.options).sort()) {
@@ -1876,10 +1885,10 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
   // preview that is the head's code (a Rust build.rs, for one). Off (`none`,
   // or false, which renders --no-call-analysis) is the only value it runs with.
   // Every option key is rendered as a flag, so the check is by key match:
-  // any key containing "call-analysis" is refused unless it is an all-off
-  // form (`call-analysis: none`, `call-analysis: false`, or
-  // `no-call-analysis: true` / `all`). An absent key is fine: the
-  // pull-request argv already passes --no-call-analysis=all then.
+  // any key containing "call-analysis" is refused unless it is the one
+  // unambiguous all-off form, `no-call-analysis: true` or `all`. An absent
+  // key is fine. Belt and braces: gateArgs appends --no-call-analysis=all
+  // to every osv-scanner preview spawn as well.
   if (gate.product === 'osv-scanner' && !callAnalysisOff(gate.options)) {
     return {
       reason: 'preparation-failed',
@@ -2337,7 +2346,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
     }
     const baseArgv = (copies: readonly string[]): string[] => [
       ...binary.argvPrefix,
-      ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: [...copies] }),
+      ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: [...copies] }, undefined, undefined, options.preview !== undefined),
     ];
     const checked: EmptiedCheckResult =
       removed === null
@@ -2631,7 +2640,8 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       decidedRef,
       external,
       channel.kind === 'base' ? channel.ref : undefined,
-      changeBase
+      changeBase,
+      options.preview !== undefined
     ),
   ];
 
@@ -2976,7 +2986,7 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
         headArgv: argv,
         baseArgv: (copies) => [
           ...binary.argvPrefix,
-          ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: copies }),
+          ...gateArgs(gate, options.staged, options.intent, decidedRef, { ...external, lockfiles: copies }, undefined, undefined, options.preview !== undefined),
         ],
         spawn: (baseArgv, cwd) => {
           const limits = spawnLimits(timeLimit, options.preview, undefined);

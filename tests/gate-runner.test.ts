@@ -2070,6 +2070,16 @@ describe('the preview under the proposed rules, one gate at a time', () => {
         .toEqual(decideTrustBase(G('dependencies', 'dep-guard'), undefined, 'origin/main', version));
     }
   });
+  it('appends --no-call-analysis=all to every osv-scanner preview spawn, after the options', () => {
+    const osv = { ...G('vulnerabilities', 'osv-scanner'), options: { 'call-analysis': 'all' } };
+    const external = { lockfiles: ['package-lock.json'] };
+    const primary = gateArgs(osv, false, undefined, 'origin/main', external, undefined, undefined, false);
+    const preview = gateArgs(osv, false, undefined, 'origin/main', external, undefined, undefined, true);
+    expect(primary.includes('--no-call-analysis=all')).toBe(false);
+    expect(preview.slice(0, -1)).toEqual(primary);
+    expect(preview.at(-1)).toBe('--no-call-analysis=all');
+  });
+
   it('keeps --base for dep-guard when the preview withholds --trust-base', () => {
     expect(gateArgs(G('dependencies', 'dep-guard'), false, undefined, undefined, {}, undefined, 'origin/main'))
       .toEqual(['--format', 'json', '--base', 'origin/main']);

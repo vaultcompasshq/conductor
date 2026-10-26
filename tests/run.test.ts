@@ -956,7 +956,12 @@ describe('pull-request mode through a whole run', () => {
     it('preview hands gitleaks and osv-scanner the same trust inputs as the primary run', () => {
       const result = historyPreviewRun();
       const strip = (argv: string[]) => argv.map((arg) => (arg.startsWith(os.tmpdir()) ? '<tmp>' : arg));
-      expect(result.preview?.gates.map((gate) => strip(gate.argv))).toEqual(result.gates.map((gate) => strip(gate.argv)));
+      // Same argv, except that an osv-scanner preview spawn ends in the
+      // forced --no-call-analysis=all (spec 5.2, finding 7).
+      const expected = result.gates.map((gate) =>
+        gate.product === 'osv-scanner' ? [...strip(gate.argv), '--no-call-analysis=all'] : strip(gate.argv)
+      );
+      expect(result.preview?.gates.map((gate) => strip(gate.argv))).toEqual(expected);
       expect(result.preview?.gates.map((gate) => gate.trustBase?.withheld)).toEqual([null, null]);
       expect(result.preview?.gates[0].argv).toContain('--diff-merges=first-parent origin/main..HEAD');
       expect(result.preview?.gates[0].argv).toContain('--ignore-gitleaks-allow');
@@ -1068,22 +1073,24 @@ describe('pull-request mode through a whole run', () => {
           repoRoot: prRepo(), staged: false, pathValue: bin, tempRoot: tempDir(),
           trustBase: PR_TRUST_BASE, preview: { policy: P(vulns(true, option)) },
         });
-      // Another spelling of the key renders as a flag of its own and is refused.
-      for (const option of ['experimental-call-analysis: true', 'no-call-analysis: rust', 'call-analysis: [none, go]', 'call-analysis: []']) {
+      // Another spelling of the key renders as a flag of its own and is refused,
+      // and so is every call-analysis value: only no-call-analysis can say off.
+      for (const option of ['experimental-call-analysis: true', 'no-call-analysis: rust', 'call-analysis: [none, go]', 'call-analysis: []', 'call-analysis: none', 'call-analysis: false']) {
         const result = run(option);
         expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
         expect(result.exitCode).toBe(0);
       }
       expect(readFileSync(lastArgvLog, 'utf8')).not.toMatch(/call-analysis/);
-      // The all-off forms are not refused: osv-scanner is spawned, with call
-      // analysis off (what the stub's output then earns is not the point here).
-      for (const option of ['no-call-analysis: true', 'call-analysis: none', 'call-analysis: false']) {
+      // The all-off forms are not refused: osv-scanner is spawned, and every
+      // preview spawn of it ends in --no-call-analysis=all whatever the options
+      // said (what the stub's output then earns is not the point here).
+      for (const option of ['no-call-analysis: true', 'no-call-analysis: all']) {
         const result = run(option);
         expect(result.preview?.gates[0].couldNotRun?.reason).not.toBe('preparation-failed');
       }
-      const argv = readFileSync(lastArgvLog, 'utf8');
-      expect(argv).toMatch(/--no-call-analysis/);
-      expect(argv).not.toMatch(/--call-analysis (?!none)/);
+      const osvLines = readFileSync(lastArgvLog, 'utf8').trim().split('\n').filter((line) => line.includes('--format json'));
+      expect(osvLines.length).toBeGreaterThan(0);
+      for (const line of osvLines) expect(line.endsWith('--no-call-analysis=all')).toBe(true);
     });
 
     it('a mismatched version pin makes the preview gate could-not-run and leaves the primary result alone', () => {
