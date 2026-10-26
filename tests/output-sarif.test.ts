@@ -2281,6 +2281,7 @@ describe('the preview under the proposed rules in the SARIF log', () => {
       .invocations[0].toolExecutionNotifications.filter((n: any) => n.descriptor?.id === PREVIEW_ID);
     expect(notes).toHaveLength(1);
     expect(notes[0].level).toBe('note');
+    expect(shown.runs.at(-1).tool.driver.notifications.map((n: any) => n.id)).toContain(PREVIEW_ID);
     expect(notes[0].message.text).toBe(
       `Preview under the proposed rules, which does not affect the verdict: dependencies (dep-guard) ` +
         `findings (${depGuard.findings.length}, ${depGuard.findings.filter((f) => f.blocking).length} blocking), ` +

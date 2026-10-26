@@ -3517,6 +3517,7 @@ describe('the per-gate job log lines on stderr', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toMatch(/^conductor: preview secrets \(vault-guard\) /m);
+    expect(result.stderr).toContain('conductor: proposed ');
     expect(result.stderr.indexOf('conductor: preview ')).toBeGreaterThan(result.stderr.indexOf('conductor: proposed '));
   });
 
