@@ -1842,7 +1842,7 @@ function callAnalysisOff(options: Record<string, unknown>): boolean {
   for (const key of Object.keys(options)) {
     if (!key.includes('call-analysis')) continue;
     const value = options[key];
-    if (key === 'call-analysis' && (value === false || asList(value).every((item) => item === 'none'))) continue;
+    if (key === 'call-analysis' && (value === false || (asList(value).length > 0 && asList(value).every((item) => item === 'none')))) continue;
     if (key === 'no-call-analysis' && (value === true || asList(value).some((item) => item === 'all'))) continue;
     return false;
   }

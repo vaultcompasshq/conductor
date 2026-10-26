@@ -1069,7 +1069,7 @@ describe('pull-request mode through a whole run', () => {
           trustBase: PR_TRUST_BASE, preview: { policy: P(vulns(true, option)) },
         });
       // Another spelling of the key renders as a flag of its own and is refused.
-      for (const option of ['experimental-call-analysis: true', 'no-call-analysis: rust', 'call-analysis: [none, go]']) {
+      for (const option of ['experimental-call-analysis: true', 'no-call-analysis: rust', 'call-analysis: [none, go]', 'call-analysis: []']) {
         const result = run(option);
         expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
         expect(result.exitCode).toBe(0);
