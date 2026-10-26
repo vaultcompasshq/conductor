@@ -17,7 +17,8 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 ### Added
 
 - A preview under the proposed rules on pull-request runs (issue 100). Each
-  gate whose `enabled` or `stage` the pull request changes runs once more
+  gate whose `enabled` or `stage` the pull request changes runs once more (a
+  role the head switches off is skipped)
   under the base policy with only `enabled`, `stage` and `enforce` taken from
   the head, and what it would have said prints after the verdict, in the job
   log, as note-level `conductor/preview-under-proposed-rules` SARIF
@@ -28,7 +29,7 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 - The whole preview has a hard deadline of 300 seconds, each spawn is killed
   with SIGKILL at it, and the pull-request comment is cut at 60000 characters,
   preview block first.
-- README recommendations: set the job's `timeout-minutes` to at least the
+- README recommendations: set the step's `timeout-minutes` to at least the
   primary run's need plus 300 seconds, and check out with
   `persist-credentials: false`.
 - SARIF run properties carry the rendered per-key policy change lines under

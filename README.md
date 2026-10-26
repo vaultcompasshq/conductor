@@ -1141,7 +1141,7 @@ backtick or a character outside printable ASCII is replaced by a placeholder.
 A pull request that switches a gate on or off, or moves its `stage`, is judged
 under the base's rules, so the author would not otherwise see what the
 proposed rules say until after merge. With the preview, each role whose
-`enabled` or `stage` changed runs once more, after the verdict, under the base
+`enabled` or `stage` changed runs once more (a role the head switches off is skipped), after the verdict, under the base
 policy with only `enabled`, `stage` and `enforce` taken from the head. Every
 other head value, `command:`, `args:`, `options` and `timeout-seconds`
 included, never reaches it: the base's command and the base's limit are what
@@ -1156,7 +1156,7 @@ verdict)`, as `conductor: preview ...` lines in the job log, as note-level
 `conductor/preview-under-proposed-rules` notifications on the umbrella's SARIF
 run, and as one `preview: N gate(s), M finding(s), K could-not-run` line in
 the step summary. The whole preview has a hard deadline of 300 seconds; a
-gate that does not fit is listed as over budget. A gate section in the preview
+gate reached with no budget left is listed as over budget, and one that starts and is killed at the deadline is could-not-run (timed-out). A gate section in the preview
 uses the same words as a primary section, so a finding may read `BLOCKING`
 there: it means the finding would block under the proposed rules, and it does
 not affect this run. A pull-request comment is cut at 60000 characters, the

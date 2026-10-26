@@ -218,7 +218,7 @@ deliberately.
 
 Which child exits are verdicts is per product since 0.5.0, read from the
 profile (`profile.exit`, src/products.ts; applied at
-src/gate-runner.ts:1431-1483). The three family gates keep exactly the old
+src/gate-runner.ts:2754-2786). The three family gates keep exactly the old
 reading, clean 0 and blocked 1, anything else could-not-run. gitleaks is
 handed `--exit-code 3`, so its 3 is blocked and its 1, which it also uses
 for errors, is could-not-run. osv-scanner's 128 ("no package sources
@@ -1308,10 +1308,12 @@ line in the full report, a clause on the clean one-line summary, and a
 `conductor/trust-base-not-passed` notification (`withheldTrustBase` and
 `trustBaseLines` in src/output-text.ts, and
 `trustBaseWithheldNotifications` in src/output-sarif.ts). The one exception
-is a preview gate: its `PREVIEW_WITHHELD` (dep-guard and vault-guard in the
-preview, which are not handed `--trust-base`) is shown in the preview block
-and never as `conductor/trust-base-not-passed`, because preview outcomes are
-never in `result.gates`, which is what both renderers read.
+is a preview gate: dep-guard and vault-guard are not handed `--trust-base`
+in the preview (`PREVIEW_WITHHELD`), and that withholding is not stated per
+gate, because preview outcomes are never in `result.gates`, which is what
+both renderers read. The preview header says the block runs under the
+proposed rules, dep-guard and vault-guard read their head control files by
+design in that block, and nothing in it reaches the verdict.
 
 Both new SARIF statements are NOTIFICATIONS by the discriminator further
 down this file, and neither is a close call once that rule is applied. A
@@ -1413,7 +1415,7 @@ GatePolicy from the head policy on a pull-request run, and it takes
 `timeout-seconds` is the base's, or the profile default for a head-only
 role, and every preview spawn is further capped at what is left of a hard
 300 s deadline and killed with SIGKILL. The run that decides parses only the
-base text (`baseParsed`, src/cli.ts:500). The head text is also parsed, for
+base text (`baseParsed`, src/cli.ts:499). The head text is also parsed, for
 the key comparison and the preview policy only, and goes to `policyDiffers`;
 on every refusal path the head's gates are reported as not run and never
 spawned. So a pull request cannot raise, lower or remove its own limits; a
@@ -1434,7 +1436,8 @@ runs out").
 ### The preview under the proposed rules never decides anything
 
 New with issue 100. On a pull-request run the gates whose `enabled` or
-`stage` the pull request changes run once more under a preview policy built
+`stage` the pull request changes run once more (a role the head switches off
+is skipped, not run) under a preview policy built
 from the base with only `enabled`, `stage` and `enforce` taken from the head
 (`previewPolicy`, src/policy-diff.ts; `runPreview`, src/run.ts), so the
 author sees what the proposed rules would say. Nothing in it is an answer:
@@ -1447,7 +1450,9 @@ one per finding of the Task 3 security review.
 pull-request protection keys off `options.trustBase`: the node_modules skip,
 the program refusal, the history-gate checks, forced enforce and the
 intent-program refusal. A preview spawn keeps `options.trustBase` and the
-`CONDUCTOR_EXPECTED_*` pins. `decideTrustBase` returns `PREVIEW_WITHHELD`
+`CONDUCTOR_EXPECTED_*` pins, which `gateRunOptions` passes through
+(src/run.ts:620-636); no preview test sets those pins or checks forced
+enforce, so those two are unpinned by a preview test. `decideTrustBase` returns `PREVIEW_WITHHELD`
 for dep-guard and vault-guard only, after the version floor and the
 unreadable-version refusal, so a refused gate stays refused; for those two
 only the `--trust-base` argv flag is removed, and dep-guard keeps `--base`.
@@ -1491,11 +1496,15 @@ inside `guardPreview` (src/run.ts), and a throw becomes one printed preview
 line and `RunResult.preview.threw`. The exit code, the findings and the
 summary are computed before the preview runs and nothing reads it back. The
 Action's render-step fallback runs with the preview off, and the README
-tells adopters to give the job `timeout-minutes` of at least the primary
+tells adopters to give the step `timeout-minutes` of at least the primary
 run's need plus 300 seconds. Pinned by tests/run.test.ts ("a preview that
 throws leaves the exit code, the verdict token and lines 1-4 identical to
 the run without it"), tests/run.test.ts ("never lets a blocking or
-could-not-run preview gate change the primary result") and
+could-not-run preview gate change the primary result", blocking half), and for a
+could-not-run preview gate, tests/gate-runner-timeout.test.ts ("a preview gate
+whose base limit is 21600 is killed when the 300 s budget runs out") and
+tests/cli.test.ts ("preview refuses a base command inside the working tree"),
+both of which end in exit 0, and
 tests/action-pr-comment.test.ts ("never passes --preview from the render
 step, so the fallback run has the preview off").
 
@@ -2535,7 +2544,7 @@ they match exact `options` keys only. `args` beside `command` can still
 carry a literal `--timeout`, and a `no-timeout: true` key (or
 `timeout: false` on gitleaks, where `timeout` stays a passthrough) renders
 `--no-timeout`, which no tool accepts, so that run is could-not-run with the
-tool's own rejection. On a pull request only the base policy is read, so
+tool's own rejection. On a pull request only the base policy's options are used (the head is read for the comparison and the preview), so
 none of this is reachable from the pull request: the reservations are a
 clarity measure for the policy author, not a trust control. Not pinned by
 any test, since it is a statement of what is not covered.
@@ -2673,7 +2682,7 @@ enabled gate", when it runs the commit stage, so a gate whose stage is
 `ci`, which is the intent gate's default, is deferred rather than run.
 The README said it correctly in its stages section and incorrectly in its
 opening summary. All three now say the commit stage
-(src/cli.ts:500-504, src/init-hook-detect.ts:415-421, README.md:119-120).
+(src/cli.ts:679-683, src/init-hook-detect.ts:415-421, README.md:119-120).
 
 The hook is written with the executable bit set after the write rather
 than through the write's mode option, because an existing file keeps its
@@ -4799,9 +4808,12 @@ from a different angle. A preview could-not-run is the other way round: it
 is advisory and never produces exit 2, with or without `--advisory`, because
 preview outcomes are never in `result.gates` and the exit code is composed
 from `result.gates` alone. A primary could-not-run is unchanged. Pinned by
-tests/run.test.ts ("never lets a blocking or could-not-run preview gate
-change the primary result") and tests/output-sarif.test.ts ("a preview
-could-not-run leaves executionSuccessful and the exit code unchanged").
+tests/gate-runner-timeout.test.ts ("a preview gate whose base limit is 21600
+is killed when the 300 s budget runs out") and tests/cli.test.ts ("preview
+refuses a base command inside the working tree"), which assert a preview
+could-not-run with exit 0, and, for `executionSuccessful` only,
+tests/output-sarif.test.ts ("a preview could-not-run leaves
+executionSuccessful and the exit code unchanged").
 
 THE PROCESS EXIT CODE AND THE VERDICT LINE ARE DECIDED FROM THE SAME
 `result.exitCode`, deliberately, so they cannot say two different things
