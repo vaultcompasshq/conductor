@@ -1882,8 +1882,7 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
     }
   }
   // osv-scanner's call analysis builds the project it scans, and in the
-  // preview that is the head's code (a Rust build.rs, for one). Off (`none`,
-  // or false, which renders --no-call-analysis) is the only value it runs with.
+  // preview that is the head's code (a Rust build.rs, for one).
   // Every option key is rendered as a flag, so the check is by key match:
   // any key containing "call-analysis" is refused unless it is the one
   // unambiguous all-off form, `no-call-analysis: true` or `all`. An absent
