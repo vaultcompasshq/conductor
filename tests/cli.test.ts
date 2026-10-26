@@ -1643,7 +1643,11 @@ describe('pull-request mode through the CLI', () => {
     // The base policy's own gates ran, including the one the head disabled.
     expect(result.stdout).toMatch(/dependencies\s+dep-guard/);
     expect(result.stdout).toMatch(/secrets\s+vault-guard/);
-    expect(result.stdout).toMatch(/policy changed in this pull request/);
+    expect(result.stdout).toContain('policy: gates.dependencies.enabled true -> false');
+    expect(result.stdout).toContain(
+      `policy: gates.secrets.command (absent) -> ${shown(path.join(repo, 'tools', 'nice-gate.sh'))}`
+    );
+    expect(result.stdout).toContain('policy: gates.secrets.args (absent) -> []');
   });
 
   it('reads the base policy when the working tree holds a file named like the revision and path', () => {
@@ -1696,7 +1700,7 @@ describe('pull-request mode through the CLI', () => {
     const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+    expect(result.stdout).toMatch(/3 control change\(s\) proposed in this pull request\./);
     expect(result.stdout.trimEnd().split('\n')).toHaveLength(1);
   });
 
@@ -1723,7 +1727,7 @@ describe('pull-request mode through the CLI', () => {
     );
 
     expect(result.stderr).toMatch(/^conductor: 1 control change\(s\) proposed in this pull request\.$/m);
-    expect(result.stderr).toMatch(/^conductor: proposed conductor policy changed in this pull request/m);
+    expect(result.stderr).toMatch(/^conductor: proposed conductor policy: gates\.secrets\.options\.fail-on \(absent\) -> "none"$/m);
   });
 
   it('prints a gate-supplied proposal line on stderr', () => {
@@ -1765,6 +1769,46 @@ describe('pull-request mode through the CLI', () => {
     const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
 
     expect(result.stdout).toMatch(/1 control change\(s\) proposed in this pull request\./);
+  });
+
+  it('names the key, old and new value of a policy change on the report', () => {
+    const { repo, bin } = attackRepo({
+      headPolicy: [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '    options:',
+        '      fail-on: none',
+        '',
+      ].join('\n'),
+    });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base', '--verbose'], bin);
+
+    expect(result.stdout).toMatch(/proposed {2}conductor {5}policy: gates\.secrets\.options\.fail-on \(absent\) -> "none"/);
+  });
+
+  it('reports a head policy with a relative command as not known, and keeps the base verdict', () => {
+    const { repo, bin } = attackRepo({
+      headPolicy: [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '    command: tools/nice-gate.sh',
+        '',
+      ].join('\n'),
+    });
+
+    const result = runCli(repo, ['run', '--staged', '--trust-base', 'base', '--verbose'], bin);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/policy: the head \.guardrails\.yaml is absent or does not parse/);
   });
 
   it('reports no proposal when the head policy only differs in formatting', () => {
@@ -3641,7 +3685,9 @@ describe('an invalid timeout-seconds', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/secrets {2}vault-guard 1\.10\.0 .* limit 60s \(policy\)/);
-    expect(result.stdout).toMatch(/policy changed in this pull request/);
+    expect(result.stdout).toContain(
+      'policy: the head .guardrails.yaml is absent or does not parse, so its changes are not known'
+    );
     expect(result.stderr).not.toContain('timeout-seconds must be');
   });
 });
@@ -3690,3 +3736,9 @@ describe('a gate version that is not the expected one, through the CLI', () => {
     expect(plain.stderr).not.toContain('version-unverified');
   });
 });
+
+/** A value as a proposed policy line shows it: JSON, cut to 77 characters plus an ellipsis past 80. */
+function shown(value: unknown): string {
+  const text = JSON.stringify(value);
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}

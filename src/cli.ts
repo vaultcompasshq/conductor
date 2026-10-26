@@ -63,6 +63,7 @@ import {
   parsePolicy,
 } from './policy.js';
 import type { CliOverrides, GateRole, GateStage, Policy } from './policy.js';
+import { diffPolicies } from './policy-diff.js';
 import { refusedTrustBase, runAll } from './run.js';
 import type { RunTrustBase } from './run.js';
 import {
@@ -305,7 +306,7 @@ export function rendersToTerminal(output: string | undefined, stdoutIsTTY: boole
  * the head's file.
  */
 type PolicyForRun =
-  | { kind: 'policy'; policy: Policy; trustBase?: RunTrustBase }
+  | { kind: 'policy'; policy: Policy; headPolicy: Policy | null; trustBase?: RunTrustBase }
   /** The trust base could not be judged against. `inventory` only names gates. */
   | { kind: 'refused'; ref: string; detail: string; inventory: Policy; notGiven?: boolean };
 
@@ -385,7 +386,11 @@ function policyForRun(
           'in Actions it is refused. Pass --trust-base for pull-request mode.\n'
       );
     }
-    return { kind: 'policy', policy: applyCliOverrides(loadPolicy(root), overrides) };
+    return {
+      kind: 'policy',
+      policy: applyCliOverrides(loadPolicy(root), overrides),
+      headPolicy: null,
+    };
   }
 
   // DEFENCE IN DEPTH, ISSUE #58. action.yml's validate step already refuses
@@ -474,18 +479,30 @@ function policyForRun(
     };
   }
 
+  // Parsed once, before applyCliOverrides, so a --gate override never shows up
+  // as a policy change. The head is parsed for the comparison alone and its
+  // result is never handed to a run.
+  const baseParsed = parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`);
+  const policyChanged = headRead.kind === 'error' ? true : policyDiffers(baseText, headText);
+  let headPolicy: Policy | null = null;
+  if (headText !== null) {
+    try {
+      headPolicy = parsePolicy(headText, `HEAD:${POLICY_FILE_NAME}`);
+    } catch (error) {
+      if (!(error instanceof PolicyError)) throw error;
+    }
+  }
   return {
     kind: 'policy',
-    policy: applyCliOverrides(
-      parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`),
-      overrides
-    ),
+    policy: applyCliOverrides(baseParsed, overrides),
+    headPolicy,
     trustBase: {
       ref: trustBase,
       // A head file git could not read is reported as a change, the
       // fail-closed direction: it is never taken to match the base.
-      policyChanged: headRead.kind === 'error' ? true : policyDiffers(baseText, headText),
+      policyChanged,
       refusal: null,
+      ...(policyChanged ? { policyChanges: diffPolicies(baseParsed, headPolicy) } : {}),
       // Computed AFTER refuseTrustBaseRef has already returned null, on the
       // one shape that check accepts despite an identical tree: a merge
       // commit whose first parent is this ref (issue #69). runAll reads this

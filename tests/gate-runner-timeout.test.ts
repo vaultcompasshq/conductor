@@ -300,14 +300,14 @@ describe('on a pull request the limit comes from the base policy, through the CL
     expect(scans[0]?.timeout).toBe(10_000);
     expect(calls.some((c) => c.timeout === 21_600_000)).toBe(false);
     expect(exitCode).toBe(0);
-    expect(stdout).toMatch(/policy changed in this pull request/);
+    expect(stdout).toMatch(/policy: gates\.secrets-history\.timeout-seconds 10 -> 21600/);
   });
 
   it('a key only on the head leaves the scan at the gitleaks default', async () => {
     const { stdout, bin } = await prRun(policy(''), policy('21600'));
     const scans = spawnsOf(bin, 'gitleaks').filter((c) => c.args.includes('--report-path'));
     expect(scans.map((c) => c.timeout)).toEqual([600_000]);
-    expect(stdout).toMatch(/policy changed in this pull request/);
+    expect(stdout).toMatch(/policy: gates\.secrets-history\.timeout-seconds \(absent\) -> 21600/);
   });
 });
 

@@ -55,6 +55,14 @@ are unchanged (dep-guard 0.16.1, vault-guard 1.12.1, intent-guard 1.10.1).
 
 ### Changed
 
+- A changed `.guardrails.yaml` on a pull request is now reported one line per
+  changed key (issue 100), naming the gate, the key and the old and new value
+  (`policy: gates.dependencies.enabled true -> false`), where it used to say
+  `policy changed in this pull request`. The head file is parsed for the
+  comparison only and never acted on. A head that is absent or does not parse
+  gets one line saying its changes are not known. The count in "N control
+  change(s) proposed" is now per key: five changed keys count as five control
+  changes, where they counted as one.
 - **The action tag now ships conductor 0.13.2, and the gate defaults are
   unchanged.** **The consumer cost.** An explicit `conductor-version` below
   `0.13.2` (0.13.0 or 0.13.1 included) is refused on pull requests once this

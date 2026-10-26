@@ -569,8 +569,15 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
     it('sums the umbrella own proposal and the gate own into one sentence', () => {
       const result = conductor(['run', '--trust-base', 'trust-base-fixture', '--verbose']);
 
-      expect(result.stdout).toMatch(/2 control change\(s\) proposed in this pull request\./);
-      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      expect(result.stdout).toMatch(/5 control change\(s\) proposed in this pull request\./);
+      for (const line of [
+        'policy: gates.dependencies.enabled true -> false',
+        `policy: gates.dependencies.options.corpus-dir ${shown(DEP_GUARD_CORPUS)} -> (absent)`,
+        `policy: gates.secrets.command (absent) -> ${shown(attacker)}`,
+        'policy: gates.secrets.args (absent) -> []',
+      ]) {
+        expect(result.stdout).toMatch(new RegExp(`proposed\\s+conductor\\s+${literal(line)}`));
+      }
       expect(result.stdout).toMatch(
         /proposed\s+intent-guard\s+contract changed in this pull request/
       );
@@ -876,11 +883,22 @@ describeE2E('dogfood: a real clone, the real gates, a real commit', () => {
         // own line is absent and the only proposal is the gate's.
         const result = conductor(['run', '--trust-base', 'vault-guard-fixture', '--verbose']);
 
-        expect(result.stdout).not.toMatch(/policy changed in this pull request/);
+        expect(result.stdout).not.toMatch(/proposed\s+conductor\s/);
       });
     }
   );
 });
+
+/** A value as a proposed policy line shows it: JSON, cut to 77 characters plus an ellipsis past 80. */
+function shown(value: unknown): string {
+  const text = JSON.stringify(value);
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+
+/** Escapes text for use inside a RegExp. */
+function literal(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * THE COMPOSED TEST. The design document calls this the acceptance criterion
@@ -1176,7 +1194,13 @@ describeComposed('the composed test: a pull request that tries to mute all three
       const result = conductorIn(fixture, ['run', '--trust-base', 'base', '--verbose']);
 
       expect(proposalCount(result.stdout)).toBeGreaterThanOrEqual(4);
-      expect(result.stdout).toMatch(/proposed\s+conductor\s+policy changed in this pull request/);
+      const attacker = path.join(fixture.repo, 'tools', 'nice-gate.sh');
+      for (const line of [
+        `policy: gates.secrets.command ${shown(SIBLING_COMMANDS['vault-guard'])} -> ${shown(attacker)}`,
+        'policy: gates.secrets.args (absent) -> []',
+      ]) {
+        expect(result.stdout).toMatch(new RegExp(`proposed\\s+conductor\\s+${literal(line)}`));
+      }
       expect(result.stdout).toMatch(/proposed\s+intent-guard\s+contract changed/);
       expect(result.stdout).toMatch(/proposed\s+vault-guard\s+config added/);
       expect(result.stdout).toMatch(/proposed\s+dep-guard\s+config added/);

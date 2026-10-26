@@ -554,7 +554,7 @@ describe('the key comes from the base policy (test 15, head-edit half)', () => {
       encoding: 'utf8',
       env: childEnv(bin),
     });
-    expect(result.stdout).toMatch(/policy changed in this pull request/);
+    expect(result.stdout).toMatch(/policy: gates\.vulnerabilities\.present-on-base "block" -> "report"/);
     expect(result.stdout).toMatch(/BLOCKING .*osv-scanner\/GHSA-A/);
     expect(result.status).toBe(1);
     expect(existsSync(path.join(repo, 'osv-base'))).toBe(false);
