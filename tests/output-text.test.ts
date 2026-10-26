@@ -13,7 +13,7 @@ import {
   normalizeOsvScanner,
   normalizeVaultGuard,
 } from '../src/normalize.js';
-import { gateLogLines, renderText } from '../src/output-text.js';
+import { gateLogLines, proposalLogLines, renderText } from '../src/output-text.js';
 import type { RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -2007,5 +2007,64 @@ describe('the exit 0 verdict does not claim more than was checked (dogfood F10)'
     const summary = renderText(run);
     expect(summary).toMatch(/Disabled \(enabled: false in \.guardrails\.yaml\): secrets-history \(gitleaks\)\./);
     expect(renderText(result([cleanDeps()], 0))).not.toMatch(/Disabled/);
+  });
+});
+
+describe('proposalLogLines', () => {
+  function prResult(proposals: RunResult['proposals']): RunResult {
+    return {
+      ...result([], 0),
+      trustBase: { ref: 'origin/main', policyChanged: false, refusal: null },
+      proposals,
+    };
+  }
+
+  it('writes the proposal count and one line per proposal for the job log', () => {
+    expect(
+      proposalLogLines(
+        prResult([
+          {
+            product: 'dep-guard',
+            role: 'dependencies',
+            line: 'config changed in this pull request (proposed: minAgeDays raised to 7)',
+          },
+        ])
+      )
+    ).toEqual([
+      'conductor: 1 control change(s) proposed in this pull request.',
+      'conductor: proposed dep-guard config changed in this pull request (proposed: minAgeDays raised to 7)',
+    ]);
+    expect(proposalLogLines(prResult([]))).toEqual([
+      'conductor: 0 control change(s) proposed in this pull request.',
+    ]);
+    expect(proposalLogLines({ ...prResult([]), trustBase: null })).toEqual([]);
+    expect(
+      proposalLogLines({
+        ...prResult([]),
+        trustBase: { ref: 'origin/main', policyChanged: false, refusal: 'cannot read' },
+      })
+    ).toEqual([]);
+    expect(
+      proposalLogLines({
+        ...prResult([]),
+        trustBase: { ref: '', policyChanged: false, refusal: null, notGiven: true },
+      })
+    ).toEqual([]);
+  });
+
+  it('breaks a workflow command inside a proposal before it reaches the log', () => {
+    const [, line] = proposalLogLines(
+      prResult([{ product: 'dep-guard', role: 'dependencies', line: 'x ::error::y' }])
+    );
+    expect(line).not.toContain('::error::');
+  });
+
+  it('cleans control characters out of a proposal so it stays one log line', () => {
+    const lines = proposalLogLines(
+      prResult([{ product: 'dep-guard', role: 'dependencies', line: 'a\nb\r\x1b[31m ::error::c' }])
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(lines[1]).not.toContain('::error::');
   });
 });

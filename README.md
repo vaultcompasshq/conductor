@@ -1124,6 +1124,14 @@ on the base; it shows up as a proposal line in the report instead. To preview
 a policy edit, run `conductor run` without `--trust-base`, as in "Adopting
 conductor" above.
 
+Where the proposals appear under the Action: the job log gets a
+`conductor: N control change(s) proposed in this pull request.` line followed
+by one `conductor: proposed <product> <line>` line per proposal, and the step
+summary gets the same count and up to 50 proposed lines under `control
+changes:` in a text block, with a `(n more in the report)` line when there are
+more. This does not depend on `pr-comment`. A proposed line that holds a
+backtick or a character outside printable ASCII is replaced by a placeholder.
+
 ## Intent at a pull request
 
 The intent gate is the only one of the five with any ceremony: its native

@@ -797,6 +797,26 @@ export function jobLogSummary(result: RunResult): string {
 }
 
 /**
+ * The proposal lines for a job log: the count sentence, then one line per
+ * proposed control change. Empty outside pull-request mode, and empty when
+ * the trust base was refused or never given, because no rules were read and
+ * there is nothing proposed to count. Each line goes through
+ * cleanOutputLine, since a proposal carries text a gate printed.
+ */
+export function proposalLogLines(result: RunResult): string[] {
+  const trust = result.trustBase;
+  if (trust === null || trust.notGiven === true || (trust.refusal !== null && trust.refusal !== undefined)) {
+    return [];
+  }
+  return [
+    cleanOutputLine(`conductor: ${proposalCount(result)}.`),
+    ...result.proposals.map((proposal) =>
+      cleanOutputLine(`conductor: proposed ${proposal.product} ${proposal.line}`)
+    ),
+  ];
+}
+
+/**
  * One plain line per gate, for the job log: which gate, which version, what
  * happened, and the exit code. Written to stderr by cli.ts on EVERY run, so
  * an adopter reading the log learns which gate did what without opening a
