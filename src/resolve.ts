@@ -60,7 +60,7 @@
 //     "ran" from an unknown version is worse than one that is honestly
 //     reported missing.
 
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants, lstatSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import type { GatePolicy, Product } from './policy.js';
@@ -104,6 +104,20 @@ export interface ResolvedBinary {
   program: string;
   /** Arguments placed before the ones the umbrella adds. */
   argvPrefix: string[];
+  /**
+   * Every file or directory the policy's own `args:` names on disk, as an
+   * absolute path, with every loadable sibling of each (`argumentCandidates`),
+   * in args order. Empty when the policy has no `args:`.
+   *
+   * Carried because an interpreter `command:` hands the program to run as an
+   * ARGUMENT: with `command: /usr/bin/node` and `args: [tools/gate/run.mjs]`
+   * the script is what judges, not Node, and the pull-request provenance check
+   * has to vet it the way it vets `program` (audit 2026-10-27, B1). Only the
+   * policy's args, never a candidate's built-in prefix (`scan`, `source`):
+   * those are subcommands this package wrote, and a directory of the same
+   * name in somebody's repository is not a program.
+   */
+  argumentPaths: string[];
   source: ResolutionSource;
   /** The candidate name this matched, for the report's gate header. */
   candidate: string;
@@ -310,6 +324,7 @@ export function resolveGateBinary(
     const prefix = gate.args ?? inferred?.prefix ?? table[0].prefix;
     const candidateName = inferred?.name ?? baseName(gate.command);
     const candidate = inferred ?? table[0];
+    const argumentPaths = argumentPathsOf(gate, repoRoot);
 
     // A build directory holds plain .js files with a shebang but no
     // executable bit surprisingly often (a fresh tsc output, a file copied
@@ -322,6 +337,7 @@ export function resolveGateBinary(
         // Node is the command; the script is what actually decides anything.
         program: gate.command,
         argvPrefix: [gate.command, ...prefix],
+        argumentPaths,
         source: 'policy',
         candidate: candidateName,
         versionProbe:
@@ -341,20 +357,22 @@ export function resolveGateBinary(
       };
     }
 
+    // A command that is not itself a gate name (an interpreter, typically)
+    // and whose args hand it a script is asked through the script, or the
+    // version reported is the interpreter's (audit 2026-10-27, N4). A
+    // version-unsafe candidate keeps its sibling lookup: rule 2 above.
+    const viaScript =
+      inferred === undefined && candidate.versionSafe ? scriptVersionProbe(gate, repoRoot) : null;
     return {
       command: gate.command,
       program: gate.command,
       argvPrefix: prefix,
+      argumentPaths,
       source: 'policy',
       candidate: candidateName,
-      versionProbe: versionProbeFor(
-        gate.product,
-        candidate,
-        gate.command,
-        repoRoot,
-        pathValue,
-        skipNodeModules
-      ),
+      versionProbe:
+        viaScript ??
+        versionProbeFor(gate.product, candidate, gate.command, repoRoot, pathValue, skipNodeModules),
     };
   }
 
@@ -367,6 +385,7 @@ export function resolveGateBinary(
       command: found.command,
       program: found.command,
       argvPrefix: [...candidate.prefix],
+      argumentPaths: [],
       source: found.source,
       candidate: candidate.name,
       versionProbe: versionProbeFor(
@@ -386,4 +405,157 @@ export function resolveGateBinary(
 /** Every name resolution would try, for the missing-gate finding's message. */
 export function candidateNames(product: Product): string[] {
   return CANDIDATES[product].map((candidate) => candidate.name);
+}
+
+/**
+ * The extensions an interpreter can add to an entry before it looks at the
+ * entry as written: Node's main-entry resolution tries `.js`, `.json` and
+ * `.node` BEFORE a directory of the same name (`node tools/gate` runs
+ * `tools/gate.js` over `tools/gate/index.js`, measured on Node 22), and the
+ * ES module forms are listed too, so a sibling a loader might take is vetted
+ * whether or not this Node takes it (audit 2026-10-27 fix round, MB1 and
+ * MB2).
+ */
+const LOADABLE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.json', '.node'];
+
+function existsAtAll(candidate: string): boolean {
+  try {
+    lstatSync(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the policy's `command:` is itself the gate program, so its `args:`
+ * are that gate's own argv rather than something an interpreter will load.
+ *
+ * True when the command's name is a candidate name (`vault-guard`,
+ * `intent-guard.js`), and for a non-executable `.js` command, which this
+ * package runs through its own Node with the script as the program. False
+ * for anything else, an interpreter such as `node` or `python3` above all.
+ * Only then are the product's subcommand words (`scan`, `source`) exempt
+ * from being read as paths: an interpreter handed `scan` runs `scan.js` or
+ * `scan/index.js`, so for it the word is a path like any other (audit
+ * 2026-10-27 fix round, MB3).
+ */
+export function commandIsGateProgram(gate: GatePolicy): boolean {
+  if (gate.command === undefined) {
+    return true;
+  }
+  if (!isExecutableFile(gate.command) && /\.(?:js|mjs|cjs)$/.test(gate.command)) {
+    return true;
+  }
+  const name = baseName(gate.command);
+  return CANDIDATES[gate.product].some((candidate) => candidate.name === name);
+}
+
+/**
+ * Every path an interpreter could load for one `args:` entry, as absolute
+ * paths, in the order checked; empty when the entry names nothing on disk
+ * (audit 2026-10-27, B1, and its fix round).
+ *
+ * Relative entries are resolved against `repoRoot`. That is the working
+ * directory of the version probe and of the gate's own spawn for every
+ * product except one whose base config can name further files
+ * (`followsConfigExtend`): on a pull request that gate runs from a temporary
+ * directory holding the base ref's copies (src/gate-runner.ts, spawnCwd), so
+ * a relative script there resolves against base copies or not at all, never
+ * against the head tree. The rules, in order:
+ *
+ *  - An option with no `=` (`--json`, `-r`) names nothing. An option with one
+ *    (`--config=tools/cfg.json`, `--import=./hook.mjs`) is read for the value
+ *    after the first `=`, since that is where an interpreter takes a file to
+ *    load and a gate takes a file to read its rules from.
+ *  - When `exemptSubcommands` is true (the command is the gate program
+ *    itself, commandIsGateProgram), a bare word that is one of the product's
+ *    own subcommands (`scan`, `git`, `source`, `check`) names nothing, even
+ *    when a directory of that name exists. For an interpreter nothing is
+ *    exempt.
+ *  - The entry as written, when it exists as a file, a directory or a
+ *    symlink, without following the symlink, so the caller can refuse an
+ *    in-tree link on its own entry.
+ *  - Then every `<entry>.js`, `.mjs`, `.cjs`, `.json` and `.node` that exists,
+ *    slash or not, and whether or not the entry itself exists: Node tries
+ *    those before a directory of the same name, and a bare `run` runs
+ *    `run.js`. A sibling the head ADDED is listed too, which is what refuses
+ *    it: the base does not track it.
+ *
+ * A directory's contents are covered by the caller's tree comparison, so
+ * `index.js` and `package.json` inside it are not listed separately; a
+ * `main` that points outside the directory is not vetted, the same limit as
+ * a program's directory. Everything else, a Python `-m` module name, a bare
+ * package specifier an interpreter resolves for itself, code passed as a
+ * string (`node -e`, `bash -c`), is not recognised as a path. The README says
+ * so.
+ */
+export function argumentCandidates(
+  arg: string,
+  repoRoot: string,
+  product: Product,
+  exemptSubcommands: boolean
+): string[] {
+  let value = arg;
+  if (arg.startsWith('-')) {
+    const equals = arg.indexOf('=');
+    if (equals < 0) {
+      return [];
+    }
+    value = arg.slice(equals + 1);
+  } else if (exemptSubcommands && CANDIDATES[product].some((candidate) => candidate.prefix.includes(arg))) {
+    return [];
+  }
+  if (value === '') {
+    return [];
+  }
+  const absolute = path.resolve(repoRoot, value);
+  return [absolute, ...LOADABLE_EXTENSIONS.map((extension) => absolute + extension)].filter(existsAtAll);
+}
+
+/** `argumentCandidates` for every entry of a policy's `args:`, flattened. */
+function argumentPathsOf(gate: GatePolicy, repoRoot: string): string[] {
+  const exempt = commandIsGateProgram(gate);
+  return (gate.args ?? []).flatMap((arg) => argumentCandidates(arg, repoRoot, gate.product, exempt));
+}
+
+/**
+ * The version probe for a policy `command:` that is not itself a gate name,
+ * when its `args:` hand it a script: the args up to and including the first
+ * non-option entry, when that entry names something the interpreter can load
+ * (argumentCandidates: a file, a directory, or a bare or extension-less name
+ * with a loadable sibling), then the product's own probe argv. The entry is
+ * passed as written, so the interpreter resolves it exactly as it will for
+ * the scan. So `node tools/gate/run.mjs scan` is asked `node
+ * tools/gate/run.mjs --version`, `node tools/gate` is asked `node tools/gate
+ * --version`, and the version reported is the script's, not Node's (audit
+ * 2026-10-27, N4). Null when the first non-option entry names nothing, or
+ * there is none, and the caller keeps the probe it would have made anyway.
+ *
+ * Only the first: everything after the script is the script's own argv, and
+ * carrying a subcommand or a target into a probe would make it do work,
+ * which is the one thing a probe must not do.
+ * An interpreter flag that takes a file as a separate entry (`-r
+ * ./setup.js`) makes that file the first, so the probe asks the interpreter
+ * and reports its version, as it did before; under an expected-version pin
+ * that is could-not-run, the fail-closed direction.
+ */
+function scriptVersionProbe(gate: GatePolicy, repoRoot: string): VersionProbe | null {
+  const spec = profileFor(gate.product).versionProbe;
+  if (spec === null || gate.command === undefined || gate.args === undefined) {
+    return null;
+  }
+  for (let index = 0; index < gate.args.length; index += 1) {
+    const arg = gate.args[index]!;
+    if (arg.startsWith('-')) {
+      continue;
+    }
+    // Only the FIRST non-option entry can be the script. A later file is the
+    // script's own argument (`my-build check rules.json`), and a probe that
+    // carried the subcommand before it would make the gate do work.
+    return argumentCandidates(arg, repoRoot, gate.product, false).length > 0
+      ? { command: gate.command, argv: [...gate.args.slice(0, index + 1), ...spec.argv] }
+      : null;
+  }
+  return null;
 }

@@ -2302,4 +2302,31 @@ describe('the preview under the proposed rules in the SARIF log', () => {
     const shown = JSON.parse(renderSarif({ ...lone, preview: ONE_COULD_NOT_RUN_PREVIEW_GATE }, '9.9.9'));
     expect(shown).toEqual(plain);
   });
+
+  it('a preview that throws while its notes are built leaves the log as it is without a preview', () => {
+    // Pins the guardPreview wrapper in previewNotifications (audit 2026-10-27,
+    // N2): made to rethrow, renderSarif throws here.
+    const throwing = {
+      ...ONE_BLOCKING_PREVIEW_GATE,
+      get gates(): GateOutcome[] {
+        throw new Error('boom');
+      },
+    } as RunPreview;
+    const plain = JSON.parse(renderSarif(BLOCKING_PR_RESULT, '9.9.9'));
+    const shown = JSON.parse(renderSarif({ ...BLOCKING_PR_RESULT, preview: throwing }, '9.9.9'));
+    expect(shown).toEqual(plain);
+  });
+
+  it('escapes head-chosen non-ASCII text in a preview note (audit 2026-10-27, N3)', () => {
+    const hostile = previewOf(
+      outcome({ exitCode: null, couldNotRun: { reason: 'evil‮::error::x' as never, detail: 'd' } })
+    );
+    const shown = JSON.parse(renderSarif({ ...BLOCKING_PR_RESULT, preview: hostile }, '9.9.9'));
+    const note = shown.runs
+      .at(-1)
+      .invocations[0].toolExecutionNotifications.find((n: any) => n.descriptor?.id === PREVIEW_ID);
+    expect(note.message.text).not.toMatch(/[^\x20-\x7e]/);
+    expect(note.message.text).toContain('\\u202e');
+    expect(JSON.stringify(note)).not.toContain('‮');
+  });
 });

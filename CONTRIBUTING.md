@@ -157,6 +157,9 @@ check every hit, in the same pull request:
   first line shown under the full-report example). It is real output the
   tag actually prints, not narration, and drifts from it the same way a
   stale code pin would.
+- `SECURITY.md`, the supported-versions table, on a minor or major bump: it
+  names the latest minor, and the 2026-10-27 audit found it still naming
+  0.4.x ten minors later.
 - `tests/action.test.ts`, the assertions pinning the real `conductor-version`
   default and package version: the install manifest, the action input
   default, and the install argv. Left at the old version, these fail on

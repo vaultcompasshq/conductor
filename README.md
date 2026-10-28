@@ -786,7 +786,10 @@ merged by someone allowed to merge without this check passing. A `.guardrails.ya
 pull request never takes effect for that run, `command:` and `args:`
 included, so **a pull request cannot change the rules it is judged by, and
 cannot choose the program that judges it, as long as that program is
-self-contained** (see the directory rule below). The same ref is passed
+self-contained** (see the directory rule below). "The program" includes a
+script handed to an interpreter: with `command: /usr/bin/node` and
+`args: [tools/gate/run.mjs]`, the script is what judges, and it is vetted
+exactly as a `command:` inside the tree would be. The same ref is passed
 down to every gate that supports it, so their contracts, configs and
 baselines come from the base branch too.
 
@@ -862,6 +865,61 @@ within its own directory**. A program at the repository ROOT is refused, and
 the message says to give it a directory: at the root the containing directory
 is the whole repository, so the rule would mean "no pull request may change
 anything".
+
+**In-tree script arguments are vetted too.** Since 0.15.0 every entry of a
+gate's `args:` that names something inside the working tree goes through the
+same rule as the program, because an interpreter `command:` (Node, Python, a
+shell) takes the program it runs as an argument. Before that, a base policy
+of `command: /usr/bin/node` with `args: [tools/gate/run.mjs, scan]` let a
+pull request rewrite `tools/gate/run.mjs` and report itself clean. Exactly
+what counts:
+
+- An entry is resolved against the repository root. Everything an
+  interpreter could load for it is vetted: the entry as written, and every
+  `<entry>.js`, `.mjs`, `.cjs`, `.json` or `.node` beside it, with or
+  without a slash. Node loads `tools/gate.js` before the directory
+  `tools/gate/`, and runs `run.js` for a bare `run`, so a sibling file the
+  pull request adds is refused because the base does not have it.
+- A file (or a symbolic link) must meet the two conditions above; a
+  directory must have the same tree object id at the base and the head; the
+  repository root itself (`.`) is refused, since conductor already hands
+  each gate the repository it scans. A directory's `package.json` `main`
+  that points outside the directory is not vetted.
+- `--name=value` is read for the value, so `--config=tools/gate/rules.json`
+  and `--import=./tools/gate/hook.mjs` are vetted. An option with no `=` and
+  a word that names nothing on disk are not paths and are never refused.
+- The gate's own subcommand words (`scan`, `git`, `source`, `check`) are not
+  read as paths only when `command:` is the gate itself (its file name is
+  the gate's name, such as a vendored `vault-guard`). For an interpreter
+  they are paths like any other word: `node scan` runs `scan/index.js`.
+  A renamed gate binary, or any wrapper whose name is not a gate name, is
+  treated as an interpreter, so its `scan` or `source` is vetted if a file
+  or directory of that name exists, and a pull request touching it is
+  refused.
+- Not recognised as a path, and **not** vetted: a Python `-m` module name, a
+  bare package name an interpreter resolves for itself, code passed as a
+  string (`node -e`, `bash -c`), and a package runner such as `npx`, which
+  resolves the gate from the head's own `node_modules`. Name the script by
+  its path, and do not run a gate through a package runner on pull requests.
+- The sibling extensions tried are Node's (`.js`, `.mjs`, `.cjs`, `.json`,
+  `.node`). A TypeScript runner such as `tsx`, `ts-node` or `bun` also
+  resolves `.ts`, `.mts` and `.cts`, which are not tried, so name a
+  TypeScript script with its extension (`tools/gate/run.ts`, not
+  `tools/gate/run`).
+- A script outside the working tree is accepted, as a program there is.
+
+The version probe asks the script, not the interpreter: the args up to the
+first non-option entry, when that entry names something loadable, then
+`--version`, so `node tools/gate/run.mjs scan` is asked `node
+tools/gate/run.mjs --version` and `node tools/gate` is asked `node
+tools/gate --version`. The version conductor reports and checks against an
+expected-version pin is then the gate's own. When the first non-option
+entry names nothing loadable, or the command is the gate itself, the probe
+is the command's own. One shape still reports the interpreter's version: a
+flag that takes a file as its own entry before the script (`node -r
+./setup.js tools/gate/run.mjs`) makes `./setup.js` the first entry, so the
+probe is `node -r ./setup.js --version`; under an expected-version pin that
+gate is could-not-run. Write `--require=./setup.js` instead.
 
 A symlink inside the repository is refused on **its own entry**, before its
 target is considered: it is either untracked, or its tree entry is a link
@@ -1146,7 +1204,8 @@ policy with only `enabled`, `stage` and `enforce` taken from the head. Every
 other head value, `command:`, `args:`, `options` and `timeout-seconds`
 included, never reaches it: the base's command and the base's limit are what
 run, and a base `command:` that resolves inside the working tree is refused
-there. A gate's own config is another matter: in the preview, dep-guard and
+there, as is a base `args:` entry that names a path inside it (an
+interpreter's script). A gate's own config is another matter: in the preview, dep-guard and
 vault-guard read their own `.dep-guard.json` and `.vault-guard.json` from the
 head, because previewing the proposed rules means their rules too, while
 gitleaks and osv-scanner keep the base's config. osv-scanner call analysis is
@@ -1167,7 +1226,13 @@ gate reached with no budget left is listed as over budget, and one that starts a
 uses the same words as a primary section, so a finding may read `BLOCKING`
 there: it means the finding would block under the proposed rules, and it does
 not affect this run. A pull-request comment is cut at 60000 characters, the
-preview block first.
+preview block first. Every character outside printable ASCII in the preview
+(in the report, the job log and the SARIF notes) is written as a `\uXXXX`
+escape, because a gate there can read text the head chose, a
+right-to-left override in a pattern name included. The primary text report
+escapes finding file paths the same way, since a pull request names its own
+files; other primary gate text, and every path in the SARIF log, is printed
+as the gate gave it.
 
 Ask for it with `--preview` on `conductor run`, or with the Action's `preview`
 input, which defaults to `true`; any other value turns it off. There is no
@@ -1489,7 +1554,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.11.0'
+          node-version: '22.23.4'
       - id: conductor
         uses: vaultcompasshq/conductor@v0.14.0
         with:
@@ -1554,8 +1619,10 @@ jobs:
           # Not a bare major: Node 22.0.0 ships npm 10.5.1, which the action
           # refuses because that client reports a clean install as tampered
           # with. 22.1.0 or later, or 20.13.0 or later, carries an npm that
-          # can verify.
-          node-version: '22.11.0'
+          # can verify. 22.23.4 is the patched release this repository's own
+          # release job pins after the 2026-10-21 Node security release; the
+          # gates run over pull-request content under whatever Node you pick.
+          node-version: '22.23.4'
       # NOTHING FROM THE PULL REQUEST RUNS BEFORE THE ACTION IN THIS JOB.
       # No `pnpm install`, `npm ci`, build or test step: an install runs the
       # repository's own lifecycle scripts (a root postinstall), and that code
@@ -1603,7 +1670,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.11.0'
+          node-version: '22.23.4'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
@@ -1775,7 +1842,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.11.0'
+          node-version: '22.23.4'
       - id: conductor
         # The primary run's need (here 5 minutes) plus 300 seconds.
         timeout-minutes: 10

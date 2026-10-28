@@ -2202,4 +2202,66 @@ describe('the preview under the proposed rules', () => {
   it('prints nothing for a run without a preview', () => {
     expect(renderText(prResult([]))).not.toContain(PREVIEW_HEADER);
   });
+
+  it('escapes head-chosen bidi and other non-ASCII characters in the preview block and log lines (audit 2026-10-27, N3)', () => {
+    // The audit's shape: a head .vault-guard.json extra_patterns id carrying
+    // a workflow command and a right-to-left override. Here it is carried in
+    // the reason, the detail and what the gate said, which reach both sinks.
+    const hostile = 'evil`::error::x‮​é\u{1F600}';
+    const text = renderText({ ...prResult([]), preview: previewWithDetail(hostile) }, { verbose: true });
+    const shown = text.slice(text.indexOf(PREVIEW_HEADER));
+    expect(shown).toContain('evil`: :error: :x\\u202e\\u200b\\u00e9\\ud83d\\ude00');
+    expect(shown).not.toMatch(/[^\x20-\x7e\n]/);
+    for (const line of previewLogLines({ ...prResult([]), preview: previewWithDetail(hostile) })) {
+      expect(line).not.toMatch(/[^\x20-\x7e]/);
+      expect(line).toContain('\\u202e');
+    }
+  });
+
+  /**
+   * The two report-side guardPreview wrappers (audit 2026-10-27, N2). A
+   * preview whose gate list throws when read: each wrapper turns that into
+   * its one fallback line, and the report before the preview is unchanged.
+   * Made to rethrow, renderText and previewLogLines throw here.
+   */
+  it('turns a throw inside the preview block or its log lines into one fallback line', () => {
+    const throwing = {
+      ...ONE_CLEAN_PREVIEW_GATE,
+      get gates(): GateOutcome[] {
+        throw new Error('boom');
+      },
+    } as RunPreview;
+    const without = renderText(prResult([]), { verbose: true });
+    const text = renderText({ ...prResult([]), preview: throwing }, { verbose: true });
+    expect(text.startsWith(without)).toBe(true);
+    expect(text.slice(without.length).split('\n').slice(0, 3)).toEqual([
+      '',
+      PREVIEW_HEADER,
+      'preview: could not be completed (boom)',
+    ]);
+    expect(previewLogLines({ ...prResult([]), preview: throwing })).toEqual([
+      'conductor: preview could not be completed (boom)',
+    ]);
+  });
+});
+
+describe('head-chosen file paths in the primary text report (audit 2026-10-27 fix round, N3)', () => {
+  it('escapes a bidi override in a finding path, and leaves an ASCII path alone', () => {
+    // The reviewer's repro: a file named cfg<U+202E>sj.txt holding a key on
+    // the branch. The rule id comes from base config; the path never does.
+    const [first, ...rest] = vaultGuard.findings;
+    const renamed = {
+      ...first!,
+      subject: { ...(first!.subject as { kind: 'location'; file: string; line: number; column: number }), file: 'cfg‮sj.txt' },
+    };
+    const text = renderText(
+      result([outcome({ role: 'secrets', product: 'vault-guard', findings: [renamed, ...rest] })], 1),
+      { verbose: true }
+    );
+    expect(text).toContain('cfg\\u202esj.txt:');
+    expect(text).not.toContain('‮');
+    for (const finding of rest) {
+      if (finding.subject.kind === 'location') expect(text).toContain(`${finding.subject.file}:`);
+    }
+  });
 });

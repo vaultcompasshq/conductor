@@ -1130,6 +1130,53 @@ describe('pull-request mode through a whole run', () => {
       expect(existsSync(programLog)).toBe(false);
       expect(existsSync(lastArgvLog)).toBe(false);
     });
+
+    it('preview refuses a base args script inside the working tree before any spawn, and runs one outside it', () => {
+      // Audit 2026-10-27, B1: an interpreter command outside the tree with
+      // the gate script in args. The script is the program, so the preview's
+      // in-tree refusal has to see it as it sees a command.
+      const repo = prRepo();
+      const programLog = path.join(tempDir(), 'base-gate.txt');
+      const scriptBody =
+        `import { appendFileSync } from 'node:fs';\n` +
+        `appendFileSync(${JSON.stringify(programLog)}, process.argv.slice(2).join(' ') + '\\n');\n` +
+        `if (process.argv[2] === '--version') { console.log('9.9.9'); process.exit(0); }\n` +
+        `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});\n`;
+      const inside = path.join(repo, 'tools', 'base-gate.mjs');
+      mkdirSync(path.dirname(inside), { recursive: true });
+      writeFileSync(inside, scriptBody);
+      const outside = path.join(tempDir(), 'base-gate.mjs');
+      writeFileSync(outside, scriptBody);
+      const withScript = (enabled: boolean, script: string) =>
+        P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}    command: ${JSON.stringify(process.execPath)}\n    args: [${JSON.stringify(script)}, scan]\n`);
+      const bin = tempDir();
+      const run = (script: string) =>
+        runAll(withScript(false, script), {
+          repoRoot: repo, staged: false, pathValue: bin,
+          trustBase: PR_TRUST_BASE, preview: { policy: withScript(true, script) },
+        });
+
+      const refused = run('tools/base-gate.mjs');
+      expect(refused.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+      expect(refused.preview?.gates[0].couldNotRun?.detail).toBe(
+        'preview under the proposed rules: the base args entry tools/base-gate.mjs names a path inside the working tree, so this gate was not run'
+      );
+      expect(existsSync(programLog)).toBe(false);
+
+      // The same candidate set as the primary run (fix round): a bare name
+      // Node runs as <name>.js is refused here before any spawn too.
+      writeFileSync(path.join(repo, 'base-gate.js'), '// would run as base-gate\n');
+      const bare = run('base-gate');
+      expect(bare.preview?.gates[0].couldNotRun?.detail).toBe(
+        'preview under the proposed rules: the base args entry base-gate names a path inside the working tree, so this gate was not run'
+      );
+      expect(existsSync(programLog)).toBe(false);
+
+      const ran = run(outside);
+      expect(ran.preview?.gates[0].couldNotRun?.reason).not.toBe('gate-program-refused');
+      // The probe asked the script, not Node (N4), and then the scan ran.
+      expect(readFileSync(programLog, 'utf8').split('\n')[0]).toBe('--version');
+    });
   });
 });
 

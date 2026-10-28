@@ -72,7 +72,7 @@
 //    (`headTreeEqualsBase` below) and run only the gates whose input is
 //    history rather than the tree.
 
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
@@ -1013,4 +1013,100 @@ export function atLeastVersion(version: string | null, minimum: string): boolean
     }
   }
   return true;
+}
+
+/**
+ * Why a path named in a gate's `args:` cannot be trusted on a pull-request
+ * run, or null (audit 2026-10-27, B1).
+ *
+ * An interpreter `command:` takes the program as an argument: with
+ * `command: /usr/bin/node` and `args: [tools/gate/run.mjs, scan]` the script
+ * judges and Node only runs it, so vetting `command:` alone let a pull request
+ * rewrite the script and choose its own judge. `argumentCandidates`
+ * (src/resolve.ts) lists every path an interpreter could load for an entry,
+ * the entry and each of its loadable siblings (`tools/gate.js` beside
+ * `tools/gate/`), and each one is asked here separately; this decides
+ * whether that one path is the base's.
+ *
+ *  - A FILE, or a symlink of any kind, goes through refuseHeadControlledProgram
+ *    unchanged: blob and containing directory identical at both refs, an
+ *    in-tree link refused on its own entry, the root refused, anything outside
+ *    the tree accepted. The same rule as a `command:`, because it is the same
+ *    question.
+ *  - A DIRECTORY inside the tree is accepted only when it is a tracked tree
+ *    at both refs with the same tree object id: when no sibling file wins,
+ *    an interpreter handed a directory (`node tools/gate`) runs what is
+ *    inside it, so the whole subtree is the unit, as it is beside a program.
+ *    A sibling file that would win is a separate candidate, vetted as a file.
+ *  - THE REPOSITORY ROOT ITSELF is refused (`node .` runs the head's own
+ *    package.json main). Approving it would mean comparing the whole tree,
+ *    which differs on every pull request; conductor already hands every gate
+ *    the repository it scans, so no gate needs the root in `args:`.
+ *
+ * NOTHING HERE READS THE WORKING TREE's CONTENTS, as for the program: both
+ * sides are `git ls-tree` listings. Only whether the entry is a directory is
+ * read from disk, and a link is never followed for that, so a link is always
+ * vetted as a link.
+ */
+export function refuseHeadControlledArgument(
+  repoRoot: string,
+  trustBase: string,
+  argumentPath: string
+): string | null {
+  const repoReal = realOrNull(repoRoot);
+  if (repoReal === null) {
+    return `the repository root ${repoRoot} could not be resolved, so the gate arguments could not be checked against "${trustBase}". Nothing was checked by this gate.`;
+  }
+  const spellings = [withResolvedParent(argumentPath), realOrNull(argumentPath)].filter(
+    (spelling): spelling is string => spelling !== null
+  );
+  if (spellings.some((spelling) => path.relative(repoReal, spelling) === '')) {
+    return (
+      `the gate's args: name the repository root (${argumentPath}), so what would run is decided by ` +
+      `the whole working tree, and this pull request differs from "${trustBase}" somewhere in it. ` +
+      'conductor already hands each gate the repository it scans; name a script in its own ' +
+      'directory instead. Nothing was checked by this gate.'
+    );
+  }
+
+  let isDirectory: boolean;
+  try {
+    isDirectory = lstatSync(argumentPath).isDirectory();
+  } catch {
+    // Gone between resolution and now: nothing for a child to run from here,
+    // and nothing for the program rule to approve either. Asking it anyway
+    // is the fail-closed direction, since an untracked or absent path refuses.
+    isDirectory = false;
+  }
+  if (!isDirectory) {
+    return refuseHeadControlledProgram(repoRoot, trustBase, argumentPath);
+  }
+
+  for (const spelling of new Set(spellings)) {
+    if (!insideWorkingTree(repoReal, spelling)) {
+      continue;
+    }
+    const relative = path.relative(repoReal, spelling).split(path.sep).join('/');
+    const baseEntry = treeEntryAt(repoRoot, trustBase, relative);
+    const headEntry = treeEntryAt(repoRoot, 'HEAD', relative);
+    for (const listed of [baseEntry, headEntry]) {
+      if (listed.kind === 'error') {
+        return (
+          `the directory ${relative} named in the gate's args: could not be checked against ` +
+          `"${trustBase}": ${listed.detail}. Nothing was checked by this gate.`
+        );
+      }
+    }
+    const base = baseEntry.kind === 'entry' ? baseEntry : null;
+    const head = headEntry.kind === 'entry' ? headEntry : null;
+    if (base === null || head === null || base.type !== 'tree' || head.type !== 'tree' || base.sha !== head.sha) {
+      return (
+        `the directory ${relative} named in the gate's args: is not what "${trustBase}" approved: ` +
+        'this pull request adds, removes or changes something in it, and an interpreter handed a ' +
+        'directory runs what is inside. Land the change on the base branch first, or name a ' +
+        'script outside the repository. Nothing was checked by this gate.'
+      );
+    }
+  }
+  return null;
 }
