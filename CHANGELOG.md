@@ -14,8 +14,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-**Intended as 0.15.0, a minor: a pull-request run that was green can now be
-could-not-run.** Fixes from the 2026-10-27 audit.
+## [0.15.0] - 2026-10-28
+
+**A package release, a minor: a pull-request run that was green can now be
+could-not-run.** `@vaultcompass/conductor` moves to 0.15.0 on npm and the
+action's `conductor-version` default moves to `0.15.0` in lockstep, because
+the trust-base argument check and the version probe fix are in the CLI. Two
+gate defaults move: dep-guard 0.17.0 and intent-guard 1.10.2 (vault-guard
+stays 1.12.1). Fixes from the 2026-10-27 audit.
 
 ### Security
 
@@ -56,6 +62,29 @@ could-not-run.** Fixes from the 2026-10-27 audit.
   comment intact. The primary text report escapes finding file paths the
   same way, because a pull request names its own files; other primary gate
   text and every SARIF path are printed as the gate gave them.
+
+### Changed
+
+- **The umbrella now installs `dep-guard` 0.17.0 and `intent-guard` 1.10.2
+  by default, up from 0.16.1 and 1.10.1.** dep-guard 0.17.0 reads local
+  targets under `node_modules` and name-checks lock entries the manifest
+  does not declare. intent-guard 1.10.2 counts file names again when they
+  sit in quotes, emphasis, escapes, HTML and Unicode punctuation. The
+  `TAG_DEP_GUARD_*` and `TAG_INTENT_GUARD_*` constants in `action.yml` move
+  in lockstep with the defaults, since those constants are what the
+  pull-request backward-pin rule measures a pin against; the dep-guard
+  pull-request-mode floor (`TRUST_BASE_MIN_VERSION` in `src/gate-runner.ts`)
+  is unchanged.
+
+  **What can newly turn a run red.** A repository that is green today can
+  newly fail where a local dependency target under `node_modules` or an
+  undeclared lock entry is now checked, or where an intent file name that
+  was hidden by quotes, emphasis, escapes, HTML or Unicode punctuation is
+  now seen. **The consumer cost.** On a pull request, an explicit
+  `dep-guard-version` below `0.17.0` or `intent-guard-version` below
+  `1.10.2` is refused; remove the input or raise it. Outside a pull request
+  an explicit pin is unaffected. To hold back, stay on the previous action
+  tag, v0.14.0.
 
 ### Fixed
 

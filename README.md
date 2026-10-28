@@ -168,7 +168,7 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.14.0
+   conductor 0.15.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
@@ -1534,7 +1534,7 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.14.0.
+SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.15.0.
 
 ```yaml
 name: guardrails
@@ -1556,7 +1556,7 @@ jobs:
         with:
           node-version: '22.23.4'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.14.0
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -1633,7 +1633,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.14.0
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These three
@@ -1644,9 +1644,9 @@ jobs:
           # request of their own. On a pull request the action refuses a pin
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
-          dep-guard-version: 0.16.1
+          dep-guard-version: 0.17.0
           vault-guard-version: 1.12.1
-          intent-guard-version: 1.10.1
+          intent-guard-version: 1.10.2
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
@@ -1846,7 +1846,7 @@ jobs:
       - id: conductor
         # The primary run's need (here 5 minutes) plus 300 seconds.
         timeout-minutes: 10
-        uses: vaultcompasshq/conductor@v0.14.0
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           pr-comment: true
           advisory: true
@@ -1982,7 +1982,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.14.0
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -2061,12 +2061,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.14.0
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.14.0
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
@@ -2187,7 +2187,7 @@ an explicit pin is unaffected, which is how a stale pin can sit unnoticed
 until the first pull request after the upgrade.
 
 **Pin the action ref to a full commit SHA** with the tag as a comment, for
-example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.14.0`. To
+example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.15.0`. To
 find the SHA for a tag, run
 `gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.12.0` or read it off
 the Releases page.
@@ -2210,6 +2210,7 @@ tag with no row here has an entry that does not state its defaults; read
 
 | Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
 | --- | --- | --- | --- |
+| v0.15.0 | package | 0.15.0 | dep-guard 0.17.0 (from 0.16.1), intent-guard 1.10.2 (from 1.10.1) |
 | v0.14.0 | package | 0.14.0 | none (gate defaults unchanged) |
 | v0.13.2 | package | 0.13.2 | none (gate defaults unchanged) |
 | v0.13.1 | action-only | 0.13.0 | dep-guard 0.16.1 (from 0.15.0) |
