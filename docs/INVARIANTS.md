@@ -366,7 +366,7 @@ This was recorded here as a disagreement with the README, which used to
 summarise enforcement as making such a gate "a note rather than exit 2".
 That was true of the exit code and false of the published log. The README
 was the wrong one and now says the same thing this section does
-(README.md:187-193), and the rule is pinned by
+(docs/policy-file.md, the `enforce` paragraph), and the rule is pinned by
 tests/output-sarif.test.ts:1027, which renders an unenforced gate that
 could not run and asserts the result's level is `error` and its severity
 `critical`, with the `gate-not-enforced` notification beside it.
@@ -551,7 +551,7 @@ of its own "beyond conductor/gate-missing". That was false and always had
 been: the union at src/normalize.ts:1202-1205 has three members, and the
 README named `conductor/gate-failed` elsewhere in the same document.
 Three, plus the two normalization diagnostics, is the number, and both
-documents now list all five (AGENTS.md:12-16, README.md:980-984).
+documents now list all five (AGENTS.md:12-16, README.md:1173-1178).
 
 The README half of that pair was pointing at the wrong place and had been
 since it was written. It named the paragraph about mirroring the Action's
@@ -2833,7 +2833,7 @@ enabled gate", when it runs the commit stage, so a gate whose stage is
 `ci`, which is the intent gate's default, is deferred rather than run.
 The README said it correctly in its stages section and incorrectly in its
 opening summary. All three now say the commit stage
-(src/cli.ts:687-691, src/init-hook-detect.ts:415-421, README.md:119-120).
+(src/cli.ts:687-691, src/init-hook-detect.ts:415-421, docs/policy-file.md, the `stage` paragraph).
 
 The hook is written with the executable bit set after the write rather
 than through the write's mode option, because an existing file keeps its
