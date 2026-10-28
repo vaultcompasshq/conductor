@@ -23,7 +23,7 @@ until the first pull request after the upgrade.
 **Pin the action ref to a full commit SHA** with the tag as a comment, for
 example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.15.0`. To
 find the SHA for a tag, run
-`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.12.0` or read it off
+`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.15.0` or read it off
 the Releases page.
 
 **Dependabot or Renovate bumping that SHA changes the action ref only.** It
@@ -61,3 +61,11 @@ tag with no row here has an entry that does not state its defaults; read
 | v0.5.1 | action-only | 0.5.0 | dep-guard 0.8.0 (from 0.7.0), intent-guard 1.6.0 (from 1.5.2) |
 | v0.4.4 | action-only | 0.4.0 | dep-guard 0.7.0 (from 0.6.0), vault-guard 1.8.0 (from 1.7.0) |
 | v0.4.3 | action-only | 0.4.0 | intent-guard 1.5.2 (from 1.4.0) |
+
+## Upgrading intent-guard past its contract directory rename
+
+intent-guard 1.3.0 moved its frozen contract from `.conductor/` to
+`.intent-guard/`. Upgrade `@vaultcompass/conductor` alongside it, to 0.2.3
+or later: 0.2.2 reads the old path, so with a newer intent-guard the intent
+gate goes quiet instead of failing. Every release this page lists is well
+past that; the warning matters only for a very old pin.

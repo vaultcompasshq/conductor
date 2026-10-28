@@ -487,9 +487,92 @@ describe('an interpreter command with the gate script in args', () => {
     expect(resolveGateBinary(secrets(['scan']), repo, tempDir())?.argumentPaths).toEqual([path.join(repo, 'scan')]);
     expect(commandIsGateProgram(secrets([], gateNamed))).toBe(true);
     expect(commandIsGateProgram(secrets([]))).toBe(false);
+    // Audit 2026-10-28, MB1: a non-executable `.js` whose name is not a gate
+    // name is a dispatcher like any other, so its `scan` is a path. Only the
+    // name decides; a gate-named script still matches by name.
     const script = path.join(tempDir(), 'my-build.js');
     writeFileSync(script, '// not executable\n');
-    expect(commandIsGateProgram(secrets([], script))).toBe(true);
+    expect(commandIsGateProgram(secrets([], script))).toBe(false);
+    expect(resolveGateBinary(secrets(['scan'], script), repo, tempDir())?.argumentPaths).toEqual([path.join(repo, 'scan')]);
+    const gateNamedScript = path.join(tempDir(), 'vault-guard.js');
+    writeFileSync(gateNamedScript, '// not executable\n');
+    expect(commandIsGateProgram(secrets([], gateNamedScript))).toBe(true);
+  });
+
+  it('reads the args of a command that is the gate itself as data, by position, whatever is on disk (audit 2026-10-28, N1 and review B1)', () => {
+    const { repo } = scriptRepo();
+    writeFileSync(path.join(repo, 'tools', 'vg', 'rules.js'), '// a sibling an interpreter would take\n');
+    const outside = path.join(tempDir(), 'outside.json');
+    const gateNamed = shim(tempDir(), 'vault-guard');
+    const at = (relative: string) => path.join(repo, relative);
+    const resolved = resolveGateBinary(
+      secrets(
+        [
+          'scan',
+          '--config=.gitleaks.toml',
+          'tools/vg/cfg.json',
+          'tools/vg/rules',
+          'tools/vg',
+          '.',
+          '--corpus-dir',
+          'corpus',
+          '--json',
+          '--fail-on=high',
+          '-ctools/vg/cfg.json',
+          '-v',
+          outside,
+          'nowhere',
+        ],
+        gateNamed
+      ),
+      repo,
+      tempDir()
+    );
+    expect(resolved?.argumentPaths).toEqual([]);
+    // Listed by POSITION, never by what the head's disk holds: whether a
+    // path is a file, a directory or absent is decided later, from the base
+    // tree (refuseHeadControlledData). A word after an option written with
+    // no `=` is that option's value; a joined short option is read for the
+    // rest of the word.
+    expect(resolved?.dataArguments).toEqual([
+      { path: at('.gitleaks.toml'), positional: false, entry: '--config=.gitleaks.toml' },
+      { path: at('tools/vg/cfg.json'), positional: true, entry: 'tools/vg/cfg.json' },
+      { path: at('tools/vg/rules'), positional: true, entry: 'tools/vg/rules' },
+      { path: at('tools/vg'), positional: true, entry: 'tools/vg' },
+      { path: repo, positional: true, entry: '.' },
+      { path: at('corpus'), positional: false, entry: 'corpus' },
+      { path: at('high'), positional: false, entry: '--fail-on=high' },
+      { path: at('tools/vg/cfg.json'), positional: false, entry: '-ctools/vg/cfg.json' },
+      { path: outside, positional: false, entry: outside },
+      { path: at('nowhere'), positional: true, entry: 'nowhere' },
+    ]);
+    // An interpreter's args are never data: they stay code.
+    expect(resolveGateBinary(secrets(['--config=.gitleaks.toml']), repo, tempDir())?.dataArguments).toEqual([]);
+    // The product's own subcommand words name nothing, even where a FILE of
+    // that name exists (osv-scanner's `source`).
+    writeFileSync(path.join(repo, 'source'), 'a file named like a subcommand\n');
+    const osv = shim(tempDir(), 'osv-scanner');
+    expect(
+      resolveGateBinary(gate({ role: 'vulnerabilities', product: 'osv-scanner', command: osv, args: ['scan', 'source'] }), repo, tempDir())
+        ?.dataArguments
+    ).toEqual([]);
+  });
+
+  it('keeps the code rule for an args entry with a code extension, even under a gate-named command (review N-e)', () => {
+    const { repo } = scriptRepo();
+    writeFileSync(path.join(repo, 'tools', 'vg', 'filter.js'), '//\n');
+    const gateNamedScript = path.join(tempDir(), 'vault-guard.js');
+    writeFileSync(gateNamedScript, '// a dispatcher named like the gate\n');
+    const resolved = resolveGateBinary(
+      secrets(['tools/vg/legacy.js', '--hook=tools/vg/run.mjs', '--config=tools/vg/cfg.json'], gateNamedScript),
+      repo,
+      tempDir()
+    );
+    // The full interpreter candidate set for the code entries.
+    expect(resolved?.argumentPaths).toEqual([path.join(repo, 'tools', 'vg', 'legacy.js'), path.join(repo, 'tools', 'vg', 'run.mjs')]);
+    expect(resolved?.dataArguments).toEqual([
+      { path: path.join(repo, 'tools', 'vg', 'cfg.json'), positional: false, entry: '--config=tools/vg/cfg.json' },
+    ]);
   });
 
   it('carries nothing when resolution found the gate itself, whatever its prefix names', () => {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -1176,6 +1176,45 @@ describe('pull-request mode through a whole run', () => {
       expect(ran.preview?.gates[0].couldNotRun?.reason).not.toBe('gate-program-refused');
       // The probe asked the script, not Node (N4), and then the scan ran.
       expect(readFileSync(programLog, 'utf8').split('\n')[0]).toBe('--version');
+    });
+
+    it('preview refuses an in-tree link in args whose target is outside the tree, by the link own entry (audit 2026-10-28, N3)', () => {
+      const repo = prRepo();
+      const programLog = path.join(tempDir(), 'base-gate.txt');
+      const outside = path.join(tempDir(), 'base-gate.mjs');
+      writeFileSync(
+        outside,
+        `import { appendFileSync } from 'node:fs';\n` +
+          `appendFileSync(${JSON.stringify(programLog)}, process.argv.slice(2).join(' ') + '\\n');\n` +
+          `if (process.argv[2] === '--version') { console.log('9.9.9'); process.exit(0); }\n` +
+          `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});\n`
+      );
+      mkdirSync(path.join(repo, 'tools'), { recursive: true });
+      symlinkSync(outside, path.join(repo, 'tools', 'link.mjs'));
+      const withScript = (enabled: boolean) =>
+        P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}    command: ${JSON.stringify(process.execPath)}\n    args: ["tools/link.mjs", scan]\n`);
+      const result = runAll(withScript(false), {
+        repoRoot: repo, staged: false, pathValue: tempDir(),
+        trustBase: PR_TRUST_BASE, preview: { policy: withScript(true) },
+      });
+      expect(result.preview?.gates[0].couldNotRun?.detail).toBe(
+        'preview under the proposed rules: the base args entry tools/link.mjs names a path inside the working tree, so this gate was not run'
+      );
+      expect(existsSync(programLog)).toBe(false);
+    });
+
+    it('preview does not refuse outright a data file the gate itself is given in args (audit 2026-10-28, N1)', () => {
+      const repo = prRepo();
+      writeFileSync(path.join(repo, 'rules.json'), '{}\n');
+      const bin = tempDir();
+      const gateBinary = stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+      const withRules = (enabled: boolean) =>
+        P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}    command: ${JSON.stringify(gateBinary)}\n    args: [scan, "--config=rules.json"]\n`);
+      const result = runAll(withRules(false), {
+        repoRoot: repo, staged: false, pathValue: bin,
+        trustBase: PR_TRUST_BASE, preview: { policy: withRules(true) },
+      });
+      expect(result.preview?.gates[0].couldNotRun?.detail ?? '').not.toMatch(/the base args entry/);
     });
   });
 });

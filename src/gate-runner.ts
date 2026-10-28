@@ -69,12 +69,17 @@ import { osvLockfileKind, profileFor } from './products.js';
 import { unreadManifestsNote } from './unread-manifests.js';
 import type { ProductProfile } from './products.js';
 import { escapeNonAscii } from './policy-diff.js';
-import { atLeastVersion, refuseHeadControlledArgument, refuseHeadControlledProgram } from './trust-base.js';
+import {
+  atLeastVersion,
+  refuseHeadControlledArgument,
+  refuseHeadControlledData,
+  refuseHeadControlledProgram,
+} from './trust-base.js';
 import {
   ResolveError,
   argumentCandidates,
   candidateNames,
-  commandIsGateProgram,
+  codeArguments,
   nodeModulesCandidate,
   resolveGateBinary,
 } from './resolve.js';
@@ -1186,6 +1191,15 @@ export function refuseHeadControlledBinary(
       return refusal;
     }
   }
+  // A command that is the gate itself reads the rest of its args as data
+  // (audit 2026-10-28, N1, and its review): what each path is comes from the
+  // base tree, and a file or an option-value directory must be the base's.
+  for (const data of binary.dataArguments) {
+    const refusal = refuseHeadControlledData(repoRoot, trustBase, data);
+    if (refusal !== null) {
+      return refusal;
+    }
+  }
   return null;
 }
 
@@ -1925,10 +1939,14 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
   // own entry is in the tree, wherever it points (its directory is checked).
   // The candidate set is the primary run's (argumentCandidates): the entry and
   // every loadable sibling of it, so a head-added tools/gate.js beside a base
-  // tools/gate/ is refused here too.
-  const exempt = commandIsGateProgram(gate);
-  for (const arg of gate.args ?? []) {
-    const candidates = argumentCandidates(arg, repoRoot, gate.product, exempt);
+  // tools/gate/ is refused here too. The entries are the primary run's code
+  // arguments (codeArguments): every entry for a command that is not the gate
+  // itself, and only the code-extension ones for one that is. The gate's
+  // other args are data it reads (audit 2026-10-28, N1), and runGate's data
+  // check (refuseHeadControlledData, through refuseHeadControlledBinary) runs
+  // on every preview spawn, an option-value directory included (review B1).
+  for (const arg of codeArguments(gate)) {
+    const candidates = argumentCandidates(arg, repoRoot);
     if (candidates.some((named) => realPathInside(repoRoot, named) || realPathInside(repoRoot, path.dirname(named)))) {
       return {
         reason: 'gate-program-refused',

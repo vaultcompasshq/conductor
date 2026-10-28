@@ -101,12 +101,63 @@ is the whole repository, so the rule would mean "no pull request may change
 anything".
 
 **In-tree script arguments are vetted too.** Since 0.15.0 every entry of a
-gate's `args:` that names something inside the working tree goes through the
-same rule as the program, because an interpreter `command:` (Node, Python, a
-shell) takes the program it runs as an argument. Before that, a base policy
-of `command: /usr/bin/node` with `args: [tools/gate/run.mjs, scan]` let a
-pull request rewrite `tools/gate/run.mjs` and report itself clean. Exactly
-what counts:
+gate's `args:` that names something inside the working tree is vetted,
+because an interpreter `command:` (Node, Python, a shell) takes the program
+it runs as an argument. Before that, a base policy of
+`command: /usr/bin/node` with `args: [tools/gate/run.mjs, scan]` let a pull
+request rewrite `tools/gate/run.mjs` and report itself clean.
+
+Which rule an entry gets depends on one thing, the **file name of
+`command:`**:
+
+- **The command is the gate itself**: its file name, less a `.js`, `.mjs`
+  or `.cjs` extension, is the gate's name (`vault-guard`, a vendored
+  `intent-guard.js`, `/opt/homebrew/bin/gitleaks`). Its args are its own
+  argv, and a path named there is **data** the gate reads, such as
+  `gitleaks git --config=.gitleaks.toml` or dep-guard's
+  `--corpus-dir=corpus`, a directory of rules. What each path is comes from
+  the **base** tree, never from the head's disk, so a pull request cannot
+  delete a path or turn a file into a directory to change the rule:
+  - a file at the base must be tracked and byte for byte the base's at the
+    head, and that is all: its directory is not compared, a file at the
+    repository root is fine, and no `.js` sibling is tried;
+  - a directory given as an **option's value** (`--corpus-dir=corpus`, the
+    word after `--corpus-dir`, or a joined short option such as `-ccorpus`)
+    must have the same tree object id at the base and the head;
+  - a **positional** directory (`scan src`, `scan .`) is a scan target and is
+    not compared, and the repository root is accepted only there, never as
+    an option's value;
+  - a path the base does not have is refused if the head has anything
+    there, and is otherwise a word, not a path (`--format=json`).
+
+  A word written after an option with no `=` is read as that option's
+  value, the fail-closed direction, unless the gate's own `--help` says the
+  option takes no value: conductor keeps a short list of those per gate
+  (osv-scanner `-r`/`--recursive`, `--offline`, `--no-ignore` and the like;
+  gitleaks `-v`/`--verbose`, `--no-banner`, `--redact`; `--staged` for the
+  family gates; dep-guard `--online`/`--no-online`), so
+  `osv-scanner scan source -r .` scans `.` as usual. After any other flag,
+  put scan targets before the flags. The
+  gate's own subcommand words (`scan`, `git`, `source`, `check`) are never
+  read as paths. **An entry with a code extension** (`.js`, `.mjs`, `.cjs`,
+  `.node`, `.ts`, `.mts`, `.cts`, `.py`, `.sh`, `.bash`, `.rb`, `.pl`) keeps
+  the interpreter rule below whatever the command is named, because none of
+  the gates reads such a file as data. A tracked symbolic link named as a
+  data path is refused on every pull request, as a program link is. A
+  pull request that changes a data path is refused with a message naming it
+  as a path in `args:`; land the change on the base branch first.
+- **Anything else** is treated as an interpreter, and its args as code: a
+  real interpreter, a renamed gate binary, and any wrapper or dispatcher
+  whose name is not a gate name, executable or not (a non-executable
+  `my-build.js` included: how a file is run says nothing about what it
+  loads). The rest of this list is that rule.
+
+conductor trusts the name: a wrapper you give a gate's name, which then
+hands its argument to an interpreter, is vetted as the gate. A
+code-extension entry still gets the interpreter rule, siblings and directory
+included; an extension-less entry it runs as code is vetted only as data.
+
+For a command that is not the gate itself, exactly what counts:
 
 - An entry is resolved against the repository root. Everything an
   interpreter could load for it is vetted: the entry as written, and every
@@ -122,14 +173,21 @@ what counts:
 - `--name=value` is read for the value, so `--config=tools/gate/rules.json`
   and `--import=./tools/gate/hook.mjs` are vetted. An option with no `=` and
   a word that names nothing on disk are not paths and are never refused.
-- The gate's own subcommand words (`scan`, `git`, `source`, `check`) are not
-  read as paths only when `command:` is the gate itself (its file name is
-  the gate's name, such as a vendored `vault-guard`). For an interpreter
-  they are paths like any other word: `node scan` runs `scan/index.js`.
-  A renamed gate binary, or any wrapper whose name is not a gate name, is
-  treated as an interpreter, so its `scan` or `source` is vetted if a file
-  or directory of that name exists, and a pull request touching it is
-  refused.
+- The gate's subcommand words are paths like any other word here: `node
+  scan` runs `scan/index.js`. So a renamed gate binary, or any wrapper whose
+  name is not a gate name, has its `scan` or `source` vetted if a file or
+  directory of that name (or a `scan.js` beside it) exists, and a pull
+  request touching it is refused. If the command really is the gate binary
+  under another name, point `command:` at a file named like the gate (a
+  symbolic link outside the repository will do) so its args are read as
+  data.
+- A file at the repository root is refused here, as a program there is,
+  with a message that names it as a file in `args:` and gives the remedy.
+  Every refusal under this rule names the entry as a file in `args:`, never
+  as "the gate program".
+- A short option joined to its value (`-c.gitleaks.toml`) is not read as a
+  path for an interpreter; write `--config=...` or the value as its own
+  entry. (For a command that is the gate itself it is read, as above.)
 - Not recognised as a path, and **not** vetted: a Python `-m` module name, a
   bare package name an interpreter resolves for itself, code passed as a
   string (`node -e`, `bash -c`), and a package runner such as `npx`, which
