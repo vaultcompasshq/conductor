@@ -14,8 +14,13 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
-**Intended as 0.15.0, a minor: a pull-request run that was green can now be
-could-not-run.** Fixes from the 2026-10-27 audit.
+## [0.15.0] - 2026-10-28
+
+**A package release, a minor: a pull-request run that was green can now be
+could-not-run.** `@vaultcompass/conductor` moves to 0.15.0 on npm and the
+action's `conductor-version` default moves to `0.15.0` in lockstep, because
+the trust-base argument check and the version probe fix are in the CLI. The
+gate defaults are unchanged. Fixes from the 2026-10-27 audit.
 
 ### Security
 

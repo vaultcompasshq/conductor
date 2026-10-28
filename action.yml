@@ -64,7 +64,7 @@ inputs:
       range would hand that decision to whatever the registry served on the
       morning of the run. The pin is only as protected as the workflow file
       is; see the note above the install step.
-    default: 0.14.0
+    default: 0.15.0
   dep-guard-version:
     description: >-
       The exact version of the dependency gate this action installs. Same
@@ -343,7 +343,7 @@ runs:
         # read-only token, no secrets), and a test holds it to being the only
         # one.
         TAG_CONDUCTOR_MAJOR=0
-        TAG_CONDUCTOR_MINOR=14
+        TAG_CONDUCTOR_MINOR=15
         TAG_CONDUCTOR_PATCH=0
         TAG_DEP_GUARD_MAJOR=0
         TAG_DEP_GUARD_MINOR=16
