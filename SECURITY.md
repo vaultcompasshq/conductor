@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.4.x   | :white_check_mark: |
-| < 0.4   | :x:                |
+| 0.15.x  | :white_check_mark: |
+| < 0.15  | :x:                |
 
 conductor is pre-1.0. The latest published minor is supported; earlier
 minors are not patched.

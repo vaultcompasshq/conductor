@@ -394,7 +394,9 @@ describe('every reader of a non-zero child exit agrees with the exit code (test 
    * folded into the one-line summary.
    */
   it('finds no reader of a gate exit code compared with 0 outside gateExitBlocks and the two allowlisted sites', () => {
-    const allowed = new Set(['output-text.ts:gateLogLines', 'output-text.ts:isFullyClean']);
+    // gateOutcomeWords is the outcome word gateLogLines used to compute inline;
+    // the preview's log lines share it.
+    const allowed = new Set(['output-text.ts:gateOutcomeWords', 'output-text.ts:isFullyClean']);
     // `result.exitCode` is the composed code, `process.exitCode` and
     // `err.exitCode` are not a gate's; every other receiver is.
     const notAGate = new Set(['result', 'process', 'err']);

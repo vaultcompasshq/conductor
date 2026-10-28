@@ -289,6 +289,27 @@ describe('a base that cannot be compared (test 11)', () => {
     expectAllIntroduced(compared(repo, { presentOnBase: 'report' }).out, /not a regular file/);
   });
 
+  it('when the base symbolic link has the same object id as the head file, so only its mode differs', () => {
+    // The unchanged shortcut compares object ids, and a link's blob is its
+    // target text. A link on the base whose target text is byte for byte the
+    // head file has the same id, so only the regular-file mode check keeps
+    // the shortcut from calling it unchanged (audit 2026-10-27 mutation
+    // survivor M8: replacing that check with entry.mode.length > 0 kept every
+    // test green before this one).
+    const body = lockBody([A]);
+    const repo = tempDir();
+    git(repo, 'init', '--quiet', '-b', 'main');
+    put(repo, { 'README.md': '# fixture\n' });
+    symlinkSync(body, path.join(repo, 'package-lock.json'));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '--quiet', '-m', 'base');
+    git(repo, 'checkout', '--quiet', '-b', 'pr');
+    git(repo, 'rm', '--quiet', 'package-lock.json');
+    commit(repo, { 'package-lock.json': body });
+    expect(git(repo, 'rev-parse', 'main:package-lock.json')).toBe(git(repo, 'rev-parse', 'HEAD:package-lock.json'));
+    expectAllIntroduced(compared(repo, { presentOnBase: 'report' }).out, /not a regular file/);
+  });
+
   const changed = () => prRepo({ 'package-lock.json': lockBody([A]) }, { 'package-lock.json': lockBody([A], 'touched') });
 
   it('when the base run exits 127', () => {
@@ -554,7 +575,7 @@ describe('the key comes from the base policy (test 15, head-edit half)', () => {
       encoding: 'utf8',
       env: childEnv(bin),
     });
-    expect(result.stdout).toMatch(/policy changed in this pull request/);
+    expect(result.stdout).toMatch(/policy: gates\.vulnerabilities\.present-on-base "block" -> "report"/);
     expect(result.stdout).toMatch(/BLOCKING .*osv-scanner\/GHSA-A/);
     expect(result.status).toBe(1);
     expect(existsSync(path.join(repo, 'osv-base'))).toBe(false);

@@ -21,7 +21,7 @@ an explicit pin is unaffected, which is how a stale pin can sit unnoticed
 until the first pull request after the upgrade.
 
 **Pin the action ref to a full commit SHA** with the tag as a comment, for
-example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.13.2`. To
+example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.15.0`. To
 find the SHA for a tag, run
 `gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.12.0` or read it off
 the Releases page.
@@ -44,6 +44,8 @@ tag with no row here has an entry that does not state its defaults; read
 
 | Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
 | --- | --- | --- | --- |
+| v0.15.0 | package | 0.15.0 | dep-guard 0.17.0 (from 0.16.1), intent-guard 1.10.2 (from 1.10.1) |
+| v0.14.0 | package | 0.14.0 | none (gate defaults unchanged) |
 | v0.13.2 | package | 0.13.2 | none (gate defaults unchanged) |
 | v0.13.1 | action-only | 0.13.0 | dep-guard 0.16.1 (from 0.15.0) |
 | v0.13.0 | package | 0.13.0 | none (gate defaults unchanged) |

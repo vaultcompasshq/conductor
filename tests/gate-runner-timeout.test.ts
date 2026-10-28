@@ -6,18 +6,29 @@
 // the options, so the stub gates still run as real subprocesses.
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const real = await import('node:child_process');
-const calls: Array<{ command: string; args: readonly string[]; timeout: number | undefined; cwd: string | undefined }> = [];
+const calls: Array<{
+  command: string;
+  args: readonly string[];
+  timeout: number | undefined;
+  cwd: string | undefined;
+  killSignal: string | number | undefined;
+  env: NodeJS.ProcessEnv | undefined;
+}> = [];
 
 jest.unstable_mockModule('node:child_process', () => ({
   ...real,
-  spawnSync: (command: string, args: readonly string[], options: { timeout?: number; cwd?: string }) => {
-    calls.push({ command, args, timeout: options?.timeout, cwd: options?.cwd });
+  spawnSync: (
+    command: string,
+    args: readonly string[],
+    options: { timeout?: number; cwd?: string; killSignal?: string | number; env?: NodeJS.ProcessEnv }
+  ) => {
+    calls.push({ command, args, timeout: options?.timeout, cwd: options?.cwd, killSignal: options?.killSignal, env: options?.env });
     return real.spawnSync(command, args as string[], options as Parameters<typeof real.spawnSync>[2]);
   },
 }));
@@ -242,7 +253,7 @@ describe('gitleaks own options.timeout is passed through, beside conductor own l
 });
 
 describe('on a pull request the limit comes from the base policy, through the CLI path', () => {
-  async function prRun(basePolicy: string, headPolicy: string) {
+  async function prRun(basePolicy: string, headPolicy: string, extraArgs: string[] = []) {
     const repo = tempDir();
     git(repo, 'init', '--quiet', '-b', 'main');
     writeFileSync(path.join(repo, '.guardrails.yaml'), basePolicy);
@@ -273,7 +284,7 @@ describe('on a pull request the limit comes from the base policy, through the CL
       process.env.PATH = `${bin}${path.delimiter}${saved.PATH ?? ''}`;
       delete process.env.GITHUB_BASE_REF;
       delete process.env.GITHUB_ACTIONS;
-      await buildProgram().parseAsync(['node', 'conductor', 'run', '--trust-base', 'base', '--project', repo, '--verbose']);
+      await buildProgram().parseAsync(['node', 'conductor', 'run', '--trust-base', 'base', '--project', repo, '--verbose', ...extraArgs]);
       return { stdout: stdout.join(''), exitCode: process.exitCode, bin };
     } finally {
       out.mockRestore();
@@ -300,14 +311,110 @@ describe('on a pull request the limit comes from the base policy, through the CL
     expect(scans[0]?.timeout).toBe(10_000);
     expect(calls.some((c) => c.timeout === 21_600_000)).toBe(false);
     expect(exitCode).toBe(0);
-    expect(stdout).toMatch(/policy changed in this pull request/);
+    expect(stdout).toMatch(/policy: gates\.secrets-history\.timeout-seconds 10 -> 21600/);
   });
 
   it('a key only on the head leaves the scan at the gitleaks default', async () => {
     const { stdout, bin } = await prRun(policy(''), policy('21600'));
     const scans = spawnsOf(bin, 'gitleaks').filter((c) => c.args.includes('--report-path'));
     expect(scans.map((c) => c.timeout)).toEqual([600_000]);
-    expect(stdout).toMatch(/policy changed in this pull request/);
+    expect(stdout).toMatch(/policy: gates\.secrets-history\.timeout-seconds \(absent\) -> 21600/);
+  });
+
+  // Twins of the two above, with --preview. The head now also switches the
+  // gate on, so the preview runs it.
+  it('the preview of a gate the head switches on keeps the base 10 s limit, never 21600', async () => {
+    const { stdout, exitCode, bin } = await prRun(
+      'version: 1\ngates:\n  secrets-history:\n    product: gitleaks\n    enabled: false\n    timeout-seconds: 10\n',
+      policy('21600'), ['--preview']);
+    const scans = spawnsOf(bin, 'gitleaks').filter((c) => c.args.includes('--report-path'));
+    expect(scans.map((c) => c.timeout)).toEqual([10_000]);
+    expect(calls.some((c) => c.timeout === 21_600_000)).toBe(false);
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatch(/policy: gates\.secrets-history\.enabled false -> true/);
+  });
+
+  it('the preview of a head-only gate stays inside the 300 s budget, never the 600 s default or 21600', async () => {
+    const { bin } = await prRun('version: 1\ngates:\n  secrets-history:\n    product: gitleaks\n    enabled: false\n', policy('21600'), ['--preview']);
+    const [scan] = spawnsOf(bin, 'gitleaks').filter((c) => c.args.includes('--report-path'));
+    // Wall clock, not an injected one: the CLI path sets no previewClock.
+    expect(scan?.timeout).toBeLessThanOrEqual(300_000);
+    expect(scan?.timeout).toBeGreaterThan(290_000);
+  });
+});
+
+describe('the preview under the proposed rules runs under a hard 300 s budget', () => {
+  const P = (body: string) => parsePolicy(`version: 1\ngates:\n${body}`, 'preview-test');
+
+  /** A vault-guard that answers --version, then sleeps 30 s on a scan. */
+  function sleepingVaultGuard(bin: string): string {
+    const file = path.join(bin, 'vault-guard');
+    writeFileSync(file, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "9.9.9"; exit 0; fi\nsleep 30\n');
+    chmodSync(file, 0o755);
+    return bin;
+  }
+
+  it('a preview gate whose base limit is 21600 is killed when the 300 s budget runs out', () => {
+    // The preview's start, the budget check before the gate, and the version
+    // probe read 0, so the probe has the whole budget even on a loaded
+    // machine; from the scan on the clock reads 298 500, 1.5 s before the end.
+    const ticks = [0, 0, 0];
+    const result = runAll(P('  dependencies:\n    product: dep-guard\n    enabled: false\n'), {
+      repoRoot: gitRepo(), staged: false, pathValue: sleepingVaultGuard(tempDir()),
+      trustBase: { ref: 'HEAD', policyChanged: true, refusal: null },
+      preview: { policy: P('  secrets:\n    product: vault-guard\n    timeout-seconds: 21600\n') },
+      previewClock: () => ticks.shift() ?? 298_500,
+    });
+    const scan = calls.find((call) => call.args.includes('-f'));
+    expect(scan?.timeout).toBe(1_500);
+    expect(scan?.killSignal).toBe('SIGKILL');
+    expect(result.preview?.gates[0].couldNotRun?.reason).toBe('timed-out');
+    expect(result.preview?.gates[0].timeLimit?.source).toBe('preview-budget');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('a preview spawn with no budget left is not started, and says so', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    // The start, the budget check and the version probe read 0; the scan
+    // reads 300 000, so the budget is spent before it.
+    const ticks = [0, 0, 0];
+    const result = runAll(P('  dependencies:\n    product: dep-guard\n    enabled: false\n'), {
+      repoRoot: gitRepo(), staged: false, pathValue: bin,
+      trustBase: { ref: 'HEAD', policyChanged: true, refusal: null },
+      preview: { policy: P('  secrets:\n    product: vault-guard\n') },
+      previewClock: () => ticks.shift() ?? 300_000,
+    });
+    expect(spawnsOf(bin, 'vault-guard').filter((call) => call.args.includes('-f'))).toEqual([]);
+    const out = result.preview?.gates[0];
+    expect(out?.couldNotRun?.reason).toBe('timed-out');
+    expect(out?.couldNotRun?.detail).toContain('vault-guard was not started: the preview budget was spent');
+    expect(out?.couldNotRun?.detail).not.toContain('0 s limit');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('preview spawns get a temporary XDG_CACHE_HOME and SIGKILL, and primary spawns get neither', () => {
+    const bin = tempDir();
+    stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+    const tempRoot = tempDir();
+    runAll(P('  secrets:\n    product: vault-guard\n'), {
+      repoRoot: gitRepo(), staged: false, pathValue: bin, tempRoot,
+      trustBase: { ref: 'HEAD', policyChanged: true, refusal: null },
+      preview: { policy: P('  secrets:\n    product: vault-guard\n') },
+      previewClock: () => 0,
+    });
+    // The preview's cache directory was made under tempRoot and removed.
+    expect(spawnsOf(bin, 'vault-guard')[3]?.env?.XDG_CACHE_HOME?.startsWith(tempRoot)).toBe(true);
+    expect(readdirSync(tempRoot).filter((name) => name.startsWith('conductor-preview-'))).toEqual([]);
+    const spawns = spawnsOf(bin, 'vault-guard');
+    // version probe and scan, once for the primary run and once for the preview
+    expect(spawns).toHaveLength(4);
+    expect(spawns.slice(0, 2).map((call) => [call.killSignal, call.env?.XDG_CACHE_HOME])).toEqual([[undefined, undefined], [undefined, undefined]]);
+    for (const call of spawns.slice(2)) {
+      expect(call.killSignal).toBe('SIGKILL');
+      expect(call.env?.XDG_CACHE_HOME?.startsWith(os.tmpdir())).toBe(true);
+      expect(call.env?.XDG_CACHE_HOME).not.toBe(process.env.XDG_CACHE_HOME);
+    }
   });
 });
 

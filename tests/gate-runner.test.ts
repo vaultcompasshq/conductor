@@ -18,13 +18,17 @@ import { fileURLToPath } from 'node:url';
 
 import {
   GATE_SAID_MAX_CHARS,
+  PREVIEW_WITHHELD,
   TRUST_BASE_MIN_VERSION,
   decideTrustBase,
+  gateArgs,
+  previewSpawnOptions,
+  previewSpawnTimeout,
   runGate,
 } from '../src/gate-runner.js';
 import { useGitProgram } from '../src/git.js';
 import { gateLogLines, proposalCount, verdictToken } from '../src/output-text.js';
-import type { GatePolicy } from '../src/policy.js';
+import type { GatePolicy, GateRole, Product } from '../src/policy.js';
 import { CLEAN_INTENT_GUARD, CLEAN_OSV_SCANNER, CLEAN_VAULT_GUARD, stubGate } from './helpers/stub-gate.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -2045,5 +2049,48 @@ describe('a gate version that is not the expected one, under the signal', () => 
     expect(signalled.enforce).toBe(true);
     expect(unsignalled.couldNotRun?.reason).toBe('timed-out');
     expect(unsignalled.enforce).toBe(false);
+  });
+});
+
+describe('the preview under the proposed rules, one gate at a time', () => {
+  const G = (role: GateRole, product: Product): GatePolicy =>
+    ({ role, product, enabled: true, stage: 'ci', enforce: true, excludedByCli: false, options: {} });
+  it('withholds only the flag, for dep-guard and vault-guard only, in the preview', () => {
+    expect(decideTrustBase(G('dependencies', 'dep-guard'), undefined, 'origin/main', '9.9.9', true))
+      .toEqual({ ref: 'origin/main', withheld: PREVIEW_WITHHELD, refused: null, proposals: [] });
+    expect(decideTrustBase(G('secrets', 'vault-guard'), undefined, 'origin/main', '9.9.9', true)?.withheld).toBe(PREVIEW_WITHHELD);
+    for (const [role, product] of [['secrets-history', 'gitleaks'], ['vulnerabilities', 'osv-scanner'], ['intent', 'intent-guard']] as const) {
+      expect(decideTrustBase(G(role, product), undefined, 'origin/main', '9.9.9', true))
+        .toEqual(decideTrustBase(G(role, product), undefined, 'origin/main', '9.9.9'));
+    }
+  });
+  it('refuses a gate below its floor or with no readable version in the preview exactly as in the primary run', () => {
+    for (const version of ['0.5.0', null]) {
+      expect(decideTrustBase(G('dependencies', 'dep-guard'), undefined, 'origin/main', version, true))
+        .toEqual(decideTrustBase(G('dependencies', 'dep-guard'), undefined, 'origin/main', version));
+    }
+  });
+  it('appends --no-call-analysis=all to every osv-scanner preview spawn, after the options', () => {
+    const osv = { ...G('vulnerabilities', 'osv-scanner'), options: { 'call-analysis': 'all' } };
+    const external = { lockfiles: ['package-lock.json'] };
+    const primary = gateArgs(osv, false, undefined, 'origin/main', external, undefined, undefined, false);
+    const preview = gateArgs(osv, false, undefined, 'origin/main', external, undefined, undefined, true);
+    expect(primary.includes('--no-call-analysis=all')).toBe(false);
+    expect(preview.slice(0, -1)).toEqual(primary);
+    expect(preview.at(-1)).toBe('--no-call-analysis=all');
+  });
+
+  it('keeps --base for dep-guard when the preview withholds --trust-base', () => {
+    expect(gateArgs(G('dependencies', 'dep-guard'), false, undefined, undefined, {}, undefined, 'origin/main'))
+      .toEqual(['--format', 'json', '--base', 'origin/main']);
+    expect(gateArgs(G('secrets', 'vault-guard'), false, undefined, undefined, {}, undefined, 'origin/main'))
+      .toEqual(['-f', 'json']);
+  });
+  it('gives a preview spawn the smaller of its limit and the budget left, and SIGKILL', () => {
+    const p = { deadline: 1_000_000, clock: () => 998_500, cacheDir: 'cache' };
+    expect(previewSpawnTimeout(21_600_000, p)).toBe(1_500);
+    expect(previewSpawnTimeout(10_000, { ...p, clock: () => 700_000 })).toBe(10_000);
+    expect(previewSpawnTimeout(10_000, { ...p, clock: () => 1_000_001 })).toBe(0);
+    expect(previewSpawnOptions(10_000, p, { A: '1' })).toEqual({ timeout: 1_500, killSignal: 'SIGKILL', env: { A: '1', XDG_CACHE_HOME: 'cache' } });
   });
 });

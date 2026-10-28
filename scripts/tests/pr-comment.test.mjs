@@ -14,15 +14,19 @@
 // this file makes a real network call.
 
 import { describe, expect, it } from '@jest/globals';
+import { readFileSync } from 'node:fs';
 
 import {
+  COMMENT_LIMIT,
   MARKER,
+  PREVIEW_HEADER,
   buildCommentBody,
   createCommentArgs,
   fenceReport,
   findMarkedCommentId,
   listCommentsArgs,
   postReport,
+  truncateReport,
   updateCommentArgs,
 } from '../lib/pr-comment.mjs';
 
@@ -64,6 +68,45 @@ describe('buildCommentBody', () => {
 
 const BOT_AUTHOR = { login: 'github-actions[bot]', type: 'Bot' };
 const HUMAN_AUTHOR = { login: 'someone', type: 'User' };
+
+describe('truncateReport', () => {
+  const PRIMARY = 'conductor 9.9.9\nverdict-token: pass\n' + 'x'.repeat(1000) + '\n\nconductor verdict: pass\n';
+
+  it('a comment over 60000 characters keeps the primary report and cuts the preview first', () => {
+    const text = PRIMARY + '\n' + PREVIEW_HEADER + '\n' + 'y'.repeat(70000) + '\n';
+    expect(truncateReport(text)).toBe(
+      PRIMARY + '\n(preview under the proposed rules omitted: the report is over 60000 characters)\n'
+    );
+    expect(buildCommentBody(text)).toContain(PRIMARY.trimEnd());
+    expect(buildCommentBody(text)).not.toContain('yyyy');
+  });
+
+  it('leaves a report at or under 60000 characters alone, and cuts a primary report over it with a note', () => {
+    expect(COMMENT_LIMIT).toBe(60000);
+    expect(truncateReport('a'.repeat(60000))).toBe('a'.repeat(60000));
+    expect(truncateReport('a'.repeat(70000))).toBe('a'.repeat(60000) + '\n\n(report truncated at 60000 characters)');
+  });
+
+  it('cuts the primary report too when it alone is over the limit, preview block or not', () => {
+    const big = 'conductor 9.9.9\n' + 'a'.repeat(65000) + '\n';
+    const text = big + '\n' + PREVIEW_HEADER + '\n' + 'y'.repeat(10) + '\n';
+    expect(truncateReport(text)).toBe(text.slice(0, 60000) + '\n\n(report truncated at 60000 characters)');
+  });
+
+  it('cuts at the last preview header, so a header-shaped line in the primary report cannot cut it short', () => {
+    const primary = 'conductor 9.9.9\n\n' + PREVIEW_HEADER + '\n' + 'x'.repeat(1000) + '\n\nconductor verdict: pass\n';
+    const text = primary + '\n' + PREVIEW_HEADER + '\n' + 'y'.repeat(70000) + '\n';
+    expect(truncateReport(text)).toBe(
+      primary + '\n(preview under the proposed rules omitted: the report is over 60000 characters)\n'
+    );
+  });
+
+  it('spells PREVIEW_HEADER exactly as src/output-text.ts does', () => {
+    expect(PREVIEW_HEADER).toBe('Preview under the proposed rules (does not affect the verdict)');
+    const source = readFileSync(new URL('../../src/output-text.ts', import.meta.url), 'utf8');
+    expect(source).toContain(`export const PREVIEW_HEADER = '${PREVIEW_HEADER}';`);
+  });
+});
 
 describe('findMarkedCommentId', () => {
   it('finds the id of the bot-authored comment carrying the marker', () => {

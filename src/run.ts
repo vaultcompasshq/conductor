@@ -1,9 +1,15 @@
 // One run across every enabled gate.
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_COULD_NOT_RUN, composeExitCode, gateExitBlocks } from './exit-codes.js';
 import {
   type GateOutcome,
+  type RunGateOptions,
+  cleanOutputLine,
   expectedVersionBeforePreparation,
   gateProgramRefused,
   preparationFailed,
@@ -24,6 +30,8 @@ import { GATE_ROLES, enabledGates, runsAtStage } from './policy.js';
 import { profileFor } from './products.js';
 import { ResolveError, resolveGateBinary } from './resolve.js';
 import { POLICY_PROPOSAL_LINE } from './trust-base.js';
+import type { PolicyKeyChange } from './policy-diff.js';
+import { policyChangeLine } from './policy-diff.js';
 
 /**
  * An enabled gate the stage filter held back.
@@ -142,6 +150,15 @@ export interface RunTrustBase {
   /** Whether the head commit's own policy file differs from that one. */
   policyChanged: boolean;
   /**
+   * The keys that differ, when `policyChanged` is true: one entry per key,
+   * computed from the parsed base and head files before any CLI override.
+   * Empty or absent on a changed policy means no effective key differs (a
+   * default spelled out, or the YAML reordered), and the report falls back to
+   * the one-line POLICY_PROPOSAL_LINE. A head whose keys are not known is not
+   * an empty list: it is the single not-known entry.
+   */
+  policyChanges?: PolicyKeyChange[];
+  /**
    * Why this ref could not be used at all, or null when it was.
    *
    * A SEPARATE FIELD RATHER THAN AN ABSENT `trustBase`, and it is load-bearing
@@ -231,6 +248,38 @@ export interface RunResult {
     bySeverity: Record<string, number>;
   };
   exitCode: number;
+  /**
+   * The preview under the proposed rules: the roles whose `enabled` or
+   * `stage` the pull request changes, run once more under those keys. It
+   * decides nothing: computed after every field above is fixed, and never
+   * read back by any of them. Absent, not empty, when the run was not asked
+   * for one.
+   */
+  preview?: RunPreview;
+}
+
+/** The whole preview's hard deadline (spec 5.2, finding 2). */
+export const PREVIEW_BUDGET_MS = 300_000;
+
+/** A preview role that did not run, and why: the run's --stage, enabled: false, or --gate. */
+export interface PreviewSkipped {
+  role: GateRole;
+  product: Product;
+  reason: 'stage' | 'disabled' | 'excluded';
+}
+
+/** What the preview under the proposed rules did. */
+export interface RunPreview {
+  gates: GateOutcome[];
+  /** Every preview finding, ordered as the primary run's are. */
+  findings: Finding[];
+  skipped: PreviewSkipped[];
+  /** The intent role, when enabled: the preview never prepares it (finding 9). */
+  deferred: GateRole[];
+  /** The gate reached with no budget left, and every gate after it. */
+  overBudget: GateRole[];
+  /** The preview threw: its message, cleaned and cut to 200 characters. */
+  threw: string | null;
 }
 
 export interface RunOptions {
@@ -278,6 +327,15 @@ export interface RunOptions {
    * IntentPrepareOptions.tempRoot.
    */
   tempRoot?: string;
+  /**
+   * The preview under the proposed rules, run after the primary result is
+   * fixed. Its policy is built by the caller (`previewPolicy`, which takes
+   * only `enabled`, `stage` and `enforce` from the head). Absent means no
+   * preview, which is every run without --preview.
+   */
+  preview?: { policy: Policy };
+  /** A test hook: the preview's clock. No CLI path sets it; absent is Date.now. */
+  previewClock?: () => number;
 }
 
 /**
@@ -465,7 +523,13 @@ function collectProposals(
 ): ControlProposal[] {
   const proposals: ControlProposal[] = [];
   if (trustBase?.policyChanged === true) {
-    proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
+    const changes = trustBase.policyChanges ?? [];
+    if (changes.length === 0) {
+      proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
+    }
+    for (const change of changes) {
+      proposals.push({ product: 'conductor', role: null, line: policyChangeLine(change) });
+    }
   }
   proposals.push(...preparation);
   for (const outcome of outcomes) {
@@ -547,6 +611,105 @@ function expectedVersionOption(product: Product, env: NodeJS.ProcessEnv): { expe
   return value !== undefined && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value)
     ? { expectedVersion: value }
     : {};
+}
+
+/**
+ * The runGate options every gate of a run gets, the preview's included: the
+ * preview runs a gate with exactly these, plus its own `preview`.
+ */
+function gateRunOptions(gate: GatePolicy, options: RunOptions, env: NodeJS.ProcessEnv): RunGateOptions {
+  return {
+    repoRoot: options.repoRoot,
+    staged: options.staged,
+    pathValue: options.pathValue,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...expectedVersionOption(gate.product, env),
+    // Offered to every child. runGate decides which ones take it: a gate
+    // below its pull-request-mode minimum is could-not-run, and a gate it is
+    // withheld from carries the reason on the outcome. NEVER left out of the
+    // preview: every pull-request protection keys off it (spec 5.2, finding 1).
+    ...(options.trustBase === undefined ? {} : { trustBase: options.trustBase.ref }),
+    // Where an external gate's working directory goes (its report file, its
+    // config from the base ref). The runner removes what it makes.
+    ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
+  };
+}
+
+/**
+ * Runs `work`, and turns any throw into `fallback(message)`, the message
+ * cleaned for a log line and cut to 200 characters. Never rethrows: nothing
+ * the preview does may reach the verdict, and a throw would (spec 5.2,
+ * finding 3).
+ */
+export function guardPreview<T>(work: () => T, fallback: (message: string) => T): T {
+  try {
+    return work();
+  } catch (err) {
+    let raw: string;
+    try {
+      raw = err instanceof Error ? err.message : String(err);
+    } catch {
+      raw = 'an error that could not be described';
+    }
+    return fallback(cleanOutputLine(raw).slice(0, 200));
+  }
+}
+
+/**
+ * The preview under the proposed rules: each role of `policy` run once more,
+ * with the primary run's own options, trust base included, under one hard
+ * deadline. The intent role is deferred and never prepared.
+ */
+export function runPreview(policy: Policy, options: RunOptions): RunPreview {
+  const clock = options.previewClock ?? Date.now;
+  const start = clock();
+  const deadline = start + PREVIEW_BUDGET_MS;
+  const env = options.env ?? {};
+
+  const skipped: PreviewSkipped[] = [];
+  const deferred: GateRole[] = [];
+  const toRun: GatePolicy[] = [];
+  for (const role of GATE_ROLES) {
+    const gate = policy.gates[role];
+    if (gate === undefined) continue;
+    if (gate.excludedByCli) {
+      skipped.push({ role, product: gate.product, reason: 'excluded' });
+    } else if (!gate.enabled) {
+      skipped.push({ role, product: gate.product, reason: 'disabled' });
+    } else if (role === 'intent') {
+      // BEFORE the loop, and it never enters it: prepareIntent spawns the
+      // intent program (spec 5.2, finding 9).
+      deferred.push(role);
+    } else if (options.stage !== undefined && !runsAtStage(gate.stage, options.stage)) {
+      skipped.push({ role, product: gate.product, reason: 'stage' });
+    } else {
+      toRun.push(gate);
+    }
+  }
+
+  const gates: GateOutcome[] = [];
+  const overBudget: GateRole[] = [];
+  const cacheDir = mkdtempSync(path.join(options.tempRoot ?? os.tmpdir(), 'conductor-preview-'));
+  try {
+    for (const [index, gate] of toRun.entries()) {
+      if (deadline - clock() <= 0) {
+        overBudget.push(...toRun.slice(index).map((later) => later.role));
+        break;
+      }
+      gates.push(runGate(gate, { ...gateRunOptions(gate, options, env), preview: { deadline, clock, cacheDir } }));
+    }
+  } finally {
+    rmSync(cacheDir, { recursive: true, force: true });
+  }
+
+  return {
+    gates,
+    findings: gates.flatMap((outcome) => outcome.findings).sort(compareFindings),
+    skipped,
+    deferred,
+    overBudget,
+    threw: null,
+  };
 }
 
 export function runAll(policy: Policy, options: RunOptions): RunResult {
@@ -686,25 +849,14 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
 
       outcomes.push(
         runGate(gate, {
-          repoRoot: options.repoRoot,
-          staged: options.staged,
-          pathValue: options.pathValue,
-          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          ...gateRunOptions(gate, options, env),
           ...(intent === undefined ? {} : { intent }),
-          ...expectedVersionOption(gate.product, env),
           // For a run with no preparation: which contract the child will read
           // out of the repository itself. Looked up only for the gate it is
           // about, so no other gate pays for the two stat calls.
           ...(intent !== undefined || gate.role !== 'intent'
             ? {}
             : nativeContractOption(options.repoRoot)),
-          // Offered to every child. runGate decides which ones take it: a
-          // gate below its pull-request-mode minimum is could-not-run, and a
-          // gate it is withheld from carries the reason on the outcome.
-          ...(options.trustBase === undefined ? {} : { trustBase: options.trustBase.ref }),
-          // Where an external gate's working directory goes (its report file,
-          // its config from the base ref). The runner removes what it makes.
-          ...(options.tempRoot === undefined ? {} : { tempRoot: options.tempRoot }),
         })
       );
     }
@@ -736,10 +888,37 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
       enforce: outcome.enforce,
     }))
   );
+  const summary = {
+    blocking: findings.filter((finding) => finding.blocking).length,
+    byProduct,
+    bySeverity,
+  };
+  const proposals = collectProposals(outcomes, options.trustBase, preparationProposals);
+  // Before the preview too, so a preview of up to 300 s cannot move it.
+  const generatedAt = (options.now?.() ?? new Date()).toISOString();
+
+  // LAST, after outcomes, findings, summary, exitCode and proposals are
+  // fixed, and nothing above reads it. Inside the throw wrapper, so a throw
+  // here is one line in the report and never exit 2 (spec 5.2, finding 3).
+  const previewPolicy = options.preview?.policy;
+  const preview =
+    previewPolicy === undefined
+      ? undefined
+      : guardPreview(
+          () => runPreview(previewPolicy, options),
+          (message): RunPreview => ({
+            gates: [],
+            findings: [],
+            skipped: [],
+            deferred: [],
+            overBudget: [],
+            threw: message,
+          })
+        );
 
   return {
     schemaVersion: 1,
-    generatedAt: (options.now?.() ?? new Date()).toISOString(),
+    generatedAt,
     gates: outcomes,
     // Absent rather than empty when nothing is disabled, so a run with every
     // gate on serialises exactly as it did before this field existed.
@@ -750,12 +929,9 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     treeUnchanged,
     findings,
     trustBase: options.trustBase ?? null,
-    proposals: collectProposals(outcomes, options.trustBase, preparationProposals),
-    summary: {
-      blocking: findings.filter((finding) => finding.blocking).length,
-      byProduct,
-      bySeverity,
-    },
+    proposals,
+    summary,
     exitCode,
+    ...(preview === undefined ? {} : { preview }),
   };
 }

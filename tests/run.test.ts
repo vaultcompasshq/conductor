@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { POLICY_FILE_NAME, applyCliOverrides, parsePolicy } from '../src/policy.js';
-import { refusedTrustBase, runAll } from '../src/run.js';
+import { PREVIEW_WITHHELD } from '../src/gate-runner.js';
+import { renderText, verdictToken } from '../src/output-text.js';
+import { POLICY_FILE_NAME, type Policy, applyCliOverrides, parsePolicy } from '../src/policy.js';
+import { type RunOptions, refusedTrustBase, runAll } from '../src/run.js';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -876,6 +878,306 @@ describe('pull-request mode through a whole run', () => {
     expect(result.trustBase).toBeNull();
     expect(result.proposals).toEqual([]);
   });
+  describe('the preview under the proposed rules', () => {
+    const P = (body: string) => parsePolicy(`version: 1\ngates:\n${body}`, 'preview-test');
+    const SECRETS = P('  secrets:\n    product: vault-guard\n');
+    const SECRETS_OFF = P('  secrets:\n    product: vault-guard\n    enabled: false\n');
+    const FAMILY = P('  dependencies:\n    product: dep-guard\n  secrets:\n    product: vault-guard\n');
+    const HISTORY = P('  secrets-history:\n    product: gitleaks\n  vulnerabilities:\n    product: osv-scanner\n');
+    const PR_TRUST_BASE = { ref: 'origin/main', policyChanged: true, refusal: null };
+
+    function previewRun(base: Policy, preview: Policy, extra: Partial<RunOptions> = {}, depGuard: { stdout: string; exit: number } = { stdout: CLEAN_DEP_GUARD, exit: 0 }) {
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'dep-guard', { ...depGuard, argvLog: lastArgvLog });
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      stubGate(bin, 'intent-guard', { stdout: PROPOSING_INTENT, version: '1.8.1', argvLog: lastArgvLog });
+      return runAll(base, {
+        repoRoot: prRepo(), staged: false, pathValue: bin,
+        trustBase: PR_TRUST_BASE,
+        preview: { policy: preview }, ...extra,
+      });
+    }
+
+    /** dep-guard blocking (exit 1, one finding) for the preview only: the base does not enable it. */
+    function blockingDepGuardPreviewRun(base: Policy, preview: Policy) {
+      return previewRun(base, preview, {}, {
+        stdout: readFileSync(path.join(FIXTURES, 'dep-guard-0.2.0-blocking.json'), 'utf8'),
+        exit: 1,
+      });
+    }
+
+    /** fiveStubs() on PATH, prRepo(), and the same history policy as the base and as the preview. */
+    function historyPreviewRun() {
+      return runAll(HISTORY, {
+        repoRoot: prRepo(), staged: false, pathValue: fiveStubs(), tempRoot: tempDir(),
+        trustBase: PR_TRUST_BASE, preview: { policy: HISTORY },
+      });
+    }
+
+    /** A clean vault-guard on a PATH outside any repository. */
+    function cleanBin(): string {
+      const bin = tempDir();
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+      return bin;
+    }
+
+    /**
+     * prRepo() plus, in the head commit only, node_modules/.bin/vault-guard
+     * and tools/bin/vault-guard, both writing `marker` when run.
+     */
+    function familyRepo(): { repo: string; marker: string } {
+      const repo = prRepo();
+      const marker = path.join(tempDir(), 'family-ran.txt');
+      for (const rel of ['node_modules/.bin/vault-guard', 'tools/bin/vault-guard']) {
+        const file = path.join(repo, rel);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, `#!/bin/sh\nprintf 'ran\\n' > ${JSON.stringify(marker)}\necho '9.9.9'\n`);
+        chmodSync(file, 0o755);
+      }
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: repo });
+      git('add', '-A', '-f');
+      git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'plant');
+      return { repo, marker };
+    }
+
+    it('preview omits --trust-base only for dep-guard and vault-guard', () => {
+      const result = previewRun(SECRETS, FAMILY);
+      // The stubs log their whole argv, the npm gates' `scan` subcommand
+      // included: the primary vault-guard, then the preview's two.
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual([
+        'scan -f json --trust-base origin/main',
+        'scan --format json --base origin/main',
+        'scan -f json',
+      ]);
+      expect(result.preview?.gates.map((gate) => gate.trustBase?.withheld)).toEqual([PREVIEW_WITHHELD, PREVIEW_WITHHELD]);
+    });
+
+    it('preview hands gitleaks and osv-scanner the same trust inputs as the primary run', () => {
+      const result = historyPreviewRun();
+      const strip = (argv: string[]) => argv.map((arg) => (arg.startsWith(os.tmpdir()) ? '<tmp>' : arg));
+      // Same argv, except that an osv-scanner preview spawn ends in the
+      // forced --no-call-analysis=all (spec 5.2, finding 7).
+      const expected = result.gates.map((gate) =>
+        gate.product === 'osv-scanner' ? [...strip(gate.argv), '--no-call-analysis=all'] : strip(gate.argv)
+      );
+      expect(result.preview?.gates.map((gate) => strip(gate.argv))).toEqual(expected);
+      expect(result.preview?.gates.map((gate) => gate.trustBase?.withheld)).toEqual([null, null]);
+      expect(result.preview?.gates[0].argv).toContain('--diff-merges=first-parent origin/main..HEAD');
+      expect(result.preview?.gates[0].argv).toContain('--ignore-gitleaks-allow');
+    });
+
+    it('never lets a blocking or could-not-run preview gate change the primary result', () => {
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined });
+      const result = blockingDepGuardPreviewRun(SECRETS, FAMILY);
+      expect(result.preview?.gates[0].findings.some((finding) => finding.blocking)).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.findings).toEqual([]);
+      expect(result.summary).toEqual(without.summary);
+      expect(result.proposals).toEqual(without.proposals);
+    });
+
+    it('a preview that throws leaves the exit code, the verdict token and lines 1-4 identical to the run without it', () => {
+      const boom = { version: 1, report: { format: 'text' }, get gates() { throw new Error('boom'); } } as unknown as Policy;
+      // One shared clock that only the preview advances: generatedAt is read
+      // before the preview starts, so it is the value a run without one gives.
+      let previewTicks = 0;
+      const clocks = {
+        now: () => new Date(previewTicks * 1000),
+        previewClock: () => ++previewTicks,
+      };
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined, ...clocks });
+      const result = previewRun(SECRETS, boom, clocks);
+      expect(result.preview).toEqual({ gates: [], findings: [], skipped: [], deferred: [], overBudget: [], threw: 'boom' });
+      expect(previewTicks).toBe(1);
+      expect(result.generatedAt).toBe(without.generatedAt);
+      expect(result.exitCode).toBe(without.exitCode);
+      expect(verdictToken(result, false)).toBe(verdictToken(without, false));
+      // A clean run without --verbose is one summary line, so line 2 onward
+      // is the preview block itself: that form is pinned by its prefix. The
+      // full report (--verbose, the form the Action and the comment use) is
+      // compared with the same result rendered without its preview, since
+      // the two runs' durations differ.
+      expect(renderText(result).startsWith(renderText(without))).toBe(true);
+      const { preview: _preview, ...unpreviewed } = result;
+      const full = renderText(result, { verbose: true });
+      expect(full.startsWith(renderText(unpreviewed, { verbose: true }))).toBe(true);
+      expect(full.split('\n').slice(0, 4)).toEqual(renderText(unpreviewed, { verbose: true }).split('\n').slice(0, 4));
+      expect(renderText(result)).toContain('\npreview: could not be completed (boom)\n');
+    });
+
+    it('the preview never calls prepareIntent and prints the deferred line', () => {
+      const result = previewRun(SECRETS, P('  intent:\n    product: intent-guard\n'));
+      expect(result.preview?.deferred).toEqual(['intent']);
+      expect(result.preview?.gates).toEqual([]);
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual(['scan -f json --trust-base origin/main']);
+    });
+
+    it('stops the preview at the budget and lists the rest as over budget', () => {
+      // The clock reads 0 until the preview dep-guard has written its argv line,
+      // then 300 000: dependencies runs inside the budget, secrets finds none left.
+      const result = previewRun(SECRETS, FAMILY, {
+        previewClock: () => (readFileSync(lastArgvLog, 'utf8').includes('--format json --base') ? 300_000 : 0),
+      });
+      expect(result.preview?.gates.map((gate) => gate.role)).toEqual(['dependencies']);
+      expect(result.preview?.overBudget).toEqual(['secrets']);
+    });
+
+    it('refuses a preview option value that starts with a dash without spawning the gate', () => {
+      const result = previewRun(SECRETS, P('  dependencies:\n    product: dep-guard\n    options:\n      fail-on: "--output=/tmp/x"\n'));
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual(['scan -f json --trust-base origin/main']);
+    });
+
+    it('preview of a family gate keeps the node_modules skip and refuses a head-controlled program', () => {
+      const { repo, marker } = familyRepo();
+      const skip = runAll(SECRETS_OFF, { repoRoot: repo, staged: false, pathValue: cleanBin(),
+        trustBase: PR_TRUST_BASE, preview: { policy: SECRETS } });
+      expect(skip.preview?.gates[0].nodeModulesSkipped).toBeDefined();
+      expect(skip.preview?.gates[0].couldNotRun).toBeNull();
+      const refused = runAll(SECRETS_OFF, { repoRoot: repo, staged: false, pathValue: path.join(repo, 'tools', 'bin'),
+        trustBase: PR_TRUST_BASE, preview: { policy: SECRETS } });
+      expect(refused.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+      expect(existsSync(marker)).toBe(false);
+    });
+
+    it("preview refuses osv-scanner call analysis, because it would build the head's code", () => {
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', stdout: CLEAN_OSV_SCANNER, argvLog: lastArgvLog });
+      const vulns = (enabled: boolean) =>
+        `  vulnerabilities:\n    product: osv-scanner\n${enabled ? '' : '    enabled: false\n'}    options:\n      call-analysis: all\n`;
+      const result = runAll(P(`  secrets:\n    product: vault-guard\n${vulns(false)}`), {
+        repoRoot: prRepo(), staged: false, pathValue: bin, tempRoot: tempDir(),
+        trustBase: PR_TRUST_BASE, preview: { policy: P(vulns(true)) },
+      });
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+      expect(result.preview?.gates[0].couldNotRun?.detail).toBe(
+        "the preview does not run call analysis, because it would build the head's code"
+      );
+      // Only the primary vault-guard ran: osv-scanner was never spawned.
+      expect(readFileSync(lastArgvLog, 'utf8').trim().split('\n')).toEqual(['scan -f json --trust-base origin/main']);
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('preview refuses any call-analysis option key that is not an all-off form', () => {
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', stdout: CLEAN_OSV_SCANNER, argvLog: lastArgvLog });
+      const vulns = (enabled: boolean, option: string) =>
+        `  vulnerabilities:\n    product: osv-scanner\n${enabled ? '' : '    enabled: false\n'}    options:\n      ${option}\n`;
+      const run = (option: string) =>
+        runAll(P(`  secrets:\n    product: vault-guard\n${vulns(false, option)}`), {
+          repoRoot: prRepo(), staged: false, pathValue: bin, tempRoot: tempDir(),
+          trustBase: PR_TRUST_BASE, preview: { policy: P(vulns(true, option)) },
+        });
+      // Another spelling of the key renders as a flag of its own and is refused,
+      // and so is every call-analysis value: only no-call-analysis can say off.
+      for (const option of ['experimental-call-analysis: true', 'no-call-analysis: rust', 'call-analysis: [none, go]', 'call-analysis: []', 'call-analysis: none', 'call-analysis: false']) {
+        const result = run(option);
+        expect(result.preview?.gates[0].couldNotRun?.reason).toBe('preparation-failed');
+        expect(result.exitCode).toBe(0);
+      }
+      expect(readFileSync(lastArgvLog, 'utf8')).not.toMatch(/call-analysis/);
+      // The all-off forms are not refused: osv-scanner is spawned, and every
+      // preview spawn of it ends in --no-call-analysis=all whatever the options
+      // said (what the stub's output then earns is not the point here).
+      for (const option of ['no-call-analysis: true', 'no-call-analysis: all']) {
+        const result = run(option);
+        expect(result.preview?.gates[0].couldNotRun?.reason).not.toBe('preparation-failed');
+      }
+      const osvLines = readFileSync(lastArgvLog, 'utf8').trim().split('\n').filter((line) => line.includes('--format json'));
+      expect(osvLines.length).toBeGreaterThan(0);
+      for (const line of osvLines) expect(line.endsWith('--no-call-analysis=all')).toBe(true);
+    });
+
+    it('a mismatched version pin makes the preview gate could-not-run and leaves the primary result alone', () => {
+      // The pin names dep-guard, which only the preview runs; the stub reports 9.9.9.
+      const env = { CONDUCTOR_EXPECTED_DEP_GUARD_VERSION: '0.10.5' };
+      const without = previewRun(SECRETS, FAMILY, { preview: undefined, env });
+      const result = previewRun(SECRETS, FAMILY, { env });
+      expect(result.preview?.gates[0].role).toBe('dependencies');
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('version-skew');
+      expect(result.exitCode).toBe(without.exitCode);
+      expect(result.exitCode).toBe(0);
+      expect(result.gates[0].couldNotRun).toBeNull();
+      expect(result.findings).toEqual(without.findings);
+    });
+
+    it('preview refuses a base command inside the working tree before any spawn', () => {
+      const repo = prRepo();
+      const program = path.join(repo, 'tools', 'base-gate.sh');
+      const programLog = path.join(tempDir(), 'base-gate.txt');
+      mkdirSync(path.dirname(program), { recursive: true });
+      writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(programLog)}\necho '9.9.9'\n`);
+      chmodSync(program, 0o755);
+      const withCommand = (enabled: boolean) =>
+        P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}    command: ${program}\n    args: []\n`);
+      const bin = tempDir();
+      lastArgvLog = path.join(tempDir(), 'argv.txt');
+      stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD, argvLog: lastArgvLog });
+      const result = runAll(withCommand(false), {
+        repoRoot: repo, staged: false, pathValue: bin,
+        trustBase: PR_TRUST_BASE, preview: { policy: withCommand(true) },
+      });
+      expect(result.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+      expect(result.preview?.gates[0].couldNotRun?.detail).toBe(
+        `preview under the proposed rules: the base command ${program} is inside the working tree, so this gate was not run`
+      );
+      // Nothing spawned for it, the version probe included.
+      expect(existsSync(programLog)).toBe(false);
+      expect(existsSync(lastArgvLog)).toBe(false);
+    });
+
+    it('preview refuses a base args script inside the working tree before any spawn, and runs one outside it', () => {
+      // Audit 2026-10-27, B1: an interpreter command outside the tree with
+      // the gate script in args. The script is the program, so the preview's
+      // in-tree refusal has to see it as it sees a command.
+      const repo = prRepo();
+      const programLog = path.join(tempDir(), 'base-gate.txt');
+      const scriptBody =
+        `import { appendFileSync } from 'node:fs';\n` +
+        `appendFileSync(${JSON.stringify(programLog)}, process.argv.slice(2).join(' ') + '\\n');\n` +
+        `if (process.argv[2] === '--version') { console.log('9.9.9'); process.exit(0); }\n` +
+        `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});\n`;
+      const inside = path.join(repo, 'tools', 'base-gate.mjs');
+      mkdirSync(path.dirname(inside), { recursive: true });
+      writeFileSync(inside, scriptBody);
+      const outside = path.join(tempDir(), 'base-gate.mjs');
+      writeFileSync(outside, scriptBody);
+      const withScript = (enabled: boolean, script: string) =>
+        P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}    command: ${JSON.stringify(process.execPath)}\n    args: [${JSON.stringify(script)}, scan]\n`);
+      const bin = tempDir();
+      const run = (script: string) =>
+        runAll(withScript(false, script), {
+          repoRoot: repo, staged: false, pathValue: bin,
+          trustBase: PR_TRUST_BASE, preview: { policy: withScript(true, script) },
+        });
+
+      const refused = run('tools/base-gate.mjs');
+      expect(refused.preview?.gates[0].couldNotRun?.reason).toBe('gate-program-refused');
+      expect(refused.preview?.gates[0].couldNotRun?.detail).toBe(
+        'preview under the proposed rules: the base args entry tools/base-gate.mjs names a path inside the working tree, so this gate was not run'
+      );
+      expect(existsSync(programLog)).toBe(false);
+
+      // The same candidate set as the primary run (fix round): a bare name
+      // Node runs as <name>.js is refused here before any spawn too.
+      writeFileSync(path.join(repo, 'base-gate.js'), '// would run as base-gate\n');
+      const bare = run('base-gate');
+      expect(bare.preview?.gates[0].couldNotRun?.detail).toBe(
+        'preview under the proposed rules: the base args entry base-gate names a path inside the working tree, so this gate was not run'
+      );
+      expect(existsSync(programLog)).toBe(false);
+
+      const ran = run(outside);
+      expect(ran.preview?.gates[0].couldNotRun?.reason).not.toBe('gate-program-refused');
+      // The probe asked the script, not Node (N4), and then the scan ran.
+      expect(readFileSync(programLog, 'utf8').split('\n')[0]).toBe('--version');
+    });
+  });
 });
 
 describe('the equal-tree exception (issue #69)', () => {
@@ -973,6 +1275,7 @@ describe('the equal-tree exception (issue #69)', () => {
     expect(result.gates).toHaveLength(5);
     expect(result.treeUnchanged).toEqual([]);
   });
+
 });
 
 /**

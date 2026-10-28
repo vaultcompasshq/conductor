@@ -1224,9 +1224,9 @@ describe('action.yml installs the gates without trusting them first', () => {
     // Naming a package that is not installed is the quiet case: the audit
     // skips it and still exits 0.
     expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.12.1');
-    expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.10.1');
-    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.13.2');
-    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.16.1');
+    expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.10.2');
+    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.15.0');
+    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.17.0');
   });
 
   it('carries a version override into the manifest as well as the install', () => {
@@ -1258,10 +1258,10 @@ describe('action.yml installs the gates outside the tree', () => {
     for (const input of VERSION_INPUTS) {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
-    expect(action.inputs?.['conductor-version']?.default).toBe('0.13.2');
-    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.16.1');
+    expect(action.inputs?.['conductor-version']?.default).toBe('0.15.0');
+    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.17.0');
     expect(action.inputs?.['vault-guard-version']?.default).toBe('1.12.1');
-    expect(action.inputs?.['intent-guard-version']?.default).toBe('1.10.1');
+    expect(action.inputs?.['intent-guard-version']?.default).toBe('1.10.2');
   });
 
   it('accepts an exact version', () => {
@@ -1305,10 +1305,10 @@ describe('action.yml installs the gates outside the tree', () => {
       'install',
       '-g',
       '--ignore-scripts',
-      '@vaultcompass/conductor@0.13.2',
-      '@vaultcompass/dep-guard@0.16.1',
+      '@vaultcompass/conductor@0.15.0',
+      '@vaultcompass/dep-guard@0.17.0',
       '@vaultcompass/vault-guard@1.12.1',
-      '@vaultcompass/intent-guard@1.10.1',
+      '@vaultcompass/intent-guard@1.10.2',
       'audit',
       'signatures',
     ]);
@@ -1723,10 +1723,11 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag the TAG constants
-    // are 0.13.2 (conductor), 0.16.1 (dep-guard), 1.12.1 (vault-guard) and
-    // 1.10.1 (intent-guard). Only an input whose shipped patch is above 0 has a
-    // lower patch to refuse on the UNMODIFIED step, and as of this tag all
-    // four do. The arm is also driven on the same step with
+    // are 0.15.0 (conductor), 0.17.0 (dep-guard), 1.12.1 (vault-guard) and
+    // 1.10.2 (intent-guard). Only an input whose shipped patch is above 0 has a
+    // lower patch to refuse on the UNMODIFIED step, and as of this tag
+    // vault-guard and intent-guard do while conductor and dep-guard ship
+    // patch 0. The arm is also driven on the same step with
     // one constant's patch advanced by one (the shipped version itself is the
     // lower patch), the way the minor arm is driven in the cases above, and any
     // input that does ship a patch above 0 is also driven on the unmodified
@@ -1790,16 +1791,16 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // `1.10.0` sorts BELOW `1.8.0` as text and above it as a version, and
     // refusing it would refuse the very direction this rule leaves open.
     const forward: Array<[string, string]> = [
-      ['INTENT_GUARD_VERSION', '1.10.1'],
+      ['INTENT_GUARD_VERSION', '1.10.2'],
       ['INTENT_GUARD_VERSION', '1.11.0'],
       ['INTENT_GUARD_VERSION', '2.0.0'],
       ['INTENT_GUARD_VERSION', '10.0.0'],
-      ['DEP_GUARD_VERSION', '0.16.2'],
       ['DEP_GUARD_VERSION', '0.17.0'],
+      ['DEP_GUARD_VERSION', '0.18.0'],
       ['VAULT_GUARD_VERSION', '1.12.1'],
       ['VAULT_GUARD_VERSION', '1.13.0'],
-      ['CONDUCTOR_VERSION', '0.13.2'],
-      ['CONDUCTOR_VERSION', '0.14.0'],
+      ['CONDUCTOR_VERSION', '0.15.0'],
+      ['CONDUCTOR_VERSION', '0.16.0'],
     ];
     for (const [variable, value] of forward) {
       const run = runValidate({ [variable]: value }, { GITHUB_BASE_REF: 'main' });
@@ -1962,6 +1963,10 @@ describe('action.yml: the verdict token from the gates step', () => {
     /** Where GITHUB_STEP_SUMMARY points; 'none' leaves it unset. */
     summaryPath?: string | 'none';
     advisory?: string;
+    /** Does the installed conductor's `run --help` also list --preview? */
+    previewFlag?: boolean;
+    /** The preview input; undefined is the input's own default, 'true'. */
+    preview?: string;
   }): VerdictRun {
     const supportsFlag = options.supportsFlag ?? true;
     const dir = tempDir();
@@ -1990,6 +1995,7 @@ describe('action.yml: the verdict token from the gates step', () => {
           : supportsFlag || options.help === 'exits-1'
             ? "  printf '  --text-report <path>  write the text report too\\n'"
             : "  printf '  --output <path>\\n'",
+        options.previewFlag === true ? "  printf '  --preview  run the preview under the proposed rules\\n'" : '  :',
         options.help === 'exits-1' ? '  exit 1' : '  exit 0',
         'fi',
         `printf 'run\\n' >> ${JSON.stringify(runsLog)}`,
@@ -2025,6 +2031,7 @@ describe('action.yml: the verdict token from the gates step', () => {
       OUTPUT: 'conductor.sarif',
       WORKDIR: '.',
       ADVISORY: options.advisory ?? 'false',
+      PREVIEW: options.preview ?? 'true',
       TEXT_REPORT: textReport,
     };
     if (options.summaryPath !== 'none') {
@@ -2305,6 +2312,80 @@ describe('action.yml: the verdict token from the gates step', () => {
     }
   });
 
+  const COUNT = `  pull-request mode: rules from ${'a'.repeat(40)}. 1 control change(s) proposed in this pull request.`;
+
+  it('copies the count line and the proposed lines to the step summary in a fenced block', () => {
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        COUNT,
+        '  proposed  dep-guard     config changed in this pull request (proposed: minAgeDays raised to 7)',
+        '',
+      ].join('\n'),
+    });
+    expect(run.summary).toBe(
+      'conductor verdict: pass\n\ncontrol changes:\n\n```text\n' +
+        COUNT.trimStart() +
+        '\n' +
+        'proposed  dep-guard     config changed in this pull request (proposed: minAgeDays raised to 7)\n```\n\n'
+    );
+  });
+
+  it('replaces an unsafe proposed line with a placeholder and never copies it', () => {
+    for (const bad of ['  proposed  dep-guard     a `b` c', '  proposed  dep-guard     x\r::warning::y']) {
+      const run = runGatesForVerdict({
+        exit: 0,
+        body: `conductor 9.9.9\nverdict-token: pass\nx\n${COUNT}\n${bad}\n`,
+      });
+      expect(run.summary).toContain('proposed  dep-guard  (line omitted: unsafe characters)\n');
+      expect(run.summary).not.toContain('::warning::');
+      expect(run.summary).not.toContain('`b`');
+    }
+    expect(
+      runGatesForVerdict({
+        exit: 0,
+        body: `conductor 9.9.9\nverdict-token: pass\n  proposed  evil-gate     x\n`,
+      }).summary
+    ).toBe('conductor verdict: pass\n\n');
+  });
+
+  it('copies at most 50 proposed lines and says how many more are in the report', () => {
+    const many = Array.from({ length: 53 }, (_, i) => `  proposed  dep-guard     change ${i}`);
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: ['conductor 9.9.9', 'verdict-token: pass', 'x', COUNT, ...many, ''].join('\n'),
+    });
+    expect(run.summary.match(/^proposed {2}/gm)).toHaveLength(50);
+    expect(run.summary).toContain('(3 more in the report)\n');
+  });
+
+  it('never copies a count line that holds a backtick, or one over 700 characters', () => {
+    const tick = `  pull-request mode: rules from a\`b. 1 control change(s) proposed in this pull request.`;
+    const long = `  pull-request mode: rules from main. 1 control change(s) proposed ${'x'.repeat(700)}.`;
+    for (const count of [tick, long]) {
+      const run = runGatesForVerdict({
+        exit: 0,
+        body: `conductor 9.9.9\nverdict-token: pass\nx\n${count}\n`,
+      });
+      expect(run.summary).toBe('conductor verdict: pass\n\n');
+    }
+  });
+
+  it('writes the block with just the count line when nothing is proposed', () => {
+    const zero = '  pull-request mode: rules from main. 0 control change(s) proposed in this pull request.';
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: `conductor 9.9.9\nverdict-token: pass\nx\n${zero}\n`,
+    });
+    expect(run.summary).toBe(
+      'conductor verdict: pass\n\ncontrol changes:\n\n```text\n' + zero.trimStart() + '\n```\n\n'
+    );
+  });
+
   describe('against an installed conductor that predates --text-report', () => {
     it('never passes the flag, marks the fallback, and leaves conductor\'s own exit status alone', () => {
       for (const exit of [0, 1, 2]) {
@@ -2353,6 +2434,95 @@ describe('action.yml: the verdict token from the gates step', () => {
     expect(env['TEXT_REPORT']).toBe('${{ steps.gates.outputs.text-report }}');
     expect(env['REPORT_FALLBACK']).toBe('${{ steps.gates.outputs.report-fallback }}');
     expect(stepEnv('gates')['TEXT_REPORT']).toMatch(/runner\.temp/);
+  });
+
+  it('copies only the fixed-shape preview line to the step summary', () => {
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        COUNT,
+        '',
+        'conductor verdict: pass',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'preview: 1 gate(s), 0 finding(s), 0 could-not-run',
+        '  proposed  dep-guard     smuggled after the header',
+        '  secrets  vault-guard  ::error::x',
+        '',
+      ].join('\n'),
+    });
+    expect(run.summary).toBe(
+      'conductor verdict: pass\n\ncontrol changes:\n\n```text\n' +
+        COUNT.trimStart() +
+        '\n```\n\n' +
+        'preview under the proposed rules:\n\n```text\npreview: 1 gate(s), 0 finding(s), 0 could-not-run\n```\n\n'
+    );
+  });
+
+  it('copies no preview line whose shape is not the fixed one', () => {
+    const run = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'preview: 1 gate(s) `x`',
+        '',
+      ].join('\n'),
+    });
+    expect(run.summary).toBe('conductor verdict: pass\n\n');
+    const later = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'something else first',
+        'preview: 1 gate(s), 0 finding(s), 0 could-not-run',
+        '',
+      ].join('\n'),
+    });
+    expect(later.summary).toBe('conductor verdict: pass\n\n');
+    // A valid prefix with text after it: the shape is anchored at its end as
+    // well as its start (audit 2026-10-27, N1; dropping the trailing $ from
+    // preview_shape kept this test green before this case).
+    const trailing = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'preview: 1 gate(s), 0 finding(s), 0 could-not-run x',
+        '',
+      ].join('\n'),
+    });
+    expect(trailing.summary).toBe('conductor verdict: pass\n\n');
+  });
+
+  it('passes --preview only when the input is true and the installed conductor lists it', () => {
+    const OK = 'conductor 9.9.9\nverdict-token: pass\n';
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: true }).argv).toContain('--preview');
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: true, preview: 'false' }).argv).not.toContain('--preview');
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: true, preview: 'TRUE' }).argv).not.toContain('--preview');
+    expect(runGatesForVerdict({ exit: 0, body: OK, previewFlag: false }).argv).not.toContain('--preview');
+    expect(
+      runGatesForVerdict({ exit: 0, body: OK, previewFlag: true, help: 'exits-1' }).argv
+    ).not.toContain('--preview');
+  });
+
+  it('declares the preview input, defaulting to true', () => {
+    expect(action.inputs?.preview?.default).toBe('true');
+    expect(stepEnv('gates').PREVIEW).toBe('${{ inputs.preview }}');
   });
 });
 

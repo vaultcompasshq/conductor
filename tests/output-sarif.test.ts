@@ -15,7 +15,7 @@ import {
   normalizeVaultGuard,
 } from '../src/normalize.js';
 import { fingerprintKey, placeArtifact, renderSarif } from '../src/output-sarif.js';
-import type { RunResult } from '../src/run.js';
+import type { RunPreview, RunResult } from '../src/run.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -2192,5 +2192,141 @@ describe('a gate that could not run says nothing about proposals in the SARIF lo
 
     expect(text).not.toContain('conductor/control-change-proposed');
     expect(text).not.toMatch(/none proposed|no control change|0 control change/i);
+  });
+});
+
+describe('policy changes in the SARIF log', () => {
+  it('carries only the rendered per-key policy change lines under policyChanges', () => {
+    const log = sarif({
+      ...result([outcome({ exitCode: 0, findings: [] })]),
+      proposals: [
+        { product: 'conductor', role: null, line: 'policy: gates.dependencies.enabled true -> false' },
+      ],
+      trustBase: {
+        ref: 'origin/main',
+        policyChanged: true,
+        refusal: null,
+        policyChanges: [
+          { role: 'dependencies', key: 'enabled', old: true, new: false },
+          { role: 'dependencies', key: 'options.x', old: undefined, new: 'a\u202eb' },
+        ],
+      },
+    });
+    const umbrella = log.runs.find(
+      (run) => (run.tool as Record<string, Record<string, unknown>>).driver.name === 'conductor'
+    );
+
+    expect((umbrella?.properties as Record<string, unknown>).trustBase).toEqual({
+      ref: 'origin/main',
+      policyChanged: true,
+      refusal: null,
+      policyChanges: [
+        'policy: gates.dependencies.enabled true -> false',
+        'policy: gates.dependencies.options.x (absent) -> "a\\u202eb"',
+      ],
+    });
+  });
+});
+
+describe('the preview under the proposed rules in the SARIF log', () => {
+  const PR_FIELDS: Partial<RunResult> = {
+    trustBase: { ref: 'origin/main', policyChanged: true, refusal: null },
+    proposals: [{ product: 'conductor', role: null, line: 'policy: gates.secrets.enabled false -> true' }],
+  };
+  const BLOCKING_PR_RESULT: RunResult = {
+    ...result([outcome({ findings: depGuard.findings })]),
+    ...PR_FIELDS,
+    exitCode: 1,
+  };
+  const CLEAN_PR_RESULT: RunResult = {
+    ...result([outcome({ exitCode: 0, findings: [] })]),
+    ...PR_FIELDS,
+    exitCode: 0,
+  };
+
+  function previewOf(gate: GateOutcome): RunPreview {
+    return { gates: [gate], findings: gate.findings, skipped: [], deferred: [], overBudget: [], threw: null };
+  }
+  const ONE_BLOCKING_PREVIEW_GATE = previewOf(outcome({ findings: depGuard.findings }));
+  const ONE_COULD_NOT_RUN_PREVIEW_GATE = previewOf(
+    outcome({ exitCode: null, couldNotRun: { reason: 'gate-error', detail: 'it broke' } })
+  );
+  const PREVIEW_ID = 'conductor/preview-under-proposed-rules';
+
+  it('a run with a preview renders SARIF whose runs, results and partialFingerprints deep-equal the same run without it, apart from umbrella notifications', () => {
+    const plain = JSON.parse(renderSarif(BLOCKING_PR_RESULT, '9.9.9'));
+    const shown = JSON.parse(renderSarif({ ...BLOCKING_PR_RESULT, preview: ONE_BLOCKING_PREVIEW_GATE }, '9.9.9'));
+    // The notification and its declaration beside the rules, which is what
+    // makes its descriptor reference resolve.
+    const dropPreview = (log: any) => {
+      for (const run of log.runs) {
+        for (const invocation of run.invocations ?? []) {
+          invocation.toolExecutionNotifications = (invocation.toolExecutionNotifications ?? []).filter(
+            (n: any) => n.descriptor?.id !== PREVIEW_ID
+          );
+        }
+        if (run.tool.driver.notifications !== undefined) {
+          run.tool.driver.notifications = run.tool.driver.notifications.filter(
+            (n: any) => n.id !== PREVIEW_ID
+          );
+        }
+      }
+      return log;
+    };
+    // On copies: dropPreview edits the log in place, and the notes are read from `shown` below.
+    expect(dropPreview(structuredClone(shown))).toEqual(dropPreview(structuredClone(plain)));
+    expect(shown.runs).toHaveLength(plain.runs.length);
+    const notes = shown.runs
+      .at(-1)
+      .invocations[0].toolExecutionNotifications.filter((n: any) => n.descriptor?.id === PREVIEW_ID);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].level).toBe('note');
+    expect(shown.runs.at(-1).tool.driver.notifications.map((n: any) => n.id)).toContain(PREVIEW_ID);
+    expect(notes[0].message.text).toBe(
+      `Preview under the proposed rules, which does not affect the verdict: dependencies (dep-guard) ` +
+        `findings (${depGuard.findings.length}, ${depGuard.findings.filter((f) => f.blocking).length} blocking), ` +
+        `${depGuard.findings.length} finding(s).`
+    );
+  });
+
+  it('a preview could-not-run leaves executionSuccessful and the exit code unchanged', () => {
+    const result = { ...CLEAN_PR_RESULT, preview: ONE_COULD_NOT_RUN_PREVIEW_GATE };
+    const umbrella = JSON.parse(renderSarif(result, '9.9.9')).runs.at(-1);
+    expect(umbrella.invocations[0].executionSuccessful).toBe(true);
+    expect(result.exitCode).toBe(CLEAN_PR_RESULT.exitCode);
+  });
+
+  it('never creates the umbrella run on its own', () => {
+    const lone = { ...result([outcome({ exitCode: 0, findings: [] })]), exitCode: 0 };
+    const plain = JSON.parse(renderSarif(lone, '9.9.9'));
+    const shown = JSON.parse(renderSarif({ ...lone, preview: ONE_COULD_NOT_RUN_PREVIEW_GATE }, '9.9.9'));
+    expect(shown).toEqual(plain);
+  });
+
+  it('a preview that throws while its notes are built leaves the log as it is without a preview', () => {
+    // Pins the guardPreview wrapper in previewNotifications (audit 2026-10-27,
+    // N2): made to rethrow, renderSarif throws here.
+    const throwing = {
+      ...ONE_BLOCKING_PREVIEW_GATE,
+      get gates(): GateOutcome[] {
+        throw new Error('boom');
+      },
+    } as RunPreview;
+    const plain = JSON.parse(renderSarif(BLOCKING_PR_RESULT, '9.9.9'));
+    const shown = JSON.parse(renderSarif({ ...BLOCKING_PR_RESULT, preview: throwing }, '9.9.9'));
+    expect(shown).toEqual(plain);
+  });
+
+  it('escapes head-chosen non-ASCII text in a preview note (audit 2026-10-27, N3)', () => {
+    const hostile = previewOf(
+      outcome({ exitCode: null, couldNotRun: { reason: 'evil‮::error::x' as never, detail: 'd' } })
+    );
+    const shown = JSON.parse(renderSarif({ ...BLOCKING_PR_RESULT, preview: hostile }, '9.9.9'));
+    const note = shown.runs
+      .at(-1)
+      .invocations[0].toolExecutionNotifications.find((n: any) => n.descriptor?.id === PREVIEW_ID);
+    expect(note.message.text).not.toMatch(/[^\x20-\x7e]/);
+    expect(note.message.text).toContain('\\u202e');
+    expect(JSON.stringify(note)).not.toContain('‮');
   });
 });

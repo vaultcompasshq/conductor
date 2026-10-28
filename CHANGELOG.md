@@ -14,6 +14,145 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-28
+
+**A package release, a minor: a pull-request run that was green can now be
+could-not-run.** `@vaultcompass/conductor` moves to 0.15.0 on npm and the
+action's `conductor-version` default moves to `0.15.0` in lockstep, because
+the trust-base argument check and the version probe fix are in the CLI. Two
+gate defaults move: dep-guard 0.17.0 and intent-guard 1.10.2 (vault-guard
+stays 1.12.1). Fixes from the 2026-10-27 audit.
+
+### Security
+
+- An interpreter `command:` no longer lets a pull request choose its own
+  judge through `args:` (audit B1, pre-existing since the program check
+  arrived). With a base policy of `command: /usr/bin/node` and
+  `args: [tools/gate/run.mjs, scan]`, only Node was vetted, so a pull
+  request that rewrote `tools/gate/run.mjs` to print an empty result got
+  exit 0, "clean" and zero proposals. On a run with `--trust-base`, every
+  `args:` entry that names a path inside the working tree now goes through
+  the same check as the program, and so does every file an interpreter
+  could load for it instead: `<entry>.js`, `.mjs`, `.cjs`, `.json` and
+  `.node`, because Node runs `tools/gate.js` over the directory
+  `tools/gate/` and `run.js` for a bare `run`. A file must be byte for byte
+  the base's with its directory unchanged (a sibling the pull request adds
+  is refused), a directory must have the same tree at both refs, and the
+  repository root is refused. `--name=value` is read for its value; an
+  option with no `=` and a word that names nothing on disk are never
+  refused; the gate's own subcommand words (`scan`, `source`) are exempt
+  only when `command:` is the gate itself, never for an interpreter; a
+  script outside the tree is accepted. The preview under the proposed rules
+  refuses an in-tree `args:` candidate outright, as it already did an
+  in-tree `command:`.
+- Upgrading: a repository whose policy hands an interpreter a script it
+  keeps in the tree, and whose pull requests change that script or anything
+  beside it, now sees that gate as could-not-run (`gate-program-refused`,
+  exit 2) on those pull requests, enforced whatever `enforce:` says. Land
+  changes to the script on the base branch first, or install it outside the
+  repository. A gate binary installed under another name is treated as an
+  interpreter, so a `scan` or `source` directory beside it is vetted. Not
+  vetted: a module name (`python -m pkg`), code passed as a string
+  (`node -e`, `bash -c`), and a package runner such as `npx`, which resolves
+  the gate from the head's own `node_modules`; name the script by its path.
+- The preview under the proposed rules escapes every character outside
+  printable ASCII as `\uXXXX` in its report block, job log lines and SARIF
+  notes (audit N3). A head `.vault-guard.json` pattern name can reach the
+  preview, and a right-to-left override in one reached the pull-request
+  comment intact. The primary text report escapes finding file paths the
+  same way, because a pull request names its own files; other primary gate
+  text and every SARIF path are printed as the gate gave them.
+
+### Changed
+
+- **The umbrella now installs `dep-guard` 0.17.0 and `intent-guard` 1.10.2
+  by default, up from 0.16.1 and 1.10.1.** dep-guard 0.17.0 reads local
+  targets under `node_modules` and name-checks lock entries the manifest
+  does not declare. intent-guard 1.10.2 counts file names again when they
+  sit in quotes, emphasis, escapes, HTML and Unicode punctuation. The
+  `TAG_DEP_GUARD_*` and `TAG_INTENT_GUARD_*` constants in `action.yml` move
+  in lockstep with the defaults, since those constants are what the
+  pull-request backward-pin rule measures a pin against; the dep-guard
+  pull-request-mode floor (`TRUST_BASE_MIN_VERSION` in `src/gate-runner.ts`)
+  is unchanged.
+
+  **What can newly turn a run red.** A repository that is green today can
+  newly fail where a local dependency target under `node_modules` or an
+  undeclared lock entry is now checked, or where an intent file name that
+  was hidden by quotes, emphasis, escapes, HTML or Unicode punctuation is
+  now seen. **The consumer cost.** On a pull request, an explicit
+  `dep-guard-version` below `0.17.0` or `intent-guard-version` below
+  `1.10.2` is refused; remove the input or raise it. Outside a pull request
+  an explicit pin is unaffected. To hold back, stay on the previous action
+  tag, v0.14.0.
+
+### Fixed
+
+- The version probe for an interpreter `command:` asks the script in
+  `args:`, not the interpreter (audit N4): `node tools/gate/run.mjs scan` is
+  asked `node tools/gate/run.mjs --version`, and a directory or bare name is
+  passed as written (`node tools/gate --version`). Before, Node's own version was
+  reported as the gate's and checked against the trust-base floors, and an
+  expected-version pin under the Action made an honest interpreter-run gate
+  could-not-run.
+- README CI examples recommend Node `22.23.4`, the patched release this
+  repository's own release job uses, instead of `22.11.0`.
+- SECURITY.md names 0.15.x as the supported minor; it still named 0.4.x.
+- docs/INVARIANTS.md: the program-check citations are re-derived, and three
+  claims that held in code but were not pinned by a test now are (the
+  step-summary shape anchor, the osv-scanner base shortcut's regular-file
+  check, and three of the four preview error wrappers).
+
+## [0.14.0] - 2026-10-26
+
+**A package release.** `@vaultcompass/conductor` moves to 0.14.0 on npm and the
+action's `conductor-version` default moves to `0.14.0` in lockstep, because the
+new `preview` input needs a CLI that understands `--preview`. The gate defaults
+are unchanged.
+
+### Added
+
+- A preview under the proposed rules on pull-request runs (issue 100). Each
+  gate whose `enabled` or `stage` the pull request changes runs once more (a
+  role the head switches off is skipped)
+  under the base policy with only `enabled`, `stage` and `enforce` taken from
+  the head, and what it would have said prints after the verdict, in the job
+  log, as note-level `conductor/preview-under-proposed-rules` SARIF
+  notifications and as one line in the step summary. It decides nothing: the
+  exit code, the verdict token and the SARIF results are unchanged; in the
+  full (`--verbose`) report lines 1 to 4 are untouched, and in the one-line
+  clean form the primary report is a byte-for-byte prefix. The intent gate is
+  deferred. New `conductor run --preview` flag and Action `preview` input,
+  which defaults to `true`.
+- Upgrading: a workflow on the old `timeout-minutes: 5` recipe can be killed
+  mid-preview on a pull request that flips a gate's `enabled` or `stage`.
+  Raise it to the primary run's need plus 5 minutes, or set `preview: 'false'`.
+- The whole preview has a hard deadline of 300 seconds, each spawn is killed
+  with SIGKILL at it, and the pull-request comment is cut at 60000 characters,
+  preview block first.
+- README recommendations: set the step's `timeout-minutes` to at least the
+  primary run's need plus 300 seconds, and check out with
+  `persist-credentials: false`.
+- SARIF run properties carry the rendered per-key policy change lines under
+  policyChanges.
+- The Action's job log and step summary now print the control changes a pull
+  request proposes (issue 100). `conductor run` writes the count and one
+  `conductor: proposed <product> <line>` line per proposal to stderr, and the
+  gates step copies the count line and up to 50 proposed lines into the step
+  summary under `control changes:`, with `pr-comment` off or on. A line that
+  holds a backtick or a character outside printable ASCII is replaced by a placeholder.
+
+### Changed
+
+- A changed `.guardrails.yaml` on a pull request is now reported one line per
+  changed key (issue 100), naming the gate, the key and the old and new value
+  (`policy: gates.dependencies.enabled true -> false`), where it used to say
+  `policy changed in this pull request`. The head file is parsed for the
+  comparison only and never acted on. A head that is absent or does not parse
+  gets one line saying its changes are not known. The count in "N control
+  change(s) proposed" is now per key: five changed keys count as five control
+  changes, where they counted as one.
+
 ## [0.13.2] - 2026-10-20
 
 **A patch package release that can turn a green run red.**

@@ -64,12 +64,12 @@ inputs:
       range would hand that decision to whatever the registry served on the
       morning of the run. The pin is only as protected as the workflow file
       is; see the note above the install step.
-    default: 0.13.2
+    default: 0.15.0
   dep-guard-version:
     description: >-
       The exact version of the dependency gate this action installs. Same
       rule as conductor-version.
-    default: 0.16.1
+    default: 0.17.0
   vault-guard-version:
     description: >-
       The exact version of the secrets gate this action installs. Same rule
@@ -79,7 +79,7 @@ inputs:
     description: >-
       The exact version of the intent gate this action installs. Same rule as
       conductor-version.
-    default: 1.10.1
+    default: 1.10.2
   pr-comment:
     description: >-
       Set to exactly "true" to post conductor's own text report as a pull
@@ -118,6 +118,18 @@ inputs:
       line and its verdict token match the job's actual exit code. Off by
       default, so an existing consumer is unaffected.
     default: 'false'
+  preview:
+    description: >-
+      On a pull request whose policy file switches a gate on or off or moves
+      its stage, also run each such gate once more under the proposed rules
+      and print what it would have said, after the verdict line, in its own
+      labelled block. The preview decides nothing: it never changes the exit
+      code, the verdict, the SARIF results or the verdict token. Set to
+      exactly "true" (the default) to ask for it; any other value leaves it
+      off. Passed as conductor run's own --preview flag, and only when the
+      installed conductor lists that flag.
+    required: false
+    default: 'true'
 
 outputs:
   sarif:
@@ -312,8 +324,8 @@ runs:
         # THE TESTED VERSIONS THIS TAG SHIPS, and they move with the pins
         # above. One constant serving both is how raising one silently raises
         # the other. As of this tag dep-guard shows the difference: its constant
-        # here is 0.16.1, floor 0.10.1; vault-guard 1.12.1, floor 1.9.1;
-        # intent-guard 1.10.1, floor 1.8.1. Raising a constant need not raise one.
+        # here is 0.17.0, floor 0.10.1; vault-guard 1.12.1, floor 1.9.1;
+        # intent-guard 1.10.2, floor 1.8.1. Raising a constant need not raise one.
         #
         # COMPARED AGAINST THESE HARDCODED CONSTANTS, never against anything
         # derived from an input. An input looks identical whether the consumer
@@ -331,17 +343,17 @@ runs:
         # read-only token, no secrets), and a test holds it to being the only
         # one.
         TAG_CONDUCTOR_MAJOR=0
-        TAG_CONDUCTOR_MINOR=13
-        TAG_CONDUCTOR_PATCH=2
+        TAG_CONDUCTOR_MINOR=15
+        TAG_CONDUCTOR_PATCH=0
         TAG_DEP_GUARD_MAJOR=0
-        TAG_DEP_GUARD_MINOR=16
-        TAG_DEP_GUARD_PATCH=1
+        TAG_DEP_GUARD_MINOR=17
+        TAG_DEP_GUARD_PATCH=0
         TAG_VAULT_GUARD_MAJOR=1
         TAG_VAULT_GUARD_MINOR=12
         TAG_VAULT_GUARD_PATCH=1
         TAG_INTENT_GUARD_MAJOR=1
         TAG_INTENT_GUARD_MINOR=10
-        TAG_INTENT_GUARD_PATCH=1
+        TAG_INTENT_GUARD_PATCH=2
 
         # ONE COMPARISON, CALLED FOUR TIMES. Four hand-written copies would be
         # four places for one to drift into a weaker shape, on a check where
@@ -976,6 +988,7 @@ runs:
         OUTPUT: ${{ inputs.output }}
         WORKDIR: ${{ inputs.working-directory }}
         ADVISORY: ${{ inputs.advisory }}
+        PREVIEW: ${{ inputs.preview }}
         # The versions this action pinned for the three gates. Since 0.13.0 a
         # resolved gate reporting another version (a node_modules/.bin
         # devDependency, PATH, a policy command), or none, is could-not-run
@@ -1039,9 +1052,13 @@ runs:
         # fallback, which is the behaviour this action had before the flag
         # existed.
         text_report_supported=0
+        preview_supported=0
         if conductor_help="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN "$CONDUCTOR_BIN" run --help 2>/dev/null)"; then
           case "$conductor_help" in
             *--text-report*) text_report_supported=1 ;;
+          esac
+          case "$conductor_help" in
+            *--preview*) preview_supported=1 ;;
           esac
         fi
         if [ "$text_report_supported" -eq 1 ]; then
@@ -1125,6 +1142,16 @@ runs:
         # and `set -eu` would otherwise abort on the first one it left out.
         if [ "${ADVISORY:-}" = "true" ]; then
           ARGS+=(--advisory)
+        fi
+        # THE PREVIEW UNDER THE PROPOSED RULES, which decides nothing: it is
+        # printed after the verdict line and never changes the exit status.
+        # Only for exactly "true", and only when the same successful help
+        # request that was asked about --text-report above also lists
+        # --preview: a conductor older than the flag exits 2 on an unknown
+        # option. The render step below never passes it, for the same reason:
+        # its fallback conductor predates --text-report, so it predates this.
+        if [ "${PREVIEW:-}" = "true" ] && [ "$preview_supported" -eq 1 ]; then
+          ARGS+=(--preview)
         fi
         # Off PATH, which the install step put the runner temp on. Never
         # node_modules/.bin/conductor: that is the head's own install, chosen
@@ -1226,6 +1253,72 @@ runs:
                   printf '%s\n\n' "$summary_line" >> "$GITHUB_STEP_SUMMARY"
                 fi
               done
+              # The pull-request control changes, from the report's own count
+              # line and its "  proposed  <product>" lines. Each line is
+              # matched whole; the product must be one of the six fixed
+              # names (bounded by length checks rather than large regex repeat
+              # counts, which some regex libraries cap at 255); a rest holding a backtick, a CR or anything outside
+              # printable ASCII is replaced by a placeholder and never
+              # copied, since the report can carry text from the scanned
+              # repository and the block is a code fence. At most 50 lines.
+              count_shape='^  pull-request mode: rules from [ -_a-~]{1,200}\. [0-9]+ control change\(s\) [ -_a-~]*\.$'
+              proposed_shape='^  proposed  (conductor|dep-guard|vault-guard|intent-guard|gitleaks|osv-scanner) +(.*)$'
+              printable_shape='^[ -~]*$'
+              # The scan stops at the preview header: nothing after it is
+              # counted as a proposal, and only the one line right after it
+              # is read, to be copied below if it has the fixed shape.
+              preview_header='Preview under the proposed rules (does not affect the verdict)'
+              preview_shape='^preview: [0-9]+ gate\(s\), [0-9]+ finding\(s\), [0-9]+ could-not-run$'
+              preview_line=""
+              proposal_count_line=""
+              proposal_lines=()
+              proposal_total=0
+              while IFS= read -r report_line || [ -n "$report_line" ]; do
+                if [ "$report_line" = "$preview_header" ]; then
+                  preview_next=""
+                  IFS= read -r preview_next || true
+                  if [ "${#preview_next}" -le 200 ] && [[ "$preview_next" =~ $preview_shape ]]; then
+                    preview_line="$preview_next"
+                  fi
+                  break
+                elif [ -z "$proposal_count_line" ] && [ "${#report_line}" -le 700 ] && [[ "$report_line" =~ $count_shape ]]; then
+                  proposal_count_line="${report_line#  }"
+                elif [[ "$report_line" =~ $proposed_shape ]]; then
+                  proposal_product="${BASH_REMATCH[1]}"
+                  proposal_rest="${BASH_REMATCH[2]}"
+                  proposal_total=$((proposal_total + 1))
+                  if [ "$proposal_total" -le 50 ]; then
+                    if [[ "$proposal_rest" == *'`'* ]] || ! [[ "$proposal_rest" =~ $printable_shape ]]; then
+                      proposal_lines+=("proposed  ${proposal_product}  (line omitted: unsafe characters)")
+                    else
+                      proposal_lines+=("${report_line#  }")
+                    fi
+                  fi
+                fi
+              done < "$TEXT_REPORT"
+              if [ -n "$proposal_count_line" ] || [ "${#proposal_lines[@]}" -gt 0 ]; then
+                {
+                  printf 'control changes:\n\n```text\n'
+                  if [ -n "$proposal_count_line" ]; then
+                    printf '%s\n' "$proposal_count_line"
+                  fi
+                  if [ "${#proposal_lines[@]}" -gt 0 ]; then
+                    for proposal_line in "${proposal_lines[@]}"; do
+                      printf '%s\n' "$proposal_line"
+                    done
+                  fi
+                  if [ "$proposal_total" -gt 50 ]; then
+                    printf '(%s more in the report)\n' "$((proposal_total - 50))"
+                  fi
+                  printf '```\n\n'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              # The preview's count line only, in its own fence, and only in
+              # the fixed shape matched above: everything else in the preview
+              # block is gate text run under head-proposed keys.
+              if [ -n "$preview_line" ]; then
+                printf 'preview under the proposed rules:\n\n```text\n%s\n```\n\n' "$preview_line" >> "$GITHUB_STEP_SUMMARY"
+              fi
             fi
           fi
         fi

@@ -120,12 +120,13 @@
 
 import type { Finding, Severity } from './envelope.js';
 import { gateExitBlocks } from './exit-codes.js';
-import type { GateOutcome } from './gate-runner.js';
+import { type GateOutcome, cleanOutputLine, cleanPreviewLine } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
 import { INTENT_WARNING } from './normalize.js';
-import { skewFound, skewPlace } from './output-text.js';
+import { gateOutcomeWords, skewFound, skewPlace } from './output-text.js';
 import { POLICY_FILE_NAME } from './policy.js';
-import type { RunResult } from './run.js';
+import { policyChangeLine } from './policy-diff.js';
+import { type RunResult, guardPreview } from './run.js';
 
 const SARIF_SCHEMA =
   'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json';
@@ -454,6 +455,17 @@ interface Invocation {
    */
   executionSuccessful: boolean;
   notifications: Notification[];
+}
+
+/**
+ * The trust base as the log carries it: the per-key changes become their
+ * rendered lines (escaped and truncated), never the raw head values.
+ */
+function sarifTrustBase(trustBase: NonNullable<RunResult['trustBase']>): Record<string, unknown> {
+  const { policyChanges, ...rest } = trustBase;
+  return policyChanges === undefined
+    ? rest
+    : { ...rest, policyChanges: policyChanges.map(policyChangeLine) };
 }
 
 function makeRun(
@@ -813,6 +825,37 @@ function proposalNotifications(result: RunResult): Notification[] {
       ref: result.trustBase?.ref ?? null,
     },
   }));
+}
+
+/**
+ * The preview under the proposed rules, one note per preview gate.
+ *
+ * NOTES ONLY, and never a result, a rule, a fingerprint or a run: the
+ * preview decides nothing, so nothing of it may reach the alert list or the
+ * code scanning tab's identity for a finding. The caller appends these only
+ * to a notification list that is non-empty without them, so a preview never
+ * creates the umbrella's run, and executionSuccessful still reads only the
+ * primary gates. A throw here yields no preview notification at all.
+ */
+function previewNotifications(result: RunResult): Notification[] {
+  const preview = result.preview;
+  if (preview === undefined) {
+    return [];
+  }
+  return guardPreview(
+    (): Notification[] =>
+      preview.gates.map((gate) => {
+        const outcome = cleanPreviewLine(gateOutcomeWords(gate));
+        return {
+          id: 'conductor/preview-under-proposed-rules',
+          message:
+            'Preview under the proposed rules, which does not affect the verdict: ' +
+            `${gate.role} (${gate.product}) ${outcome}, ${gate.findings.length} finding(s).`,
+          details: { role: gate.role, product: gate.product, outcome, findings: gate.findings.length },
+        };
+      }),
+    () => []
+  );
 }
 
 /**
@@ -1189,6 +1232,11 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...intentWarningNotifications(result),
     ...gateOwnOptionNotifications(result),
   ];
+  // Only onto a list that is already non-empty: the preview never earns the
+  // umbrella's run on its own.
+  if (notifications.length > 0) {
+    notifications.push(...previewNotifications(result));
+  }
 
   // Notifications earn the run on their own. Before this, the umbrella run
   // existed only when it had findings and a deferred gate was one; without
@@ -1217,7 +1265,9 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
         // fact about the whole run: every gate that could take the flag was
         // handed this same ref. A consumer reading only the log can then tell
         // a pull-request run from an ordinary one without parsing sentences.
-        result.trustBase === null ? undefined : { trustBase: result.trustBase },
+        result.trustBase === null
+          ? undefined
+          : { trustBase: sarifTrustBase(result.trustBase) },
         {
           // A claim about whether the analysis completed, taken from the
           // gates rather than from the exit code: an unenforced gate that

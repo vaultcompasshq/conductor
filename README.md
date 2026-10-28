@@ -75,7 +75,7 @@ jobs:
           echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  $bin/osv-scanner" | sha256sum -c -
           chmod +x "$bin/osv-scanner"
           echo "$bin" >> "$GITHUB_PATH"
-      - uses: vaultcompasshq/conductor@f2fa77069594c4ae4e8df2561924fc4e6a94fac0 # v0.13.2
+      - uses: vaultcompasshq/conductor@257830bd4b94a81419189b641508f1dda0950d00 # v0.15.0
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
@@ -229,11 +229,11 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.13.2
+   conductor 0.15.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.16.1  exit 0  153ms  via dep-guard on path
+   dependencies  dep-guard 0.17.0  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
      mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online-flag not passed
 
@@ -523,7 +523,7 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.13.2.
+SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.15.0.
 
 ```yaml
 name: guardrails
@@ -543,9 +543,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.11.0'
+          node-version: '22.23.4'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.13.2
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@v3
@@ -608,8 +608,10 @@ jobs:
           # Not a bare major: Node 22.0.0 ships npm 10.5.1, which the action
           # refuses because that client reports a clean install as tampered
           # with. 22.1.0 or later, or 20.13.0 or later, carries an npm that
-          # can verify.
-          node-version: '22.11.0'
+          # can verify. 22.23.4 is the patched release this repository's own
+          # release job pins after the 2026-10-21 Node security release; the
+          # gates run over pull-request content under whatever Node you pick.
+          node-version: '22.23.4'
       # NOTHING FROM THE PULL REQUEST RUNS BEFORE THE ACTION IN THIS JOB.
       # No `pnpm install`, `npm ci`, build or test step: an install runs the
       # repository's own lifecycle scripts (a root postinstall), and that code
@@ -620,7 +622,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.13.2
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These three
@@ -631,9 +633,9 @@ jobs:
           # request of their own. On a pull request the action refuses a pin
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
-          dep-guard-version: 0.16.1
+          dep-guard-version: 0.17.0
           vault-guard-version: 1.12.1
-          intent-guard-version: 1.10.1
+          intent-guard-version: 1.10.2
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
@@ -657,7 +659,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.11.0'
+          node-version: '22.23.4'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
@@ -801,7 +803,12 @@ caused that; `continue-on-error` is the thing that let it happen, so the two
 do not belong in the same recipe. Set a step `timeout-minutes` as well: the
 Action already caps each gate's own subprocess at 120 seconds and reports one
 that exceeds it as could-not-run, so the timeout is an outer bound around the
-whole run rather than the primary control.
+whole run rather than the primary control. Make it at least what the primary
+run needs plus 300 seconds (5 minutes), because the preview under the
+proposed rules can use up to that much on a pull request that changes a
+gate's `enabled` or `stage`; a step killed mid-preview has no verdict. Check
+out with `persist-credentials: false` so the gates never run with a token
+left in the checkout's git config.
 
 A complete copy-paste job, rather than the one step above in isolation:
 
@@ -821,12 +828,14 @@ jobs:
           # From 0.8.0 a shallow checkout on a pull-request run is
           # could-not-run for the history gate.
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.11.0'
+          node-version: '22.23.4'
       - id: conductor
-        timeout-minutes: 5
-        uses: vaultcompasshq/conductor@v0.13.2
+        # The primary run's need (here 5 minutes) plus 300 seconds.
+        timeout-minutes: 10
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           pr-comment: true
           advisory: true
@@ -962,7 +971,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.13.2
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1041,12 +1050,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.13.2
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.13.2
+        uses: vaultcompasshq/conductor@v0.15.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'

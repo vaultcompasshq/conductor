@@ -59,7 +59,7 @@
           "enum": ["block", "report"]
         },
         "timeout-seconds": {
-          "description": "How long conductor lets this gate run before stopping it, in whole seconds, from 10 to 21600 (six hours, the GitHub-hosted job limit). Every spawn of the gate gets the full limit: the version probe, the scan, the intent gate's preparation steps and osv-scanner's base run. Absent means the default for the product: 120 for dep-guard, vault-guard and intent-guard, 600 for gitleaks, 300 for osv-scanner. A gate stopped at its limit could not run (timed-out). Read from the base branch policy on a pull request, so a pull request cannot change its own limit. Not the same as a gate's own timeout flag under options.",
+          "description": "How long conductor lets this gate run before stopping it, in whole seconds, from 10 to 21600 (six hours, the GitHub-hosted job limit). Every spawn of the gate gets the full limit: the version probe, the scan, the intent gate's preparation steps and osv-scanner's base run. Absent means the default for the product: 120 for dep-guard, vault-guard and intent-guard, 600 for gitleaks, 300 for osv-scanner. A gate stopped at its limit could not run (timed-out). Read from the base branch policy on a pull request, so a pull request cannot change its own limit. The preview under the proposed rules also uses the base value, or the product default for a role the base does not have, capped by its 300 second deadline. Not the same as a gate's own timeout flag under options.",
           "type": "integer",
           "minimum": 10,
           "maximum": 21600
