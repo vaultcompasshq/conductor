@@ -68,10 +68,13 @@ import {
 import { osvLockfileKind, profileFor } from './products.js';
 import { unreadManifestsNote } from './unread-manifests.js';
 import type { ProductProfile } from './products.js';
-import { atLeastVersion, refuseHeadControlledProgram } from './trust-base.js';
+import { escapeNonAscii } from './policy-diff.js';
+import { atLeastVersion, refuseHeadControlledArgument, refuseHeadControlledProgram } from './trust-base.js';
 import {
   ResolveError,
+  argumentCandidates,
   candidateNames,
+  commandIsGateProgram,
   nodeModulesCandidate,
   resolveGateBinary,
 } from './resolve.js';
@@ -1152,6 +1155,13 @@ const EMPTY_RUN: RunSummary = {
  * only the first left the probe free to spawn whatever the head put at the
  * second, and a probe RUNS a program as thoroughly as a scan does.
  *
+ * And every path the policy's `args:` name (`binary.argumentPaths`), because
+ * an interpreter `command:` takes the program as an argument: with `command:
+ * /usr/bin/node` and `args: [tools/gate/run.mjs]` the script judges, and
+ * vetting Node alone let a pull request rewrite the script (audit 2026-10-27,
+ * B1). The version probe's argv is a prefix of those same args, so it is
+ * covered by the same loop.
+ *
  * The first refusal wins and the rest is not consulted. The verdict is the
  * same either way, and the sentence a reader has to act on should name one
  * file rather than two.
@@ -1166,6 +1176,12 @@ export function refuseHeadControlledBinary(
       continue;
     }
     const refusal = refuseHeadControlledProgram(repoRoot, trustBase, program);
+    if (refusal !== null) {
+      return refusal;
+    }
+  }
+  for (const argument of binary.argumentPaths) {
+    const refusal = refuseHeadControlledArgument(repoRoot, trustBase, argument);
     if (refusal !== null) {
       return refusal;
     }
@@ -1899,6 +1915,26 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
       reason: 'gate-program-refused',
       detail: `preview under the proposed rules: the base command ${gate.command} is inside the working tree, so this gate was not run`,
     };
+  }
+  // THE SAME FOR A PATH IN args:, for the same reason (audit 2026-10-27, B1):
+  // an interpreter command takes the program as an argument, and a script in
+  // the tree imports from the head as surely as a command there does. Refused
+  // outright, as the command is, rather than by the base-equality rule: that
+  // rule still runs in runGate on every preview spawn, so this is the
+  // stricter of the two. The root counts as inside, and so does a link whose
+  // own entry is in the tree, wherever it points (its directory is checked).
+  // The candidate set is the primary run's (argumentCandidates): the entry and
+  // every loadable sibling of it, so a head-added tools/gate.js beside a base
+  // tools/gate/ is refused here too.
+  const exempt = commandIsGateProgram(gate);
+  for (const arg of gate.args ?? []) {
+    const candidates = argumentCandidates(arg, repoRoot, gate.product, exempt);
+    if (candidates.some((named) => realPathInside(repoRoot, named) || realPathInside(repoRoot, path.dirname(named)))) {
+      return {
+        reason: 'gate-program-refused',
+        detail: `preview under the proposed rules: the base args entry ${arg} names a path inside the working tree, so this gate was not run`,
+      };
+    }
   }
   return null;
 }
@@ -3086,4 +3122,20 @@ function spawnAndRead(ctx: SpawnContext): GateOutcome {
       diagnostics: [],
     };
   }
+}
+
+/**
+ * cleanOutputLine, then every remaining character outside printable ASCII
+ * escaped as \uXXXX (escapeNonAscii). For every preview line: there a gate
+ * reads the head's own control files, so a rule id or a message can be
+ * head-chosen text, a right-to-left override included (audit 2026-10-27,
+ * N3). cleanOutputLine alone breaks a workflow command and keeps the
+ * override. The primary run is NOT safe by the same argument: its rule ids
+ * come from base-approved config, but its file paths are the head's own
+ * names. So the primary text report escapes finding paths (subjectLabel,
+ * src/output-text.ts), and only those; a primary gate message or stderr
+ * excerpt that quotes a path keeps its characters, a known limit.
+ */
+export function cleanPreviewLine(raw: string): string {
+  return escapeNonAscii(cleanOutputLine(raw));
 }

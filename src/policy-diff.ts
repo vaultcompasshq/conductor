@@ -106,16 +106,22 @@ export function diffPolicies(base: Policy, head: Policy | null): PolicyKeyChange
   return changes;
 }
 
+/**
+ * Every character outside printable ASCII as a \uXXXX escape (an astral
+ * character as its two surrogate escapes), so head-chosen text cannot smuggle
+ * a bidi override or a zero-width character into the report. Used for a head
+ * policy value here, and for every preview line (cleanPreviewLine,
+ * src/gate-runner.ts), whose gate text the head's own control files can
+ * choose (audit 2026-10-27, N3).
+ */
+export function escapeNonAscii(text: string): string {
+  return text.replace(/[^\x20-\x7e]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 function renderValue(value: unknown): string {
   if (value === undefined) return '(absent)';
   const text = JSON.stringify(value) ?? '(absent)';
-  // Every character outside printable ASCII becomes a \uXXXX escape (an
-  // astral character as its two surrogate escapes), so a head option value
-  // cannot smuggle a bidi override or a zero-width character into the report.
-  const escaped = text.replace(
-    /[^\x20-\x7e]/g,
-    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
-  );
+  const escaped = escapeNonAscii(text);
   if (escaped.length <= MAX_VALUE_LENGTH) return escaped;
   // Keep whole tokens up to 77 characters, so no escape sequence is split.
   let kept = '';

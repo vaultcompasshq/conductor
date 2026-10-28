@@ -28,6 +28,7 @@ import {
   CONDUCTOR_OWN_REASONS,
   type GateOutcome,
   cleanOutputLine,
+  cleanPreviewLine,
   conductorStatedReason,
   resolutionPlace,
   versionCharacters,
@@ -37,17 +38,23 @@ import { isLegacyContractPath, legacyChangedSentence } from './intent-prepare.js
 import type { ReportedMatch } from './intent-prepare.js';
 import { SPEC_DIR } from './intent-spec.js';
 import { PRODUCT_FOR_ROLE } from './policy.js';
+import { escapeNonAscii } from './policy-diff.js';
 import { type RunResult, guardPreview } from './run.js';
 
+// A file path in a finding is the head's choice on any pull-request run (a
+// file named with a right-to-left override in it), so in the text report,
+// and so in the pull-request comment, every path is printed with
+// escapeNonAscii (audit 2026-10-27 fix round, N3). SARIF keeps the real path:
+// code scanning has to find the file.
 function subjectLabel(finding: Finding): string {
   const subject = finding.subject;
   switch (subject.kind) {
     case 'package':
-      return `${subject.name} (${subject.manifest})`;
+      return `${subject.name} (${escapeNonAscii(subject.manifest)})`;
     case 'location':
-      return `${subject.file}:${subject.line}:${subject.column}`;
+      return `${escapeNonAscii(subject.file)}:${subject.line}:${subject.column}`;
     case 'paths':
-      return subject.paths.join(', ');
+      return subject.paths.map(escapeNonAscii).join(', ');
     case 'contract':
       return subject.category === undefined ? 'intent contract' : `contract: ${subject.category}`;
     case 'none':
@@ -98,7 +105,7 @@ function osvSubject(entry: Finding[]): string {
   const installed = typeof first.details.version === 'string' ? first.details.version : '';
   const where =
     entry.length === 1 && first.subject.kind === 'package'
-      ? `(${first.subject.manifest})`
+      ? `(${escapeNonAscii(first.subject.manifest)})`
       : `${entry.length} lockfiles`;
   const fixed = typeof first.details.fixedVersion === 'string' ? `fix ${first.details.fixedVersion}` : 'no fix listed';
   const dev = entry.filter(isDev).length;
@@ -175,7 +182,7 @@ function findingLines(entry: Finding[], verbose: boolean, shortProblem: boolean)
     lines.push(...gitleaksLines(finding));
   }
   if (verbose && entry.length > 1) {
-    const manifests = entry.map((each) => (each.subject.kind === 'package' ? each.subject.manifest : ''));
+    const manifests = entry.map((each) => (each.subject.kind === 'package' ? escapeNonAscii(each.subject.manifest) : ''));
     lines.push(`      lockfiles: ${manifests.join(', ')}`);
   }
   return lines;
@@ -889,7 +896,9 @@ export function previewLines(result: RunResult, verbose: boolean): string[] {
     },
     (message) => [`preview: could not be completed (${message})`]
   );
-  return ['', PREVIEW_HEADER, ...body].map(cleanOutputLine);
+  // cleanPreviewLine, not cleanOutputLine: a head .vault-guard.json can name
+  // a pattern id with a right-to-left override in it (audit 2026-10-27, N3).
+  return ['', PREVIEW_HEADER, ...body].map(cleanPreviewLine);
 }
 
 /**
@@ -910,7 +919,7 @@ export function previewLogLines(result: RunResult): string[] {
     ],
     (message) => [`conductor: preview could not be completed (${message})`]
   );
-  return lines.map(cleanOutputLine);
+  return lines.map(cleanPreviewLine);
 }
 
 /**

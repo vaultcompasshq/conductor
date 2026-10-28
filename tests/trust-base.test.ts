@@ -23,6 +23,9 @@ import {
   refuseTrustBaseRef,
   resolveRev,
 } from '../src/trust-base.js';
+import { refuseHeadControlledBinary } from '../src/gate-runner.js';
+import type { GatePolicy } from '../src/policy.js';
+import { resolveGateBinary } from '../src/resolve.js';
 
 const temps: string[] = [];
 
@@ -795,6 +798,147 @@ describe('a dash-leading trust base never reaches git as an option', () => {
     commit(repo, { 'a.txt': 'a\n' }, 'base');
     expect(resolveRev(repo, '--output=x', 'commit')).toBeNull();
     expect(readdirSync(repo)).not.toContain('x');
+  });
+});
+
+/**
+ * The paths an interpreter's `args:` name, vetted on a pull-request run
+ * (audit 2026-10-27, B1). Real repositories: the base carries a gate script
+ * at tools/vg/run.mjs and a few neighbours; `head` edits the working tree
+ * before the head commit. What is asked is the whole check a gate meets,
+ * resolveGateBinary then refuseHeadControlledBinary, with `command:` an
+ * absolute Node outside the tree.
+ */
+describe('vetting the paths an interpreter command takes in args', () => {
+  function scriptRepo(head: (repo: string) => void): { repo: string; base: string } {
+    const repo = emptyRepo();
+    const write = (name: string, body: string): void => {
+      mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+      writeFileSync(path.join(repo, name), body);
+    };
+    write('tools/vg/run.mjs', '// honest gate script\n');
+    write('tools/vg/cfg.json', '{}\n');
+    write('tools/vg/legacy.js', '// honest legacy script\n');
+    write('scan/notes.txt', 'a directory named like a subcommand\n');
+    write('app.js', 'const x = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    const base = git(repo, ['rev-parse', 'HEAD']).trim();
+    head(repo);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '--allow-empty', '-m', 'the pull request']);
+    return { repo, base };
+  }
+  const change = (name: string) => (repo: string) => writeFileSync(path.join(repo, name), '// rewritten by the head\n');
+  function vet(repo: string, base: string, args: string[], command = process.execPath): string | null {
+    const gate = { role: 'secrets', product: 'vault-guard', enabled: true, options: {}, command, args } as GatePolicy;
+    const binary = resolveGateBinary(gate, repo, '', { skipNodeModules: true });
+    if (binary === null) {
+      throw new Error('resolution found nothing');
+    }
+    return refuseHeadControlledBinary(repo, base, binary);
+  }
+
+  it('refuses a script the head rewrote, by relative and by absolute spelling', () => {
+    const { repo, base } = scriptRepo(change('tools/vg/run.mjs'));
+    for (const script of ['tools/vg/run.mjs', path.join(repo, 'tools', 'vg', 'run.mjs')]) {
+      expect([script, vet(repo, base, [script, 'scan'])]).toEqual([
+        script,
+        expect.stringMatching(/the gate program at tools\/vg\/run\.mjs is not the one ".*" approved/),
+      ]);
+    }
+  });
+
+  it('refuses an untouched script whose directory the head changed', () => {
+    const { repo, base } = scriptRepo(change('tools/vg/cfg.json'));
+    expect(vet(repo, base, ['tools/vg/run.mjs', 'scan'])).toMatch(/a file beside the gate program in tools\/vg/);
+  });
+
+  it('accepts an untouched script when the change is elsewhere, and a script outside the tree', () => {
+    const { repo, base } = scriptRepo(change('app.js'));
+    expect(vet(repo, base, ['tools/vg/run.mjs', 'scan'])).toBeNull();
+    const outside = path.join(mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-outside-')), 'run.mjs');
+    temps.push(path.dirname(outside));
+    writeFileSync(outside, '//\n');
+    const rewritten = scriptRepo(change('tools/vg/run.mjs'));
+    expect(vet(rewritten.repo, rewritten.base, [outside, 'scan'])).toBeNull();
+  });
+
+  it('reads the value of an option written with an equals sign', () => {
+    const { repo, base } = scriptRepo(change('tools/vg/cfg.json'));
+    expect(vet(repo, base, ['--config=tools/vg/cfg.json'])).toMatch(/tools\/vg\/cfg\.json is not the one/);
+  });
+
+  it('refuses a script the base does not have at all', () => {
+    const { repo, base } = scriptRepo((dir) => {
+      mkdirSync(path.join(dir, 'tools', 'new'), { recursive: true });
+      writeFileSync(path.join(dir, 'tools', 'new', 'run.mjs'), '// added by the head\n');
+    });
+    expect(vet(repo, base, ['tools/new/run.mjs', 'scan'])).toMatch(/does not track the gate program at tools\/new\/run\.mjs/);
+  });
+
+  it('refuses an in-tree symlink on its own entry, and an outside link into a rewritten script', () => {
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-link-'));
+    temps.push(outsideDir);
+    writeFileSync(path.join(outsideDir, 'real.mjs'), '//\n');
+    const linked = scriptRepo((dir) => symlinkSync(path.join(outsideDir, 'real.mjs'), path.join(dir, 'tools', 'vg', 'link.mjs')));
+    expect(vet(linked.repo, linked.base, ['tools/vg/link.mjs'])).not.toBeNull();
+
+    const rewritten = scriptRepo(change('tools/vg/run.mjs'));
+    const outsideLink = path.join(outsideDir, 'into-tree.mjs');
+    symlinkSync(path.join(rewritten.repo, 'tools', 'vg', 'run.mjs'), outsideLink);
+    expect(vet(rewritten.repo, rewritten.base, [outsideLink])).toMatch(/tools\/vg\/run\.mjs is not the one/);
+  });
+
+  it('refuses a directory the head changed and accepts one it left alone', () => {
+    const changed = scriptRepo(change('tools/vg/legacy.js'));
+    expect(vet(changed.repo, changed.base, ['tools/vg'])).toMatch(/the directory tools\/vg named in the gate's args: is not what/);
+    const untouched = scriptRepo(change('app.js'));
+    expect(vet(untouched.repo, untouched.base, ['tools/vg'])).toBeNull();
+  });
+
+  it('refuses the repository root, however it is spelled', () => {
+    const { repo, base } = scriptRepo(change('app.js'));
+    for (const root of ['.', repo, 'tools/..']) {
+      expect([root, vet(repo, base, [root])]).toEqual([root, expect.stringMatching(/name the repository root/)]);
+    }
+  });
+
+  it('finds the file Node would run for a path written without its extension', () => {
+    const { repo, base } = scriptRepo(change('tools/vg/legacy.js'));
+    expect(vet(repo, base, ['tools/vg/legacy', 'scan'])).toMatch(/tools\/vg\/legacy\.js is not the one/);
+  });
+
+  it('never refuses an option, a gate program own subcommand, or a word that names nothing, whatever the head changed', () => {
+    const { repo, base } = scriptRepo((dir) => {
+      writeFileSync(path.join(dir, 'scan', 'notes.txt'), 'changed\n');
+      writeFileSync(path.join(dir, 'app.js'), 'const x = 2;\n');
+    });
+    // A command that is the gate itself: its subcommand is not a path, even
+    // with a directory of that name the head changed.
+    const gateNamed = path.join(mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-bin-')), 'vault-guard');
+    temps.push(path.dirname(gateNamed));
+    writeFileSync(gateNamed, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    expect(vet(repo, base, ['scan', '--json', '-f', 'json', 'nowhere/at/all.mjs', '--flag='], gateNamed)).toBeNull();
+    // An interpreter has no subcommands of its own: `node scan` runs
+    // scan/index.js, so the same word is a path (fix round, MB3).
+    expect(vet(repo, base, ['scan'])).toMatch(/the directory scan named in the gate's args: is not what/);
+    expect(vet(repo, base, ['--json', '-f', 'json', 'nowhere/at/all.mjs', '--flag='])).toBeNull();
+  });
+
+  it('refuses a sibling file a loader takes before the directory, added by the head (fix round, MB1)', () => {
+    for (const extension of ['.js', '.mjs', '.cjs', '.json', '.node']) {
+      const added = scriptRepo((dir) => writeFileSync(path.join(dir, 'tools', `vg${extension}`), '// planted\n'));
+      expect([extension, vet(added.repo, added.base, ['tools/vg'])]).toEqual([
+        extension,
+        expect.stringContaining(`does not track the gate program at tools/vg${extension}`),
+      ]);
+    }
+  });
+
+  it('refuses a bare name Node resolves with an extension (fix round, MB2)', () => {
+    const { repo, base } = scriptRepo((dir) => writeFileSync(path.join(dir, 'run.js'), '// planted\n'));
+    expect(vet(repo, base, ['run'])).toContain('run.js');
   });
 });
 

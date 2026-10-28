@@ -120,7 +120,7 @@
 
 import type { Finding, Severity } from './envelope.js';
 import { gateExitBlocks } from './exit-codes.js';
-import { type GateOutcome, cleanOutputLine } from './gate-runner.js';
+import { type GateOutcome, cleanOutputLine, cleanPreviewLine } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
 import { INTENT_WARNING } from './normalize.js';
 import { gateOutcomeWords, skewFound, skewPlace } from './output-text.js';
@@ -845,7 +845,7 @@ function previewNotifications(result: RunResult): Notification[] {
   return guardPreview(
     (): Notification[] =>
       preview.gates.map((gate) => {
-        const outcome = cleanOutputLine(gateOutcomeWords(gate));
+        const outcome = cleanPreviewLine(gateOutcomeWords(gate));
         return {
           id: 'conductor/preview-under-proposed-rules',
           message:

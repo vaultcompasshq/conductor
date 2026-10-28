@@ -3896,3 +3896,260 @@ function shown(value: unknown): string {
   const text = JSON.stringify(value);
   return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
+
+/**
+ * An interpreter as the command and the gate script in args (audit
+ * 2026-10-27, B1).
+ *
+ * The base names an absolute Node outside the tree as `command:` and hands
+ * it `tools/vg/run.mjs` in `args:`. The interpreter is not what judges; the
+ * script is. Before the fix only `command:` went through the program check,
+ * so a head that rewrote the script chose its own judge: exit 0, clean, and
+ * not even listed as a proposal.
+ */
+describe('an interpreter command: whose in-tree script in args: the head replaced', () => {
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  function scriptRepo(options: {
+    head: 'honest' | 'plant';
+    /** Put the script outside the working tree and name it by its absolute path. */
+    outside?: boolean;
+  }): { repo: string; bin: string; marker: string } {
+    const repo = tempDir();
+    const bin = tempDir();
+    const marker = path.join(tempDir(), 'planted-ran.txt');
+
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+
+    // The real gate, on PATH and outside the repository. It reports the
+    // secret the pull request carries.
+    stubGate(bin, 'vault-guard', {
+      stdout: JSON.stringify({
+        version: '1',
+        scannedAt: '2026-09-06T00:00:00.000Z',
+        summary: { files: 1, secrets: 1 },
+        run: { files_scanned: 1, patterns_active: 59, fail_on: 'medium', blocking_matches: 1 },
+        results: [
+          {
+            file: 'leak.js',
+            matches: [
+              {
+                type: 'github-token',
+                severity: 'critical',
+                line: 1,
+                column: 15,
+                offset: 15,
+                value: 'ghp_...',
+                fingerprint: 'abc123',
+              },
+            ],
+          },
+        ],
+      }),
+      exit: 1,
+      version: '1.9.1',
+    });
+
+    // The honest script forwards its argv to the real gate, which is the
+    // audit's reproduction. The planted one records that it ran (on ANY
+    // invocation, the version probe included), then says there is nothing.
+    const honest = [
+      "import { spawnSync } from 'node:child_process';",
+      "const child = spawnSync('vault-guard', process.argv.slice(2), { stdio: 'inherit' });",
+      'process.exit(child.status ?? 2);',
+      '',
+    ].join('\n');
+    const plant = [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(marker)}, 'ran\\n');`,
+      "if (process.argv[2] === '--version') { console.log('1.9.1'); process.exit(0); }",
+      `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});`,
+      '',
+    ].join('\n');
+
+    const scriptDir = options.outside === true ? tempDir() : path.join(repo, 'tools', 'vg');
+    const script = path.join(scriptDir, 'run.mjs');
+    mkdirSync(scriptDir, { recursive: true });
+    writeFileSync(script, honest);
+    const scriptArg = options.outside === true ? script : 'tools/vg/run.mjs';
+
+    writeFileSync(
+      path.join(repo, '.guardrails.yaml'),
+      [
+        'version: 1',
+        'gates:',
+        '  secrets:',
+        '    product: vault-guard',
+        `    command: ${JSON.stringify(process.execPath)}`,
+        `    args: [${JSON.stringify(scriptArg)}, scan]`,
+        '',
+      ].join('\n')
+    );
+    writeFileSync(path.join(repo, 'app.js'), 'const x = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base: node runs the gate script']);
+    git(repo, ['branch', 'base']);
+
+    writeFileSync(
+      path.join(repo, 'leak.js'),
+      // Split in this source so the repository's own secrets scan does
+      // not match it; the file written is the whole fabricated token.
+      "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n"
+    );
+    if (options.head === 'plant') {
+      writeFileSync(script, plant);
+    }
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+
+    return { repo, bin, marker };
+  }
+
+  it('runs the rewritten script when there is no trust base, which is the hole', () => {
+    const { repo, bin, marker } = scriptRepo({ head: 'plant' });
+
+    const result = runCli(repo, ['run'], bin);
+
+    expect(existsSync(marker)).toBe(true);
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toMatch(/vault-guard\/github-token/);
+  });
+
+  it('refuses under a trust base before the script runs at all, naming the script', () => {
+    const { repo, bin, marker } = scriptRepo({ head: 'plant' });
+
+    const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+    // Not even the version probe ran it.
+    expect(existsSync(marker)).toBe(false);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+    expect(result.stdout).toMatch(/tools\/vg\/run\.mjs is not the one "base" approved/);
+  });
+
+  it('runs a script the pull request left alone, and reports the script version, not the interpreter one', () => {
+    const { repo, bin } = scriptRepo({ head: 'honest' });
+
+    const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+    expect(result.stdout).not.toMatch(/gate-program-refused/);
+    expect(result.stdout).toMatch(/vault-guard\/github-token/);
+    expect(result.status).toBe(1);
+    // The version probe asks the script (finding N4), so the header carries
+    // the gate's version and not this Node's.
+    expect(result.stdout).toMatch(/secrets\s+vault-guard\s+1\.9\.1/);
+    expect(result.stdout).not.toContain(process.versions.node);
+  });
+
+  it('runs a script outside the working tree, which a pull request cannot write', () => {
+    const { repo, bin } = scriptRepo({ head: 'honest', outside: true });
+
+    const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+
+    expect(result.stdout).not.toMatch(/gate-program-refused/);
+    expect(result.stdout).toMatch(/vault-guard\/github-token/);
+    expect(result.status).toBe(1);
+  });
+
+  /**
+   * The fix round's three bypasses (independent review of the B1 fix). Each
+   * one is the reviewer's repro repository: the base names an entry Node
+   * resolves to something other than the path written, and the head plants
+   * there. Each ran the plant and exited 0 before the candidate set.
+   */
+  function layoutRepo(options: {
+    args: string[];
+    /** Files at the base, each `honest` (forwards to the real gate). */
+    base: string[];
+    /** Files the head writes as the plant (records that it ran, prints clean). */
+    plant: string[];
+  }): { repo: string; bin: string; marker: string } {
+    const { repo, bin, marker } = scriptRepo({ head: 'honest', outside: true });
+    // Reuse the repository scriptRepo built (its gate stub, its leak), but
+    // replace its policy and lay out this case's files on a fresh base.
+    const fresh = tempDir();
+    git(fresh, ['init', '--quiet', '-b', 'main']);
+    git(fresh, ['config', 'user.email', 'test@example.com']);
+    git(fresh, ['config', 'user.name', 'Test']);
+    const honest =
+      "const { spawnSync } = require('node:child_process');\n" +
+      "const child = spawnSync('vault-guard', process.argv.slice(2), { stdio: 'inherit' });\n" +
+      'process.exit(child.status ?? 2);\n';
+    const plant =
+      "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", 'ran\\n');\n" +
+      "if (process.argv[2] === '--version') { console.log('1.9.1'); process.exit(0); }\n" +
+      `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});\n`;
+    const put = (name: string, body: string): void => {
+      mkdirSync(path.dirname(path.join(fresh, name)), { recursive: true });
+      writeFileSync(path.join(fresh, name), body);
+    };
+    put(
+      '.guardrails.yaml',
+      [
+        'version: 1',
+        'gates:',
+        '  secrets:',
+        '    product: vault-guard',
+        `    command: ${JSON.stringify(process.execPath)}`,
+        `    args: [${options.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
+        '',
+      ].join('\n')
+    );
+    put('app.js', 'const x = 1;\n');
+    for (const name of options.base) put(name, honest);
+    git(fresh, ['add', '-A']);
+    git(fresh, ['commit', '--quiet', '-m', 'base']);
+    git(fresh, ['branch', 'base']);
+    writeFileSync(path.join(fresh, 'leak.js'), readFileSync(path.join(repo, 'leak.js')));
+    for (const name of options.plant) put(name, plant);
+    git(fresh, ['add', '-A']);
+    git(fresh, ['commit', '--quiet', '-m', 'the pull request']);
+    return { repo: fresh, bin, marker };
+  }
+
+  function expectRefused(layout: { repo: string; bin: string; marker: string }, detail: RegExp): void {
+    const result = runCli(layout.repo, ['run', '--trust-base', 'base', '--verbose'], layout.bin);
+    expect(existsSync(layout.marker)).toBe(false);
+    expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+    expect(result.stdout).toMatch(detail);
+    expect(result.status).toBe(2);
+  }
+
+  it('refuses a directory argument when the head adds the sibling file Node loads first (a-dirsib)', () => {
+    expectRefused(
+      layoutRepo({ args: ['tools/vg', 'scan'], base: ['tools/vg/index.js'], plant: ['tools/vg.js'] }),
+      /does not track the gate program at tools\/vg\.js/
+    );
+    expectRefused(
+      layoutRepo({ args: ['gate', 'scan'], base: ['gate/index.js'], plant: ['gate.js'] }),
+      /does not track the gate program at gate\.js/
+    );
+  });
+
+  it('refuses a bare script name Node resolves with an extension (b-bare)', () => {
+    expectRefused(layoutRepo({ args: ['run', 'scan'], base: ['run.js'], plant: ['run.js'] }), /run\.js/);
+  });
+
+  it('reads a subcommand word as a path when the command is an interpreter (c-subcmd)', () => {
+    expectRefused(
+      layoutRepo({ args: ['scan'], base: ['scan/index.js'], plant: ['scan/index.js'] }),
+      /the directory scan named in the gate's args: is not what/
+    );
+  });
+
+  it('runs a directory argument the pull request left alone, and probes it for the gate version', () => {
+    const layout = layoutRepo({ args: ['tools/vg', 'scan'], base: ['tools/vg/index.js'], plant: [] });
+    const result = runCli(layout.repo, ['run', '--trust-base', 'base', '--verbose'], layout.bin);
+    expect(result.stdout).not.toMatch(/gate-program-refused/);
+    expect(result.stdout).toMatch(/vault-guard\/github-token/);
+    expect(result.stdout).toMatch(/secrets\s+vault-guard\s+1\.9\.1/);
+    expect(result.status).toBe(1);
+  });
+});

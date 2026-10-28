@@ -2490,6 +2490,22 @@ describe('action.yml: the verdict token from the gates step', () => {
       ].join('\n'),
     });
     expect(later.summary).toBe('conductor verdict: pass\n\n');
+    // A valid prefix with text after it: the shape is anchored at its end as
+    // well as its start (audit 2026-10-27, N1; dropping the trailing $ from
+    // preview_shape kept this test green before this case).
+    const trailing = runGatesForVerdict({
+      exit: 0,
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: pass',
+        'x',
+        '',
+        'Preview under the proposed rules (does not affect the verdict)',
+        'preview: 1 gate(s), 0 finding(s), 0 could-not-run x',
+        '',
+      ].join('\n'),
+    });
+    expect(trailing.summary).toBe('conductor verdict: pass\n\n');
   });
 
   it('passes --preview only when the input is true and the installed conductor lists it', () => {

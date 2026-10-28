@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 
-import { CANDIDATES, nodeModulesCandidate, resolveGateBinary } from '../src/resolve.js';
+import { CANDIDATES, commandIsGateProgram, nodeModulesCandidate, resolveGateBinary } from '../src/resolve.js';
 import type { GatePolicy } from '../src/policy.js';
 
 const temps: string[] = [];
@@ -369,5 +369,134 @@ describe('naming the candidate a pull-request run skipped', () => {
         repo
       )
     ).toBeNull();
+  });
+});
+
+/**
+ * An interpreter `command:` with the gate script in `args:` (audit
+ * 2026-10-27). The probe asks the script (N4), and every path the args name
+ * is carried for the pull-request program check (B1).
+ */
+describe('an interpreter command with the gate script in args', () => {
+  function scriptRepo(): { repo: string; script: string } {
+    const repo = tempDir();
+    const script = path.join(repo, 'tools', 'vg', 'run.mjs');
+    mkdirSync(path.dirname(script), { recursive: true });
+    writeFileSync(script, '// the gate script\n');
+    writeFileSync(path.join(repo, 'tools', 'vg', 'cfg.json'), '{}\n');
+    writeFileSync(path.join(repo, 'tools', 'vg', 'legacy.js'), '// extension-less spelling\n');
+    // A directory named like a subcommand, which must never count as a path.
+    mkdirSync(path.join(repo, 'scan'), { recursive: true });
+    return { repo, script };
+  }
+  const secrets = (args: string[], command = process.execPath): GatePolicy =>
+    gate({ role: 'secrets', product: 'vault-guard', command, args });
+
+  it('asks the script for its version, keeping the args before it and dropping the ones after', () => {
+    const { repo, script } = scriptRepo();
+    for (const [args, argv] of [
+      [['tools/vg/run.mjs', 'scan'], ['tools/vg/run.mjs', '--version']],
+      [[script, 'scan'], [script, '--version']],
+      [['--no-warnings', 'tools/vg/run.mjs', 'scan'], ['--no-warnings', 'tools/vg/run.mjs', '--version']],
+      // Fix round, N4: a directory, an extension-less name and an interpreter
+      // `scan` (scan/ exists here) are probed as written, the way the
+      // interpreter will resolve them for the scan.
+      [['tools/vg', 'scan'], ['tools/vg', '--version']],
+      [['tools/vg/legacy', 'scan'], ['tools/vg/legacy', '--version']],
+      [['scan'], ['scan', '--version']],
+    ] as Array<[string[], string[]]>) {
+      const resolved = resolveGateBinary(secrets(args), repo, tempDir());
+      expect([args, resolved?.versionProbe]).toEqual([args, { command: process.execPath, argv }]);
+    }
+  });
+
+  it('keeps the plain probe when no args entry names anything, or when the command is itself a gate name', () => {
+    const { repo } = scriptRepo();
+    expect(resolveGateBinary(secrets(['--json', 'nowhere']), repo, tempDir())?.versionProbe).toEqual({
+      command: process.execPath,
+      argv: ['--version'],
+    });
+    // A file after a subcommand is the gate's own argument, never a script
+    // to probe through: probing `check tools/vg/cfg.json --version` would run
+    // a check.
+    expect(resolveGateBinary(secrets(['check', 'tools/vg/cfg.json']), repo, tempDir())?.versionProbe).toEqual({
+      command: process.execPath,
+      argv: ['--version'],
+    });
+    const gateNamed = shim(tempDir(), 'vault-guard');
+    expect(resolveGateBinary(secrets(['scan', 'tools/vg/cfg.json'], gateNamed), repo, tempDir())?.versionProbe).toEqual({
+      command: gateNamed,
+      argv: ['--version'],
+    });
+  });
+
+  it('carries every path an interpreter could load for the args, and nothing for options or missing paths', () => {
+    const { repo, script } = scriptRepo();
+    const outside = path.join(tempDir(), 'outside.mjs');
+    writeFileSync(outside, '//\n');
+    const resolved = resolveGateBinary(
+      secrets([
+        'tools/vg/run.mjs',
+        script,
+        '--config=tools/vg/cfg.json',
+        '--json',
+        '-r',
+        'scan',
+        'tools/vg/legacy',
+        'tools/vg',
+        '.',
+        outside,
+        'tools/vg/missing.mjs',
+        'nowhere',
+        '--flag=',
+      ]),
+      repo,
+      tempDir()
+    );
+    expect(resolved?.argumentPaths).toEqual([
+      script,
+      script,
+      path.join(repo, 'tools', 'vg', 'cfg.json'),
+      // An interpreter has no subcommands: `scan` names the scan/ directory.
+      path.join(repo, 'scan'),
+      path.join(repo, 'tools', 'vg', 'legacy.js'),
+      path.join(repo, 'tools', 'vg'),
+      repo,
+      outside,
+    ]);
+  });
+
+  it('lists the entry and every loadable sibling of it, slash or not (fix round, MB1 and MB2)', () => {
+    const { repo } = scriptRepo();
+    for (const extension of ['.js', '.mjs', '.cjs', '.json', '.node']) {
+      writeFileSync(path.join(repo, 'tools', `vg${extension}`), '//\n');
+    }
+    writeFileSync(path.join(repo, 'run.js'), '//\n');
+    const resolved = resolveGateBinary(secrets(['tools/vg', 'run']), repo, tempDir());
+    expect(resolved?.argumentPaths).toEqual([
+      path.join(repo, 'tools', 'vg'),
+      ...['.js', '.mjs', '.cjs', '.json', '.node'].map((extension) => path.join(repo, 'tools', `vg${extension}`)),
+      path.join(repo, 'run.js'),
+    ]);
+  });
+
+  it('exempts the product subcommands only when the command is the gate program itself (fix round, MB3)', () => {
+    const { repo } = scriptRepo();
+    const gateNamed = shim(tempDir(), 'vault-guard');
+    expect(resolveGateBinary(secrets(['scan'], gateNamed), repo, tempDir())?.argumentPaths).toEqual([]);
+    expect(resolveGateBinary(secrets(['scan']), repo, tempDir())?.argumentPaths).toEqual([path.join(repo, 'scan')]);
+    expect(commandIsGateProgram(secrets([], gateNamed))).toBe(true);
+    expect(commandIsGateProgram(secrets([]))).toBe(false);
+    const script = path.join(tempDir(), 'my-build.js');
+    writeFileSync(script, '// not executable\n');
+    expect(commandIsGateProgram(secrets([], script))).toBe(true);
+  });
+
+  it('carries nothing when resolution found the gate itself, whatever its prefix names', () => {
+    const repo = tempDir();
+    mkdirSync(path.join(repo, 'scan'), { recursive: true });
+    const binDir = tempDir();
+    shim(binDir, 'vault-guard');
+    expect(resolveGateBinary(gate({ role: 'secrets', product: 'vault-guard' }), repo, binDir)?.argumentPaths).toEqual([]);
   });
 });

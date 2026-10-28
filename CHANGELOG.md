@@ -14,6 +14,66 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+**Intended as 0.15.0, a minor: a pull-request run that was green can now be
+could-not-run.** Fixes from the 2026-10-27 audit.
+
+### Security
+
+- An interpreter `command:` no longer lets a pull request choose its own
+  judge through `args:` (audit B1, pre-existing since the program check
+  arrived). With a base policy of `command: /usr/bin/node` and
+  `args: [tools/gate/run.mjs, scan]`, only Node was vetted, so a pull
+  request that rewrote `tools/gate/run.mjs` to print an empty result got
+  exit 0, "clean" and zero proposals. On a run with `--trust-base`, every
+  `args:` entry that names a path inside the working tree now goes through
+  the same check as the program, and so does every file an interpreter
+  could load for it instead: `<entry>.js`, `.mjs`, `.cjs`, `.json` and
+  `.node`, because Node runs `tools/gate.js` over the directory
+  `tools/gate/` and `run.js` for a bare `run`. A file must be byte for byte
+  the base's with its directory unchanged (a sibling the pull request adds
+  is refused), a directory must have the same tree at both refs, and the
+  repository root is refused. `--name=value` is read for its value; an
+  option with no `=` and a word that names nothing on disk are never
+  refused; the gate's own subcommand words (`scan`, `source`) are exempt
+  only when `command:` is the gate itself, never for an interpreter; a
+  script outside the tree is accepted. The preview under the proposed rules
+  refuses an in-tree `args:` candidate outright, as it already did an
+  in-tree `command:`.
+- Upgrading: a repository whose policy hands an interpreter a script it
+  keeps in the tree, and whose pull requests change that script or anything
+  beside it, now sees that gate as could-not-run (`gate-program-refused`,
+  exit 2) on those pull requests, enforced whatever `enforce:` says. Land
+  changes to the script on the base branch first, or install it outside the
+  repository. A gate binary installed under another name is treated as an
+  interpreter, so a `scan` or `source` directory beside it is vetted. Not
+  vetted: a module name (`python -m pkg`), code passed as a string
+  (`node -e`, `bash -c`), and a package runner such as `npx`, which resolves
+  the gate from the head's own `node_modules`; name the script by its path.
+- The preview under the proposed rules escapes every character outside
+  printable ASCII as `\uXXXX` in its report block, job log lines and SARIF
+  notes (audit N3). A head `.vault-guard.json` pattern name can reach the
+  preview, and a right-to-left override in one reached the pull-request
+  comment intact. The primary text report escapes finding file paths the
+  same way, because a pull request names its own files; other primary gate
+  text and every SARIF path are printed as the gate gave them.
+
+### Fixed
+
+- The version probe for an interpreter `command:` asks the script in
+  `args:`, not the interpreter (audit N4): `node tools/gate/run.mjs scan` is
+  asked `node tools/gate/run.mjs --version`, and a directory or bare name is
+  passed as written (`node tools/gate --version`). Before, Node's own version was
+  reported as the gate's and checked against the trust-base floors, and an
+  expected-version pin under the Action made an honest interpreter-run gate
+  could-not-run.
+- README CI examples recommend Node `22.23.4`, the patched release this
+  repository's own release job uses, instead of `22.11.0`.
+- SECURITY.md names 0.15.x as the supported minor; it still named 0.4.x.
+- docs/INVARIANTS.md: the program-check citations are re-derived, and three
+  claims that held in code but were not pinned by a test now are (the
+  step-summary shape anchor, the osv-scanner base shortcut's regular-file
+  check, and three of the four preview error wrappers).
+
 ## [0.14.0] - 2026-10-26
 
 **A package release.** `@vaultcompass/conductor` moves to 0.14.0 on npm and the
