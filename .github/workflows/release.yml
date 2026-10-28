@@ -56,6 +56,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        persist-credentials: false
 
     - name: Setup pnpm
       uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -153,10 +155,12 @@ jobs:
         git fetch origin main:refs/remotes/origin/main
 
         # "git tag v0.2.0 SOME_COMMIT && git push --tags" fires this
-        # workflow from any commit, on or off main. This repository has no
-        # branch protection and no tag ruleset, so without this check a tag
-        # on a side branch walks straight into an OIDC trusted publish, with
-        # a real tag and a matching GitHub Release to show for it.
+        # workflow from any commit, on or off main. Branch protection on
+        # main and a tag ruleset now exist, but neither stops a tag from
+        # being pushed at a commit on a side branch. Keep this check as
+        # defence in depth: without it such a tag walks straight into an
+        # OIDC trusted publish, with a real tag and a matching GitHub
+        # Release to show for it.
         if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
           echo "::error::Tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not an ancestor of origin/main. Publishing it would put code that never merged on the registry under a real tag. Refusing to publish."
           exit 1
@@ -228,6 +232,9 @@ jobs:
   release:
     needs: prepare
     runs-on: ubuntu-latest
+    # Approval gate for the publish. The environment is created in the
+    # repository settings and the npm trusted publisher is bound to it.
+    environment: npm-publish
     permissions:
       contents: write
       id-token: write
@@ -236,6 +243,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        persist-credentials: false
 
     - name: Setup Node.js
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -249,9 +258,11 @@ jobs:
     # >= 11.5.1 (Node >= 22.14.0). Pin major 11 -- npm@12 needs a newer Node
     # than this job runs. This installs npm itself, not this repository's
     # dependencies. Those were installed in prepare, which has no id-token.
+    # Exact version, so a new npm 11.x never runs with the OIDC token
+    # unreviewed: 11.21.1, published 2026-10-15. Bump it deliberately.
     - name: Upgrade npm for OIDC trusted publishing
       if: needs.prepare.outputs.action_only == 'false'
-      run: npm install -g npm@11
+      run: npm install -g npm@11.21.1
 
     - name: Download the packed tarball
       if: needs.prepare.outputs.action_only == 'false'
