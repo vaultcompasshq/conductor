@@ -229,7 +229,7 @@ required.
 
    Your terminal also shows one status line per gate, written to stderr so a
    CI job log has a per-gate record even when the report goes to a file,
-   such as `conductor: gate dependencies (dep-guard 0.17.0): ok, exit 0` or
+   such as `conductor: gate dependencies (dep-guard 0.18.0): ok, exit 0` or
    a `skipped (deferred to stage ci)` line for a deferred gate. They carry
    nothing the summary does not; to see only the summary, redirect stderr
    (`conductor run --staged --stage commit 2>/dev/null` in the hook).
@@ -237,15 +237,15 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.15.0
+   conductor 0.16.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.17.0  exit 0  153ms  via dep-guard on path
+   dependencies  dep-guard 0.18.0  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
      mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online false   lookups 0   skipped-by-deadline 0
 
-   secrets  vault-guard 1.12.1  exit 1  105ms  via vault-guard on path
+   secrets  vault-guard 1.13.0  exit 1  105ms  via vault-guard on path
      BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:14:12
          Possible secret of type 'anthropic'
      threshold medium   suppressed 0   ignored not reported
@@ -665,9 +665,9 @@ jobs:
           # request of their own. On a pull request the action refuses a pin
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
-          dep-guard-version: 0.17.0
-          vault-guard-version: 1.12.1
-          intent-guard-version: 1.10.2
+          dep-guard-version: 0.18.0
+          vault-guard-version: 1.13.0
+          intent-guard-version: 1.10.3
       - uses: github/codeql-action/upload-sarif@v3
         # Always: the log is most worth having on the run that failed.
         if: always()
