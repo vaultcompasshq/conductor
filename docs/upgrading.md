@@ -21,9 +21,9 @@ an explicit pin is unaffected, which is how a stale pin can sit unnoticed
 until the first pull request after the upgrade.
 
 **Pin the action ref to a full commit SHA** with the tag as a comment, for
-example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.15.0`. To
+example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.16.0`. To
 find the SHA for a tag, run
-`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.15.0` or read it off
+`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.16.0` or read it off
 the Releases page.
 
 **Dependabot or Renovate bumping that SHA changes the action ref only.** It
