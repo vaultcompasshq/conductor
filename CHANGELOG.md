@@ -14,6 +14,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-28
+
+**A security release.** It closes the trust-base gate-program and
+interpreter-argument gaps found in the 2026-10-28 audit, and moves the
+Action's default gates to dep-guard 0.18.0, vault-guard 1.13.0 and
+intent-guard 1.10.3, all security releases. `@vaultcompass/conductor` moves
+to 0.16.0 on npm and the `conductor-version` default moves in lockstep.
+
 Fixes from the 2026-10-28 audit.
 
 ### Security
