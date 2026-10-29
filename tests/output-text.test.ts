@@ -2264,4 +2264,81 @@ describe('head-chosen file paths in the primary text report (audit 2026-10-27 fi
       if (finding.subject.kind === 'location') expect(text).toContain(`${finding.subject.file}:`);
     }
   });
+
+  // Audit 2026-10-28, N2: the manifest of a package finding and the verbose
+  // lockfile list are head-chosen paths too, and each escape had no test.
+  // One case per print site, so dropping any one escape turns one red.
+  const OVERRIDE = '‮';
+  function packageFinding(product: string, manifest: string, extra: Record<string, unknown> = {}) {
+    const first = depGuard.findings.find((finding) => finding.subject.kind === 'package')!;
+    return {
+      ...first,
+      product,
+      ruleId: `${product}/example`,
+      message: 'an example finding',
+      subject: { kind: 'package' as const, name: 'left-pad', manifest },
+      details: { ...extra },
+    };
+  }
+
+  it('escapes a bidi override in the manifest of a dep-guard package finding', () => {
+    const finding = packageFinding('dep-guard', `pkg${OVERRIDE}a/package.json`);
+    const text = renderText(result([outcome({ findings: [finding] })], 1), { verbose: true });
+    expect(text).toContain('left-pad (pkg\\u202ea/package.json)');
+    expect(text).not.toContain(OVERRIDE);
+  });
+
+  it('escapes a bidi override in the lockfile of a single osv-scanner entry', () => {
+    const finding = packageFinding('osv-scanner', `app${OVERRIDE}b/package-lock.json`, { version: '1.0.0' });
+    const text = renderText(
+      result([outcome({ role: 'vulnerabilities', product: 'osv-scanner', findings: [finding] })], 1),
+      { verbose: true }
+    );
+    expect(text).toContain('left-pad@1.0.0 (app\\u202eb/package-lock.json)');
+    expect(text).not.toContain(OVERRIDE);
+  });
+
+  it('escapes a bidi override in the verbose lockfile list of a grouped osv-scanner entry', () => {
+    const findings = [
+      packageFinding('osv-scanner', `one${OVERRIDE}c/package-lock.json`, { version: '1.0.0' }),
+      packageFinding('osv-scanner', 'two/package-lock.json', { version: '1.0.0' }),
+    ];
+    const text = renderText(result([outcome({ role: 'vulnerabilities', product: 'osv-scanner', findings })], 1), {
+      verbose: true,
+    });
+    expect(text).toContain('2 lockfiles');
+    expect(text).toMatch(/lockfiles: .*one\\u202ec\/package-lock\.json/);
+    expect(text).not.toContain(OVERRIDE);
+  });
+});
+
+describe('an unenforced gate that checked nothing (audit 2026-10-28, N5)', () => {
+  function unenforcedIntent(contractFound: boolean): string {
+    return renderText(
+      result(
+        [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            exitCode: 0,
+            enforce: false,
+            findings: [],
+            run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { contractFound } },
+          }),
+        ],
+        0
+      ),
+      { verbose: true }
+    );
+  }
+
+  it('does not word a push-mode intent run with no contract like a clean result', () => {
+    const text = unenforcedIntent(false);
+    expect(text).not.toMatch(/found nothing to block on/);
+    expect(text).toMatch(/not enforced: .*it checked nothing here: intent ran but found no contract to check against/);
+  });
+
+  it('keeps the clean wording for an unenforced gate that did check something', () => {
+    expect(unenforcedIntent(true)).toMatch(/It found nothing to block on here/);
+  });
 });

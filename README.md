@@ -44,8 +44,9 @@ conductor init --dry-run   # prints every file it would write, writes nothing
 conductor init --hook      # writes .guardrails.yaml and one pre-commit hook
 ```
 
-The hook runs every enabled gate on each commit and prints one line when the
-commit is clean. Each gate can also be installed and run on its own.
+The hook runs every enabled gate on each commit and, when the commit is
+clean, prints one summary line, plus one status line per gate on stderr.
+Each gate can also be installed and run on its own.
 
 Then the same gates on every pull request, as one pinned workflow:
 
@@ -75,7 +76,7 @@ jobs:
           echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  $bin/osv-scanner" | sha256sum -c -
           chmod +x "$bin/osv-scanner"
           echo "$bin" >> "$GITHUB_PATH"
-      - uses: vaultcompasshq/conductor@257830bd4b94a81419189b641508f1dda0950d00 # v0.15.0
+      - uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
@@ -215,7 +216,7 @@ required.
    Commit something, now that `--hook` above has installed the pre-commit
    hook (this walkthrough's output below only appears when the hook is
    installed; a bare `conductor init` with no `--hook` runs no gate on
-   commit at all). A clean commit prints one line:
+   commit at all). A clean commit prints one summary line on stdout:
 
    ```
    conductor: clean, nothing blocked. 2 gate(s) ran: dependencies (dep-guard), secrets (vault-guard). Deferred to a later stage: intent (intent-guard) from stage ci. 0 gate(s) left out by --gate. 0 gate(s) not enforced. 1 note(s). 0 suppressed across all gates. Re-run with --verbose for the full report.
@@ -226,18 +227,25 @@ required.
    out by `--gate`, not enforced, and suppressed findings. Which gates appear
    in each depends on your policy file.
 
+   Your terminal also shows one status line per gate, written to stderr so a
+   CI job log has a per-gate record even when the report goes to a file,
+   such as `conductor: gate dependencies (dep-guard 0.18.0): ok, exit 0` or
+   a `skipped (deferred to stage ci)` line for a deferred gate. They carry
+   nothing the summary does not; to see only the summary, redirect stderr
+   (`conductor run --staged --stage commit 2>/dev/null` in the hook).
+
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.15.0
+   conductor 0.16.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.17.0  exit 0  153ms  via dep-guard on path
+   dependencies  dep-guard 0.18.0  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
-     mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online-flag not passed
+     mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online false   lookups 0   skipped-by-deadline 0
 
-   secrets  vault-guard 1.12.1  exit 1  105ms  via vault-guard on path
+   secrets  vault-guard 1.13.0  exit 1  105ms  via vault-guard on path
      BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:14:12
          Possible secret of type 'anthropic'
      threshold medium   suppressed 0   ignored not reported
@@ -248,7 +256,8 @@ required.
    verdict: exit 1, 1 blocking finding(s) in 1 of 2 enforced gate(s).
    ```
 
-   The `mode`, `corpusBuiltAt`, `lockfileFormat` and `online-flag` line under
+   The `mode`, `corpusBuiltAt`, `lockfileFormat`, `online`, `lookups` and
+   `skipped-by-deadline` line under
    `dependencies`, and the `filesScanned`/`patternsActive` line under
    `secrets`, are each gate's own run facts, one line per gate, added to the
    full report so a reader can see what a gate actually scanned and with
@@ -523,7 +532,8 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README name vaultcompasshq/conductor@v0.15.0.
+SHA instead. The recipes in this README name v0.16.0 that way, as
+`vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0`.
 
 ```yaml
 name: guardrails
@@ -545,7 +555,7 @@ jobs:
         with:
           node-version: '22.23.4'
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.15.0
+        uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
@@ -577,10 +587,32 @@ pinned `action.yml`, which is the version that commit ships, so the installed
 umbrella follows the pin and a Dependabot bump is the one `uses` line. If the
 input is set and is older than the constants in that pinned action.yml, a
 pull request run is refused and the validate step says to remove the input. A
-newer value is accepted and is what gets installed. The three gate version
-inputs can be left out too: each one then takes the default in the pinned
-action.yml. The spelled-out example below names them when a workflow wants
-that transparency.
+newer value is accepted and is what gets installed.
+
+**Omit the three gate version inputs too, unless you need to pin a gate
+forward** (issue 145). Each one then takes the default in the pinned
+action.yml, so the defaults travel with the tag and a Dependabot or Renovate
+bump of the `uses:` line moves the gates with it. Pinned by hand, they do
+not move: after the bump `dep-guard-version`, `vault-guard-version` or
+`intent-guard-version` sits below the new tag's defaults, a pull request
+refuses a pin below them, and that bump's own pull request goes red with
+nothing wrong in it. The fix is in the same pull request: raise each pinned
+line to the new tag's default (the CHANGELOG entry for the tag lists them,
+and so does the table in [Upgrading](docs/upgrading.md)), or delete it. The
+spelled-out example below names them when a workflow wants that
+transparency, and carries that cost.
+
+**The gates the Action installs are as new as the tag** (issue 146). A
+tag's defaults can reach npm the same day the tag does, so they can be
+younger than the minimum release age dep-guard holds your own dependencies
+to (7 days by default, a check that runs when dep-guard runs with
+`--online`). The Action installs them itself, outside your
+lockfile, so dep-guard does not see them. To run older gates, pin the action
+ref to an older tag, whose defaults are older; pinning the version inputs
+below the tag's own defaults is refused on a pull request, because a pull
+request must not choose an older, weaker judge. A Dependabot `cooldown`
+setting on the `github-actions` ecosystem delays the bump itself by the
+same number of days.
 
 ```yaml
 name: guardrails
@@ -622,7 +654,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.15.0
+        uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           output: conductor.sarif
           # Exact versions, never a range and never "latest". These three
@@ -633,9 +665,9 @@ jobs:
           # request of their own. On a pull request the action refuses a pin
           # below what the pinned action.yml ships, and the three lines can
           # be left out entirely to take that action's own versions.
-          dep-guard-version: 0.17.0
-          vault-guard-version: 1.12.1
-          intent-guard-version: 1.10.2
+          dep-guard-version: 0.18.0
+          vault-guard-version: 1.13.0
+          intent-guard-version: 1.10.3
       - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         # Always: the log is most worth having on the run that failed.
         if: always()
@@ -801,12 +833,19 @@ days (issue #36) because the step's exit code was swallowed regardless of
 which of the two reasons produced it. `advisory` fixes the failure that
 caused that; `continue-on-error` is the thing that let it happen, so the two
 do not belong in the same recipe. Set a step `timeout-minutes` as well: the
-Action already caps each gate's own subprocess at 120 seconds and reports one
-that exceeds it as could-not-run, so the timeout is an outer bound around the
-whole run rather than the primary control. Make it at least what the primary
-run needs plus 300 seconds (5 minutes), because the preview under the
-proposed rules can use up to that much on a pull request that changes a
-gate's `enabled` or `stage`; a step killed mid-preview has no verdict. Check
+Action already caps each gate's own subprocess (by default 120 seconds for
+the three family gates, 600 for gitleaks and 300 for osv-scanner, see the
+time limits above) and reports one that exceeds it as could-not-run, so the
+timeout is an outer bound around the whole run rather than the primary
+control. It must not undercut those limits, because a step killed by its
+own timeout has no verdict at all, where a gate stopped at its limit is
+reported. Make it at least the sum of the enabled gates' limits plus 300
+seconds for the preview under the proposed rules, which can use up to that
+much on a pull request that changes a gate's `enabled` or `stage`, plus the
+time the step spends installing the gates before any of them runs. With all
+five gates at their defaults that is 1260 plus 300 seconds, 26 minutes,
+before the install, so the recipe below says 30; raise it with any
+`timeout-seconds` you raise. Check
 out with `persist-credentials: false` so the gates never run with a token
 left in the checkout's git config.
 
@@ -833,9 +872,11 @@ jobs:
         with:
           node-version: '22.23.4'
       - id: conductor
-        # The primary run's need (here 5 minutes) plus 300 seconds.
-        timeout-minutes: 10
-        uses: vaultcompasshq/conductor@v0.15.0
+        # The enabled gates' own limits (all five at their defaults: 1260
+        # seconds) plus 300 seconds for the preview, rounded up. A step
+        # timeout below that can kill a full gitleaks scan and leave no verdict.
+        timeout-minutes: 30
+        uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           pr-comment: true
           advisory: true
@@ -971,7 +1012,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@v0.15.0
+        uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1050,12 +1091,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@v0.15.0
+        uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@v0.15.0
+        uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'

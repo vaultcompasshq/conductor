@@ -273,6 +273,16 @@ function enforcementNote(gate: GateOutcome): string | null {
       'proceeds. Set enforce: true there to make it block.'
     );
   }
+  // A gate that ran and checked nothing (an intent gate with no contract, a
+  // scanner with nothing to scan) found nothing because it looked at nothing,
+  // and "found nothing to block on" reads as a clean result (audit
+  // 2026-10-28, N5). The same predicate and words as the verdict's list.
+  if (gateCheckedNothing(gate)) {
+    return (
+      '  not enforced: enforce is false for this gate in .guardrails.yaml, and it checked ' +
+      `nothing here: ${checkedNothingWording(gate)}. This is not a clean result.`
+    );
+  }
   return '  not enforced: enforce is false for this gate in .guardrails.yaml. It found nothing to block on here.';
 }
 

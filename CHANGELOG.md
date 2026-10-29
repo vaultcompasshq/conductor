@@ -14,6 +14,70 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-28
+
+**A security release.** It closes the trust-base gate-program and
+interpreter-argument gaps found in the 2026-10-28 audit, and moves the
+Action's default gates to dep-guard 0.18.0, vault-guard 1.13.0 and
+intent-guard 1.10.3, all security releases. `@vaultcompass/conductor` moves
+to 0.16.0 on npm and the `conductor-version` default moves in lockstep.
+
+Fixes from the 2026-10-28 audit.
+
+### Security
+
+- A non-executable `.js` `command:` whose name is not a gate name is no
+  longer treated as the gate itself (audit MB1, introduced in 0.15.0). Its
+  subcommand word was exempt from vetting, so a base policy of
+  `command: /opt/run-gate.js` (a dispatcher that loads the script its first
+  argument names) with `args: [scan]` let a pull request rewrite `scan.js`
+  and get exit 0, clean, zero proposals. Only the command's file name now
+  decides whether it is the gate: `vault-guard` or a vendored
+  `vault-guard.js` is; anything else, executable or not, is vetted as an
+  interpreter. The 0.15.0 entry below said the exemption held "only when
+  `command:` is the gate itself"; that is now true.
+
+### Fixed
+
+- A gate's own data arguments no longer make it could-not-run on every pull
+  request (audit N1, introduced in 0.15.0). With `command:` named like the
+  gate, `args: [git, --config=.gitleaks.toml]` was refused on any pull
+  request because a root-level file was vetted as code, and the message
+  called the rules file "the gate program" and said to move a vendored gate.
+  When `command:` is the gate itself its args are now read as data, and
+  what each path is comes from the base tree, not the head's disk: a file
+  must be the base's bytes, but its directory is not compared and a file at
+  the root is fine; a directory given as an option's value (dep-guard's
+  `--corpus-dir=corpus`, the word after `--corpus-dir`, or a joined short
+  option such as `-ccorpus`) must be the same tree at the base and the
+  head; a positional directory (`scan src`, `scan .`) is a scan target and
+  is not compared; a path the base lacks is refused if the head has
+  anything there. A word after an option written with no `=` is read as
+  that option's value, unless the gate's own help says the option takes no
+  value (a short per-gate list, so `osv-scanner scan source -r .` still
+  scans `.`); after any other flag, put scan targets before the flags. An entry with
+  a code extension (`.js`, `.py`, `.sh` and the like) keeps the interpreter
+  rule whatever the command is named. Every other command keeps the 0.15.0
+  rule, and its refusals now name the entry as a file in `args:` rather
+  than "the gate program". Upgrading: a gate binary installed under another
+  name is still vetted as an interpreter; point `command:` at a file (or a
+  link outside the repository) named like the gate to have its args read
+  as data. (A first version of this fix, reviewed before release, left a
+  directory in a gate-named command's args unvetted, which let a pull
+  request rewrite dep-guard's corpus and pass; it never shipped.)
+- An unenforced gate that checked nothing, such as a push-mode intent gate
+  with no contract, no longer gets the note "It found nothing to block on
+  here"; the note now says it checked nothing and that this is not a clean
+  result (audit N5).
+- The trust-base refusal for a base that carries the same tree as HEAD now
+  gives the likely cause: the pull request was merged while the job was
+  queued, so nothing needs fixing and a later push re-runs the check. The
+  verdict is unchanged, could-not-run.
+- Tests now pin three head-path escapes in the text report (a package's
+  manifest, a single osv-scanner entry's lockfile, the verbose lockfile
+  list) and the preview's refusal of an in-tree link in `args:`, each of
+  which a mutation left green (audit N2, N3). No behaviour change.
+
 ## [0.15.0] - 2026-10-28
 
 **A package release, a minor: a pull-request run that was green can now be

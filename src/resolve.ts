@@ -88,6 +88,16 @@ export interface VersionProbe {
   argv: string[];
 }
 
+/** One args entry of a gate-named command that could name a path (`dataArgumentPaths`). */
+export interface DataArgument {
+  /** Absolute, resolved against the repository root. */
+  path: string;
+  /** False for an option's value (`--x=v`, the word after `--x`, `-xv`): data the gate reads. */
+  positional: boolean;
+  /** The args entry as written, for the refusal message. */
+  entry: string;
+}
+
 export interface ResolvedBinary {
   /** What to spawn. */
   command: string;
@@ -116,8 +126,26 @@ export interface ResolvedBinary {
    * policy's args, never a candidate's built-in prefix (`scan`, `source`):
    * those are subcommands this package wrote, and a directory of the same
    * name in somebody's repository is not a program.
+   *
+   * When `command:` is the gate itself (commandIsGateProgram) only the args
+   * entries with a code extension are listed here (`codeArguments`); the
+   * rest of its args are its own argv, read as data, and land in
+   * `dataArguments` instead.
    */
   argumentPaths: string[];
+  /**
+   * Every args entry that could name a path, when `command:` is the gate
+   * itself (`dataArgumentPaths`), in args order, by POSITION and never by
+   * what the head's disk holds. Empty for every other command, and when
+   * resolution found the gate.
+   *
+   * The pull-request check (refuseHeadControlledData) decides from the BASE
+   * tree what each one is: a file must be the base's blob, a directory given
+   * as an option's value must be the base's tree, and a positional directory
+   * is a scan target and is not compared (audit 2026-10-28, N1, and its
+   * review, B1 and N-a).
+   */
+  dataArguments: DataArgument[];
   source: ResolutionSource;
   /** The candidate name this matched, for the report's gate header. */
   candidate: string;
@@ -325,6 +353,7 @@ export function resolveGateBinary(
     const candidateName = inferred?.name ?? baseName(gate.command);
     const candidate = inferred ?? table[0];
     const argumentPaths = argumentPathsOf(gate, repoRoot);
+    const dataArguments = dataArgumentPaths(gate, repoRoot);
 
     // A build directory holds plain .js files with a shebang but no
     // executable bit surprisingly often (a fresh tsc output, a file copied
@@ -338,6 +367,7 @@ export function resolveGateBinary(
         program: gate.command,
         argvPrefix: [gate.command, ...prefix],
         argumentPaths,
+        dataArguments,
         source: 'policy',
         candidate: candidateName,
         versionProbe:
@@ -368,6 +398,7 @@ export function resolveGateBinary(
       program: gate.command,
       argvPrefix: prefix,
       argumentPaths,
+      dataArguments,
       source: 'policy',
       candidate: candidateName,
       versionProbe:
@@ -386,6 +417,7 @@ export function resolveGateBinary(
       program: found.command,
       argvPrefix: [...candidate.prefix],
       argumentPaths: [],
+      dataArguments: [],
       source: found.source,
       candidate: candidate.name,
       versionProbe: versionProbeFor(
@@ -431,20 +463,25 @@ function existsAtAll(candidate: string): boolean {
  * Whether the policy's `command:` is itself the gate program, so its `args:`
  * are that gate's own argv rather than something an interpreter will load.
  *
- * True when the command's name is a candidate name (`vault-guard`,
- * `intent-guard.js`), and for a non-executable `.js` command, which this
- * package runs through its own Node with the script as the program. False
- * for anything else, an interpreter such as `node` or `python3` above all.
- * Only then are the product's subcommand words (`scan`, `source`) exempt
- * from being read as paths: an interpreter handed `scan` runs `scan.js` or
- * `scan/index.js`, so for it the word is a path like any other (audit
- * 2026-10-27 fix round, MB3).
+ * True only when the command's NAME is a candidate name (`vault-guard`,
+ * `intent-guard.js`, executable or not). False for anything else: an
+ * interpreter such as `node` or `python3`, a renamed gate binary, and any
+ * wrapper or dispatcher whose name is not a gate name, a non-executable
+ * `my-build.js` included. Only when true are the product's subcommand words
+ * (`scan`, `source`) exempt from being read as paths, and the args read as
+ * the gate's own data rather than as code (`dataArgumentPaths`): an
+ * interpreter handed `scan` runs `scan.js` or `scan/index.js`, so for it the
+ * word is a path like any other (audit 2026-10-27 fix round, MB3).
+ *
+ * The name is the only test. An earlier version also counted every
+ * non-executable `.js` command, because this package runs one through its own
+ * Node with the script as the program; but how a file is RUN says nothing
+ * about what it LOADS, and a dispatcher that requires the script its first
+ * argument names let a pull request rewrite `scan.js` and pass (audit
+ * 2026-10-28, MB1).
  */
 export function commandIsGateProgram(gate: GatePolicy): boolean {
   if (gate.command === undefined) {
-    return true;
-  }
-  if (!isExecutableFile(gate.command) && /\.(?:js|mjs|cjs)$/.test(gate.command)) {
     return true;
   }
   const name = baseName(gate.command);
@@ -468,11 +505,11 @@ export function commandIsGateProgram(gate: GatePolicy): boolean {
  *    (`--config=tools/cfg.json`, `--import=./hook.mjs`) is read for the value
  *    after the first `=`, since that is where an interpreter takes a file to
  *    load and a gate takes a file to read its rules from.
- *  - When `exemptSubcommands` is true (the command is the gate program
- *    itself, commandIsGateProgram), a bare word that is one of the product's
- *    own subcommands (`scan`, `git`, `source`, `check`) names nothing, even
- *    when a directory of that name exists. For an interpreter nothing is
- *    exempt.
+ *  - Nothing else is exempt, the product's own subcommand words (`scan`,
+ *    `source`) included: this is only ever asked for a command that is not
+ *    the gate itself (commandIsGateProgram), and an interpreter handed `scan`
+ *    runs `scan.js` or `scan/index.js`. The gate itself has no code args;
+ *    its args are data (dataArgumentPaths).
  *  - The entry as written, when it exists as a file, a directory or a
  *    symlink, without following the symlink, so the caller can refuse an
  *    in-tree link on its own entry.
@@ -490,12 +527,7 @@ export function commandIsGateProgram(gate: GatePolicy): boolean {
  * string (`node -e`, `bash -c`), is not recognised as a path. The README says
  * so.
  */
-export function argumentCandidates(
-  arg: string,
-  repoRoot: string,
-  product: Product,
-  exemptSubcommands: boolean
-): string[] {
+export function argumentCandidates(arg: string, repoRoot: string): string[] {
   let value = arg;
   if (arg.startsWith('-')) {
     const equals = arg.indexOf('=');
@@ -503,8 +535,6 @@ export function argumentCandidates(
       return [];
     }
     value = arg.slice(equals + 1);
-  } else if (exemptSubcommands && CANDIDATES[product].some((candidate) => candidate.prefix.includes(arg))) {
-    return [];
   }
   if (value === '') {
     return [];
@@ -513,10 +543,139 @@ export function argumentCandidates(
   return [absolute, ...LOADABLE_EXTENSIONS.map((extension) => absolute + extension)].filter(existsAtAll);
 }
 
-/** `argumentCandidates` for every entry of a policy's `args:`, flattened. */
+/**
+ * Extensions that mark an args entry as CODE whatever the command is named
+ * (review 2026-10-28, N-e). None of the five gates reads such a file as data,
+ * so a gate-named command losing the code rule for them buys nothing, while a
+ * wrapper carrying a gate's name that hands `tools/run.js` to an interpreter
+ * would otherwise be vetted by that file's bytes alone, weaker than v0.15.0.
+ */
+const CODE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.node', '.ts', '.mts', '.cts', '.py', '.sh', '.bash', '.rb', '.pl'];
+
+function hasCodeExtension(value: string): boolean {
+  return CODE_EXTENSIONS.some((extension) => value.endsWith(extension));
+}
+
+/**
+ * A gate-named command's args entries, read by POSITION as that gate's own
+ * argv (review 2026-10-28, B1 and N-b):
+ *
+ *  - `--name=value` and `-x=value`: the value, an option value;
+ *  - `--name` or `-x` with no `=`: the NEXT entry is its value, unless that
+ *    entry is itself an option. Which options take a value is the gate's
+ *    business and not known here, so a word after any such option is read
+ *    as one; that is the fail-closed direction (a positional written after a
+ *    flag is vetted as data, and the refusal says to write it first);
+ *  - `-xvalue`, a short option joined to its value (pflag shorthand): the
+ *    rest of the word, an option value. Bundled flags (`-rv`) read the same
+ *    way name nothing on disk, so they cost one lookup and refuse nothing;
+ *  - a bare word that is one of the product's subcommands: nothing;
+ *  - any other word: a positional.
+ */
+/**
+ * Flags that take NO value, per product, read from each gate's own `--help`
+ * (osv-scanner 2.4.0 `scan source`, gitleaks 8.30.1 `git`, dep-guard 0.17.0
+ * and vault-guard 1.12.1 `scan`, intent-guard 1.10.2 `check`). The word after
+ * one of these is NOT its value, so `osv-scanner scan source -r .` keeps `.`
+ * as a positional scan target (re-review 2026-10-28, R1). Any flag not listed
+ * stays fail-closed: the word after it is read as its value. A wrong entry
+ * would let a value be read as a positional, which leaves a directory
+ * unvetted, so entries come only from a gate's own help text.
+ */
+const NO_VALUE_FLAGS: Record<Product, readonly string[]> = {
+  'osv-scanner': [
+    '-r', '--recursive', '--no-ignore', '--include-git-root', '--serve', '--offline',
+    '--offline-vulnerabilities', '--download-offline-databases', '--no-resolve',
+    '--allow-no-lockfiles', '--all-packages', '--all-vulns',
+    '--experimental-flag-deprecated-packages', '--experimental-no-default-plugins', '-h', '--help',
+  ],
+  gitleaks: [
+    '-v', '--verbose', '--pre-commit', '--staged', '--ignore-gitleaks-allow', '--no-banner',
+    '--no-color', '--redact', '-h', '--help',
+  ],
+  'dep-guard': ['--staged', '--online', '--no-online', '-h', '--help'],
+  'vault-guard': ['--staged', '-h', '--help'],
+  'intent-guard': ['--staged', '--no-require-frozen', '--log', '--json', '-h', '--help', '-v', '--version'],
+};
+
+function gateArgEntries(gate: GatePolicy): Array<{ value: string; positional: boolean; entry: string }> {
+  const entries: Array<{ value: string; positional: boolean; entry: string }> = [];
+  let pendingOption = false;
+  for (const arg of gate.args ?? []) {
+    if (arg.startsWith('-') && arg !== '-') {
+      pendingOption = false;
+      const equals = arg.indexOf('=');
+      if (equals >= 0) {
+        entries.push({ value: arg.slice(equals + 1), positional: false, entry: arg });
+      } else if (!arg.startsWith('--') && arg.length > 2) {
+        entries.push({ value: arg.slice(2), positional: false, entry: arg });
+      } else {
+        // A flag the gate's own help says takes no value leaves the next word
+        // a positional (NO_VALUE_FLAGS); any other flag claims it.
+        pendingOption = !NO_VALUE_FLAGS[gate.product].includes(arg);
+      }
+      continue;
+    }
+    if (pendingOption) {
+      pendingOption = false;
+      entries.push({ value: arg, positional: false, entry: arg });
+      continue;
+    }
+    if (CANDIDATES[gate.product].some((candidate) => candidate.prefix.includes(arg))) {
+      continue;
+    }
+    entries.push({ value: arg, positional: true, entry: arg });
+  }
+  return entries.filter((each) => each.value !== '');
+}
+
+/**
+ * The args entries vetted as CODE: every entry when the command is not the
+ * gate itself, and only the code-extension values (`hasCodeExtension`) when
+ * it is. Each goes through `argumentCandidates`, here and in the preview.
+ */
+export function codeArguments(gate: GatePolicy): string[] {
+  if (!commandIsGateProgram(gate)) {
+    return gate.args ?? [];
+  }
+  return gateArgEntries(gate)
+    .filter((each) => hasCodeExtension(each.value))
+    .map((each) => each.value);
+}
+
+/** `argumentCandidates` for every code argument (`codeArguments`), flattened. */
 function argumentPathsOf(gate: GatePolicy, repoRoot: string): string[] {
-  const exempt = commandIsGateProgram(gate);
-  return (gate.args ?? []).flatMap((arg) => argumentCandidates(arg, repoRoot, gate.product, exempt));
+  return codeArguments(gate).flatMap((arg) => argumentCandidates(arg, repoRoot));
+}
+
+/**
+ * The args entries of a gate-named command that are its own DATA, when
+ * `command:` is the gate itself (commandIsGateProgram), in args order; empty
+ * for every other command (audit 2026-10-28, N1, and its review, B1, N-a,
+ * N-b, N-e).
+ *
+ * Every non-code entry (`gateArgEntries`, less the code-extension ones in
+ * `codeArguments`) is listed with its position, resolved against the
+ * repository root, WHETHER OR NOT the head's disk has it and whatever kind of
+ * thing the disk holds there: a head must not be able to delete a path or
+ * change it from a file to a directory to move it out of vetting. What each
+ * one is, and so which rule applies, is decided from the base tree by
+ * refuseHeadControlledData. No `<entry>.js` sibling is tried: that is how an
+ * interpreter resolves a name, and this command is not one.
+ *
+ * What this trusts is the NAME: a program named like a gate is taken to be
+ * that gate, except that a code-extension entry keeps the code rule. A
+ * wrapper given a gate's name that hands an extension-less entry to an
+ * interpreter is a wrapper, vetted no further than this (README,
+ * pull-request trust boundary).
+ */
+export function dataArgumentPaths(gate: GatePolicy, repoRoot: string): DataArgument[] {
+  if (gate.command === undefined || !commandIsGateProgram(gate)) {
+    return [];
+  }
+  return gateArgEntries(gate)
+    .filter((each) => !hasCodeExtension(each.value))
+    .map((each) => ({ path: path.resolve(repoRoot, each.value), positional: each.positional, entry: each.entry }));
 }
 
 /**
@@ -553,7 +712,7 @@ function scriptVersionProbe(gate: GatePolicy, repoRoot: string): VersionProbe | 
     // Only the FIRST non-option entry can be the script. A later file is the
     // script's own argument (`my-build check rules.json`), and a probe that
     // carried the subcommand before it would make the gate do work.
-    return argumentCandidates(arg, repoRoot, gate.product, false).length > 0
+    return argumentCandidates(arg, repoRoot).length > 0
       ? { command: gate.command, argv: [...gate.args.slice(0, index + 1), ...spec.argv] }
       : null;
   }

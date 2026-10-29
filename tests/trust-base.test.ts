@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -136,6 +136,11 @@ describe('refusing a trust base', () => {
     const refusal = refuseTrustBaseRef(repo, 'HEAD~1');
     expect(refusal).toMatch(/identical tree/);
     expect(refusal).toMatch(/Nothing was checked/);
+    // The likely cause and what to do about it (2026-10-28 fix-forward): the
+    // usual reason is a pull request merged while its job was queued.
+    expect(refusal).toMatch(/the base already carries this tree/);
+    expect(refusal).toMatch(/merged while this job was queued/);
+    expect(refusal).toMatch(/nothing here needs fixing, and a later push re-runs the check/);
   });
 
   it('refuses when there is no head commit to compare against', () => {
@@ -844,14 +849,15 @@ describe('vetting the paths an interpreter command takes in args', () => {
     for (const script of ['tools/vg/run.mjs', path.join(repo, 'tools', 'vg', 'run.mjs')]) {
       expect([script, vet(repo, base, [script, 'scan'])]).toEqual([
         script,
-        expect.stringMatching(/the gate program at tools\/vg\/run\.mjs is not the one ".*" approved/),
+        // Named as a file in args:, never as "the gate program" (review N-f).
+        expect.stringMatching(/in the gate's args:, the file tools\/vg\/run\.mjs is not the one ".*" approved/),
       ]);
     }
   });
 
   it('refuses an untouched script whose directory the head changed', () => {
     const { repo, base } = scriptRepo(change('tools/vg/cfg.json'));
-    expect(vet(repo, base, ['tools/vg/run.mjs', 'scan'])).toMatch(/a file beside the gate program in tools\/vg/);
+    expect(vet(repo, base, ['tools/vg/run.mjs', 'scan'])).toMatch(/a file beside tools\/vg\/run\.mjs in tools\/vg/);
   });
 
   it('accepts an untouched script when the change is elsewhere, and a script outside the tree', () => {
@@ -874,7 +880,7 @@ describe('vetting the paths an interpreter command takes in args', () => {
       mkdirSync(path.join(dir, 'tools', 'new'), { recursive: true });
       writeFileSync(path.join(dir, 'tools', 'new', 'run.mjs'), '// added by the head\n');
     });
-    expect(vet(repo, base, ['tools/new/run.mjs', 'scan'])).toMatch(/does not track the gate program at tools\/new\/run\.mjs/);
+    expect(vet(repo, base, ['tools/new/run.mjs', 'scan'])).toMatch(/does not track tools\/new\/run\.mjs/);
   });
 
   it('refuses an in-tree symlink on its own entry, and an outside link into a rewritten script', () => {
@@ -931,7 +937,7 @@ describe('vetting the paths an interpreter command takes in args', () => {
       const added = scriptRepo((dir) => writeFileSync(path.join(dir, 'tools', `vg${extension}`), '// planted\n'));
       expect([extension, vet(added.repo, added.base, ['tools/vg'])]).toEqual([
         extension,
-        expect.stringContaining(`does not track the gate program at tools/vg${extension}`),
+        expect.stringContaining(`does not track tools/vg${extension}`),
       ]);
     }
   });
@@ -939,6 +945,168 @@ describe('vetting the paths an interpreter command takes in args', () => {
   it('refuses a bare name Node resolves with an extension (fix round, MB2)', () => {
     const { repo, base } = scriptRepo((dir) => writeFileSync(path.join(dir, 'run.js'), '// planted\n'));
     expect(vet(repo, base, ['run'])).toContain('run.js');
+  });
+
+  /**
+   * Audit 2026-10-28, N1. A command that IS the gate (named like one) reads
+   * its args as its own data: a rules file must be the base's blob, but its
+   * directory, its siblings and a scan target directory are not code and
+   * are not compared. Every other command keeps the code rule above.
+   */
+  describe('a command that is the gate itself', () => {
+    function gateNamed(): string {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-gate-'));
+      temps.push(dir);
+      const file = path.join(dir, 'vault-guard');
+      writeFileSync(file, '#!/bin/sh\nexit 0\n');
+      chmodSync(file, 0o755);
+      return file;
+    }
+
+    it('accepts a root-level rules file and a scan target directory the head did not change, whatever else changed', () => {
+      const { repo, base } = scriptRepo((dir) => {
+        writeFileSync(path.join(dir, 'tools', 'vg', 'legacy.js'), '// a sibling the head changed\n');
+        writeFileSync(path.join(dir, 'scan', 'notes.txt'), 'changed\n');
+      });
+      expect(vet(repo, base, ['scan', '--config=tools/vg/cfg.json', 'tools/vg', 'scan', '.'], gateNamed())).toBeNull();
+    });
+
+    it('refuses a rules file the head rewrote, naming it as a file the gate reads', () => {
+      const { repo, base } = scriptRepo(change('tools/vg/cfg.json'));
+      const refusal = vet(repo, base, ['scan', '--config=tools/vg/cfg.json'], gateNamed());
+      expect(refusal).toMatch(/the file tools\/vg\/cfg\.json named in the gate's args: is not the one ".*" approved/);
+      expect(refusal).not.toMatch(/gate program at/);
+    });
+
+    it('refuses a rules file the base does not track, and a link in place of one', () => {
+      const added = scriptRepo((dir) => writeFileSync(path.join(dir, 'rules.json'), '{}\n'));
+      expect(vet(added.repo, added.base, ['scan', 'rules.json'], gateNamed())).toMatch(
+        /the file rules\.json named in the gate's args: is not tracked at ".*"/
+      );
+      const linked = scriptRepo((dir) => {
+        symlinkSync('cfg.json', path.join(dir, 'tools', 'vg', 'link.json'));
+      });
+      expect(vet(linked.repo, linked.base, ['scan', 'tools/vg/link.json'], gateNamed())).toMatch(
+        /tools\/vg\/link\.json named in the gate's args: is not tracked|not a regular file/
+      );
+    });
+
+    it('refuses a link the base tracks unchanged, since what it points at is the head choice', () => {
+      const repo = emptyRepo();
+      writeFileSync(path.join(repo, 'real.json'), '{}\n');
+      symlinkSync('real.json', path.join(repo, 'rules.json'));
+      git(repo, ['add', '-A']);
+      git(repo, ['commit', '--quiet', '-m', 'base']);
+      const base = git(repo, ['rev-parse', 'HEAD']).trim();
+      writeFileSync(path.join(repo, 'app.js'), '//\n');
+      git(repo, ['add', '-A']);
+      git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+      expect(vet(repo, base, ['scan', 'rules.json'], gateNamed())).toMatch(
+        /the file rules\.json named in the gate's args: is not a regular file/
+      );
+    });
+
+    it('words a root-level file in an interpreter args: as a file named there, not as the gate program', () => {
+      const { repo, base } = scriptRepo(change('tools/vg/legacy.js'));
+      const refusal = vet(repo, base, ['--config=app.js']);
+      expect(refusal).toMatch(/the file app\.js named in the gate's args: is at the repository root/);
+      expect(refusal).toMatch(/point command: at a file named like the gate/);
+      expect(refusal).not.toMatch(/gate program at|Move a vendored gate/);
+    });
+
+    it('still refuses an interpreter given the same rules file, by the code rule (B1 unchanged)', () => {
+      const { repo, base } = scriptRepo(change('tools/vg/legacy.js'));
+      expect(vet(repo, base, ['--config=tools/vg/cfg.json'])).toMatch(/a file beside tools\/vg\/cfg\.json in tools\/vg/);
+      expect(vet(repo, base, ['--config=tools/vg/cfg.json'], gateNamed())).toBeNull();
+    });
+
+    // Review 2026-10-28, B1: dep-guard reads --corpus-dir as its rules, so a
+    // directory given as an OPTION VALUE is data and its tree must be the
+    // base's. Only a POSITIONAL directory is a scan target.
+    it('refuses a directory given as an option value when the head changed anything in it (review B1)', () => {
+      const changed = scriptRepo(change('tools/vg/legacy.js'));
+      for (const args of [['scan', '--corpus-dir=tools/vg'], ['scan', '--corpus-dir', 'tools/vg']]) {
+        expect([args, vet(changed.repo, changed.base, args, gateNamed())]).toEqual([
+          args,
+          expect.stringMatching(/the directory tools\/vg named in the gate's args: is not what ".*" approved/),
+        ]);
+      }
+      const untouched = scriptRepo(change('app.js'));
+      expect(vet(untouched.repo, untouched.base, ['scan', '--corpus-dir=tools/vg'], gateNamed())).toBeNull();
+      // The same directory as a positional scan target is not compared.
+      expect(vet(changed.repo, changed.base, ['scan', 'tools/vg'], gateNamed())).toBeNull();
+    });
+
+    it('refuses the repository root as an option value, and accepts it as a positional scan target', () => {
+      const { repo, base } = scriptRepo(change('app.js'));
+      const refusal = vet(repo, base, ['scan', '--corpus-dir=.'], gateNamed());
+      // Re-review R1: the entry as written, never the absolute checkout path,
+      // and the remedy that works for a misplaced scan target comes first.
+      expect(refusal).toMatch(/give the repository root \(--corpus-dir=\.\) as an option's value/);
+      expect(refusal).toMatch(/move it before the flags/);
+      expect(refusal).not.toContain(repo);
+      expect(vet(repo, base, ['scan', '.'], gateNamed())).toBeNull();
+    });
+
+    // Re-review 2026-10-28, R1: `osv-scanner scan source -r .` is the form
+    // osv-scanner's own documentation leads with. `-r` takes no value, so the
+    // `.` after it is a positional scan target, not -r's value. Known
+    // no-value flags come from each gate's --help; an unknown flag stays
+    // fail-closed and its next word is still read as its value.
+    it('reads the word after a known no-value flag as a positional, and after an unknown flag as its value (re-review R1)', () => {
+      const { repo, base } = scriptRepo(change('app.js'));
+      const osvDir = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-osv-'));
+      temps.push(osvDir);
+      const osv = path.join(osvDir, 'osv-scanner');
+      writeFileSync(osv, '#!/bin/sh\nexit 0\n');
+      chmodSync(osv, 0o755);
+      const vetOsv = (args: string[]): string | null => {
+        const gate = { role: 'vulnerabilities', product: 'osv-scanner', enabled: true, options: {}, command: osv, args } as GatePolicy;
+        const binary = resolveGateBinary(gate, repo, '', { skipNodeModules: true });
+        return refuseHeadControlledBinary(repo, base, binary!);
+      };
+      expect(vetOsv(['scan', 'source', '-r', '.'])).toBeNull();
+      expect(vetOsv(['scan', 'source', '--recursive', '.'])).toBeNull();
+      expect(vetOsv(['scan', 'source', '--no-ignore', '--offline', '-r', '.'])).toBeNull();
+      expect(vetOsv(['scan', 'source', '--experimental-unknown', '.'])).toMatch(/give the repository root \(\.\) as an option's value/);
+      // A table entry for one gate is not a table entry for another.
+      expect(vet(repo, base, ['scan', '-r', '.'], gateNamed())).toMatch(/give the repository root/);
+      expect(vet(repo, base, ['scan', '--staged', '.'], gateNamed())).toBeNull();
+    });
+
+    it('decides what a path is from the base tree, so a head that deletes or retypes it is refused (review N-a)', () => {
+      const deleted = scriptRepo((dir) => rmSync(path.join(dir, 'tools', 'vg', 'cfg.json')));
+      expect(vet(deleted.repo, deleted.base, ['scan', '--config=tools/vg/cfg.json'], gateNamed())).toMatch(
+        /the file tools\/vg\/cfg\.json named in the gate's args: is not a regular file at both/
+      );
+      const retyped = scriptRepo((dir) => {
+        rmSync(path.join(dir, 'tools', 'vg', 'cfg.json'));
+        mkdirSync(path.join(dir, 'tools', 'vg', 'cfg.json'));
+        writeFileSync(path.join(dir, 'tools', 'vg', 'cfg.json', 'x.json'), '{}\n');
+      });
+      expect(vet(retyped.repo, retyped.base, ['scan', '--config=tools/vg/cfg.json'], gateNamed())).toMatch(
+        /tools\/vg\/cfg\.json named in the gate's args: is not a regular file at both/
+      );
+      const dirToFile = scriptRepo((dir) => {
+        rmSync(path.join(dir, 'tools', 'vg'), { recursive: true });
+        writeFileSync(path.join(dir, 'tools', 'vg'), 'now a file\n');
+      });
+      expect(vet(dirToFile.repo, dirToFile.base, ['scan', '--corpus-dir=tools/vg'], gateNamed())).toMatch(
+        /the directory tools\/vg named in the gate's args: is not what/
+      );
+    });
+
+    it('reads a joined short option for its value (review N-b)', () => {
+      const { repo, base } = scriptRepo(change('tools/vg/cfg.json'));
+      expect(vet(repo, base, ['scan', '-ctools/vg/cfg.json'], gateNamed())).toMatch(
+        /the file tools\/vg\/cfg\.json named in the gate's args: is not the one/
+      );
+    });
+
+    it('keeps the code rule for an args entry with a code extension, whatever the command is named (review N-e)', () => {
+      const { repo, base } = scriptRepo(change('tools/vg/legacy.js'));
+      expect(vet(repo, base, ['tools/vg/run.mjs'], gateNamed())).toMatch(/a file beside tools\/vg\/run\.mjs in tools\/vg/);
+    });
   });
 });
 

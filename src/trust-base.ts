@@ -363,12 +363,17 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
     if (parents.length >= 2 && parents[0] === base) {
       return null;
     }
+    // Still could-not-run: nothing was compared, so nothing here is a pass.
+    // But the usual cause is benign and the reader should be told so, rather
+    // than sent to fix a workflow that is not broken.
     return (
       `refusing "${ref}" as the trust base: it is a different commit from HEAD but carries an ` +
       `identical tree (${headTree}), so the policy would come from the tree being judged and ` +
-      'there would be nothing for pull-request mode to compare. A pull request merge ref looks ' +
-      'exactly like this when the base has not moved. Pass the base branch (for example ' +
-      'origin/main), not the head or merge commit. Nothing was checked.'
+      'there would be nothing for pull-request mode to compare. Likely cause: the base already ' +
+      'carries this tree, which usually means the pull request was merged while this job was ' +
+      'queued; if so, nothing here needs fixing, and a later push re-runs the check. Otherwise ' +
+      'the trust base names the head or merge commit: pass the base branch (for example ' +
+      'origin/main) instead. Nothing was checked.'
     );
   }
 
@@ -773,6 +778,16 @@ function realOrNull(candidate: string): string | null {
   }
 }
 
+/** Whether anything at all, a dangling link included, is at `candidate`. */
+function existsOnDisk(candidate: string): boolean {
+  try {
+    lstatSync(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Whether `candidate` is the working tree or something under it. */
 function insideWorkingTree(repoReal: string, candidate: string): boolean {
   const relative = path.relative(repoReal, candidate);
@@ -885,7 +900,9 @@ function treeShaAt(repoRoot: string, ref: string, relativeDir: string): string |
 export function refuseHeadControlledProgram(
   repoRoot: string,
   trustBase: string,
-  programPath: string
+  programPath: string,
+  /** True when asked for an interpreter's `args:` entry, which words the root refusal for an argument. */
+  fromArgs = false
 ): string | null {
   const repoReal = realOrNull(repoRoot);
   if (repoReal === null) {
@@ -920,6 +937,31 @@ export function refuseHeadControlledProgram(
     const base = baseEntry.kind === 'entry' ? baseEntry : null;
     const head = headEntry.kind === 'entry' ? headEntry : null;
 
+    // An interpreter's args entry is named as a file in args:, never as "the
+    // gate program": it may be a script or a file a script reads (review
+    // 2026-10-28, N-f, which the first N1 round fixed for the root only).
+    if (fromArgs && (base === null || head === null)) {
+      return (
+        `in the gate's args:, the ${trustBase === '' ? 'base' : `"${trustBase}"`} ref does not ` +
+        `track ${relative}, a file named there or one an interpreter could load for it, so it is ` +
+        'a file this pull request controls, vetted as code. Land it on the base branch first, or ' +
+        'name a script outside the repository. Nothing was checked by this gate.'
+      );
+    }
+    if (fromArgs && (!isRegularFileMode(base!.mode) || !isRegularFileMode(head!.mode))) {
+      return (
+        `in the gate's args:, the file ${relative} is not a regular file at both "${trustBase}" ` +
+        'and the head commit, so what an interpreter would load is decided by something other ' +
+        'than the approved bytes. Nothing was checked by this gate.'
+      );
+    }
+    if (fromArgs && base!.sha !== head!.sha) {
+      return (
+        `in the gate's args:, the file ${relative} is not the one "${trustBase}" approved: this ` +
+        'pull request changes it, and it is vetted as code an interpreter could load. Land the ' +
+        'change on the base branch first. Nothing was checked by this gate.'
+      );
+    }
     if (base === null || head === null) {
       return (
         `the ${trustBase === '' ? 'base' : `"${trustBase}"`} ref does not track the gate program ` +
@@ -963,11 +1005,35 @@ export function refuseHeadControlledProgram(
         // differs, which is every pull request. Refusing with the remedy
         // beats a rule that silently means "no pull request may change
         // anything".
+        if (fromArgs) {
+          // Reached for an interpreter's args (refuseHeadControlledArgument):
+          // the file may be a script or something the script reads, so it is
+          // not called "the gate program", and the remedy is about the
+          // command, not about vendoring (audit 2026-10-28, N1).
+          return (
+            `the file ${relative} named in the gate's args: is at the repository root, and it is ` +
+            'vetted as code an interpreter could load (the command is not the gate itself, or ' +
+            'the entry has a code extension): ' +
+            'the directory that would have to be unchanged is the whole repository, and this pull ' +
+            `request differs from "${trustBase}" somewhere in it. Move the script into its own ` +
+            'directory, or, if the command is the gate binary under another name, point command: ' +
+            'at a file named like the gate so its args are read as data. Nothing was checked by ' +
+            'this gate.'
+          );
+        }
         return (
           `the gate program at ${relative} is at the repository root, so the directory that ` +
           'would have to be unchanged for it to be trusted is the whole repository, and this ' +
           `pull request differs from "${trustBase}" somewhere in it. Move a vendored gate into ` +
           'its own directory, or install it on PATH. Nothing was checked by this gate.'
+        );
+      }
+      if (fromArgs) {
+        return (
+          `in the gate's args:, a file beside ${relative} in ${directory} is not what ` +
+          `"${trustBase}" approved: ${relative} is unchanged, but the directory around it is not, ` +
+          'and code an interpreter loads can load its neighbours. Land the change on the base ' +
+          'branch first, or name a script outside the repository. Nothing was checked by this gate.'
         );
       }
       return (
@@ -1079,7 +1145,7 @@ export function refuseHeadControlledArgument(
     isDirectory = false;
   }
   if (!isDirectory) {
-    return refuseHeadControlledProgram(repoRoot, trustBase, argumentPath);
+    return refuseHeadControlledProgram(repoRoot, trustBase, argumentPath, true);
   }
 
   for (const spelling of new Set(spellings)) {
@@ -1105,6 +1171,140 @@ export function refuseHeadControlledArgument(
         'this pull request adds, removes or changes something in it, and an interpreter handed a ' +
         'directory runs what is inside. Land the change on the base branch first, or name a ' +
         'script outside the repository. Nothing was checked by this gate.'
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Why a path a gate's own `args:` name cannot be trusted on a pull-request
+ * run, or null (audit 2026-10-28, N1, and its review, B1 and N-a).
+ *
+ * Asked only when `command:` is the gate itself (dataArgumentPaths in
+ * src/resolve.ts), whose args are its own argv: a rules file such as
+ * `--config=.gitleaks.toml`, or a rules directory such as dep-guard's
+ * `--corpus-dir`, is read as data, not loaded as code. Its contents still
+ * decide what the gate reports, so a pull request that rewrote them would
+ * choose the rules that judge it; but nothing beside a file runs, so a
+ * file's directory is not compared and a file at the repository root is
+ * fine.
+ *
+ * WHAT THE PATH IS COMES FROM THE BASE TREE, never from the head's disk, so a
+ * head cannot delete a path or turn a file into a directory to change which
+ * rule applies:
+ *
+ *  - Outside the working tree, by its own spelling and by its realpath:
+ *    accepted, as for a program.
+ *  - The repository root: accepted as a POSITIONAL entry (`scan .`, the
+ *    repository the gate is handed anyway, which is the thing being judged
+ *    and cannot be the base's on any pull request), refused as an OPTION
+ *    VALUE (`--corpus-dir=.` would make the whole head tree the rules).
+ *  - A tree at the base: a positional entry is a scan target and is not
+ *    compared (the head's version of it is what the gate is there to judge).
+ *    An option value is data: the head must hold a tree with the same tree
+ *    object id, or it is refused.
+ *  - A blob at the base: a tracked regular file at both refs with the same
+ *    blob, whatever its position. An in-tree link is refused on its own entry
+ *    (a link entry), as everywhere else, because what it points at is the
+ *    head's choice. A head that deleted it or replaced it is refused.
+ *  - Absent at the base: accepted only if the head has nothing there either,
+ *    tracked or on disk (a word that is not a path, `--format=json`);
+ *    otherwise it is a path this pull request chose, and refused.
+ *
+ * Only whether something exists on disk at a path the base does not track is
+ * read from the working tree; every other answer is a `git ls-tree` listing.
+ */
+export function refuseHeadControlledData(
+  repoRoot: string,
+  trustBase: string,
+  data: { path: string; positional: boolean; entry?: string }
+): string | null {
+  const repoReal = realOrNull(repoRoot);
+  if (repoReal === null) {
+    return `the repository root ${repoRoot} could not be resolved, so the files named in the gate's args: could not be checked against "${trustBase}". Nothing was checked by this gate.`;
+  }
+  const dataPath = data.path;
+  const spellings = [withResolvedParent(dataPath), realOrNull(dataPath)].filter(
+    (spelling): spelling is string => spelling !== null
+  );
+  const baseName = trustBase === '' ? 'the base' : `"${trustBase}"`;
+  if (spellings.some((spelling) => path.relative(repoReal, spelling) === '')) {
+    if (data.positional) {
+      return null;
+    }
+    // The entry as written, never the absolute checkout path, which would
+    // reach the pull-request comment and SARIF; and the remedy for the common
+    // case, a scan target written after a flag, first (re-review R1).
+    return (
+      `the gate's args: give the repository root (${data.entry ?? '.'}) as an option's value, so ` +
+      `the whole working tree would be data the gate reads, and this pull request differs from ` +
+      `${baseName} somewhere in it. If it is the scan target written after a flag, move it before ` +
+      'the flags, where it reads as a positional; otherwise give that option a directory of its ' +
+      'own. Nothing was checked by this gate.'
+    );
+  }
+  const candidates = new Set<string>();
+  for (const candidate of spellings) {
+    if (insideWorkingTree(repoReal, candidate)) {
+      candidates.add(candidate);
+    }
+  }
+  for (const candidate of candidates) {
+    const relative = path.relative(repoReal, candidate).split(path.sep).join('/');
+    const baseEntry = treeEntryAt(repoRoot, trustBase, relative);
+    const headEntry = treeEntryAt(repoRoot, 'HEAD', relative);
+    for (const listed of [baseEntry, headEntry]) {
+      if (listed.kind === 'error') {
+        return (
+          `the file ${relative} named in the gate's args: could not be checked against ${baseName}: ` +
+          `${listed.detail}. Nothing was checked by this gate.`
+        );
+      }
+    }
+    const base = baseEntry.kind === 'entry' ? baseEntry : null;
+    const head = headEntry.kind === 'entry' ? headEntry : null;
+    if (base === null) {
+      if (head === null && !existsOnDisk(candidate)) {
+        // Names nothing at either side: a word, not a path.
+        continue;
+      }
+      return (
+        `the file ${relative} named in the gate's args: is not tracked at ${baseName} and the head ` +
+        'commit both, so the gate would read a path this pull request chose. Commit it on the base ' +
+        'branch first, or name a file outside the repository. Nothing was checked by this gate.'
+      );
+    }
+    if (base.type === 'tree') {
+      if (data.positional) {
+        // A scan target: the head's version of it is what the gate judges.
+        continue;
+      }
+      if (head === null || head.type !== 'tree' || head.sha !== base.sha) {
+        return (
+          `the directory ${relative} named in the gate's args: is not what ${baseName} approved: ` +
+          'this pull request adds, removes or changes something in it, and it is given as an ' +
+          "option's value, so the gate reads it as data, such as a rules directory " +
+          '(dep-guard --corpus-dir). Land the change on the base branch first. If it is a scan ' +
+          'target written after a flag, move it before the flags, where it reads as a positional ' +
+          'and is not compared. Nothing was checked by this gate.'
+        );
+      }
+      continue;
+    }
+    if (head === null || !isRegularFileMode(base.mode) || !isRegularFileMode(head.mode)) {
+      return (
+        `the file ${relative} named in the gate's args: is not a regular file at both ${baseName} ` +
+        'and the head commit, so what the gate would read is decided by something other than the ' +
+        'approved bytes. Name the file itself. Nothing was checked by this gate.'
+      );
+    }
+    if (base.sha !== head.sha) {
+      return (
+        `the file ${relative} named in the gate's args: is not the one ${baseName} approved: this ` +
+        'pull request changes it, and the gate reads it, so running the gate would let the pull ' +
+        'request choose the rules that judge it. Land the change on the base branch first. ' +
+        'Nothing was checked by this gate.'
       );
     }
   }
