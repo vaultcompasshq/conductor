@@ -558,7 +558,7 @@ jobs:
         uses: vaultcompasshq/conductor@be3f33defcca091c403af6d2dc6e377ef5b94af7 # v0.16.0
         with:
           output: conductor.sarif
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         if: always()
         continue-on-error: true
         with:
@@ -668,7 +668,7 @@ jobs:
           dep-guard-version: 0.18.0
           vault-guard-version: 1.13.0
           intent-guard-version: 1.10.3
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         # Always: the log is most worth having on the run that failed.
         if: always()
         # The sarif path is published BEFORE the gates run, so on the exit 2
