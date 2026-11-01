@@ -24,6 +24,8 @@ import {
   compareExactSemver,
   readActionVersionDefault,
   readInputDefault,
+  escapeRegExp,
+  hasChangelogHeading,
 } from '../lib/release-kind.mjs';
 
 // All four `-version` inputs, at the real file's indentation, because the
@@ -118,6 +120,39 @@ describe('parseExactSemver', () => {
     for (const bad of ['01.2.3', '1.2', '1.2.3-rc.1', '1.2.3+build.5', 'v1.2.3', 'latest', '']) {
       expect([bad, parseExactSemver(bad)]).toEqual([bad, null]);
     }
+  });
+});
+
+describe('escapeRegExp', () => {
+  test('escapes every metacharacter, backslash included, so the text matches only itself', () => {
+    // The CHANGELOG heading pattern used to escape dots and nothing else. The
+    // tag text reaching it has already passed parseExactSemver, so today only
+    // digits and dots get there, but the escape has to be correct on its own
+    // rather than correct because of a check three screens up.
+    const text = String.raw`1.0.0\d+*?^$|()[]{}`;
+    const pattern = new RegExp(`^${escapeRegExp(text)}$`);
+
+    expect(pattern.test(text)).toBe(true);
+    // Each of these would match if any one metacharacter were left live.
+    expect(pattern.test('1x0x0')).toBe(false);
+    expect(pattern.test(String.raw`1.0.07+*?^$|()[]{}`)).toBe(false);
+    expect(pattern.test('')).toBe(false);
+  });
+});
+
+describe('hasChangelogHeading', () => {
+  test('matches the version text literally, metacharacters and all', () => {
+    const odd = String.raw`1.0.0+[a](b)*\d`;
+    const changelog = `# Changelog\n\n## [${odd}] - 2026-10-31\n`;
+
+    expect(hasChangelogHeading(changelog, odd)).toBe(true);
+    // A dot left live would let "1x0x0" stand in for "1.0.0".
+    expect(hasChangelogHeading('## [1x0x0]\n', '1.0.0')).toBe(false);
+    // A live alternation or class in the version text must not widen the match.
+    expect(hasChangelogHeading('## [1]\n', '1|2')).toBe(false);
+    expect(hasChangelogHeading('## [a]\n', '[a-z]')).toBe(false);
+    // Still anchored to a line start.
+    expect(hasChangelogHeading('see ## [1.0.0]\n', '1.0.0')).toBe(false);
   });
 });
 
