@@ -471,7 +471,7 @@ describe('deciding whether a gate can be put into pull-request mode', () => {
     const below = decideTrustBase(intentGate, nativeIntent, 'origin/main', versionBelow(INTENT_MIN));
     const unreadable = decideTrustBase(intentGate, nativeIntent, 'origin/main', null);
 
-    expect(below?.refused).toMatch(new RegExp(`older than ${INTENT_MIN.replace(/\./g, '\\.')}`));
+    expect(below?.refused).toContain(`older than ${INTENT_MIN}`);
     expect(unreadable?.refused).not.toMatch(/reported no version does not understand/);
   });
 
@@ -577,9 +577,9 @@ describe('the trust base on the command line and on the outcome', () => {
       });
 
       expect(outcome.couldNotRun?.reason).toBe('gate-version-unsupported');
-      expect(outcome.couldNotRun?.detail).toMatch(
-        new RegExp(`^${product} did not run: the installed ${older.replace(/\./g, '\\.')} is older`)
-      );
+      // Compared literally: the version is data, not a pattern.
+      const prefix = `${product} did not run: the installed ${older} is older`;
+      expect(outcome.couldNotRun?.detail?.slice(0, prefix.length)).toBe(prefix);
       expect(outcome.couldNotRun?.detail).toMatch(
         /Fix: install .* or newer, or remove an explicit older version pin\.$/
       );

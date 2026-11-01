@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Fixed
+
+- The release classifier's CHANGELOG heading check now escapes every
+  regular-expression metacharacter in the tag's version text, not only dots,
+  through a new `escapeRegExp` helper. The text has already passed an
+  exact-semver check by then, so no released tag was affected; the escape is
+  now correct on its own (CodeQL js/regex-injection).
+- Two gate-runner tests compare version text literally instead of building a
+  pattern from it with only dots escaped (CodeQL js/incomplete-sanitization).
+
 ## [0.16.0] - 2026-10-28
 
 **A security release.** It closes the trust-base gate-program and

@@ -29,6 +29,22 @@
 import { parse as parseYaml } from 'yaml';
 
 /**
+ * Escapes every regular-expression metacharacter in `text`, backslash
+ * included, so the result matches `text` literally inside a RegExp source.
+ */
+export function escapeRegExp(text) {
+  return text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+/**
+ * True when `changelogText` has a "## [version]" heading at the start of a
+ * line for exactly `versionText`, compared literally rather than as a pattern.
+ */
+export function hasChangelogHeading(changelogText, versionText) {
+  return new RegExp(`^##\\s*\\[${escapeRegExp(versionText)}\\]`, 'm').test(changelogText);
+}
+
+/**
  * An exact version and nothing else: three numeric components, no prerelease,
  * no build suffix, no leading zeros. Returns [major, minor, patch] or null.
  *
@@ -223,8 +239,7 @@ export function classifyRelease({
       `Tag ${tagName} looks like an action-only release, but CHANGELOG.md could not be read at the tagged commit, so its entry could not be checked. Refusing to publish.`
     );
   }
-  const headingPattern = new RegExp(`^##\\s*\\[${tagVersionText.replace(/\./g, '\\.')}\\]`, 'm');
-  if (!headingPattern.test(changelogText)) {
+  if (!hasChangelogHeading(changelogText, tagVersionText)) {
     throw new Error(
       `Tag ${tagName} looks like an action-only release, but CHANGELOG.md at the tagged commit has no "## [${tagVersionText}]" heading. An action-only release is still a release: a tag with no entry is far more likely to be a version bump someone forgot to commit than a deliberate one. Refusing to publish.`
     );
