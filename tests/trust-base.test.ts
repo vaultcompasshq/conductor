@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -1107,6 +1107,279 @@ describe('vetting the paths an interpreter command takes in args', () => {
       const { repo, base } = scriptRepo(change('tools/vg/legacy.js'));
       expect(vet(repo, base, ['tools/vg/run.mjs'], gateNamed())).toMatch(/a file beside tools\/vg\/run\.mjs in tools\/vg/);
     });
+  });
+});
+
+/**
+ * Audit 2026-11-01, MB1 and MB2.
+ *
+ * MB1: an options: value is rendered into the gate's own argv
+ * (renderOptionFlags), so it is vetted the way an args: entry of a gate-named
+ * command is: a value that names a path is data, a code-extension value is
+ * code, and a word is a word. That holds with no command: at all, where
+ * resolution finds the gate and the options are handed to it all the same.
+ *
+ * MB2: every vetted path is also judged AS WRITTEN at HEAD. A head that turns
+ * a directory on the path into a link to another base-approved directory
+ * changed the path it is judged by, and is refused, even though the resolved
+ * spelling names a tree the base approved.
+ */
+describe('vetting options: values and every path as written at HEAD (audit 2026-11-01)', () => {
+  function judgedRepo(files: Record<string, string>, head: (repo: string) => void): { repo: string; base: string } {
+    const repo = emptyRepo();
+    for (const [name, body] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+      writeFileSync(path.join(repo, name), body, { mode: name.endsWith('vault-guard') ? 0o755 : 0o644 });
+    }
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    const base = git(repo, ['rev-parse', 'HEAD']).trim();
+    head(repo);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '--allow-empty', '-m', 'the pull request']);
+    return { repo, base };
+  }
+  function gateOnDisk(): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-gate-'));
+    temps.push(dir);
+    const file = path.join(dir, 'vault-guard');
+    writeFileSync(file, '#!/bin/sh\nexit 0\n');
+    chmodSync(file, 0o755);
+    return file;
+  }
+  function vetGate(repo: string, base: string, policy: Partial<GatePolicy>, pathValue = ''): string | null {
+    const gate = { role: 'secrets', product: 'vault-guard', enabled: true, options: {}, ...policy } as GatePolicy;
+    const binary = resolveGateBinary(gate, repo, pathValue, { skipNodeModules: true });
+    if (binary === null) {
+      throw new Error('resolution found nothing');
+    }
+    return refuseHeadControlledBinary(repo, base, binary);
+  }
+  const relink = (from: string, to: string) => (repo: string) => {
+    rmSync(path.join(repo, from), { recursive: true, force: true });
+    symlinkSync(to, path.join(repo, from));
+  };
+  const touchApp = (repo: string): void => writeFileSync(path.join(repo, 'app.js'), '// the change\n');
+  const RULES = { 'rules/allow.txt': 'nothing allowed\n', 'rules/notes.md': 'the rules\n', 'app.js': '//\n' };
+
+  it('refuses an options: value naming a directory the head changed, with or without a command, and accepts one it left alone (MB1)', () => {
+    const changed = judgedRepo(RULES, (repo) => writeFileSync(path.join(repo, 'rules', 'allow.txt'), 'allow-all\n'));
+    const untouched = judgedRepo(RULES, touchApp);
+    const command = gateOnDisk();
+    const options = { 'rules-dir': 'rules', 'fail-on': 'high', verbose: true };
+    for (const policy of [{ command, args: ['scan'], options }, { options }]) {
+      const pathValue = path.dirname(command);
+      expect([policy, vetGate(changed.repo, changed.base, policy, pathValue)]).toEqual([
+        policy,
+        expect.stringMatching(/the directory rules named in the gate's options: is not what ".*" approved/),
+      ]);
+      expect([policy, vetGate(untouched.repo, untouched.base, policy, pathValue)]).toEqual([policy, null]);
+    }
+  });
+
+  it('vets dep-guard corpus-dir under options: inside the repository and accepts one outside it (MB1)', () => {
+    const corpus = { 'corpus/top.json': '["express"]\n', 'corpus/aliases.json': '{"express":[]}\n', 'app.js': '//\n' };
+    const emptied = judgedRepo(corpus, (repo) => {
+      writeFileSync(path.join(repo, 'corpus', 'top.json'), '[]\n');
+      writeFileSync(path.join(repo, 'corpus', 'aliases.json'), '{}\n');
+    });
+    const binDir = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-dg-'));
+    temps.push(binDir);
+    const depGuard = path.join(binDir, 'dep-guard');
+    writeFileSync(depGuard, '#!/bin/sh\nexit 0\n');
+    chmodSync(depGuard, 0o755);
+    const vetDepGuard = (options: Record<string, string>): string | null => {
+      const gate = { role: 'dependencies', product: 'dep-guard', enabled: true, options } as GatePolicy;
+      return refuseHeadControlledBinary(emptied.repo, emptied.base, resolveGateBinary(gate, emptied.repo, binDir, { skipNodeModules: true })!);
+    };
+    expect(vetDepGuard({ 'corpus-dir': 'corpus' })).toMatch(/the directory corpus named in the gate's options: is not what ".*" approved/);
+    expect(vetDepGuard({ 'corpus-dir': path.join(emptied.repo, 'corpus') })).toMatch(/the directory corpus named in the gate's options:/);
+    // Outside the repository: a pull request cannot write it.
+    expect(vetDepGuard({ 'corpus-dir': binDir })).toBeNull();
+  });
+
+  it('refuses an options: value naming a rules file the head changed, and keeps the code rule for a code extension (MB1)', () => {
+    const files = { ...RULES, 'tools/plugin.js': '// honest\n', 'tools/other.js': '//\n' };
+    const rulesChanged = judgedRepo(files, (repo) => writeFileSync(path.join(repo, 'rules', 'allow.txt'), 'allow-all\n'));
+    expect(vetGate(rulesChanged.repo, rulesChanged.base, { command: gateOnDisk(), options: { config: 'rules/allow.txt' } })).toMatch(
+      /the file rules\/allow\.txt named in the gate's options: is not the one ".*" approved/
+    );
+    // An interpreter command hands options: to its script as argv, so they
+    // are data there too.
+    expect(
+      vetGate(rulesChanged.repo, rulesChanged.base, { command: process.execPath, args: ['tools/plugin.js'], options: { 'rules-dir': 'rules' } })
+    ).toMatch(/the directory rules named in the gate's options: is not what/);
+    const pluginNeighbour = judgedRepo(files, (repo) => writeFileSync(path.join(repo, 'tools', 'other.js'), '// changed\n'));
+    expect(vetGate(pluginNeighbour.repo, pluginNeighbour.base, { command: gateOnDisk(), options: { plugin: 'tools/plugin.js' } })).toMatch(
+      /in the gate's options:, a file beside tools\/plugin\.js in tools/
+    );
+  });
+
+  it('refuses a data path whose parent directory the head turned into a link to a base-approved directory (MB2, dgsym)', () => {
+    const files = { 'data/corpus/top.json': '["express"]\n', 'alt/corpus/top.json': '[]\n', 'app.js': '//\n' };
+    const policy = { command: gateOnDisk(), args: ['scan', '--corpus-dir=data/corpus'] };
+    const attacked = judgedRepo(files, relink('data', 'alt'));
+    const refusal = vetGate(attacked.repo, attacked.base, policy);
+    expect(refusal).toMatch(/the path data\/corpus named in the gate's args: goes through data, which is a symbolic link at the head commit/);
+    expect(refusal).toMatch(/this pull request changed the path it is judged by/);
+    const optionsRefusal = vetGate(attacked.repo, attacked.base, { command: policy.command, options: { 'corpus-dir': 'data/corpus' } });
+    expect(optionsRefusal).toMatch(/the path data\/corpus named in the gate's options: goes through data, which is a symbolic link/);
+    const honest = judgedRepo(files, touchApp);
+    expect(vetGate(honest.repo, honest.base, policy)).toBeNull();
+  });
+
+  it('refuses a code argument whose parent directory the head turned into a link to a base-approved stub (MB2, r2)', () => {
+    const files = { 'tools/scan.js': '// the honest scan\n', 'stub/scan.js': '// prints a clean result\n', 'app.js': '//\n' };
+    const policy = { command: process.execPath, args: ['tools/scan'] };
+    const attacked = judgedRepo(files, relink('tools', 'stub'));
+    const refusal = vetGate(attacked.repo, attacked.base, policy);
+    expect(refusal).toMatch(/in the gate's args:, the path tools\/scan\.js goes through tools, which is a symbolic link at the head commit/);
+    expect(refusal).toMatch(/this pull request changed the path it is judged by/);
+    const honest = judgedRepo(files, touchApp);
+    expect(vetGate(honest.repo, honest.base, policy)).toBeNull();
+  });
+
+  it('refuses an in-tree gate program whose directory the head turned into a link to a base-approved stub (MB2, program rule)', () => {
+    const files = {
+      'tools/vault-guard': '#!/bin/sh\necho honest\n',
+      'stub/vault-guard': '#!/bin/sh\necho clean\n',
+      'app.js': '//\n',
+    };
+    const attacked = judgedRepo(files, relink('tools', 'stub'));
+    const refusal = vetGate(attacked.repo, attacked.base, { command: path.join(attacked.repo, 'tools', 'vault-guard') });
+    expect(refusal).toMatch(/the gate program at tools\/vault-guard goes through tools, which is a symbolic link at the head commit/);
+    expect(refusal).toMatch(/this pull request changed the path it is judged by/);
+    const honest = judgedRepo(files, touchApp);
+    expect(vetGate(honest.repo, honest.base, { command: path.join(honest.repo, 'tools', 'vault-guard') })).toBeNull();
+  });
+
+  it('refuses a positional scan target the head replaced with a link, and a parent link the base already tracked (MB2)', () => {
+    const files = { 'src/index.js': '//\n', 'lib/index.js': '//\n', 'app.js': '//\n' };
+    const retargeted = judgedRepo(files, relink('src', 'lib'));
+    expect(vetGate(retargeted.repo, retargeted.base, { command: gateOnDisk(), args: ['scan', 'src'] })).toMatch(
+      /the path src named in the gate's args: goes through src, which is a symbolic link at the head commit/
+    );
+    // The link is the base's own, unchanged: still refused, because what the
+    // gate reads through it is wherever the head tree points it.
+    const repo = emptyRepo();
+    mkdirSync(path.join(repo, 'alt', 'corpus'), { recursive: true });
+    writeFileSync(path.join(repo, 'alt', 'corpus', 'top.json'), '[]\n');
+    symlinkSync('alt', path.join(repo, 'data'));
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    const base = git(repo, ['rev-parse', 'HEAD']).trim();
+    touchApp(repo);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    expect(vetGate(repo, base, { command: gateOnDisk(), args: ['scan', '--corpus-dir=data/corpus'] })).toMatch(
+      /goes through data, which is a symbolic link at the head commit/
+    );
+  });
+
+  /**
+   * Review of the 2026-11-01 fix, item 1. On a case-insensitive filesystem a
+   * tree entry spelled differently is the same path on disk: the base tracks
+   * `Data/corpus/`, the head adds a link entry named `data` (built with
+   * update-index --cacheinfo, as a pull request can), and a checkout leaves
+   * only `data -> alt` on disk. `git ls-tree` at HEAD still answers `Data` is
+   * the base's tree, so the tree walk alone passes it; the disk says link.
+   * Where the temporary directory is case-insensitive (macOS by default) the
+   * link is made at the head entry's own spelling and the disk folds it onto
+   * the base's; where it is case-sensitive (Linux CI) the link is made at the
+   * base's spelling directly, which is the same on-disk state, so the check
+   * is exercised on every disk.
+   */
+  const caseInsensitive = ((): boolean => {
+    const probe = mkdtempSync(path.join(os.tmpdir(), 'conductor-trust-case-'));
+    temps.push(probe);
+    writeFileSync(path.join(probe, 'lower'), '');
+    try {
+      lstatSync(path.join(probe, 'LOWER'));
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  /**
+   * A base with `files`, then a head commit that adds ONLY a link entry named
+   * `linkName` pointing at `target` to the index, leaving every base entry in
+   * place; the working tree is then what a checkout of it leaves on a
+   * case-insensitive disk: `shadowed` gone, the link in its place.
+   */
+  function collidingRepo(files: Record<string, string>, linkName: string, target: string, shadowed: string): { repo: string; base: string } {
+    const repo = emptyRepo();
+    for (const [name, body] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+      writeFileSync(path.join(repo, name), body);
+    }
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    const base = git(repo, ['rev-parse', 'HEAD']).trim();
+    const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: target, encoding: 'utf8' }).trim();
+    git(repo, ['update-index', '--add', '--cacheinfo', `120000,${blob},${linkName}`]);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    rmSync(path.join(repo, shadowed), { recursive: true, force: true });
+    symlinkSync(target, path.join(repo, caseInsensitive ? linkName : shadowed));
+    return { repo, base };
+  }
+
+  it('refuses a data path whose parent a differently-cased link entry shadows on disk, under options and args (review item 1)', () => {
+    const { repo, base } = collidingRepo(
+      { 'Data/corpus/top.json': '["express"]\n', 'alt/corpus/top.json': '[]\n', 'app.js': '//\n' },
+      'data',
+      'alt',
+      'Data'
+    );
+    const command = gateOnDisk();
+    expect(vetGate(repo, base, { command, options: { 'corpus-dir': 'Data/corpus' } })).toMatch(
+      /the path Data\/corpus named in the gate's options: goes through Data, which is a symbolic link on disk that the pull request's tree does not declare there/
+    );
+    expect(vetGate(repo, base, { command, args: ['scan', '--corpus-dir=Data/corpus'] })).toMatch(
+      /the path Data\/corpus named in the gate's args: goes through Data, which is a symbolic link on disk that the pull request's tree does not declare there/
+    );
+  });
+
+  it('refuses a data path whose last component a differently-cased link entry shadows on disk, under options and args (review item 1)', () => {
+    const { repo, base } = collidingRepo(
+      { 'Corpus/top.json': '["express"]\n', 'alt/corpus/top.json': '[]\n', 'app.js': '//\n' },
+      'corpus',
+      'alt/corpus',
+      'Corpus'
+    );
+    const command = gateOnDisk();
+    expect(vetGate(repo, base, { command, options: { 'corpus-dir': 'Corpus' } })).toMatch(
+      /the path Corpus named in the gate's options: goes through Corpus, which is a symbolic link on disk that the pull request's tree does not declare there/
+    );
+    expect(vetGate(repo, base, { command, args: ['scan', '--corpus-dir=Corpus'] })).toMatch(
+      /the path Corpus named in the gate's args: goes through Corpus, which is a symbolic link on disk/
+    );
+  });
+
+  it('refuses a code argument whose parent a differently-cased link entry shadows on disk (review item 1)', () => {
+    const { repo, base } = collidingRepo(
+      { 'Tools/scan.js': '// the honest scan\n', 'stub/scan.js': '// prints a clean result\n', 'app.js': '//\n' },
+      'tools',
+      'stub',
+      'Tools'
+    );
+    expect(vetGate(repo, base, { command: process.execPath, args: ['Tools/scan.js'] })).toMatch(
+      /in the gate's args:, the path Tools\/scan\.js goes through Tools, which is a symbolic link on disk that the pull request's tree does not declare there/
+    );
+    // The same value through options: (item 3 of the review: the list is named).
+    expect(vetGate(repo, base, { command: gateOnDisk(), options: { plugin: 'Tools/scan.js' } })).toMatch(
+      /in the gate's options:, the path Tools\/scan\.js goes through Tools, which is a symbolic link on disk/
+    );
+  });
+
+  it('refuses a positional scan target a differently-cased link entry folds onto the repository root on disk (review item 1, R1)', () => {
+    // The positional root is otherwise accepted (a scan target), so the disk
+    // check has to run before that answer: here the gate would scan the
+    // whole root in place of the head's own Src.
+    const { repo, base } = collidingRepo({ 'Src/index.js': '// the scan target\n', 'app.js': '//\n' }, 'src', '.', 'Src');
+    expect(vetGate(repo, base, { command: gateOnDisk(), args: ['scan', 'Src'] })).toMatch(
+      /the path Src named in the gate's args: goes through Src, which is a symbolic link on disk that the pull request's tree does not declare there/
+    );
   });
 });
 

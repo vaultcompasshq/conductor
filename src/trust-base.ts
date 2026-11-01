@@ -812,6 +812,141 @@ function withResolvedParent(candidate: string): string {
 }
 
 /**
+ * A vetted path AS WRITTEN, relative to the repository root with `/`
+ * separators: '' for the root itself, null when the path is not in the
+ * working tree (audit 2026-11-01, MB2).
+ *
+ * The resolved spellings above follow every link on the path, and a link
+ * inside the tree is the head's to choose: a head that replaces `data/` with
+ * a link to a base-approved `alt/` makes `data/corpus` resolve to
+ * `alt/corpus`, whose tree is the base's, while the policy named
+ * `data/corpus`. So the components INSIDE the tree are kept exactly as
+ * written. Only the leading components that reach the tree are resolved: the
+ * shortest prefix whose real path is the root or under it, which is how a
+ * root spelled through a symlinked mount (a macOS temporary directory) or an
+ * outside link into the tree still lands inside. Components above the tree
+ * are the machine's, which a pull request cannot write.
+ */
+function writtenRelative(repoReal: string, candidate: string): string | null {
+  const absolute = path.resolve(candidate);
+  const root = path.parse(absolute).root;
+  const segments = absolute.slice(root.length).split(path.sep).filter((segment) => segment !== '');
+  for (let depth = 0; depth <= segments.length; depth += 1) {
+    const real = realOrNull(path.join(root, ...segments.slice(0, depth)));
+    if (real === null) {
+      // Nothing below a missing component exists either.
+      return null;
+    }
+    if (real === repoReal || insideWorkingTree(repoReal, real)) {
+      const reached = path.relative(repoReal, real).split(path.sep).filter((segment) => segment !== '');
+      return [...reached, ...segments.slice(depth)].join('/');
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether `candidate`, as written, names the working tree or something in it
+ * (writtenRelative). For the preview's outright refusals, so a base path
+ * written inside the tree is refused there even when a link on it points out.
+ */
+export function writtenInsideWorkingTree(repoRoot: string, candidate: string): boolean {
+  const repoReal = realOrNull(repoRoot);
+  return repoReal !== null && writtenRelative(repoReal, candidate) !== null;
+}
+
+/**
+ * The first DIRECTORY component above the last one of `relative` that HEAD's
+ * tree holds as a symbolic link, or null (audit 2026-11-01, MB2). Read from
+ * `git ls-tree`, one component at a time, never from the disk. Stops,
+ * answering null, at a component HEAD does not have, cannot list, or holds as
+ * a file: what is below it is then absent or unreadable, which the rule
+ * asking decides. The last component is each rule's own entry, which every
+ * rule already refuses as a link in its own words (a positional scan target
+ * included, in refuseHeadControlledData).
+ */
+function linkOnWrittenPathAtHead(repoRoot: string, relative: string): string | null {
+  const segments = relative.split('/').filter((segment) => segment !== '' && segment !== '.');
+  for (let depth = 1; depth < segments.length; depth += 1) {
+    const prefix = segments.slice(0, depth).join('/');
+    const listed = listOne(repoRoot, 'HEAD', prefix);
+    if (listed.kind !== 'entry') {
+      return null;
+    }
+    if (listed.mode === '120000') {
+      return prefix;
+    }
+    if (listed.type !== 'tree') {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * The refusal for a vetted path a link at HEAD redirects, naming the link.
+ * `subject` is how the rule asking names the path: "the gate program at X",
+ * "in the gate's args:, the path X", "the path X named in the gate's args:".
+ */
+function linkOnWrittenPathRefusal(subject: string, link: string, baseName: string): string {
+  return (
+    `${subject} goes through ${link}, which is a symbolic link at the head commit, so this pull ` +
+    'request changed the path it is judged by: the gate would be handed whatever that link points ' +
+    `at, not the path ${baseName} approved. conductor judges every path as written and follows no ` +
+    'link inside the repository. Name the directory the link points at, or commit a real directory ' +
+    'there on the base branch. Nothing was checked by this gate.'
+  );
+}
+
+/**
+ * The first component of `relative`, the last one included, that is a
+ * symbolic link ON DISK while HEAD's tree holds no link at that exact
+ * spelling, or null (review of the 2026-11-01 fix, item 1).
+ *
+ * `git ls-tree` matches names exactly, and a case-insensitive disk does not:
+ * a head that adds a link entry `data` beside the base's tree `Data` leaves
+ * only `data -> alt` on disk after a checkout, so `Data/corpus` reads the
+ * link's target while the tree still says `Data` is the base's directory.
+ * The disk is therefore asked too, and a link there that the tree does not
+ * declare at that spelling refuses: what the gate is handed is decided by
+ * something other than the tree conductor judged. A link the tree DOES
+ * declare is left to the checks that already refuse it. Stops at the first
+ * component that is missing or not a directory. Each rule asks this LAST, so
+ * a path its own checks refuse keeps its wording; the exception is the data
+ * rule's positional root, which returns early and asks this first (R1).
+ */
+function undeclaredLinkOnDisk(repoRoot: string, repoReal: string, relative: string): string | null {
+  const segments = relative.split('/').filter((segment) => segment !== '' && segment !== '.');
+  for (let depth = 1; depth <= segments.length; depth += 1) {
+    const prefix = segments.slice(0, depth).join('/');
+    let stats;
+    try {
+      stats = lstatSync(path.join(repoReal, prefix));
+    } catch {
+      return null;
+    }
+    if (stats.isSymbolicLink()) {
+      const listed = listOne(repoRoot, 'HEAD', prefix);
+      return listed.kind === 'entry' && listed.mode === '120000' ? null : prefix;
+    }
+    if (!stats.isDirectory()) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** The refusal for a link on disk the head tree does not declare, naming it. */
+function undeclaredLinkRefusal(subject: string, link: string): string {
+  return (
+    `${subject} goes through ${link}, which is a symbolic link on disk that the pull request's tree does not declare ` +
+    'there, so what the gate would be handed is decided by something other than the tree conductor ' +
+    'judged. On a case-insensitive filesystem a tree entry spelled with different case is the same ' +
+    'path. Nothing was checked by this gate.'
+  );
+}
+
+/**
  * The tree object id of one directory at a ref, or null.
  *
  * The repository root is its own case: it has no containing directory, so the
@@ -896,21 +1031,54 @@ function treeShaAt(repoRoot: string, ref: string, relativeDir: string): string |
  * or its tree entry is a link rather than a regular file, and either refuses.
  * Vetting the target is what catches a link whose own path is outside the
  * tree pointing into it; it never decides the in-repo case.
+ *
+ * AND THE PATH AS WRITTEN, for this rule and for both args rules below
+ * (audit 2026-11-01, MB2). Both spellings above resolve the directories on
+ * the path through the head's disk, so a head that replaced `tools/` with a
+ * link to a base-tracked `stub/` had `tools/vault-guard` judged as
+ * `stub/vault-guard`, which the base approved. So the path is also judged
+ * exactly as written inside the tree (writtenRelative): refused when HEAD's
+ * tree holds any directory on it as a link (linkOnWrittenPathAtHead), and
+ * the written path is one more candidate, judged by its own entries at both
+ * refs like the others. A link the base already had there is refused too:
+ * what the gate is handed through it is still decided by the head tree.
  */
 export function refuseHeadControlledProgram(
   repoRoot: string,
   trustBase: string,
   programPath: string,
   /** True when asked for an interpreter's `args:` entry, which words the root refusal for an argument. */
-  fromArgs = false
+  fromArgs = false,
+  /** Which policy list an argument came from, for its refusals: `args:`, or `options:` for a code-extension option value. */
+  list = "the gate's args:"
 ): string | null {
   const repoReal = realOrNull(repoRoot);
   if (repoReal === null) {
     return `the repository root ${repoRoot} could not be resolved, so the gate program could not be checked against "${trustBase}". Nothing was checked by this gate.`;
   }
 
+  // AS WRITTEN, before either resolved spelling (audit 2026-11-01, MB2): a
+  // directory on the written path that HEAD holds as a link redirects the
+  // program to wherever the head points it, and the written path is also a
+  // candidate below, judged by its own entries at both refs.
+  const written = writtenRelative(repoReal, programPath);
+  if (written !== null && written !== '') {
+    const link = linkOnWrittenPathAtHead(repoRoot, written);
+    if (link !== null) {
+      return linkOnWrittenPathRefusal(
+        fromArgs ? `in ${list}, the path ${written}` : `the gate program at ${written}`,
+        link,
+        trustBase === '' ? 'the base' : `"${trustBase}"`
+      );
+    }
+  }
+
   const candidates = new Set<string>();
-  for (const candidate of [withResolvedParent(programPath), realOrNull(programPath)]) {
+  for (const candidate of [
+    withResolvedParent(programPath),
+    realOrNull(programPath),
+    written === null ? null : path.join(repoReal, written),
+  ]) {
     if (candidate !== null && insideWorkingTree(repoReal, candidate)) {
       candidates.add(candidate);
     }
@@ -942,7 +1110,7 @@ export function refuseHeadControlledProgram(
     // 2026-10-28, N-f, which the first N1 round fixed for the root only).
     if (fromArgs && (base === null || head === null)) {
       return (
-        `in the gate's args:, the ${trustBase === '' ? 'base' : `"${trustBase}"`} ref does not ` +
+        `in ${list}, the ${trustBase === '' ? 'base' : `"${trustBase}"`} ref does not ` +
         `track ${relative}, a file named there or one an interpreter could load for it, so it is ` +
         'a file this pull request controls, vetted as code. Land it on the base branch first, or ' +
         'name a script outside the repository. Nothing was checked by this gate.'
@@ -950,14 +1118,14 @@ export function refuseHeadControlledProgram(
     }
     if (fromArgs && (!isRegularFileMode(base!.mode) || !isRegularFileMode(head!.mode))) {
       return (
-        `in the gate's args:, the file ${relative} is not a regular file at both "${trustBase}" ` +
+        `in ${list}, the file ${relative} is not a regular file at both "${trustBase}" ` +
         'and the head commit, so what an interpreter would load is decided by something other ' +
         'than the approved bytes. Nothing was checked by this gate.'
       );
     }
     if (fromArgs && base!.sha !== head!.sha) {
       return (
-        `in the gate's args:, the file ${relative} is not the one "${trustBase}" approved: this ` +
+        `in ${list}, the file ${relative} is not the one "${trustBase}" approved: this ` +
         'pull request changes it, and it is vetted as code an interpreter could load. Land the ' +
         'change on the base branch first. Nothing was checked by this gate.'
       );
@@ -1011,7 +1179,7 @@ export function refuseHeadControlledProgram(
           // not called "the gate program", and the remedy is about the
           // command, not about vendoring (audit 2026-10-28, N1).
           return (
-            `the file ${relative} named in the gate's args: is at the repository root, and it is ` +
+            `the file ${relative} named in ${list} is at the repository root, and it is ` +
             'vetted as code an interpreter could load (the command is not the gate itself, or ' +
             'the entry has a code extension): ' +
             'the directory that would have to be unchanged is the whole repository, and this pull ' +
@@ -1030,7 +1198,7 @@ export function refuseHeadControlledProgram(
       }
       if (fromArgs) {
         return (
-          `in the gate's args:, a file beside ${relative} in ${directory} is not what ` +
+          `in ${list}, a file beside ${relative} in ${directory} is not what ` +
           `"${trustBase}" approved: ${relative} is unchanged, but the directory around it is not, ` +
           'and code an interpreter loads can load its neighbours. Land the change on the base ' +
           'branch first, or name a script outside the repository. Nothing was checked by this gate.'
@@ -1043,6 +1211,14 @@ export function refuseHeadControlledProgram(
         'request put there. Land the change on the base branch first, or install the gate on ' +
         'PATH. Nothing was checked by this gate.'
       );
+    }
+  }
+
+  // LAST, the disk against the tree (review of the 2026-11-01 fix, item 1).
+  if (written !== null && written !== '') {
+    const undeclared = undeclaredLinkOnDisk(repoRoot, repoReal, written);
+    if (undeclared !== null) {
+      return undeclaredLinkRefusal(fromArgs ? `in ${list}, the path ${written}` : `the gate program at ${written}`, undeclared);
     }
   }
 
@@ -1117,22 +1293,38 @@ export function atLeastVersion(version: string | null, minimum: string): boolean
 export function refuseHeadControlledArgument(
   repoRoot: string,
   trustBase: string,
-  argumentPath: string
+  argumentPath: string,
+  /** Which policy list the path came from, for the refusals: `args:`, or `options:` for a code-extension option value. */
+  list = "the gate's args:"
 ): string | null {
   const repoReal = realOrNull(repoRoot);
   if (repoReal === null) {
     return `the repository root ${repoRoot} could not be resolved, so the gate arguments could not be checked against "${trustBase}". Nothing was checked by this gate.`;
   }
-  const spellings = [withResolvedParent(argumentPath), realOrNull(argumentPath)].filter(
-    (spelling): spelling is string => spelling !== null
-  );
+  // The written spelling beside the resolved ones (audit 2026-11-01, MB2).
+  const written = writtenRelative(repoReal, argumentPath);
+  const spellings = [
+    withResolvedParent(argumentPath),
+    realOrNull(argumentPath),
+    written === null ? null : path.join(repoReal, written),
+  ].filter((spelling): spelling is string => spelling !== null);
   if (spellings.some((spelling) => path.relative(repoReal, spelling) === '')) {
     return (
-      `the gate's args: name the repository root (${argumentPath}), so what would run is decided by ` +
+      `${list} name the repository root (${argumentPath}), so what would run is decided by ` +
       `the whole working tree, and this pull request differs from "${trustBase}" somewhere in it. ` +
       'conductor already hands each gate the repository it scans; name a script in its own ' +
       'directory instead. Nothing was checked by this gate.'
     );
+  }
+  if (written !== null) {
+    const link = linkOnWrittenPathAtHead(repoRoot, written);
+    if (link !== null) {
+      return linkOnWrittenPathRefusal(
+        `in ${list}, the path ${written}`,
+        link,
+        trustBase === '' ? 'the base' : `"${trustBase}"`
+      );
+    }
   }
 
   let isDirectory: boolean;
@@ -1145,7 +1337,7 @@ export function refuseHeadControlledArgument(
     isDirectory = false;
   }
   if (!isDirectory) {
-    return refuseHeadControlledProgram(repoRoot, trustBase, argumentPath, true);
+    return refuseHeadControlledProgram(repoRoot, trustBase, argumentPath, true, list);
   }
 
   for (const spelling of new Set(spellings)) {
@@ -1158,7 +1350,7 @@ export function refuseHeadControlledArgument(
     for (const listed of [baseEntry, headEntry]) {
       if (listed.kind === 'error') {
         return (
-          `the directory ${relative} named in the gate's args: could not be checked against ` +
+          `the directory ${relative} named in ${list} could not be checked against ` +
           `"${trustBase}": ${listed.detail}. Nothing was checked by this gate.`
         );
       }
@@ -1167,11 +1359,18 @@ export function refuseHeadControlledArgument(
     const head = headEntry.kind === 'entry' ? headEntry : null;
     if (base === null || head === null || base.type !== 'tree' || head.type !== 'tree' || base.sha !== head.sha) {
       return (
-        `the directory ${relative} named in the gate's args: is not what "${trustBase}" approved: ` +
+        `the directory ${relative} named in ${list} is not what "${trustBase}" approved: ` +
         'this pull request adds, removes or changes something in it, and an interpreter handed a ' +
         'directory runs what is inside. Land the change on the base branch first, or name a ' +
         'script outside the repository. Nothing was checked by this gate.'
       );
+    }
+  }
+  // LAST, the disk against the tree (review of the 2026-11-01 fix, item 1).
+  if (written !== null) {
+    const undeclared = undeclaredLinkOnDisk(repoRoot, repoReal, written);
+    if (undeclared !== null) {
+      return undeclaredLinkRefusal(`in ${list}, the path ${written}`, undeclared);
     }
   }
   return null;
@@ -1181,8 +1380,9 @@ export function refuseHeadControlledArgument(
  * Why a path a gate's own `args:` name cannot be trusted on a pull-request
  * run, or null (audit 2026-10-28, N1, and its review, B1 and N-a).
  *
- * Asked only when `command:` is the gate itself (dataArgumentPaths in
- * src/resolve.ts), whose args are its own argv: a rules file such as
+ * Asked for the args of a `command:` that is the gate itself, and for the
+ * `options:` values of every gate (dataArgumentPaths in src/resolve.ts),
+ * since both are the gate's own argv: a rules file such as
  * `--config=.gitleaks.toml`, or a rules directory such as dep-guard's
  * `--corpus-dir`, is read as data, not loaded as code. Its contents still
  * decide what the gate reports, so a pull request that rewrote them would
@@ -1211,6 +1411,14 @@ export function refuseHeadControlledArgument(
  *  - Absent at the base: accepted only if the head has nothing there either,
  *    tracked or on disk (a word that is not a path, `--format=json`);
  *    otherwise it is a path this pull request chose, and refused.
+ *  - AS WRITTEN as well as resolved (audit 2026-11-01, MB2): a directory on
+ *    the written path that HEAD's tree holds as a link is refused, the
+ *    written path is judged by the rules above like the resolved ones, and a
+ *    positional scan target the base tracks as a directory is refused when
+ *    HEAD holds it as a link, since that one is otherwise not compared.
+ *  - The same for an `options:` value (audit 2026-11-01, MB1): it is
+ *    rendered into the gate's argv and read the same way (dataArgumentPaths),
+ *    and `from: 'options'` only changes which list the refusal names.
  *
  * Only whether something exists on disk at a path the base does not track is
  * read from the working tree; every other answer is a `git ls-tree` listing.
@@ -1218,26 +1426,57 @@ export function refuseHeadControlledArgument(
 export function refuseHeadControlledData(
   repoRoot: string,
   trustBase: string,
-  data: { path: string; positional: boolean; entry?: string }
+  data: { path: string; positional: boolean; entry?: string; from?: 'options' }
 ): string | null {
+  // Which list of the policy the value came from, for every message below:
+  // an `options:` value is rendered into the same argv and vetted the same
+  // way (audit 2026-11-01, MB1).
+  const list = data.from === 'options' ? "the gate's options:" : "the gate's args:";
   const repoReal = realOrNull(repoRoot);
   if (repoReal === null) {
-    return `the repository root ${repoRoot} could not be resolved, so the files named in the gate's args: could not be checked against "${trustBase}". Nothing was checked by this gate.`;
+    return `the repository root ${repoRoot} could not be resolved, so the files named in ${list} could not be checked against "${trustBase}". Nothing was checked by this gate.`;
   }
   const dataPath = data.path;
-  const spellings = [withResolvedParent(dataPath), realOrNull(dataPath)].filter(
-    (spelling): spelling is string => spelling !== null
-  );
+  // The written spelling beside the resolved ones (audit 2026-11-01, MB2).
+  const written = writtenRelative(repoReal, dataPath);
+  const spellings = [
+    withResolvedParent(dataPath),
+    realOrNull(dataPath),
+    written === null ? null : path.join(repoReal, written),
+  ].filter((spelling): spelling is string => spelling !== null);
   const baseName = trustBase === '' ? 'the base' : `"${trustBase}"`;
+  if (written !== null && written !== '') {
+    const subject = `the path ${written} named in ${list}`;
+    const link = linkOnWrittenPathAtHead(repoRoot, written);
+    if (link !== null) {
+      return linkOnWrittenPathRefusal(subject, link, baseName);
+    }
+    // A positional directory the base tracks is a scan target and is not
+    // compared below, so its own entry is asked here: a link there hands the
+    // gate wherever the head points it, possibly the root, instead of the
+    // target the base named. Every other own-entry link (a file, an option
+    // value) is refused below, in the words of its kind.
+    if (data.positional) {
+      const own = listOne(repoRoot, 'HEAD', written);
+      const approved = treeEntryAt(repoRoot, trustBase, written);
+      if (own.kind === 'entry' && own.mode === '120000' && approved.kind === 'entry' && approved.type === 'tree') {
+        return linkOnWrittenPathRefusal(subject, written, baseName);
+      }
+    }
+  }
   if (spellings.some((spelling) => path.relative(repoReal, spelling) === '')) {
     if (data.positional) {
-      return null;
+      // A scan target that IS the root is accepted, so the disk check that
+      // otherwise runs last runs here first: a link on disk the head tree
+      // does not declare can fold a positional onto the root (review R1).
+      const undeclared = written === null || written === '' ? null : undeclaredLinkOnDisk(repoRoot, repoReal, written);
+      return undeclared === null ? null : undeclaredLinkRefusal(`the path ${written} named in ${list}`, undeclared);
     }
     // The entry as written, never the absolute checkout path, which would
     // reach the pull-request comment and SARIF; and the remedy for the common
     // case, a scan target written after a flag, first (re-review R1).
     return (
-      `the gate's args: give the repository root (${data.entry ?? '.'}) as an option's value, so ` +
+      `${list} give the repository root (${data.entry ?? '.'}) as an option's value, so ` +
       `the whole working tree would be data the gate reads, and this pull request differs from ` +
       `${baseName} somewhere in it. If it is the scan target written after a flag, move it before ` +
       'the flags, where it reads as a positional; otherwise give that option a directory of its ' +
@@ -1257,7 +1496,7 @@ export function refuseHeadControlledData(
     for (const listed of [baseEntry, headEntry]) {
       if (listed.kind === 'error') {
         return (
-          `the file ${relative} named in the gate's args: could not be checked against ${baseName}: ` +
+          `the file ${relative} named in ${list} could not be checked against ${baseName}: ` +
           `${listed.detail}. Nothing was checked by this gate.`
         );
       }
@@ -1270,7 +1509,7 @@ export function refuseHeadControlledData(
         continue;
       }
       return (
-        `the file ${relative} named in the gate's args: is not tracked at ${baseName} and the head ` +
+        `the file ${relative} named in ${list} is not tracked at ${baseName} and the head ` +
         'commit both, so the gate would read a path this pull request chose. Commit it on the base ' +
         'branch first, or name a file outside the repository. Nothing was checked by this gate.'
       );
@@ -1282,7 +1521,7 @@ export function refuseHeadControlledData(
       }
       if (head === null || head.type !== 'tree' || head.sha !== base.sha) {
         return (
-          `the directory ${relative} named in the gate's args: is not what ${baseName} approved: ` +
+          `the directory ${relative} named in ${list} is not what ${baseName} approved: ` +
           'this pull request adds, removes or changes something in it, and it is given as an ' +
           "option's value, so the gate reads it as data, such as a rules directory " +
           '(dep-guard --corpus-dir). Land the change on the base branch first. If it is a scan ' +
@@ -1294,18 +1533,25 @@ export function refuseHeadControlledData(
     }
     if (head === null || !isRegularFileMode(base.mode) || !isRegularFileMode(head.mode)) {
       return (
-        `the file ${relative} named in the gate's args: is not a regular file at both ${baseName} ` +
+        `the file ${relative} named in ${list} is not a regular file at both ${baseName} ` +
         'and the head commit, so what the gate would read is decided by something other than the ' +
         'approved bytes. Name the file itself. Nothing was checked by this gate.'
       );
     }
     if (base.sha !== head.sha) {
       return (
-        `the file ${relative} named in the gate's args: is not the one ${baseName} approved: this ` +
+        `the file ${relative} named in ${list} is not the one ${baseName} approved: this ` +
         'pull request changes it, and the gate reads it, so running the gate would let the pull ' +
         'request choose the rules that judge it. Land the change on the base branch first. ' +
         'Nothing was checked by this gate.'
       );
+    }
+  }
+  // LAST, the disk against the tree (review of the 2026-11-01 fix, item 1).
+  if (written !== null && written !== '') {
+    const undeclared = undeclaredLinkOnDisk(repoRoot, repoReal, written);
+    if (undeclared !== null) {
+      return undeclaredLinkRefusal(`the path ${written} named in ${list}`, undeclared);
     }
   }
   return null;

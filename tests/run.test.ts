@@ -1203,6 +1203,41 @@ describe('pull-request mode through a whole run', () => {
       expect(existsSync(programLog)).toBe(false);
     });
 
+    it('preview refuses a base command and a base args script written inside the tree behind a link that points out of it (audit 2026-11-01, MB2)', () => {
+      const repo = prRepo();
+      const programLog = path.join(tempDir(), 'base-gate.txt');
+      const outsideDir = tempDir();
+      const program = path.join(outsideDir, 'base-gate.sh');
+      writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(programLog)}\necho '9.9.9'\n`);
+      chmodSync(program, 0o755);
+      writeFileSync(
+        path.join(outsideDir, 'base-gate.mjs'),
+        `import { appendFileSync } from 'node:fs';\n` +
+          `appendFileSync(${JSON.stringify(programLog)}, process.argv.slice(2).join(' ') + '\\n');\n` +
+          `if (process.argv[2] === '--version') { console.log('9.9.9'); process.exit(0); }\n` +
+          `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});\n`
+      );
+      symlinkSync(outsideDir, path.join(repo, 'tools'));
+      const written = path.join(repo, 'tools', 'base-gate.sh');
+      const run = (lines: string) => {
+        const policy = (enabled: boolean) =>
+          P(`  secrets:\n    product: vault-guard\n${enabled ? '' : '    enabled: false\n'}${lines}`);
+        return runAll(policy(false), {
+          repoRoot: repo, staged: false, pathValue: tempDir(),
+          trustBase: PR_TRUST_BASE, preview: { policy: policy(true) },
+        });
+      };
+      const byCommand = run(`    command: ${JSON.stringify(written)}\n    args: []\n`);
+      expect(byCommand.preview?.gates[0].couldNotRun?.detail).toBe(
+        `preview under the proposed rules: the base command ${written} is inside the working tree, so this gate was not run`
+      );
+      const byScript = run(`    command: ${JSON.stringify(process.execPath)}\n    args: ["tools/base-gate.mjs", scan]\n`);
+      expect(byScript.preview?.gates[0].couldNotRun?.detail).toBe(
+        'preview under the proposed rules: the base args entry tools/base-gate.mjs names a path inside the working tree, so this gate was not run'
+      );
+      expect(existsSync(programLog)).toBe(false);
+    });
+
     it('preview does not refuse outright a data file the gate itself is given in args (audit 2026-10-28, N1)', () => {
       const repo = prRepo();
       writeFileSync(path.join(repo, 'rules.json'), '{}\n');

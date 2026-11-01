@@ -233,7 +233,10 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     # Approval gate for the publish. The environment is created in the
-    # repository settings and the npm trusted publisher is bound to it.
+    # repository settings, and this job, the only one with id-token, runs in
+    # it, so a publish waits for its approval. The npm trusted publisher is
+    # bound to this workflow file only; no environment binding is configured
+    # on the npm side.
     environment: npm-publish
     permissions:
       contents: write

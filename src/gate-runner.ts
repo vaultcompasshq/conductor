@@ -74,6 +74,7 @@ import {
   refuseHeadControlledArgument,
   refuseHeadControlledData,
   refuseHeadControlledProgram,
+  writtenInsideWorkingTree,
 } from './trust-base.js';
 import {
   ResolveError,
@@ -1185,8 +1186,14 @@ export function refuseHeadControlledBinary(
       return refusal;
     }
   }
+  const fromOptions = new Set(binary.optionArgumentPaths ?? []);
   for (const argument of binary.argumentPaths) {
-    const refusal = refuseHeadControlledArgument(repoRoot, trustBase, argument);
+    const refusal = refuseHeadControlledArgument(
+      repoRoot,
+      trustBase,
+      argument,
+      fromOptions.has(argument) ? "the gate's options:" : "the gate's args:"
+    );
     if (refusal !== null) {
       return refusal;
     }
@@ -1924,7 +1931,13 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
       detail: "the preview does not run call analysis, because it would build the head's code",
     };
   }
-  if (gate.command !== undefined && realPathInside(repoRoot, gate.command)) {
+  // Inside by its real path OR as written: a directory on the written path
+  // that is a link out of the tree is the head's choice too (audit
+  // 2026-11-01, MB2), and the primary rule judges every path as written.
+  if (
+    gate.command !== undefined &&
+    (realPathInside(repoRoot, gate.command) || writtenInsideWorkingTree(repoRoot, gate.command))
+  ) {
     return {
       reason: 'gate-program-refused',
       detail: `preview under the proposed rules: the base command ${gate.command} is inside the working tree, so this gate was not run`,
@@ -1947,7 +1960,14 @@ function previewRefusal(gate: GatePolicy, repoRoot: string): CouldNotRun | null 
   // on every preview spawn, an option-value directory included (review B1).
   for (const arg of codeArguments(gate)) {
     const candidates = argumentCandidates(arg, repoRoot);
-    if (candidates.some((named) => realPathInside(repoRoot, named) || realPathInside(repoRoot, path.dirname(named)))) {
+    if (
+      candidates.some(
+        (named) =>
+          realPathInside(repoRoot, named) ||
+          realPathInside(repoRoot, path.dirname(named)) ||
+          writtenInsideWorkingTree(repoRoot, named)
+      )
+    ) {
       return {
         reason: 'gate-program-refused',
         detail: `preview under the proposed rules: the base args entry ${arg} names a path inside the working tree, so this gate was not run`,
