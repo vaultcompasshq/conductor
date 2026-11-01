@@ -4352,3 +4352,233 @@ describe('which args are code and which are data (audit 2026-10-28, MB1 and N1)'
     expect(result.status).toBe(1);
   });
 });
+
+/**
+ * Audit 2026-11-01, MB1 and MB2, end to end, on the audit's fixture shapes.
+ *
+ * dgopt (MB1): a rules directory handed to the gate under options: rather
+ * than args:. The gate here is a vault-guard stand-in that reads
+ * `--rules-dir` the way dep-guard reads `--corpus-dir`; dep-guard's own key
+ * under options: is pinned at the unit level in tests/trust-base.test.ts.
+ *
+ * dgsym and r2 (MB2): a head that replaces a directory on a vetted path with
+ * a link to another directory the base tracks, for the data rule, the code
+ * rule and the program rule. Every attacking head is could-not-run (exit 2);
+ * every honest head still runs and blocks on its leak (exit 1).
+ */
+describe('options: values and paths as written at HEAD, end to end (audit 2026-11-01, MB1 and MB2)', () => {
+  function git(repo: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
+    }
+  }
+
+  const LEAKING = JSON.stringify({
+    version: '1',
+    scannedAt: '2026-11-01T00:00:00.000Z',
+    summary: { files: 1, secrets: 1 },
+    run: { files_scanned: 1, patterns_active: 59, fail_on: 'medium', blocking_matches: 1 },
+    results: [
+      {
+        file: 'leak.js',
+        matches: [
+          { type: 'github-token', severity: 'critical', line: 1, column: 15, offset: 15, value: 'ghp_...', fingerprint: 'abc123' },
+        ],
+      },
+    ],
+  });
+
+  /** Writes the blocking and the clean report into `bin`, returning their paths. */
+  function reports(bin: string): { blocked: string; clean: string } {
+    const blocked = path.join(bin, 'blocked.json');
+    const clean = path.join(bin, 'clean.json');
+    writeFileSync(blocked, LEAKING);
+    writeFileSync(clean, CLEAN_VAULT_GUARD);
+    return { blocked, clean };
+  }
+
+  /** A gate on PATH in `bin` that blocks unless the rules directory it is handed says allow-all. */
+  function rulesGate(bin: string, ran: string): string {
+    const { blocked, clean } = reports(bin);
+    const gateBinary = path.join(bin, 'vault-guard');
+    writeFileSync(
+      gateBinary,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo 1.9.1; exit 0; fi',
+        `echo ran >> ${JSON.stringify(ran)}`,
+        'dir=""; take=""',
+        'for a in "$@"; do',
+        '  if [ -n "$take" ]; then dir="$a"; take=""; continue; fi',
+        '  case "$a" in --rules-dir=*) dir="${a#--rules-dir=}" ;; --rules-dir) take=1 ;; esac',
+        'done',
+        `if [ -n "$dir" ] && /usr/bin/grep -q allow-all "$dir/allow.txt" 2>/dev/null; then /bin/cat ${JSON.stringify(clean)}; exit 0; fi`,
+        `/bin/cat ${JSON.stringify(blocked)}; exit 1`,
+        '',
+      ].join('\n')
+    );
+    chmodSync(gateBinary, 0o755);
+    return gateBinary;
+  }
+
+  /** A pull request on branch `base`: the base files, then a leak and whatever `head` does. */
+  function judged(options: {
+    policy: (repo: string) => string[];
+    base: Record<string, string>;
+    head: (repo: string) => void;
+  }): string {
+    const repo = tempDir();
+    git(repo, ['init', '--quiet', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    const put = (name: string, body: string): void => {
+      mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+      writeFileSync(path.join(repo, name), body, { mode: name.endsWith('vault-guard') ? 0o755 : 0o644 });
+    };
+    put('.guardrails.yaml', ['version: 1', 'gates:', '  secrets:', '    product: vault-guard', ...options.policy(repo), ''].join('\n'));
+    put('app.js', 'const x = 1;\n');
+    for (const [name, body] of Object.entries(options.base)) put(name, body);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'base']);
+    git(repo, ['branch', 'base']);
+    put('leak.js', "const token = 'ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';\n");
+    options.head(repo);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '--quiet', '-m', 'the pull request']);
+    return repo;
+  }
+
+  const relink = (from: string, to: string) => (repo: string) => {
+    rmSync(path.join(repo, from), { recursive: true, force: true });
+    symlinkSync(to, path.join(repo, from));
+  };
+  const leaveAlone = (): void => {};
+  const RULES = { 'rules/allow.txt': 'nothing allowed\n', 'rules/notes.md': 'the rules\n' };
+
+  it('refuses a gate whose rules directory under options: the pull request emptied, and runs it when the directory is left alone (MB1, dgopt)', () => {
+    const spellings = (gateBinary: string): Array<{ name: string; lines: string[] }> => [
+      { name: 'options, no command', lines: ['    options:', '      rules-dir: rules'] },
+      {
+        name: 'options, gate command',
+        lines: [`    command: ${JSON.stringify(gateBinary)}`, '    args: [scan]', '    options:', '      rules-dir: rules'],
+      },
+      { name: 'args', lines: [`    command: ${JSON.stringify(gateBinary)}`, '    args: [scan, --rules-dir=rules]'] },
+    ];
+    for (const index of [0, 1, 2]) {
+      const honestBin = tempDir();
+      const honestRan = path.join(tempDir(), 'gate-ran.txt');
+      const honestSpelling = spellings(rulesGate(honestBin, honestRan))[index]!;
+      const honest = judged({ policy: () => honestSpelling.lines, base: RULES, head: leaveAlone });
+      const honestResult = runCli(honest, ['run', '--trust-base', 'base', '--verbose'], honestBin);
+      expect([honestSpelling.name, honestResult.status, existsSync(honestRan)]).toEqual([honestSpelling.name, 1, true]);
+      expect(honestResult.stdout).toMatch(/vault-guard\/github-token/);
+
+      const attackBin = tempDir();
+      const attackRan = path.join(tempDir(), 'gate-ran.txt');
+      const attackSpelling = spellings(rulesGate(attackBin, attackRan))[index]!;
+      const attacked = judged({
+        policy: () => attackSpelling.lines,
+        base: RULES,
+        head: (repo) => writeFileSync(path.join(repo, 'rules', 'allow.txt'), 'allow-all\n'),
+      });
+      const attackResult = runCli(attacked, ['run', '--trust-base', 'base', '--verbose'], attackBin);
+      expect([attackSpelling.name, attackResult.status, existsSync(attackRan)]).toEqual([attackSpelling.name, 2, false]);
+      expect(attackResult.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+      expect(attackResult.stdout).toMatch(
+        index === 2
+          ? /the directory rules named in the gate's args: is not what "base" approved/
+          : /the directory rules named in the gate's options: is not what "base" approved/
+      );
+    }
+  });
+
+  it('refuses a data path whose directory the pull request replaced with a link to a weaker base-tracked one (MB2, dgsym)', () => {
+    const base = { 'data/rules/allow.txt': 'nothing allowed\n', 'alt/rules/allow.txt': 'allow-all\n' };
+    const lines = (gateBinary: string): string[] => [`    command: ${JSON.stringify(gateBinary)}`, '    args: [scan, --rules-dir=data/rules]'];
+
+    const honestBin = tempDir();
+    const honestGate = rulesGate(honestBin, path.join(tempDir(), 'gate-ran.txt'));
+    const honest = judged({ policy: () => lines(honestGate), base, head: leaveAlone });
+    const honestResult = runCli(honest, ['run', '--trust-base', 'base', '--verbose'], honestBin);
+    expect(honestResult.status).toBe(1);
+    expect(honestResult.stdout).toMatch(/vault-guard\/github-token/);
+
+    const attackBin = tempDir();
+    const attackRan = path.join(tempDir(), 'gate-ran.txt');
+    const attackGate = rulesGate(attackBin, attackRan);
+    const attacked = judged({ policy: () => lines(attackGate), base, head: relink('data', 'alt') });
+    const attackResult = runCli(attacked, ['run', '--trust-base', 'base', '--verbose'], attackBin);
+    expect(existsSync(attackRan)).toBe(false);
+    expect(attackResult.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+    expect(attackResult.stdout).toMatch(/goes through data, which is a symbolic link at the head commit/);
+    expect(attackResult.status).toBe(2);
+  });
+
+  it('refuses a script argument whose directory the pull request replaced with a link to a base-tracked stub (MB2, r2)', () => {
+    const marker = path.join(tempDir(), 'stub-ran.txt');
+    const files = {
+      'tools/scan.js':
+        "const { spawnSync } = require('node:child_process');\n" +
+        "const child = spawnSync('vault-guard', process.argv.slice(2), { stdio: 'inherit' });\n" +
+        'process.exit(child.status ?? 2);\n',
+      'stub/scan.js':
+        "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", 'ran\\n');\n" +
+        `console.log(${JSON.stringify(CLEAN_VAULT_GUARD)});\n`,
+    };
+    // Outside the tree, NOT executable, and not named like a gate: it loads
+    // the script its first argument names.
+    const dispatcher = path.join(tempDir(), 'run-gate.js');
+    writeFileSync(
+      dispatcher,
+      [
+        "const path = require('node:path');",
+        "if (process.argv[2] === '--version') { console.log('1.9.1'); process.exit(0); }",
+        'require(path.resolve(process.argv[2]));',
+        '',
+      ].join('\n')
+    );
+    const lines = [`    command: ${JSON.stringify(dispatcher)}`, '    args: [tools/scan]'];
+
+    for (const shape of ['honest', 'attacking'] as const) {
+      const bin = tempDir();
+      stubGate(bin, 'vault-guard', { stdout: LEAKING, exit: 1, version: '1.9.1' });
+      const repo = judged({ policy: () => lines, base: files, head: shape === 'honest' ? leaveAlone : relink('tools', 'stub') });
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+      if (shape === 'honest') {
+        expect(result.stdout).toMatch(/vault-guard\/github-token/);
+        expect(result.status).toBe(1);
+      } else {
+        expect(existsSync(marker)).toBe(false);
+        expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+        expect(result.stdout).toMatch(/in the gate's args:, the path tools\/scan\.js goes through tools, which is a symbolic link/);
+        expect(result.status).toBe(2);
+      }
+    }
+  });
+
+  it('refuses an in-tree gate program whose directory the pull request replaced with a link to a base-tracked stub (MB2, program rule)', () => {
+    for (const shape of ['honest', 'attacking'] as const) {
+      const bin = tempDir();
+      const { blocked, clean } = reports(bin);
+      const files = {
+        'tools/vault-guard': `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.9.1; exit 0; fi\n/bin/cat ${JSON.stringify(blocked)}; exit 1\n`,
+        'stub/vault-guard': `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.9.1; exit 0; fi\n/bin/cat ${JSON.stringify(clean)}; exit 0\n`,
+      };
+      const repo = judged({
+        policy: (root) => [`    command: ${JSON.stringify(path.join(root, 'tools', 'vault-guard'))}`],
+        base: files,
+        head: shape === 'honest' ? leaveAlone : relink('tools', 'stub'),
+      });
+      const result = runCli(repo, ['run', '--trust-base', 'base', '--verbose'], bin);
+      if (shape === 'honest') {
+        expect(result.stdout).toMatch(/vault-guard\/github-token/);
+        expect(result.status).toBe(1);
+      } else {
+        expect(result.stdout).toMatch(/DID NOT RUN \(gate-program-refused\)/);
+        expect(result.stdout).toMatch(/the gate program at tools\/vault-guard goes through tools, which is a symbolic link/);
+        expect(result.status).toBe(2);
+      }
+    }
+  });
+});

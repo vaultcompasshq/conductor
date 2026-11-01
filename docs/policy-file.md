@@ -114,6 +114,9 @@ that scans a requirements file always gets `--no-resolve`, and a
 `no-resolve` key here is dropped from that run with a note; and a
 pull-request run gets `--no-call-analysis=all` unless this block names
 `call-analysis` or `no-call-analysis`, in which case that value is used.
+On a pull-request run every `options` value that names a path in the repository
+is vetted against the base exactly as an `args:` entry is (see
+[the pull-request trust boundary](pull-request-trust-boundary.md)).
 `timeout-seconds` is refused under `options` on every gate, and `timeout`
 on every gate but gitleaks, where it is gitleaks' own `--timeout` flag and
 is passed through (see `timeout-seconds` below and

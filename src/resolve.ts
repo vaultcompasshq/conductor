@@ -63,6 +63,7 @@
 import { accessSync, constants, lstatSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { renderOptionFlags } from './policy.js';
 import type { GatePolicy, Product } from './policy.js';
 import { profileFor } from './products.js';
 
@@ -96,6 +97,8 @@ export interface DataArgument {
   positional: boolean;
   /** The args entry as written, for the refusal message. */
   entry: string;
+  /** 'options' when the value came from the policy's `options:`, so the refusal names that list; absent for `args:`. */
+  from?: 'options';
 }
 
 export interface ResolvedBinary {
@@ -130,14 +133,23 @@ export interface ResolvedBinary {
    * When `command:` is the gate itself (commandIsGateProgram) only the args
    * entries with a code extension are listed here (`codeArguments`); the
    * rest of its args are its own argv, read as data, and land in
-   * `dataArguments` instead.
+   * `dataArguments` instead. The code-extension `options:` values are listed
+   * here too, for every command and for a gate resolution found (audit
+   * 2026-11-01, MB1).
    */
   argumentPaths: string[];
   /**
+   * The entries of `argumentPaths` that came from `options:`, so a refusal
+   * names the list the value was written in (review of the 2026-11-01 fix,
+   * item 3). Absent is the same as empty: every entry came from `args:`.
+   */
+  optionArgumentPaths?: string[];
+  /**
    * Every args entry that could name a path, when `command:` is the gate
    * itself (`dataArgumentPaths`), in args order, by POSITION and never by
-   * what the head's disk holds. Empty for every other command, and when
-   * resolution found the gate.
+   * what the head's disk holds; then every non-code `options:` value as
+   * rendered, for every command and for a gate resolution found (audit
+   * 2026-11-01, MB1).
    *
    * The pull-request check (refuseHeadControlledData) decides from the BASE
    * tree what each one is: a file must be the base's blob, a directory given
@@ -353,6 +365,7 @@ export function resolveGateBinary(
     const candidateName = inferred?.name ?? baseName(gate.command);
     const candidate = inferred ?? table[0];
     const argumentPaths = argumentPathsOf(gate, repoRoot);
+    const optionArgumentPaths = optionArgumentPathsOf(gate, repoRoot);
     const dataArguments = dataArgumentPaths(gate, repoRoot);
 
     // A build directory holds plain .js files with a shebang but no
@@ -367,6 +380,7 @@ export function resolveGateBinary(
         program: gate.command,
         argvPrefix: [gate.command, ...prefix],
         argumentPaths,
+        optionArgumentPaths,
         dataArguments,
         source: 'policy',
         candidate: candidateName,
@@ -398,6 +412,7 @@ export function resolveGateBinary(
       program: gate.command,
       argvPrefix: prefix,
       argumentPaths,
+      optionArgumentPaths,
       dataArguments,
       source: 'policy',
       candidate: candidateName,
@@ -416,8 +431,11 @@ export function resolveGateBinary(
       command: found.command,
       program: found.command,
       argvPrefix: [...candidate.prefix],
-      argumentPaths: [],
-      dataArguments: [],
+      // No args: here (they go with a command:), but the options: are handed
+      // to this gate all the same (audit 2026-11-01, MB1).
+      argumentPaths: optionArgumentPathsOf(gate, repoRoot),
+      optionArgumentPaths: optionArgumentPathsOf(gate, repoRoot),
+      dataArguments: dataArgumentPaths(gate, repoRoot),
       source: found.source,
       candidate: candidate.name,
       versionProbe: versionProbeFor(
@@ -598,10 +616,13 @@ const NO_VALUE_FLAGS: Record<Product, readonly string[]> = {
   'intent-guard': ['--staged', '--no-require-frozen', '--log', '--json', '-h', '--help', '-v', '--version'],
 };
 
-function gateArgEntries(gate: GatePolicy): Array<{ value: string; positional: boolean; entry: string }> {
+function gateArgEntries(
+  product: Product,
+  words: readonly string[]
+): Array<{ value: string; positional: boolean; entry: string }> {
   const entries: Array<{ value: string; positional: boolean; entry: string }> = [];
   let pendingOption = false;
-  for (const arg of gate.args ?? []) {
+  for (const arg of words) {
     if (arg.startsWith('-') && arg !== '-') {
       pendingOption = false;
       const equals = arg.indexOf('=');
@@ -612,7 +633,7 @@ function gateArgEntries(gate: GatePolicy): Array<{ value: string; positional: bo
       } else {
         // A flag the gate's own help says takes no value leaves the next word
         // a positional (NO_VALUE_FLAGS); any other flag claims it.
-        pendingOption = !NO_VALUE_FLAGS[gate.product].includes(arg);
+        pendingOption = !NO_VALUE_FLAGS[product].includes(arg);
       }
       continue;
     }
@@ -621,7 +642,7 @@ function gateArgEntries(gate: GatePolicy): Array<{ value: string; positional: bo
       entries.push({ value: arg, positional: false, entry: arg });
       continue;
     }
-    if (CANDIDATES[gate.product].some((candidate) => candidate.prefix.includes(arg))) {
+    if (CANDIDATES[product].some((candidate) => candidate.prefix.includes(arg))) {
       continue;
     }
     entries.push({ value: arg, positional: true, entry: arg });
@@ -630,22 +651,49 @@ function gateArgEntries(gate: GatePolicy): Array<{ value: string; positional: bo
 }
 
 /**
- * The args entries vetted as CODE: every entry when the command is not the
- * gate itself, and only the code-extension values (`hasCodeExtension`) when
- * it is. Each goes through `argumentCandidates`, here and in the preview.
+ * The policy's `options:` as the gate receives them: rendered to flags
+ * (renderOptionFlags, the same rendering gateArgs appends to every spawn) and
+ * read by position like a gate-named command's args (audit 2026-11-01, MB1).
+ *
+ * Whatever the command is: the rendered flags always come after the args, so
+ * they are the gate's own argv, or a script's argv when the command is an
+ * interpreter, and never an interpreter's. Option keys cannot hold `=` (the
+ * schema's key pattern), so `--name value` is the only rendering there is.
  */
-export function codeArguments(gate: GatePolicy): string[] {
-  if (!commandIsGateProgram(gate)) {
-    return gate.args ?? [];
-  }
-  return gateArgEntries(gate)
+function optionEntries(gate: GatePolicy): Array<{ value: string; positional: boolean; entry: string }> {
+  return gateArgEntries(gate.product, renderOptionFlags(gate.options));
+}
+
+/** The `options:` values vetted as CODE: those with a code extension, as for a gate-named command's args. */
+function optionCodeArguments(gate: GatePolicy): string[] {
+  return optionEntries(gate)
     .filter((each) => hasCodeExtension(each.value))
     .map((each) => each.value);
+}
+
+/**
+ * The args entries vetted as CODE: every entry when the command is not the
+ * gate itself, and only the code-extension values (`hasCodeExtension`) when
+ * it is, then the code-extension `options:` values (optionCodeArguments).
+ * Each goes through `argumentCandidates`, here and in the preview.
+ */
+export function codeArguments(gate: GatePolicy): string[] {
+  const fromArgs = !commandIsGateProgram(gate)
+    ? gate.args ?? []
+    : gateArgEntries(gate.product, gate.args ?? [])
+        .filter((each) => hasCodeExtension(each.value))
+        .map((each) => each.value);
+  return [...fromArgs, ...optionCodeArguments(gate)];
 }
 
 /** `argumentCandidates` for every code argument (`codeArguments`), flattened. */
 function argumentPathsOf(gate: GatePolicy, repoRoot: string): string[] {
   return codeArguments(gate).flatMap((arg) => argumentCandidates(arg, repoRoot));
+}
+
+/** `argumentCandidates` for the code-extension `options:` values alone (optionCodeArguments). */
+function optionArgumentPathsOf(gate: GatePolicy, repoRoot: string): string[] {
+  return optionCodeArguments(gate).flatMap((arg) => argumentCandidates(arg, repoRoot));
 }
 
 /**
@@ -668,14 +716,30 @@ function argumentPathsOf(gate: GatePolicy, repoRoot: string): string[] {
  * wrapper given a gate's name that hands an extension-less entry to an
  * interpreter is a wrapper, vetted no further than this (README,
  * pull-request trust boundary).
+ *
+ * Then every non-code `options:` value (optionEntries), WHATEVER the command
+ * is and with no command at all: they are rendered into the argv of every
+ * spawn, after the args, so they are the gate's own data (or a script's)
+ * whoever runs them, and a rules directory written there is as much the
+ * rules as one written in args (audit 2026-11-01, MB1). Marked `from:
+ * 'options'` only so a refusal names the list the value came from.
  */
 export function dataArgumentPaths(gate: GatePolicy, repoRoot: string): DataArgument[] {
-  if (gate.command === undefined || !commandIsGateProgram(gate)) {
-    return [];
-  }
-  return gateArgEntries(gate)
+  const fromArgs =
+    gate.command === undefined || !commandIsGateProgram(gate)
+      ? []
+      : gateArgEntries(gate.product, gate.args ?? [])
+          .filter((each) => !hasCodeExtension(each.value))
+          .map((each) => ({ path: path.resolve(repoRoot, each.value), positional: each.positional, entry: each.entry }));
+  const fromOptions = optionEntries(gate)
     .filter((each) => !hasCodeExtension(each.value))
-    .map((each) => ({ path: path.resolve(repoRoot, each.value), positional: each.positional, entry: each.entry }));
+    .map((each) => ({
+      path: path.resolve(repoRoot, each.value),
+      positional: each.positional,
+      entry: each.entry,
+      from: 'options' as const,
+    }));
+  return [...fromArgs, ...fromOptions];
 }
 
 /**

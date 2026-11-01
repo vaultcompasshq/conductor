@@ -14,8 +14,73 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+Fixes from the 2026-11-01 cohesion audit.
+
+### Security
+
+- A path given under a gate's `options:` is now vetted on a pull request
+  exactly as one given in `args:` is (audit MB1, present since `options:`
+  existed). The options block is rendered into the gate's argv, but only
+  `args:` was read for paths, so a base policy of
+  `dependencies: {product: dep-guard, options: {corpus-dir: corpus}}`, the
+  documented way to pass a gate a flag (docs/policy-file.md), let a pull
+  request empty `corpus/aliases.json` and `corpus/top.json` and get exit 0,
+  clean, zero proposals; the same corpus written in `args:` was already
+  refused. Every `options:` value is now read as the gate receives it
+  (`--name value`) and goes through the data rule `args:` values get: a
+  directory given as a value must be the same tree at the base and the
+  head, a file must be the base's bytes, a code-extension value keeps the
+  interpreter rule, and a word is a word. That holds for every `command:`,
+  and with no `command:` at all. A corpus outside the repository, given by
+  absolute path, is accepted as before. Upgrading: no policy change is
+  needed; a pull request that changes a path an `options:` value names is
+  now could-not-run, as it already was for `args:`, so land such a change
+  on the base branch first. Two consequences to check for: an `options:`
+  value naming a path that exists on disk but is not tracked at the base
+  (`node_modules`, a build directory) is now refused on every pull request,
+  and one naming a tracked directory is refused on any pull request that
+  touches that directory. An untracked on-disk path has to leave
+  `options:`, be named by a path outside the repository, or become tracked
+  at the base; moving it to `args:` does not help, since an untracked path
+  is refused there too, positional or not, and turning an exclude-type
+  value into a positional would make it a scan target. A tracked directory
+  needs its changes landed on the base branch first. The only `options:` examples the docs give, `fail-on` and
+  `require-frozen`, name no path and are unaffected.
+- Every path conductor vets on a pull request, a gate program, a script in
+  `args:`, a data path in `args:` or an `options:` value, is now also judged
+  exactly as written at HEAD (audit MB2, present since the trust-base checks
+  existed). The checks compared only the spellings resolved on the head's
+  disk, so a head that replaced a directory on the path with a symbolic link
+  to another directory the base already tracked, such as `data -> alt` for
+  `--corpus-dir=data/corpus`, or `tools -> stub` for `args: [tools/scan]` or
+  an in-tree `command:` under `tools/`, had the path judged as the target the
+  base approved while the gate read through the link, and passed. A
+  directory on the written path that HEAD holds as a symbolic link now
+  refuses the gate, with a message that names the link and says the pull
+  request changed the path it is judged by; the written path is also judged
+  by the same rule as every other spelling, and a positional scan-target
+  directory that HEAD holds as a link is refused. The disk is asked too:
+  any component of the written path, the last one included, that is a
+  symbolic link on disk which HEAD's tree does not declare at that exact
+  spelling refuses the gate. That closes the case-insensitive filesystem
+  shape (macOS by default), where a head adds a link entry `data` beside
+  the base's `Data/`, a checkout leaves only the link on disk, and the
+  tree still answers that `Data` is the base's directory. A refusal of a
+  code-extension `options:` value now names `options:`, not `args:`. The
+  preview under the
+  proposed rules refuses the same shapes. Upgrading: a policy that names a
+  path through a symbolic link committed in the repository is now refused
+  on every pull request, even when the link itself is unchanged; name the
+  directory the link points at instead.
+
 ### Fixed
 
+- SECURITY.md lists 0.16.x as the supported version (audit N2). It still
+  said 0.15.x after 0.16.0 was published.
+- The release workflow's comment on the publish job no longer says the npm
+  trusted publisher is bound to the `npm-publish` environment (audit N3).
+  The job runs in that environment, which is the approval gate; the
+  npm-side environment binding is not configured.
 - The release classifier's CHANGELOG heading check now escapes every
   regular-expression metacharacter in the tag's version text, not only dots,
   through a new `escapeRegExp` helper. The text has already passed an

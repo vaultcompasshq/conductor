@@ -117,7 +117,10 @@ Which rule an entry gets depends on one thing, the **file name of
   `gitleaks git --config=.gitleaks.toml` or dep-guard's
   `--corpus-dir=corpus`, a directory of rules. What each path is comes from
   the **base** tree, never from the head's disk, so a pull request cannot
-  delete a path or turn a file into a directory to change the rule:
+  delete a path or turn a file into a directory to change the rule. Each
+  path is judged **as written** as well as by where it resolves on disk,
+  so a pull request cannot redirect it through a link either (see "Every
+  path is judged as written" below):
   - a file at the base must be tracked and byte for byte the base's at the
     head, and that is all: its directory is not compared, a file at the
     repository root is fine, and no `.js` sibling is tried;
@@ -156,6 +159,44 @@ conductor trusts the name: a wrapper you give a gate's name, which then
 hands its argument to an interpreter, is vetted as the gate. A
 code-extension entry still gets the interpreter rule, siblings and directory
 included; an extension-less entry it runs as code is vetted only as data.
+
+**`options:` values are vetted the same way.** The `options:` block is
+read exactly as the gate receives it, rendered to flags
+(`rules-dir: rules` becomes `--rules-dir rules`), and each value is vetted
+by the data rule above: a directory given as an option's value must have
+the same tree object id at the base and the head, a file must be the
+base's blob, a code-extension value keeps the interpreter rule, and a word
+that names nothing is a word. That holds whatever `command:` is, and with
+no `command:` at all, since the options are handed to every gate. So
+dep-guard's `corpus-dir: corpus` must be the same tree at the base and the
+head, while a corpus outside the repository, given by absolute path, is
+accepted as any path outside the tree is. A refusal names the value as a
+path in `options:`.
+
+**Every path is judged as written.** Each vetted path, a program, a code
+argument, a data argument or an option value, is also
+looked up exactly as written, through the git tree at HEAD one directory
+at a time, alongside the spellings resolved on disk. If any directory on
+the written path is a symbolic link at HEAD, the gate is refused, with a
+message naming the link and saying the pull request changed the path it is
+judged by; the written path is then judged by the same rule as every other
+spelling, so it must be what the base approved at that path. A positional
+scan-target directory the base tracks is refused when HEAD holds it as a
+link. A link of this kind is refused even when the base already had it:
+conductor follows no link inside the repository, so name the directory the
+link points at instead. Only the leading directories that reach the
+repository are resolved, so a checkout reached through a symlinked mount
+is unaffected.
+
+The disk is asked as well as the tree. Every component of the written
+path inside the repository, the last one included, is looked at on disk,
+and one that is a symbolic link there while HEAD's tree does not declare a
+link at that exact spelling refuses the gate, with a message naming the
+component. This is the case-insensitive filesystem shape (macOS by
+default): a pull request can add a tree entry `data` that is a link beside
+the base's directory `Data`, a checkout leaves only the link on disk, and
+the tree, which matches names exactly, still says `Data` is the base's
+directory.
 
 For a command that is not the gate itself, exactly what counts:
 
@@ -217,7 +258,8 @@ A symlink inside the repository is refused on **its own entry**, before its
 target is considered: it is either untracked, or its tree entry is a link
 rather than a regular file, and either refuses. (A symlink whose own path is
 outside the tree but which points into it has its target vetted; that is the
-case following the link exists for.)
+case following the link exists for.) A symlink at a directory ON the path
+inside the repository is refused too, by the written-path rule above.
 
 Anything else is could-not-run for that gate, naming the path, and it reaches
 the exit code even where the policy sets `enforce: false`, because the gate
@@ -496,9 +538,10 @@ proposed rules say until after merge. With the preview, each role whose
 policy with only `enabled`, `stage` and `enforce` taken from the head. Every
 other head value, `command:`, `args:`, `options` and `timeout-seconds`
 included, never reaches it: the base's command and the base's limit are what
-run, and a base `command:` that resolves inside the working tree is refused
-there, as is a base `args:` entry that names a path inside it (an
-interpreter's script). A gate's own config is another matter: in the preview, dep-guard and
+run, and a base `command:` that resolves inside the working tree, or is
+written inside it with a link on the path pointing out, is refused there, as
+is a base `args:` entry that names a path inside it (an interpreter's
+script) by either spelling. A gate's own config is another matter: in the preview, dep-guard and
 vault-guard read their own `.dep-guard.json` and `.vault-guard.json` from the
 head, because previewing the proposed rules means their rules too, while
 gitleaks and osv-scanner keep the base's config. osv-scanner call analysis is
