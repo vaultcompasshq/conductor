@@ -1329,7 +1329,7 @@ export function gateArgs(
    */
   preview = false
 ): string[] {
-  const passthrough = renderOptionFlags(gate.options);
+  const passthrough = renderOptionFlags(gate.options, gate.product);
   const trust = trustBase === undefined ? [] : ['--trust-base', trustBase];
   const config = external.configPath === undefined ? [] : ['--config', external.configPath];
   switch (gate.product) {
@@ -1507,7 +1507,7 @@ export function gateArgs(
         ...lockfiles,
         ...(noResolve ? ['--no-resolve'] : []),
         ...callAnalysis,
-        ...renderOptionFlags(options),
+        ...renderOptionFlags(options, gate.product),
         ...(preview ? ['--no-call-analysis=all'] : []),
       ];
     }

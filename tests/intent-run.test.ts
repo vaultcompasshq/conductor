@@ -1750,3 +1750,240 @@ describe('the expected intent-guard version, before the preparation', () => {
     expect(unpinned.exitCode).toBe(0);
   });
 });
+
+/**
+ * Issue 161: `options: require-frozen: true` on the intent gate rendered
+ * `--require-frozen`, which intent-guard's check refuses as an unknown option
+ * (1.10.3 `check --help` lists only `--no-require-frozen`; on is its default).
+ * Every directly spawned run then read the usage error as unparseable output.
+ * The stub refuses the positive spelling the same way the real CLI does.
+ */
+describe('options require-frozen on a directly spawned intent gate (issue 161)', () => {
+  function policyWith(value: boolean) {
+    return parsePolicy(
+      `version: 1\ngates:\n  intent:\n    product: intent-guard\n    options:\n      require-frozen: ${String(value)}\n`,
+      POLICY_FILE_NAME
+    );
+  }
+
+  function directRun(value: boolean, staged: boolean): RunResult {
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: CHECK_PASSING }, unknownOptions: ['--require-frozen'] });
+    // No --base, no GITHUB_BASE_REF, no trust base: the gate is spawned
+    // directly, the push, pre-commit and local shape.
+    return runAll(policyWith(value), { repoRoot: repo(), staged, pathValue: bin, env: {} });
+  }
+
+  it('spawns no --require-frozen for require-frozen true, and the gate runs rather than being unparseable', () => {
+    for (const staged of [false, true]) {
+      const result = directRun(true, staged);
+      expect(result.gates[0].argv).toEqual([
+        'check',
+        '--project',
+        '.',
+        ...(staged ? ['--staged'] : []),
+        '--json',
+      ]);
+      expect(result.gates[0].couldNotRun).toBeNull();
+      expect(result.findings.map((finding) => finding.ruleId)).not.toContain(
+        'conductor/gate-output-unparseable'
+      );
+      expect(result.exitCode).toBe(0);
+    }
+  });
+
+  it('still renders require-frozen false as --no-require-frozen', () => {
+    const result = directRun(false, false);
+    expect(result.gates[0].argv).toEqual(['check', '--project', '.', '--json', '--no-require-frozen']);
+    expect(result.gates[0].couldNotRun).toBeNull();
+  });
+});
+
+/**
+ * Issue 103, the umbrella half: intent-guard 1.10.4 keeps JSON status ok with
+ * require-frozen off and no contract, and adds a top-level skipReason. A
+ * directly spawned run reports that gate as having checked nothing, on the
+ * same surfaces and with the same words and SARIF id as the pull-request
+ * path's no-contract skip.
+ */
+describe('an intent gate that says skipReason on a directly spawned run (issue 103)', () => {
+  const SKIPPED = readFileSync(
+    path.join(FIXTURES, 'intent-guard-1.10.4-check-no-contract-skipped.json'),
+    'utf8'
+  );
+  const SKIP_REASON = (JSON.parse(SKIPPED) as { skipReason: string }).skipReason;
+
+  const INTENT_OFF = parsePolicy(
+    'version: 1\ngates:\n  intent:\n    product: intent-guard\n    options:\n      require-frozen: false\n',
+    POLICY_FILE_NAME
+  );
+  const DEPS_AND_INTENT_OFF = parsePolicy(
+    'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  intent:\n    product: intent-guard\n    options:\n      require-frozen: false\n',
+    POLICY_FILE_NAME
+  );
+
+  function pushSkipRun(withDeps: boolean, check = SKIPPED): RunResult {
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: check }, version: '1.10.4' });
+    if (withDeps) {
+      stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    }
+    return runAll(withDeps ? DEPS_AND_INTENT_OFF : INTENT_OFF, {
+      repoRoot: repo({ spec: false }),
+      staged: false,
+      pathValue: bin,
+      env: {},
+    });
+  }
+
+  type Sarif = {
+    runs: Array<{
+      tool: { driver: { name: string } };
+      results: Array<{ ruleId: string }>;
+      invocations?: Array<{
+        toolExecutionNotifications: Array<{
+          descriptor: { id: string };
+          level: string;
+          message: { text: string };
+        }>;
+      }>;
+    }>;
+  };
+
+  it('is neither a blocked nor an unparseable gate, and exits 0', () => {
+    const result = pushSkipRun(false);
+    expect(result.gates).toHaveLength(1);
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(result.gates[0].run.details.skipReason).toBe(SKIP_REASON);
+  });
+
+  it('is nothing-checked in the text report, with the gate own reason', () => {
+    const result = pushSkipRun(false);
+    expect(verdictToken(result, false)).toBe('nothing-checked');
+    const text = renderText(result, { version: '9.9.9' });
+    expect(text.split('\n')[1]).toBe('verdict-token: nothing-checked');
+    expect(text).toMatch(/verdict: exit 0, nothing was checked: intent /);
+    expect(text).toContain(`  no contract: ${SKIP_REASON}`);
+    expect(text).not.toMatch(/BLOCKING|could not run|unparseable/);
+  });
+
+  it('is the intent-guard/no-contract notification in SARIF, the id the pull-request skip uses, and never a result', () => {
+    const log = JSON.parse(renderSarif(pushSkipRun(false), '0.2.0')) as Sarif;
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    const notification = umbrella?.invocations?.[0].toolExecutionNotifications.find(
+      (entry) => entry.descriptor.id === 'intent-guard/no-contract'
+    );
+    expect(notification?.level).toBe('note');
+    expect(notification?.message.text).toBe(
+      `The intent gate (intent-guard) checked nothing on this branch. ${SKIP_REASON}`
+    );
+    const ruleIds = log.runs.flatMap((entry) => entry.results.map((each) => each.ruleId));
+    expect(ruleIds).not.toContain('intent-guard/no-contract');
+    expect(ruleIds).not.toContain('conductor/gate-output-unparseable');
+    expect(ruleIds).not.toContain('intent-guard/gate-blocked');
+  });
+
+  it('names the intent gate on the one-line summary beside a clean gate, as the pull-request skip does', () => {
+    const result = pushSkipRun(true);
+    expect(verdictToken(result, false)).toBe('pass');
+    const summary = renderText(result);
+    expect(summary.trimEnd().split('\n')).toHaveLength(1);
+    expect(summary).toMatch(/clean, nothing blocked/);
+    expect(summary).toMatch(/Nothing to check against: intent \(intent-guard\)\./);
+
+    const log = JSON.parse(renderSarif(result, '0.2.0')) as Sarif;
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    expect(
+      umbrella?.invocations?.[0].toolExecutionNotifications.map((entry) => entry.descriptor.id)
+    ).toContain('intent-guard/no-contract');
+  });
+
+  it('accepts a future status skipped the same way, on skipReason alone', () => {
+    // contractFound left out, so nothing but the status and skipReason can
+    // be what says the gate checked nothing.
+    const parsed = JSON.parse(SKIPPED) as Record<string, unknown>;
+    delete parsed.contractFound;
+    delete parsed.contractFrozen;
+    const result = pushSkipRun(false, JSON.stringify({ ...parsed, status: 'skipped' }));
+    expect(result.gates[0].couldNotRun).toBeNull();
+    expect(result.exitCode).toBe(0);
+    expect(verdictToken(result, false)).toBe('nothing-checked');
+    expect(renderText(result)).toContain(`no contract: ${SKIP_REASON}`);
+    const log = JSON.parse(renderSarif(result, '0.2.0')) as Sarif;
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    expect(
+      umbrella?.invocations?.[0].toolExecutionNotifications.map((entry) => entry.descriptor.id)
+    ).toContain('intent-guard/no-contract');
+  });
+
+  it('is still unparseable for status skipped with a blocking finding, and for an unknown status', () => {
+    const budget = JSON.parse(CHECK_BLOCKING) as object;
+    for (const check of [
+      JSON.stringify({ ...budget, status: 'skipped', skipReason: SKIP_REASON }),
+      JSON.stringify({ ...(JSON.parse(SKIPPED) as object), status: 'frobnicated' }),
+    ]) {
+      const result = pushSkipRun(false, check);
+      expect(result.gates[0].couldNotRun).not.toBeNull();
+      expect(result.findings.map((finding) => finding.ruleId)).toContain('conductor/gate-output-unparseable');
+      expect(result.exitCode).toBe(2);
+      expect(verdictToken(result, false)).toBe('could-not-run');
+    }
+  });
+
+  it('reports an older intent-guard that found no contract with require-frozen off, and sends no skipReason, the same way', () => {
+    // The pre-1.10.4 shape: status ok, contractFound false, no skipReason.
+    // SARIF then carries the fallback sentence, since the gate gave none.
+    const older = JSON.stringify({
+      status: 'ok',
+      exitCode: 0,
+      reasons: [],
+      warnings: [],
+      contractFound: false,
+      contractFrozen: false,
+      crossSessionDrift: null,
+    });
+    const result = pushSkipRun(true, older);
+    expect(result.gates.find((gate) => gate.role === 'intent')?.run.details.skipReason).toBeUndefined();
+    const summary = renderText(result);
+    expect(summary).toMatch(/Nothing to check against: intent \(intent-guard\)\./);
+    const log = JSON.parse(renderSarif(result, '0.2.0')) as Sarif;
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    const notification = umbrella?.invocations?.[0].toolExecutionNotifications.find(
+      (entry) => entry.descriptor.id === 'intent-guard/no-contract'
+    );
+    expect(notification?.message.text).toBe(
+      'The intent gate (intent-guard) checked nothing on this branch. It found no contract to check against.'
+    );
+  });
+
+  it('never files a missing contract that BLOCKED as checked nothing', () => {
+    // require-frozen on and no contract: the gate blocks, and contractFound
+    // is false there too. That is a block, never a skip, on any surface.
+    const noContractBlocked = readFileSync(
+      path.join(FIXTURES, 'intent-guard-1.2.1-check-no-contract.json'),
+      'utf8'
+    );
+    const bin = tempDir();
+    stubIntentGuard(bin, { check: { stdout: noContractBlocked, exit: 1 } });
+    const result = runAll(INTENT_ONLY, { repoRoot: repo({ spec: false }), staged: false, pathValue: bin, env: {} });
+    expect(result.exitCode).toBe(1);
+    const log = JSON.parse(renderSarif(result, '0.2.0')) as Sarif;
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    expect(
+      (umbrella?.invocations?.[0].toolExecutionNotifications ?? []).map((entry) => entry.descriptor.id)
+    ).not.toContain('intent-guard/no-contract');
+  });
+
+  it('says nothing of the kind for an ordinary ok result with a contract', () => {
+    const result = pushSkipRun(true, CHECK_PASSING);
+    const summary = renderText(result);
+    expect(summary).not.toMatch(/Nothing to check against/);
+    const log = JSON.parse(renderSarif(result, '0.2.0')) as Sarif;
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    expect(
+      (umbrella?.invocations?.[0].toolExecutionNotifications ?? []).map((entry) => entry.descriptor.id)
+    ).not.toContain('intent-guard/no-contract');
+  });
+});

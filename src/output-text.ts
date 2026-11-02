@@ -467,14 +467,24 @@ function gateSection(gate: GateOutcome, verbose: boolean, refusedOnTerminal = fa
       .filter(
         ([key, value]) =>
           // ignoredReported drives the line above rather than being a fact
-          // about the run, so it is not printed twice.
+          // about the run, so it is not printed twice. skipReason gets its
+          // own line, below.
           key !== 'ignoredReported' &&
+          key !== 'skipReason' &&
           (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') &&
           value !== ''
       )
       .map(([key, value]) => `${key} ${String(value)}`);
     if (facts.length > 0) {
       lines.push(`  ${facts.join('   ')}`);
+    }
+
+    // The gate's own sentence for having checked nothing (issue 103), in the
+    // words the pull-request path's skipped line uses for the same state.
+    // The gate wrote it, so it is cleaned like any other gate text.
+    const skipReason = intentSkipReason(gate);
+    if (skipReason !== null && intentCheckedNothing(gate)) {
+      lines.push(`  ${skipWording('no-contract').line}: ${cleanOutputLine(skipReason)}`);
     }
 
     for (const diagnostic of gate.run.diagnostics) {
@@ -551,7 +561,9 @@ interface SkipWording {
   summary: string;
 }
 
-function skipWording(reason: RunResult['skipped'][number]['reason']): SkipWording {
+type SkippedReason = RunResult['skipped'][number]['reason'];
+
+function skipWording(reason: SkippedReason): SkipWording {
   if (reason === 'contract-waived') {
     return {
       line: 'spec waived',
@@ -1212,7 +1224,34 @@ function gateCheckedNothing(gate: RunResult['gates'][number]): boolean {
   return (
     gate.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan') ||
     readNoPackages(gate) ||
-    (gate.role === 'intent' && gate.run.details.contractFound === false)
+    intentCheckedNothing(gate)
+  );
+}
+
+/**
+ * The gate's own skipReason (intent-guard 1.10.4, issue 103), or null. Put
+ * in the run details by normalizeIntentGuard only when non-empty.
+ */
+export function intentSkipReason(gate: GateOutcome): string | null {
+  const said = gate.run.details.skipReason;
+  return typeof said === 'string' && said !== '' ? said : null;
+}
+
+/**
+ * An intent gate that RAN and checked nothing: it said so with skipReason,
+ * or (before 1.10.4) it reported no contract found. The one predicate the
+ * text report, its one-line summary and the SARIF notification all read, so
+ * a directly spawned run reports this state on the same surfaces as the
+ * pull-request path's no-contract skip (issue 103). Never for a gate that
+ * could not run or that blocked: a missing contract under require-frozen is
+ * a block, not a skip.
+ */
+export function intentCheckedNothing(gate: GateOutcome): boolean {
+  return (
+    gate.role === 'intent' &&
+    gate.couldNotRun === null &&
+    !gate.findings.some((finding) => finding.blocking) &&
+    (intentSkipReason(gate) !== null || gate.run.details.contractFound === false)
   );
 }
 
@@ -1655,7 +1694,16 @@ function summaryLine(result: RunResult): string {
   // decided there is none exactly where most readers stop reading. Grouped in
   // first-seen order so the sentence does not reorder itself between runs.
   const skippedByWording = new Map<string, string[]>();
-  for (const gate of result.skipped) {
+  // An intent gate that ran and checked nothing (issue 103) is named in the
+  // same clause as the pull-request path's no-contract skip: it is the same
+  // state, and this line is all a hook or a pull request comment prints.
+  const checkedNothing: Array<{ role: string; product: string; reason: SkippedReason }> = [
+    ...result.skipped,
+    ...result.gates
+      .filter(intentCheckedNothing)
+      .map((gate) => ({ role: gate.role, product: gate.product, reason: 'no-contract' as const })),
+  ];
+  for (const gate of checkedNothing) {
     const lead = skipWording(gate.reason).summary;
     skippedByWording.set(lead, [
       ...(skippedByWording.get(lead) ?? []),

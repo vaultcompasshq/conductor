@@ -357,7 +357,7 @@ An unenforced gate that could not run still produces a critical,
 error-level RESULT in the SARIF log, not a note. `conductor/gate-missing`
 and `conductor/gate-failed` keep their severity and their result standing
 whatever the policy says about enforcement (src/normalize.ts:1219 for the
-severity, src/output-sarif.ts:136-142 for the level, and 1046-1051 for the
+severity, src/output-sarif.ts:142-148 for the level, and 1046-1051 for the
 findings going into the umbrella's run rather than being reclassified),
 and only the umbrella's own `gate-not-enforced` notification says the
 verdict did not reach the exit code.
@@ -1288,7 +1288,7 @@ pull request leaves alone runs and one it rewrites is refused; a path the
 base lacks is refused when the head tracks it or the disk has it, and is a
 word otherwise. A word written after a flag is read as the flag's value,
 the fail-closed direction, and the refusal says to put scan targets before
-the flags, EXCEPT after a flag in `NO_VALUE_FLAGS` (src/resolve.ts), a
+the flags, EXCEPT after a flag in `NO_VALUE_FLAGS` (src/policy.ts:618-630), a
 per-product list taken only from each gate's own `--help`, so
 `osv-scanner scan source -r .` keeps `.` a positional (re-review
 2026-10-28, R1: without the list that canonical form was could-not-run on
@@ -1333,15 +1333,15 @@ MB1). `renderOptionFlags` turns the policy's `options:` into the flags
 every spawn ends with, and before this only `args:` was read for paths, so
 `dependencies: {options: {corpus-dir: corpus}}` let a pull request empty
 the corpus and pass while the same corpus in `args:` was refused.
-`optionEntries` (src/resolve.ts:663-665) renders the options with that same
+`optionEntries` (src/resolve.ts:637-639) renders the options with that same
 function and reads the result with `gateArgEntries`, the reader a
 gate-named command's args get; code-extension values go to the code rule
-(`optionCodeArguments`, src/resolve.ts:668-672, appended in
-`codeArguments`, src/resolve.ts:680-687, and listed again on their own as
-`optionArgumentPaths`, src/resolve.ts:695-697, which
+(`optionCodeArguments`, src/resolve.ts:642-646, appended in
+`codeArguments`, src/resolve.ts:654-661, and listed again on their own as
+`optionArgumentPaths`, src/resolve.ts:669-671, which
 `refuseHeadControlledBinary` reads at src/gate-runner.ts:1189-1196 so the
 refusal names `options:`) and every other value to the data
-rule (`dataArgumentPaths`, src/resolve.ts:727-743, marked `from:
+rule (`dataArgumentPaths`, src/resolve.ts:701-717, marked `from:
 'options'` only so the refusal names `options:`). That holds whatever
 `command:` is, because the options always follow the args in the argv and
 so are never an interpreter's own, and with no `command:` at all, where
@@ -2358,7 +2358,7 @@ skipped and excluded lines), a clause on the one-line clean summary
 (`summaryLine`, src/output-text.ts) and its own verdict branch for the case
 where every enabled gate landed in this list, and a `conductor/tree-unchanged`
 notification in the SARIF log (`treeUnchangedNotifications`,
-src/output-sarif.ts:623-631, a NOTE by the same discriminator as
+src/output-sarif.ts:629-637, a NOTE by the same discriminator as
 `gate-deferred` and `gate-excluded`: this is a statement about how much of
 the policy the run covered, not about anybody's code). None of the three
 reaches the exit code, which composes only from `outcomes`
@@ -2577,7 +2577,7 @@ comment.
    tests/normalize.test.ts:483-538.
 2. AN UNCLASSIFIED REASON DISAPPEARS FROM THE REPORT WHEN SOMETHING ELSE
    BLOCKS. The backstop that catches unclassified reasons fires only when
-   NOTHING ELSE blocked (src/normalize.ts:807), so a pull request that
+   NOTHING ELSE blocked (src/normalize.ts:814), so a pull request that
    forged a contract approval AND breached a change budget reported only
    the budget breach. The run still failed; the report never said the
    approval was self-granted, which is the one sentence pull-request mode
@@ -2804,10 +2804,32 @@ threshold in its own `options` block, spelled the way that gate spells it.
 
 `options` keys are the gate's own long-flag names with the dashes
 stripped, and this package never maps, renames or interprets one
-(`renderOptionFlags`, src/policy.ts:546-566). `true` renders as `--key`,
+(`renderOptionFlags`, src/policy.ts:666-688). `true` renders as `--key`,
 `false` as `--no-key` (commander's own convention, and the one negation
 rendering that is right without knowing the flag), a scalar as `--key
-value`, and an array as one pair per entry. Keys are sorted, so two policy
+value`, and an array as one pair per entry. The one exception to `true`
+(issue 161), general across gates and not an intent-guard special case:
+where the gate's own help, as recorded in `NO_VALUE_FLAGS`
+(src/policy.ts:618-630), has a value-less `--no-key` and no value-less
+`--key`, `true` renders nothing (`onlyNegatedSpelling`,
+src/policy.ts:650-653). The premise is that table's: it lists only
+value-less flags, so a gate with a VALUED `--key` beside a value-less
+`--no-key` would wrongly lose `true`, and no gate has that shape today.
+Such a flag's default is on, so `true` asks for the default. intent-guard
+1.10.3 `check` refuses `--require-frozen` as an unknown option, which made
+`require-frozen: true` could-not-run on every directly spawned intent run;
+gitleaks `banner` and `color` and osv-scanner `ignore` and `resolve` were
+could-not-run the same way, since those binaries refuse the positive
+spellings (measured in review), and now take the same path. A flag the
+table does not know, or one it lists in both spellings, renders as before;
+the decision is per product. Pinned by tests/policy.test.ts ("renders
+nothing for require-frozen true on intent-guard, whose check accepts only
+--no-require-frozen", "applies to every gate: true renders nothing for
+gitleaks banner and color and osv-scanner ignore and resolve", "keeps
+--key for a flag whose gate lists both spellings, and for a flag it does
+not list at all" and "decides per product: the same key on a gate that
+has no negated spelling still renders") and tests/intent-run.test.ts ("spawns no --require-frozen for
+require-frozen true, and the gate runs rather than being unparseable"). Keys are sorted, so two policy
 files differing only in key order produce the same command line and a
 diffable report. That passthrough is what keeps the umbrella from growing
 a second, drifting copy of three CLIs, and it is why a gate can gain a
@@ -3843,7 +3865,7 @@ parameterised case over all five of the gate's own state markers), 734 (a
 READING THE OLD DIRECTORY IS SAID OUT LOUD, as one aside on the text
 report's contract line (src/output-text.ts:114-121) and one
 `intent-guard/legacy-state-dir` notification in the SARIF log
-(src/output-sarif.ts:564-588). Both go through one predicate over the
+(src/output-sarif.ts:570-594). Both go through one predicate over the
 source path (`isLegacyContractPath`, src/intent-prepare.ts:97-99) rather
 than a boolean carried beside it: the path is already the fact, and a flag
 travelling next to it is a second copy that can disagree with the first.
@@ -4108,7 +4130,7 @@ It never reaches the exit code, enforced or not, because a skipped gate
 produces no `GateOutcome` and `composeExitCode` only ever sees outcomes.
 It is still on screen: one line in the text report
 (src/output-text.ts:232-237), one notification in the SARIF log
-(src/output-sarif.ts:650-663), and a distinct verdict sentence when it is
+(src/output-sarif.ts:656-669), and a distinct verdict sentence when it is
 the only thing that happened (src/output-text.ts:579-618), because telling
 somebody to set `enabled: true` is the wrong advice for a gate that is
 already on and had nothing to check.
@@ -4247,7 +4269,7 @@ either `no-contract` or `contract-waived` (src/output-sarif.ts:673-685),
 `intent-guard/legacy-state-dir` (src/output-sarif.ts:566-590), all of them
 collected at src/output-sarif.ts:1053-1066 and written into
 `invocations[0].toolExecutionNotifications` on the umbrella's run
-(src/output-sarif.ts:475-482 and 1085-1109). As results they were
+(src/output-sarif.ts:481-488 and 1085-1109). As results they were
 fingerprint-less note alerts that reappeared on every run, so a repository
 on the adoption ramp accrued permanent alerts about this tool's own
 configuration.
@@ -4272,7 +4294,7 @@ that file format, true on every run forever.
 The notification descriptor id keeps the id the statement was filed under
 when it was a result, so a consumer that had rules for these still
 recognises them, and the descriptors are declared beside the rules so the
-reference resolves rather than dangling (src/output-sarif.ts:406-416,
+reference resolves rather than dangling (src/output-sarif.ts:412-422,
 declared at 418-423 and attached at 464-466). Level is always `note`; a
 notification arriving as a warning would push these straight back into
 the alert list they were moved out of.
@@ -4326,7 +4348,7 @@ fact it observed (deferred, excluded, skipped, unenforced, legacy state
 dir); this one is a sentence intent-guard sends verbatim, so it is read by
 `readIntentWarnings` (src/normalize.ts:513-518) into a run-level diagnostic
 namespaced `intent-guard/warning` (the constant at src/normalize.ts:495,
-attached to `run.diagnostics` at src/normalize.ts:832) rather than into the
+attached to `run.diagnostics` at src/normalize.ts:839) rather than into the
 umbrella's own top-level `diagnostics` field, which stays reserved for
 conductor's five fixed ids and never a gate's own statement. Reading it is
 tolerant on purpose, unlike everything else this normalizer validates:
@@ -4512,7 +4534,7 @@ run") and tests/osv-output.test.ts ("sets no baselineState and no
 comparison details in SARIF").
 
 `%SRCROOT%` is attached only to a path genuinely under the source root
-(`placeArtifact`, src/output-sarif.ts:170-211). An absolute path is
+(`placeArtifact`, src/output-sarif.ts:176-217). An absolute path is
 positive evidence the file is NOT under the root, since one of the gates
 keeps a path absolute exactly when the file is outside the directory it
 scanned; stripping the leading slash fabricates a source-root-relative
@@ -4533,9 +4555,9 @@ the umbrella against that checkout found the offender.
 
 So every result now carries at least one location, and the fallback is a
 real file rather than an invented one: the control file the result is a
-statement about (`fallbackLocationFor`, src/output-sarif.ts:303-309, and
-`withFallbackLocation`, src/output-sarif.ts:322-333, applied in `toResult`
-at src/output-sarif.ts:363). That is the policy file for the umbrella's own
+statement about (`fallbackLocationFor`, src/output-sarif.ts:309-315, and
+`withFallbackLocation`, src/output-sarif.ts:328-339, applied in `toResult`
+at src/output-sarif.ts:369). That is the policy file for the umbrella's own
 results and for the two gates whose control files the umbrella does not
 read, and the frozen contract for the intent gate when the run recorded
 which state directory it read. Nothing that already had a location is
@@ -4558,7 +4580,7 @@ column (vault-guard at src/normalize.ts:348-349, gitleaks `StartLine` at
 src/normalize.ts:887-888 and `StartColumn` at 906-909). When `StartColumn` is
 absent, that line sets it to 1. gitleaks also carries `endColumn` when the
 report has a usable `EndColumn` (src/normalize.ts:910-918, written into the
-region at src/output-sarif.ts:264-266). vault-guard's JSON has no match
+region at src/output-sarif.ts:270-272). vault-guard's JSON has no match
 length, so that gate's region has no `endColumn` (src/normalize.ts:377-378).
 
 A gitleaks column below 1 never reaches a region (audit 2026-10-18 B1).
@@ -4603,12 +4625,12 @@ match is unknown FROM THIS CHANNEL rather than unknown to the product,
 which makes it a fixable upstream ask (carry `matchLength` on the match)
 rather than a permanent limitation of the finding. Until it is carried it
 is not guessed, and the renderer already emits `endColumn` when the
-envelope has one (src/output-sarif.ts:261-263), so the day the field
+envelope has one (src/output-sarif.ts:267-269), so the day the field
 arrives the only change needed is in the normalizer.
 
 `partialFingerprints` carries each product's own fingerprint unhashed,
 under a key naming the product and a version
-(src/output-sarif.ts:147-149 and 358). Hashing it together with
+(src/output-sarif.ts:153-155 and 364). Hashing it together with
 anything would mint a second identity for every finding, one that moves
 when the first does not, and every alert would resurface on the next scan.
 The key is versioned so a future change to a product's fingerprint inputs
@@ -4617,7 +4639,7 @@ silently comparing hashes of different things.
 
 `properties.blocking` is the gate's decision as reconciled in
 src/normalize.ts and is never recomputed in the renderer
-(src/output-sarif.ts:346). A second copy of the gate living in the
+(src/output-sarif.ts:352). A second copy of the gate living in the
 renderer would drift silently.
 
 `executionSuccessful` is written whenever the umbrella's run is written,
@@ -4724,7 +4746,7 @@ threshold, so a budget violation is blocking because the gate raises one
 reason per violation and blocks on having any reason at all, and a drift
 finding is blocking exactly when the OVERALL action blocks, since the gate
 raises one reason for the score and none per finding
-(src/normalize.ts:660-697 for the budget half and 699-753 for the drift
+(src/normalize.ts:667-704 for the budget half and 706-760 for the drift
 half).
 
 THE VERDICT HAS A CLAUSE FOR THE STATE THIS RULE PRODUCES, and it was
@@ -4835,7 +4857,7 @@ for the intent gate, which has no per-finding severity at all, and
 `severityIsDerived` is true there for every finding
 (src/envelope.ts:16-23; identity at src/normalize.ts:239-241; the
 umbrella's own two ladders for the intent gate at src/normalize.ts:476-487,
-marked derived at src/normalize.ts:684, 735 and 775). An unrecognised level
+marked derived at src/normalize.ts:691, 742 and 782). An unrecognised level
 from the secret gate lands on `info` and is marked derived, so a
 downstream consumer never sees a level outside the union
 (src/normalize.ts:359-363). The text report marks a derived severity with
@@ -4850,7 +4872,7 @@ worth: `stable` survives edits elsewhere in the file, `positional` does
 not, `none` means there is no id to keep. Where a product mints no
 fingerprint, the field is null and no `partialFingerprints` object is
 emitted, rather than an invented id no baseline anywhere contains
-(src/normalize.ts:779-781).
+(src/normalize.ts:786-788).
 
 The umbrella's OWN findings are the one thing it fingerprints, and the
 digest is over the rule, the role and the product and deliberately NOT
@@ -5464,8 +5486,8 @@ lockfile and a run that scanned none both have `results: []`, and reading
 lockfile it handed over with `--lockfile` before osv-scanner is ever
 spawned (`external.lockfiles`, src/gate-runner.ts:1228-1297); that same
 list, never the tool's report, is what `normalizeOsvScanner` renders as the
-`lockfiles` fact (`describeLockfiles`, src/normalize.ts:1168-1174, used at
-src/normalize.ts:1336). `results.length` is kept under a renamed key,
+`lockfiles` fact (`describeLockfiles`, src/normalize.ts:1214-1220, used at
+src/normalize.ts:1382). `results.length` is kept under a renamed key,
 `sources-with-findings`, so the count that really did come from the tool is
 never confused with the count that came from the umbrella. The two existing
 nothing-to-scan paths are unchanged: both return before
@@ -6017,6 +6039,35 @@ now says it checked nothing, in the verdict sentence's own words, and that
 this is not a clean result. Pinned by tests/output-text.test.ts ("does not
 word a push-mode intent run with no contract like a clean result" and
 "keeps the clean wording for an unenforced gate that did check something").
+
+A DIRECTLY SPAWNED INTENT GATE THAT CHECKED NOTHING IS REPORTED LIKE THE
+PULL-REQUEST SKIP (issue 103). intent-guard 1.10.4 keeps JSON status `ok`
+with require-frozen off and no contract and adds a top-level `skipReason`.
+`readSkipReason` (src/normalize.ts:876-893) records a non-empty one in the
+run details; a skip that carries any finding, a `skipped` status with no
+reason, and a non-string reason are refused as unparseable, and a `blocked`
+result stays blocked whatever it says. The status check
+(src/normalize.ts:659) accepts `skipped` as the one added value, read the
+same as `ok` plus `skipReason`, so the gate can move to a distinct status
+later; every other unknown status is still unparseable. The gate stays in
+`result.gates`, since it ran. `intentCheckedNothing`
+(src/output-text.ts:1249-1256) is the one predicate the verdict token, the
+verdict sentence, the one-line summary (the "Nothing to check against"
+clause, src/output-text.ts:1700) and the SARIF `intent-guard/no-contract`
+notification (`ranAndCheckedNothingNotifications`,
+src/output-sarif.ts:719-727) read, so text, the pull request comment (the
+text report, fenced) and SARIF agree; it never fires for a gate that could
+not run or blocked. Pinned by tests/normalize.test.ts ("accepts status
+skipped with a skipReason, and reads it exactly as ok plus skipReason",
+"rejects status skipped that carries a blocking finding" and "still rejects
+any other unknown status") and tests/intent-run.test.ts ("is the
+intent-guard/no-contract notification in SARIF, the id the pull-request
+skip uses, and never a result", "names the intent gate on the one-line
+summary beside a clean gate, as the pull-request skip does", "never
+files a missing contract that BLOCKED as checked nothing" and, for the
+pre-1.10.4 shape with no skipReason and its fallback SARIF sentence,
+"reports an older intent-guard that found no contract with require-frozen
+off, and sends no skipReason, the same way").
 
 THE ONE PLACE A SECOND RUN REMAINS, and why. The action installs whatever
 `conductor-version` says, and a version older than the one that added

@@ -1461,3 +1461,66 @@ describe('osv-scanner output that is a verdict but not an advisory', () => {
     expect(withTop.otherVerdicts).toEqual([]);
   });
 });
+
+/**
+ * Issue 103, the umbrella half. intent-guard 1.10.4 keeps status ok with
+ * require-frozen off and no contract and adds a top-level skipReason; a later
+ * release may move that state to status "skipped". Both read the same, and
+ * that one status value is the only loosening at the status check.
+ */
+describe('intent-guard skipReason and status skipped (issue 103)', () => {
+  const SKIPPED = fixture('intent-guard-1.10.4-check-no-contract-skipped.json') as Record<string, unknown>;
+  const REASON = SKIPPED.skipReason as string;
+
+  it('carries a non-empty skipReason on an ok result into the run details, with no finding', () => {
+    const result = normalizeIntentGuard(SKIPPED, '1.10.4');
+    expect(result.findings).toEqual([]);
+    expect(result.run.details.skipReason).toBe(REASON);
+  });
+
+  it('accepts status skipped with a skipReason, and reads it exactly as ok plus skipReason', () => {
+    const asOk = normalizeIntentGuard(SKIPPED, '1.10.4');
+    const asSkipped = normalizeIntentGuard({ ...SKIPPED, status: 'skipped' }, '1.11.0');
+    expect(asSkipped.findings).toEqual([]);
+    expect(asSkipped.run.details.skipReason).toBe(REASON);
+    expect({ ...asSkipped, findings: [] }).toEqual({ ...asOk, findings: [] });
+  });
+
+  it('records no skipReason on an ordinary ok result, or on an empty one', () => {
+    const passing = normalizeIntentGuard(fixture('intent-guard-1.2.1-check-passing.json'), '1.2.1');
+    expect('skipReason' in passing.run.details).toBe(false);
+    const empty = normalizeIntentGuard({ ...SKIPPED, skipReason: '' }, '1.10.4');
+    expect('skipReason' in empty.run.details).toBe(false);
+  });
+
+  it('rejects status skipped that carries a blocking finding', () => {
+    const contradictory = { ...(INTENT_GUARD_BUDGET as Record<string, unknown>), status: 'skipped', skipReason: REASON };
+    expect(() => normalizeIntentGuard(contradictory, '1.11.0')).toThrow(NormalizeError);
+  });
+
+  it('rejects a skipReason on an ok result that carries a blocking finding', () => {
+    const contradictory = { ...(INTENT_GUARD_BUDGET as Record<string, unknown>), status: 'ok', skipReason: REASON };
+    expect(() => normalizeIntentGuard(contradictory, '1.10.4')).toThrow(NormalizeError);
+  });
+
+  it('rejects status skipped with no skipReason, and a skipReason that is not a string', () => {
+    const noReason: Record<string, unknown> = { ...SKIPPED };
+    delete noReason.skipReason;
+    expect(() => normalizeIntentGuard({ ...noReason, status: 'skipped' }, '1.11.0')).toThrow(NormalizeError);
+    expect(() => normalizeIntentGuard({ ...SKIPPED, skipReason: 7 }, '1.10.4')).toThrow(NormalizeError);
+  });
+
+  it('still rejects any other unknown status', () => {
+    expect(() => normalizeIntentGuard({ ...SKIPPED, status: 'frobnicated' }, '1.10.4')).toThrow(NormalizeError);
+    expect(() => normalizeIntentGuard({ ...SKIPPED, status: 'Skipped' }, '1.10.4')).toThrow(NormalizeError);
+  });
+
+  it('keeps a blocked result blocked whatever skipReason says, and does not record it', () => {
+    const blocked = normalizeIntentGuard(
+      { ...(INTENT_GUARD_BUDGET as Record<string, unknown>), skipReason: REASON },
+      '1.10.4'
+    );
+    expect(blocked.findings.some((finding) => finding.blocking)).toBe(true);
+    expect('skipReason' in blocked.run.details).toBe(false);
+  });
+});

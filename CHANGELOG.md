@@ -88,6 +88,36 @@ Fixes from the 2026-11-01 cohesion audit.
   now correct on its own (CodeQL js/regex-injection).
 - Two gate-runner tests compare version text literally instead of building a
   pattern from it with only dots escaped (CodeQL js/incomplete-sanitization).
+- `options: require-frozen: true` on the intent gate no longer makes the gate
+  could-not-run (issue 161). It rendered `--require-frozen`, which
+  intent-guard's `check` refuses as an unknown option (its help lists only
+  `--no-require-frozen`; on is the default), so every directly spawned run
+  (a push with no base, the pre-commit stage, a local `conductor run`)
+  reported `conductor/gate-output-unparseable`. A `true` option is now left
+  off the command line when the gate's own help, as recorded in conductor's
+  per-gate table of value-less flags, has a value-less `--no-<key>` and no
+  value-less `--<key>`: true is then that gate's default. The rule is
+  general across gates, not an intent-guard special case, so it also
+  covers gitleaks `banner` and `color` and osv-scanner `ignore` and
+  `resolve`, whose positive spellings those binaries refuse (gitleaks:
+  unknown flag; osv-scanner `scan source`: flag provided but not defined)
+  and which were could-not-run before. No gate today has a valued
+  `--<key>` beside a value-less `--no-<key>`, the one shape the rule would
+  misread. `false` still renders `--no-<key>`, and every other flag renders
+  as before.
+- An intent gate that ran and checked nothing is now reported that way on a
+  directly spawned run, as the pull-request path already reports a
+  no-contract skip (issue 103, umbrella half). intent-guard 1.10.4 keeps
+  JSON status `ok` with require-frozen off and no contract and adds a
+  `skipReason`; conductor now prints that reason under the gate, names the
+  gate in the one-line summary's "Nothing to check against" clause, and
+  adds the `intent-guard/no-contract` notification to the SARIF log, so the
+  text report, the pull request comment and SARIF agree. The SARIF
+  notification and the summary clause also cover an older intent-guard that
+  reports no contract found with require-frozen off. A future status
+  `skipped` is accepted and read the same way; a skip that carries a
+  finding, a `skipped` status with no reason, and any other unknown status
+  are still unparseable.
 
 ## [0.16.0] - 2026-10-28
 

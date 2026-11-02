@@ -192,19 +192,19 @@ describe('per-gate option passthrough', () => {
   });
 
   it('renders option keys as the gate own flag spellings, unchanged', () => {
-    expect(renderOptionFlags({ 'fail-on': 'high' })).toEqual(['--fail-on', 'high']);
-    expect(renderOptionFlags({ online: true })).toEqual(['--online']);
-    expect(renderOptionFlags({ 'require-frozen': false })).toEqual(['--no-require-frozen']);
-    expect(renderOptionFlags({ 'max-size': 12 })).toEqual(['--max-size', '12']);
+    expect(renderOptionFlags({ 'fail-on': 'high' }, 'dep-guard')).toEqual(['--fail-on', 'high']);
+    expect(renderOptionFlags({ online: true }, 'dep-guard')).toEqual(['--online']);
+    expect(renderOptionFlags({ 'require-frozen': false }, 'intent-guard')).toEqual(['--no-require-frozen']);
+    expect(renderOptionFlags({ 'max-size': 12 }, 'vault-guard')).toEqual(['--max-size', '12']);
   });
 
   it('renders an array option once per value', () => {
-    expect(renderOptionFlags({ ignore: ['a', 'b'] })).toEqual(['--ignore', 'a', '--ignore', 'b']);
+    expect(renderOptionFlags({ ignore: ['a', 'b'] }, 'vault-guard')).toEqual(['--ignore', 'a', '--ignore', 'b']);
   });
 
   it('renders options in a deterministic order regardless of file order', () => {
-    const first = renderOptionFlags({ zeta: '1', alpha: '2' });
-    const second = renderOptionFlags({ alpha: '2', zeta: '1' });
+    const first = renderOptionFlags({ zeta: '1', alpha: '2' }, 'dep-guard');
+    const second = renderOptionFlags({ alpha: '2', zeta: '1' }, 'dep-guard');
     expect(first).toEqual(second);
   });
 
@@ -849,5 +849,45 @@ describe('the timeout set under options instead of beside enforce', () => {
         });
       }
     }
+  });
+});
+
+describe('a true option the gate spells only as a negation (issue 161)', () => {
+  it('renders nothing for require-frozen true on intent-guard, whose check accepts only --no-require-frozen', () => {
+    // intent-guard 1.10.3 check --help lists --no-require-frozen and no
+    // --require-frozen, and refuses the positive spelling as an unknown
+    // option. Its default is on, so true asks for the default.
+    expect(renderOptionFlags({ 'require-frozen': true }, 'intent-guard')).toEqual([]);
+    expect(renderOptionFlags({ 'require-frozen': true, log: true }, 'intent-guard')).toEqual(['--log']);
+  });
+
+  it('still renders require-frozen false as --no-require-frozen', () => {
+    expect(renderOptionFlags({ 'require-frozen': false }, 'intent-guard')).toEqual(['--no-require-frozen']);
+  });
+
+  it('keeps --key for a flag whose gate lists both spellings, and for a flag it does not list at all', () => {
+    // dep-guard lists both --online and --no-online.
+    expect(renderOptionFlags({ online: true }, 'dep-guard')).toEqual(['--online']);
+    // A flag the table does not know is passed through as before.
+    expect(renderOptionFlags({ 'some-new-flag': true }, 'intent-guard')).toEqual(['--some-new-flag']);
+  });
+
+  it('applies to every gate: true renders nothing for gitleaks banner and color and osv-scanner ignore and resolve', () => {
+    // The rule is general, not an intent-guard case. Each of these four has
+    // only the value-less --no- spelling in NO_VALUE_FLAGS; before, true
+    // rendered the positive spelling, which the review measured both real
+    // binaries refusing (gitleaks: unknown flag --banner; osv-scanner scan
+    // source: flag provided but not defined -ignore), so it was could-not-run.
+    expect(renderOptionFlags({ banner: true, color: true }, 'gitleaks')).toEqual([]);
+    expect(renderOptionFlags({ ignore: true, resolve: true }, 'osv-scanner')).toEqual([]);
+    expect(renderOptionFlags({ banner: false, color: false }, 'gitleaks')).toEqual(['--no-banner', '--no-color']);
+    expect(renderOptionFlags({ ignore: false, resolve: false }, 'osv-scanner')).toEqual([
+      '--no-ignore',
+      '--no-resolve',
+    ]);
+  });
+
+  it('decides per product: the same key on a gate that has no negated spelling still renders', () => {
+    expect(renderOptionFlags({ 'require-frozen': true }, 'dep-guard')).toEqual(['--require-frozen']);
   });
 });

@@ -123,7 +123,13 @@ import { gateExitBlocks } from './exit-codes.js';
 import { type GateOutcome, cleanOutputLine, cleanPreviewLine } from './gate-runner.js';
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
 import { INTENT_WARNING } from './normalize.js';
-import { gateOutcomeWords, skewFound, skewPlace } from './output-text.js';
+import {
+  gateOutcomeWords,
+  intentCheckedNothing,
+  intentSkipReason,
+  skewFound,
+  skewPlace,
+} from './output-text.js';
 import { POLICY_FILE_NAME } from './policy.js';
 import { policyChangeLine } from './policy-diff.js';
 import { type RunResult, guardPreview } from './run.js';
@@ -697,6 +703,30 @@ function treeUnchangedNotifications(result: RunResult): Notification[] {
  * keep answering it the same way.
  */
 function skippedNotifications(result: RunResult): Notification[] {
+  return [...preparedSkipNotifications(result), ...ranAndCheckedNothingNotifications(result)];
+}
+
+/**
+ * An intent gate that RAN and checked nothing (issue 103): intent-guard
+ * 1.10.4's skipReason on a directly spawned run, or, before it, no contract
+ * found with require-frozen off. Filed under the same id as the
+ * pull-request path's no-contract skip, with the same message shape and the
+ * gate's own sentence as the detail, because it is the same state and a
+ * consumer filtering on intent-guard/no-contract should see both. The same
+ * predicate the text report reads (intentCheckedNothing), so the two agree.
+ * The gate's own run is still in the log, since it did run.
+ */
+function ranAndCheckedNothingNotifications(result: RunResult): Notification[] {
+  return result.gates.filter(intentCheckedNothing).map((gate) => ({
+    id: `${gate.product}/no-contract`,
+    message:
+      `The ${gate.role} gate (${gate.product}) checked nothing on this branch. ` +
+      (intentSkipReason(gate) ?? 'It found no contract to check against.'),
+    details: { role: gate.role, product: gate.product, reason: 'no-contract' },
+  }));
+}
+
+function preparedSkipNotifications(result: RunResult): Notification[] {
   return result.skipped.map((gate) => ({
     // The reason IS the second half of the id, which keeps
     // intent-guard/no-contract exactly where consumers already have it and

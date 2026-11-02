@@ -101,6 +101,12 @@ export interface StubIntentGuardOptions {
   /** File to append each non-version invocation's arguments to. */
   argvLog?: string;
   version?: string;
+  /**
+   * Arguments this stub refuses the way the real CLI refuses an unknown
+   * option: `error: unknown option '<arg>'` on stderr and exit 1 (measured
+   * against intent-guard 1.10.3 `check --require-frozen`).
+   */
+  unknownOptions?: string[];
 }
 
 /**
@@ -123,6 +129,11 @@ export function stubIntentGuard(binDir: string, options: StubIntentGuardOptions 
     lines.push(`if [ "$1" != "--version" ]; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
   }
   lines.push(`if [ "$1" = "--version" ]; then echo "${options.version ?? '1.2.1'}"; exit 0; fi`);
+  for (const refused of options.unknownOptions ?? []) {
+    lines.push(
+      `for a in "$@"; do if [ "$a" = ${JSON.stringify(refused)} ]; then echo "error: unknown option '$a'" >&2; exit 1; fi; done`
+    );
+  }
   lines.push('case "$1" in');
 
   for (const [subcommand, payload] of [
