@@ -14,6 +14,14 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-02
+
+**A security release.** It closes the findings of the 2026-11-01 cohesion
+audit, and moves the Action's default gates to dep-guard 0.18.1, vault-guard
+1.13.1 and intent-guard 1.10.4, the fix-forward releases from that audit.
+`@vaultcompass/conductor` moves to 0.17.0 on npm and the `conductor-version`
+default moves in lockstep.
+
 Fixes from the 2026-11-01 cohesion audit.
 
 ### Security
