@@ -601,18 +601,76 @@ export function enabledGates(policy: Policy): GatePolicy[] {
 }
 
 /**
+ * Flags that take NO value, per product, read from each gate's own `--help`
+ * (osv-scanner 2.4.0 `scan source`, gitleaks 8.30.1 `git`, dep-guard 0.17.0
+ * and vault-guard 1.12.1 `scan`, intent-guard 1.10.2 `check`, and 1.10.3
+ * `check` again for issue 161, which lists the same flags). Two readers:
+ *
+ *  - gateArgEntries in resolve.ts: the word after one of these is NOT its
+ *    value, so `osv-scanner scan source -r .` keeps `.` as a positional scan
+ *    target (re-review 2026-10-28, R1). Any flag not listed stays
+ *    fail-closed there: the word after it is read as its value. A wrong
+ *    entry would let a value be read as a positional, which leaves a
+ *    directory unvetted, so entries come only from a gate's own help text.
+ *  - renderOptionFlags below: a `true` option whose gate lists `--no-<key>`
+ *    and not `--<key>` is not rendered (issue 161).
+ */
+export const NO_VALUE_FLAGS: Record<Product, readonly string[]> = {
+  'osv-scanner': [
+    '-r', '--recursive', '--no-ignore', '--include-git-root', '--serve', '--offline',
+    '--offline-vulnerabilities', '--download-offline-databases', '--no-resolve',
+    '--allow-no-lockfiles', '--all-packages', '--all-vulns',
+    '--experimental-flag-deprecated-packages', '--experimental-no-default-plugins', '-h', '--help',
+  ],
+  gitleaks: [
+    '-v', '--verbose', '--pre-commit', '--staged', '--ignore-gitleaks-allow', '--no-banner',
+    '--no-color', '--redact', '-h', '--help',
+  ],
+  'dep-guard': ['--staged', '--online', '--no-online', '-h', '--help'],
+  'vault-guard': ['--staged', '-h', '--help'],
+  'intent-guard': ['--staged', '--no-require-frozen', '--log', '--json', '-h', '--help', '-v', '--version'],
+};
+
+/**
+ * Whether `--<key>` is a spelling the gate does not have while `--no-<key>`
+ * is: its own help lists only the negation. The gate's default for such a
+ * flag is then on (a `--no-` flag exists to turn a default off), so a policy
+ * value `true` asks for exactly the default, and rendering it would hand the
+ * gate an option it refuses (issue 161: intent-guard 1.10.3 `check
+ * --require-frozen` exits 1 with "unknown option", which every directly
+ * spawned run reported as unparseable output).
+ *
+ * General across gates, not an intent-guard case: gitleaks `banner` and
+ * `color` and osv-scanner `ignore` and `resolve` take the same path. The
+ * premise is the table's: NO_VALUE_FLAGS lists only value-less flags, so
+ * this reads "the gate has a value-less --no-<key> and no value-less
+ * --<key>". A gate with a VALUED --<key> beside a value-less --no-<key>
+ * would wrongly lose `true`; no gate has that shape today.
+ */
+function onlyNegatedSpelling(key: string, product: Product): boolean {
+  const known = NO_VALUE_FLAGS[product];
+  return known.includes(`--no-${key}`) && !known.includes(`--${key}`);
+}
+
+/**
  * Renders a passthrough option bag as child-process arguments.
  *
  * Keys are sorted so two policy files that differ only in key order produce
  * the same command line, which is what makes a run reproducible and a
  * report diffable.
+ *
+ * `product` is required so every caller renders what that gate accepts:
+ * `true` is `--key`, except where the gate's own help has only `--no-key`
+ * (onlyNegatedSpelling), where it is nothing.
  */
-export function renderOptionFlags(options: Record<string, OptionValue>): string[] {
+export function renderOptionFlags(options: Record<string, OptionValue>, product: Product): string[] {
   const args: string[] = [];
   for (const key of Object.keys(options).sort()) {
     const value = options[key];
     if (value === true) {
-      args.push(`--${key}`);
+      if (!onlyNegatedSpelling(key, product)) {
+        args.push(`--${key}`);
+      }
     } else if (value === false) {
       // Both dep-guard and intent-guard spell a negated boolean this way,
       // and it is commander's own convention, so it is the one negation

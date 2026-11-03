@@ -649,8 +649,15 @@ function readTrustBase(
 export function normalizeIntentGuard(raw: unknown, version: string | null): NormalizedGateOutput {
   const product = 'intent-guard';
   const root = needRecord(raw, product, 'the output');
-  if (root.status !== 'blocked' && root.status !== 'ok') {
-    fail(product, 'status', 'either "ok" or "blocked"');
+  // "skipped" is accepted ahead of the gate using it (issue 103): intent-guard
+  // 1.10.4 says "nothing was checked" as status ok plus skipReason, because
+  // anything else would have been unparseable to every conductor up to this
+  // one, and a later release can move to a status of its own once its pin
+  // floor is above this version. It is the one value added; every other
+  // status is still refused, and readSkipReason refuses a skipped status
+  // that names no reason or that carries a finding.
+  if (root.status !== 'blocked' && root.status !== 'ok' && root.status !== 'skipped') {
+    fail(product, 'status', 'one of "ok", "blocked" or "skipped"');
   }
   const trustBase = readTrustBase(root.trustBase, product);
   const warnings = readIntentWarnings(root.warnings);
@@ -818,6 +825,8 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
     }
   }
 
+  const skipReason = readSkipReason(root, findings, product);
+
   return {
     findings,
     ...(trustBase === undefined ? {} : { trustBase }),
@@ -840,10 +849,47 @@ export function normalizeIntentGuard(raw: unknown, version: string | null): Norm
         driftCategories: drift?.categories ?? null,
         budgetAction: budget?.action ?? null,
         reasons,
+        // Present only when the gate said it checked nothing. The report
+        // surfaces read it through intentCheckedNothing in output-text.ts.
+        ...(skipReason === null ? {} : { skipReason }),
       },
     },
     diagnostics: [],
   };
+}
+
+/**
+ * The gate's own statement that it checked nothing, or null (issue 103).
+ *
+ * intent-guard 1.10.4 puts a top-level `skipReason` string on a result whose
+ * status is still "ok" when require-frozen is off and there is no contract;
+ * a future status "skipped" means the same. Read only on those two
+ * statuses: a blocked result stays blocked whatever else it says, which is
+ * the fail-closed reading of a contradiction. An empty string is no reason.
+ *
+ * Refused as unparseable, never guessed at: a skipReason that is not a
+ * string, a status "skipped" that names no reason, and a skip that carries
+ * any finding. "Nothing was checked" beside a finding is a contradiction,
+ * and reading it as a skip would hide the finding, so the gate is reported
+ * as one whose output could not be read.
+ */
+function readSkipReason(
+  root: Record<string, unknown>,
+  findings: readonly Finding[],
+  product: string
+): string | null {
+  if (root.status === 'blocked') {
+    return null;
+  }
+  const said = optionalString(root.skipReason ?? undefined, product, 'skipReason');
+  const reason = said === undefined || said === '' ? null : said;
+  if (root.status === 'skipped' && reason === null) {
+    fail(product, 'skipReason', 'a non-empty string when status is "skipped"');
+  }
+  if (reason !== null && findings.length > 0) {
+    fail(product, 'findings', 'empty when the gate says it checked nothing (skipReason)');
+  }
+  return reason;
 }
 
 // -- gitleaks (external, git history mode) -------------------------------

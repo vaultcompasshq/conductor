@@ -63,7 +63,7 @@
 import { accessSync, constants, lstatSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { renderOptionFlags } from './policy.js';
+import { NO_VALUE_FLAGS, renderOptionFlags } from './policy.js';
 import type { GatePolicy, Product } from './policy.js';
 import { profileFor } from './products.js';
 
@@ -590,32 +590,6 @@ function hasCodeExtension(value: string): boolean {
  *  - a bare word that is one of the product's subcommands: nothing;
  *  - any other word: a positional.
  */
-/**
- * Flags that take NO value, per product, read from each gate's own `--help`
- * (osv-scanner 2.4.0 `scan source`, gitleaks 8.30.1 `git`, dep-guard 0.17.0
- * and vault-guard 1.12.1 `scan`, intent-guard 1.10.2 `check`). The word after
- * one of these is NOT its value, so `osv-scanner scan source -r .` keeps `.`
- * as a positional scan target (re-review 2026-10-28, R1). Any flag not listed
- * stays fail-closed: the word after it is read as its value. A wrong entry
- * would let a value be read as a positional, which leaves a directory
- * unvetted, so entries come only from a gate's own help text.
- */
-const NO_VALUE_FLAGS: Record<Product, readonly string[]> = {
-  'osv-scanner': [
-    '-r', '--recursive', '--no-ignore', '--include-git-root', '--serve', '--offline',
-    '--offline-vulnerabilities', '--download-offline-databases', '--no-resolve',
-    '--allow-no-lockfiles', '--all-packages', '--all-vulns',
-    '--experimental-flag-deprecated-packages', '--experimental-no-default-plugins', '-h', '--help',
-  ],
-  gitleaks: [
-    '-v', '--verbose', '--pre-commit', '--staged', '--ignore-gitleaks-allow', '--no-banner',
-    '--no-color', '--redact', '-h', '--help',
-  ],
-  'dep-guard': ['--staged', '--online', '--no-online', '-h', '--help'],
-  'vault-guard': ['--staged', '-h', '--help'],
-  'intent-guard': ['--staged', '--no-require-frozen', '--log', '--json', '-h', '--help', '-v', '--version'],
-};
-
 function gateArgEntries(
   product: Product,
   words: readonly string[]
@@ -661,7 +635,7 @@ function gateArgEntries(
  * schema's key pattern), so `--name value` is the only rendering there is.
  */
 function optionEntries(gate: GatePolicy): Array<{ value: string; positional: boolean; entry: string }> {
-  return gateArgEntries(gate.product, renderOptionFlags(gate.options));
+  return gateArgEntries(gate.product, renderOptionFlags(gate.options, gate.product));
 }
 
 /** The `options:` values vetted as CODE: those with a code extension, as for a gate-named command's args. */

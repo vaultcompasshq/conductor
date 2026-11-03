@@ -1,0 +1,1 @@
+{"status":"ok","exitCode":0,"reasons":[],"skipReason":"No .intent-guard/intent-contract.yaml (or legacy .conductor/intent-contract.yaml) found and require-frozen is off, so there was no contract to check against and nothing was checked.","warnings":[],"contractFound":false,"contractFrozen":false,"crossSessionDrift":null}

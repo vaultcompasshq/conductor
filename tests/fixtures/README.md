@@ -114,6 +114,19 @@ paths given so neither `drift` nor `budget` appears). Both invalid entries
 come back as `warnings` strings, intent-guard 1.7.0's new advance notice
 that these two rules will block starting in 2.0.0.
 
+## intent-guard 1.10.4
+
+NOT a capture: 1.10.4 was tagged but not yet on npm when this was written,
+and the sibling checkout's build output predated it.
+`intent-guard-1.10.4-check-no-contract-skipped.json` is written by hand from
+the source at that tag (`checkGate` in packages/core/src/gate.ts, the
+no-contract return with require-frozen off, and the JSON branch of
+packages/skill/src/check-cli.ts), keeping the key order those object
+literals give: `check --project . --no-require-frozen --json` in a project
+with no contract. Status stays `ok` and exit 0; the new `skipReason` string
+is the only thing that says nothing was checked. Replace it with a real
+capture once 1.10.4 is published.
+
 ## gitleaks 8.30.1
 
 Release `v8.30.1`, the `darwin_arm64` tarball from the gitleaks GitHub

@@ -99,7 +99,11 @@ severity floor, so their comments point at `.gitleaks.toml` and
 gate's own long flags with the leading dashes stripped: `fail-on: high`
 becomes `--fail-on high`, `online: true` becomes `--online`,
 `require-frozen: false` becomes `--no-require-frozen`, and a list becomes
-one flag per entry. The handful of flags the umbrella supplies itself (the
+one flag per entry. A `true` value for a flag the gate spells only in its
+negated form is not passed at all, since true is already that gate's
+default: `require-frozen: true` on the intent gate adds nothing to the
+command line, because intent-guard's `check` accepts `--no-require-frozen`
+and refuses `--require-frozen`. The handful of flags the umbrella supplies itself (the
 JSON format flag, `--staged`, and the intent gate's `--project`) are
 rejected if you also set them, rather than being silently overridden. For
 the external gates the umbrella writes `--report-format`, `--report-path`,
