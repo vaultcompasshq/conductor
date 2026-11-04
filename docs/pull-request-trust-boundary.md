@@ -329,40 +329,6 @@ refused as ambiguous: spell the ref in full. When neither resolves, this fails
 closed too, naming it, for the same reason the fetch-depth remedy below
 exists.
 
-### When the base branch reaches the merge ref's own tree
-
-A pull request that lands while its job is queued leaves the job on a merge
-ref whose tree equals the base branch's new tip. That tip cannot judge the run:
-the policy would come from the tree being judged. Equal trees do not prove a
-merge, so nothing is skipped for it. The same shape occurs on an open pull
-request that duplicates something that just landed, and its history can still
-hold a secret.
-
-Instead, on a `pull_request` event, the Action judges the run against the
-commit the merge ref was built from, its first parent, moving
-`refs/conductor/trust-base` there and printing a notice naming both commits.
-Every one of these has to hold, or the run stays could-not-run, exit 2, as it
-was before:
-
-- HEAD is `github.sha`, so this is the merge commit GitHub built.
-- HEAD has exactly two parents, and the second is the pull request's head.
-- HEAD's tree equals the tip's tree, HEAD is not the tip, and the first parent
-  is not the tip either.
-- The first parent is an ancestor of the tip. On a checkout without the full
-  history (`fetch-depth: 1` or `2`) that cannot be shown, so the refusal stays.
-- Each of these has the same entry at the first parent and the tip, mode and
-  type included, or is absent from both: `.guardrails.yaml`, `.gitleaks.toml`,
-  `.gitleaksignore`, `osv-scanner.toml`, `.dep-guard.json`,
-  `.dep-guard.local.json`, `.dep-guard.baseline.json`, `.vault-guard.json`,
-  `.vault-guard.local.json`, `.vault-guard.baseline.json`, `.gitattributes`,
-  `.intent-guard/intent-contract.yaml`, `.intent-guard/config.yaml`,
-  `.conductor/intent-contract.yaml` and `.conductor/config.yaml`.
-
-So a pull request that changes one of those files and lands while queued stays
-red, because the first parent's rules would be older than the tip's. A finding
-on a pull request that has already landed still reports red, which is the true
-result. Direct CLI use is unchanged: the move lives in the Action's fetch step.
-
 **Neither layer closes anything against a pull request that edits its own
 workflow file.** A CLI invocation on a pull request can simply omit
 `--trust-base`, or a workflow step can blank `GITHUB_BASE_REF` in its own env,
@@ -533,6 +499,45 @@ could-not-run until TMPDIR names one outside it.
 gate (gitleaks) enabled, because conductor hands it `git log --diff-merges`,
 which arrived in git 2.31. Only that gate checks: an older git makes it
 could-not-run, naming the version, and the other gates run.
+
+### When the base branch reaches the merge ref's own tree
+
+A pull request that lands while its job is queued leaves the job on a merge
+ref whose tree equals the base branch's new tip. That tip cannot judge the run:
+the policy would come from the tree being judged. Equal trees do not prove a
+merge, so nothing is skipped for it. The same shape occurs on an open pull
+request that duplicates something that just landed, and its history can still
+hold a secret.
+
+Instead, on a `pull_request` event, the Action judges the run against the
+commit the merge ref was built from, its first parent, moving
+`refs/conductor/trust-base` there and printing a notice naming both commits.
+The text report, and so the pull request comment, and the SARIF log say the
+same, so a rules commit that is not the branch tip comes with its reason.
+Every one of these has to hold, or the run stays could-not-run, exit 2, as it
+was before:
+
+- HEAD is `github.sha`, so this is the merge commit GitHub built.
+- HEAD has exactly two parents, and the second is the pull request's head.
+- HEAD's tree equals the tip's tree, HEAD is not the tip, and the first parent
+  is not the tip either.
+- The first parent is an ancestor of the tip. On a checkout without the full
+  history (`fetch-depth: 1` or `2`) that cannot be shown, so the refusal stays.
+- Each of these has the same entry at the first parent and the tip, mode and
+  type included, or is absent from both: `.guardrails.yaml`, `.gitleaks.toml`,
+  `.gitleaksignore`, `osv-scanner.toml`, `.dep-guard.json`,
+  `.dep-guard.local.json`, `.dep-guard.baseline.json`, `.vault-guard.json`,
+  `.vault-guard.local.json`, `.vault-guard.baseline.json`, `.gitattributes`,
+  `.intent-guard/intent-contract.yaml`, `.intent-guard/config.yaml`,
+  `.conductor/intent-contract.yaml` and `.conductor/config.yaml`.
+
+So a pull request that changes one of those files and lands while queued stays
+red, because the first parent's rules would be older than the tip's. A pull
+request that landed gets no later push, so nothing re-runs this check: this run
+stays red and its changes went unchecked here, and the refusal says so. A
+finding on a pull request that has
+already landed still reports red, which is the true result. Direct CLI use is
+unchanged: the move lives in the Action's fetch step.
 
 ## Trying pull-request mode locally
 

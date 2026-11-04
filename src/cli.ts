@@ -68,7 +68,7 @@ import { diffPolicies, previewPolicy, previewRoles } from './policy-diff.js';
 import { refusedTrustBase, runAll } from './run.js';
 import type { RunTrustBase } from './run.js';
 import {
-  headTreeEqualsBase,
+  headTreeEqualsBase, withMovedBaseTip,
   policyDiffers,
   readFileAtRef,
   refuseTrustBaseForPullRequest,
@@ -816,7 +816,7 @@ export function buildProgram(): Command {
     )
     .option(
       '--text-report <path>',
-      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or every gate that ran had nothing to scan, read no packages, or had no contract), advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
+      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or every gate that ran had nothing to scan, read no packages, had no contract, or was handed an empty change set), advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
     )
     .option(
       '--spec <path>',
@@ -910,7 +910,7 @@ export function buildProgram(): Command {
                 ...(stage === undefined ? {} : { stage }),
                 ...(options.base === undefined ? {} : { base: options.base }),
                 ...(options.spec === undefined ? {} : { spec: options.spec }),
-                ...(source.trustBase === undefined ? {} : { trustBase: source.trustBase }),
+                ...(source.trustBase === undefined ? {} : { trustBase: withMovedBaseTip(root, source.trustBase, process.env.CONDUCTOR_BASE_TIP) }),
                 // Only on request, never on --staged, and only with a trust
                 // base and a preview policy: a head that parsed and changed
                 // at least one role's enabled or stage.

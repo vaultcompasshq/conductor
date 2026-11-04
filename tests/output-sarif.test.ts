@@ -2330,3 +2330,62 @@ describe('the preview under the proposed rules in the SARIF log', () => {
     expect(JSON.stringify(note)).not.toContain('‮');
   });
 });
+
+describe('coverage statements, continued', () => {
+  it.each([
+    ['a skipReason', { skipReason: 'no contract' }],
+    ['no contract found', { contractFound: false }],
+  ])('says no-contract for no intent gate that could not run, whatever its details hold: %s', (_label, details) => {
+    const notified = (couldNotRun: GateOutcome['couldNotRun']): unknown[] =>
+      notificationsOf(
+        sarif(
+          result([
+            outcome({
+              role: 'intent',
+              product: 'intent-guard',
+              exitCode: couldNotRun === null ? 0 : 2,
+              couldNotRun,
+              run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details },
+            }),
+          ])
+        )
+      ).map((entry) => (entry.descriptor as Record<string, unknown>).id);
+
+    // The control: the same details on a gate that ran are the notification.
+    expect(notified(null)).toContain('intent-guard/no-contract');
+    expect(notified({ reason: 'gate-error', detail: 'it crashed' })).not.toContain('intent-guard/no-contract');
+  });
+
+  it('moves nothing-to-scan out of results, with the gate named and the sentence unchanged', () => {
+    // True on every run until somebody adds a lockfile, so it is a statement
+    // about coverage and not an alert.
+    const message = 'osv-scanner read no lockfile, so nothing was scanned.';
+    const log = sarif(
+      result([
+        outcome({
+          role: 'vulnerabilities',
+          product: 'osv-scanner',
+          exitCode: 0,
+          diagnostics: [{ code: 'conductor/nothing-to-scan', message }],
+        }),
+      ])
+    );
+
+    expect(umbrellaResultIds(log)).not.toContain('conductor/nothing-to-scan');
+    const entry = notificationsOf(log).find(
+      (candidate) => (candidate.descriptor as Record<string, unknown>).id === 'conductor/nothing-to-scan'
+    ) as Record<string, unknown>;
+    expect(entry.level).toBe('note');
+    expect((entry.message as Record<string, unknown>).text).toBe(message);
+    expect((entry.properties as { details: Record<string, unknown> }).details.role).toBe('vulnerabilities');
+  });
+
+  it('keeps every other gate diagnostic a result', () => {
+    const log = sarif(
+      result([
+        outcome({ exitCode: 0, diagnostics: [{ code: 'conductor/lockfiles-empty', message: 'read no packages' }] }),
+      ])
+    );
+    expect(umbrellaResultIds(log)).toContain('conductor/lockfiles-empty');
+  });
+});

@@ -18,8 +18,8 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 **Not a security release.** Three changes: the Action judges a pull request
 whose base moved while its job was queued against the commit the merge ref was
-built from (issue 159), the intent gate's no-contract skip line is one sentence
-and a link (issue 103), and the backward-pin refusal prints the line to write
+built from (issue 159), the intent gate's no-contract skip line is short
+and links the rules (issue 103), and the backward-pin refusal prints the line to write
 (issue 145). The gate versions are unchanged: dep-guard 0.18.1, vault-guard
 1.13.1 and intent-guard 1.10.4. `@vaultcompass/conductor` moves to 0.18.0 on
 npm and the `conductor-version` default moves in lockstep.
@@ -38,9 +38,10 @@ npm and the `conductor-version` default moves in lockstep.
   docs/pull-request-trust-boundary.md lists the conditions. Direct CLI use is
   unchanged.
 - The intent gate's no-contract skip line is now one sentence and a link to
-  docs/intent-at-a-pull-request.md (issue 103). It repeated about sixty words
-  on every pull request of a repository with no contract; the rules it
-  restated were already in
+  docs/intent-at-a-pull-request.md (issue 103), plus one sentence when the branch
+  name cannot choose a spec or an earlier release's match no longer applies. It
+  repeated about sixty words on every pull request of a repository with no
+  contract; the rules it restated were already in
   docs/intent-at-a-pull-request.md. That page now also says how a repository
   that does not use the intent gate switches it off (`enabled: false`), and
   docs/policy-file.md points to it. No check, verdict or exit code changes.
@@ -51,6 +52,43 @@ npm and the `conductor-version` default moves in lockstep.
 - The README's spelled-out workflow example no longer pins the three gate
   versions, so it takes the recommended shape: the defaults travel with the
   tag, and an exact forward pin can be added when needed.
+- The Action's fetch, gates and fallback render steps set
+  `GIT_NO_REPLACE_OBJECTS=1`, as the CLI's own git calls already did, so the
+  decision to move the trust base and every gate's own git reads see the
+  commits' own objects. The fetch step also reads through a graft file, for its
+  decision to move the trust base. Keeping pull-request code out of the job stays
+  the precondition; README.md lists what it covers.
+- On a run judged against the commit the merge ref was built from, the text
+  report and the SARIF log (`conductor/base-moved`, a notification) now say the
+  base branch moved past the merge ref and name its tip. The Action passes the
+  tip to the CLI for display; nothing decides on it, and the CLI ignores a value
+  the repository does not bear out.
+- An intent gate with a contract and no changed paths no longer gets "every
+  enabled gate ran": the verdict says it ran on an empty change set, the token
+  is `nothing-checked` when no other gate checked anything, and the SARIF log
+  carries the same sentence as a notification (`intent-guard/empty-change-set`).
+  No exit code changes.
+- `conductor/nothing-to-scan` is now a SARIF notification rather than a result:
+  it is true on every run until a lockfile is added, so it was a permanent note
+  alert. The text report still prints it and no exit code changes.
+- The note on files not handed to osv-scanner now says "dependency files"
+  rather than "manifests", since it lists workflows and lockfiles too, and names
+  a `package.json` with no handed JavaScript lockfile in its directory or an
+  ancestor. The verdict is unchanged.
+- A trust base refused for carrying HEAD's tree no longer promises a later push
+  to a pull request that has landed: it says nothing re-runs the check, that the
+  run stays red and its changes went unchecked here, and that the Action's
+  fallback needs a full clone (`fetch-depth: 0`). Still exit 2.
+- The per-gate log line for an intent gate that ran with no contract now says
+  `skipped (no contract)`, the words the pull-request path uses, with its exit
+  code.
+- SECURITY.md's supported table names no version, so it cannot fall behind a
+  release.
+- The README and AGENTS.md no longer say the umbrella raises five findings: three
+  can fail a run, and the rest are notes that never count toward the exit code.
+- The pull-request comment for a run that stopped before any gate points at the
+  named step's output in the job log, since a refused input is plain step output
+  rather than an error annotation.
 
 ## [0.17.0] - 2026-11-02
 

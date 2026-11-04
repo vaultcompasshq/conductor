@@ -141,7 +141,7 @@ outputs:
     description: >-
       The verdict token of the run that decided this job's exit code: one of
       pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or
-      every gate that ran had nothing to scan or no contract), advisory-blocked
+      every gate that ran had nothing to scan, no contract or an empty change set), advisory-blocked
       (N), unenforced-findings (N), blocked (N) or
       could-not-run, spelled exactly as the second line of the text report
       carries it. It is a label for conductor's own exit decision and decides
@@ -858,8 +858,10 @@ runs:
     #
     # WHAT THE EXPLICIT URL DOES NOT DO. It does not make the fetch immune to
     # url.insteadOf or any other repository git configuration: those, GITHUB_ENV,
-    # GITHUB_PATH, hooks and replace refs are covered ONLY by the precondition
-    # that no code from the pull request ran earlier in the job.
+    # GITHUB_PATH and hooks are covered ONLY by the precondition
+    # that no code from the pull request ran earlier in the job. Replace refs and a graft file
+    # are ignored by this step's own reads (below), which narrows those two and
+    # does not lift the precondition.
     #
     # FAIL CLOSED. Any failure exits non-zero with a truthful message and
     # publishes nothing, so the job stops before conductor is ever invoked with
@@ -883,6 +885,10 @@ runs:
         CONDUCTOR_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         set -euo pipefail
+        # EVERY READ BELOW SEES THE COMMITS' OWN OBJECTS, the same as every git
+        # call the CLI makes (src/git.ts). The repoint decision reads trees and parents, and a
+        # replace ref or a graft would answer those for another commit. A shallow boundary is not a graft file.
+        export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null/conductor-no-grafts
         fail() {
           printf '::error::conductor: %s\n' "$1"
           exit 1
@@ -1035,6 +1041,8 @@ runs:
             fail "refs/conductor/trust-base does not name ${first_parent} after it was moved there (ref: '${repointed_sha}'), so something else wrote it. Nothing was checked."
           fi
           published_sha="$first_parent"
+          # For the report only: the CLI prints it and decides nothing from it.
+          printf 'base-tip=%s\n' "$ref_sha" >> "$GITHUB_OUTPUT"
           printf '::notice::conductor: the base branch moved past the merge ref this run is on, to %s, which has the same tree. This run is judged against %s, the commit the merge ref was built from.\n' "$ref_sha" "$first_parent"
         fi
         printf 'sha=%s\n' "$published_sha" >> "$GITHUB_OUTPUT"
@@ -1074,6 +1082,11 @@ runs:
         # report" step (GH_TOKEN, to write the comment); neither one runs
         # conductor.
         TRUST_BASE_SHA: ${{ steps.fetch-base.outputs.sha }}
+        # The base branch's tip, set only when the fetch step moved the trust
+        # base past it. Display only: the report says the base moved, and
+        # nothing in conductor reads this for a decision. TRUST_BASE_SHA and the
+        # private ref stay the authority.
+        CONDUCTOR_BASE_TIP: ${{ steps.fetch-base.outputs.base-tip }}
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         OUTPUT: ${{ inputs.output }}
@@ -1094,6 +1107,10 @@ runs:
         TEXT_REPORT: ${{ runner.temp }}/conductor-text-report.txt
       run: |
         set -eu
+        # Inherited by conductor and every gate it spawns. A gate reads its own
+        # control files from the trust base with its own git calls, and those
+        # must see that commit's own objects, as the CLI's own calls do.
+        export GIT_NO_REPLACE_OBJECTS=1
 
         # The path the caller uploads, resolved from the WORKSPACE rather than
         # from working-directory, which is where this step runs but not where
@@ -1496,6 +1513,8 @@ runs:
         ADVISORY: ${{ inputs.advisory }}
       run: |
         set -eu
+        # The same as the gates step, for the one fallback that runs conductor here.
+        export GIT_NO_REPLACE_OBJECTS=1
 
         # THIS STEP DOES NOT RUN THE GATES. The gates step already wrote the
         # human-readable report, from the same run that wrote the SARIF log and
@@ -1591,14 +1610,14 @@ runs:
           {
             if [ "${VALIDATE_OUTCOME:-}" = "failure" ]; then
               printf '%s\n\n' 'Conductor could not run. The action refused its own inputs before installing anything (for example a pinned version below what this action tag ships, or a trust-base input on a pull request), so no gate ran and nothing was checked on this pull request. This is a workflow configuration problem, not a finding about this repository.'
-              printf '%s\n' 'The step error in the job log names the input that was refused.'
+              printf '%s\n' 'The output of the "Validate the pinned versions" step in the job log names the input that was refused.'
             elif [ "${VERIFICATION_FAILED:-}" = "true" ]; then
               printf '%s\n\n' 'Conductor could not run. The gate packages were not verified, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
               printf '%s\n\n' "${VERIFICATION_REASON:-No reason was recorded. The job log has the failing step.}"
               printf '%s\n' 'Conductor verifies its tools against the registry (npm audit signatures, over the installed gate packages and their dependencies) before running, and refuses to trust one it could not verify. The reason is given above. A registry or sigstore outage produces this too. This step already retried once; re-run the job once, and treat a repeat as real.'
             elif [ "${INSTALL_OUTCOME:-}" = "failure" ]; then
               printf '%s\n\n' 'Conductor could not run. The install step failed before the gate packages could be verified (for example an npm too old to verify signatures, or the npm install itself failing), so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
-              printf '%s\n' 'The step error in the job log says which.'
+              printf '%s\n' 'The output of the "Install the gates outside the workspace" step in the job log says which.'
             else
               printf '%s\n\n' 'Conductor could not run. Verification of the gate packages did not complete, so no gate ran and nothing was checked on this pull request. This is not a finding about this repository.'
               printf '%s\n' 'The job log has the failing step.'

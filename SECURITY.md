@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.16.x  | :white_check_mark: |
-| < 0.16  | :x:                |
+| Version                | Supported          |
+| ---------------------- | ------------------ |
+| Latest published minor | :white_check_mark: |
+| Any earlier minor      | :x:                |
 
-conductor is pre-1.0. The latest published minor is supported; earlier
-minors are not patched.
+conductor is pre-1.0, so an earlier minor is not patched. The latest published
+minor is the one `npm view @vaultcompass/conductor version` reports.
 
 ## Reporting a vulnerability
 

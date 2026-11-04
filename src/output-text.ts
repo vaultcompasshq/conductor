@@ -732,7 +732,7 @@ function trustBaseLines(result: RunResult): string[] {
   for (const { gate, reason } of withheldTrustBase(result)) {
     lines.push(`  NOT in pull-request mode  ${gate.role}  ${gate.product}  ${reason}`);
   }
-  lines.push(...nodeModulesSkippedLine(result));
+  lines.push(...baseMovedSentences(result).map((moved) => `  ${moved}`), ...nodeModulesSkippedLine(result));
   return lines;
 }
 
@@ -860,7 +860,7 @@ export function gateOutcomeWords(gate: GateOutcome): string {
   }
   const total = gate.findings.length;
   const blocking = gate.findings.filter((finding) => finding.blocking).length;
-  let outcome = total === 0 && (gate.exitCode ?? 0) === 0 ? 'ok' : `findings (${total}, ${blocking} blocking)`;
+  let outcome = total === 0 && (gate.exitCode ?? 0) === 0 ? intentCleanWords(gate) : `findings (${total}, ${blocking} blocking)`;
   // Only when the gate said so; the outcome word above is unchanged.
   const coverage = deadlineCoverage(gate);
   if (coverage !== null) {
@@ -1135,8 +1135,8 @@ function blockingCount(gate: RunResult['gates'][number]): number {
  *   nothing-checked          exit 0, but nothing was checked: no gate ran at
  *                            all (none enabled, or every one deferred,
  *                            tree-unchanged or skipped), or every gate that
- *                            ran checked nothing (nothing to scan, or no
- *                            contract; audit finding F4)
+ *                            ran checked nothing (nothing to scan, no contract,
+ *                            or an empty change set; audit finding F4)
  *   advisory-blocked (N)     exit 1 that --advisory turned into exit 0
  *   unenforced-findings (N)  exit 0, but enforce: false gates blocked or
  *                            could not run
@@ -1204,8 +1204,8 @@ export function verdictToken(result: RunResult, advisory: boolean): string {
  * A gate that ran and examined nothing: osv-scanner with nothing to scan,
  * osv-scanner whose every handed lockfile parsed to no packages (exit 128,
  * marked `packages-read 0`; a sole lockfile rewritten to {} is exactly the
- * same news as no lockfile), or an intent gate that found no contract to
- * check against. The one predicate behind both the verdict token and the
+ * same news as no lockfile), or an intent gate with no contract to check
+ * against or no changed path. The one predicate behind both the verdict token and the
  * verdict sentence's list of what was not checked.
  *
  * NOT the partial-empty case: `conductor/lockfiles-empty` is also raised
@@ -1224,7 +1224,7 @@ function gateCheckedNothing(gate: RunResult['gates'][number]): boolean {
   return (
     gate.diagnostics.some((d) => d.code === 'conductor/nothing-to-scan') ||
     readNoPackages(gate) ||
-    intentCheckedNothing(gate)
+    intentCheckedNothing(gate) || intentEmptyChangeSet(gate)
   );
 }
 
@@ -1258,7 +1258,7 @@ export function intentCheckedNothing(gate: GateOutcome): boolean {
 /** How the verdict sentence names a gate that ran and checked nothing. */
 function checkedNothingWording(gate: RunResult['gates'][number]): string {
   if (gate.role === 'intent') {
-    return `${gate.role} ran but found no contract to check against`;
+    return intentNothingWording(gate);
   }
   return readNoPackages(gate)
     ? `${gate.role} read no packages from its lockfiles`
@@ -1553,7 +1553,7 @@ export interface TextOptions {
 function isFullyClean(result: RunResult): boolean {
   // Every gate that ran checked nothing is the nothing-checked token's state
   // (audit finding F4), and a line opening "clean" would contradict it.
-  if (result.exitCode !== 0 || result.gates.length === 0 || result.gates.every(gateCheckedNothing)) {
+  if (result.exitCode !== 0 || result.gates.length === 0 || result.gates.every(gateCheckedNothing) || result.gates.some(intentEmptyChangeSet)) {
     return false;
   }
   // A tie the convention refused to guess, or a skip whose branch 0.10.0
@@ -1810,7 +1810,7 @@ function summaryLine(result: RunResult): string {
   // produces a clean report, and without this clause the only trace of the
   // attempt would be in a file nobody re-reads.
   if (result.trustBase !== null) {
-    parts.push(`Rules from ${result.trustBase.ref}. ${proposalCount(result)}.`);
+    parts.push(`Rules from ${result.trustBase.ref}. ${proposalCount(result)}.`, ...baseMovedSentences(result));
     const withheld = withheldTrustBase(result);
     if (withheld.length > 0) {
       const names = withheld.map(({ gate }) => `${gate.role} (${gate.product})`).join(', ');
@@ -1935,4 +1935,55 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
 
   lines.push('', verdict(result, Boolean(options.advisory)));
   return withPreview(`${lines.join('\n')}\n`);
+}
+
+/**
+ * An intent gate that ran with a contract on a change set of no paths: a branch
+ * the base it was measured against already carries, or a net-empty one. The
+ * gate says it is clean and it is, about nothing. Never for a gate that could
+ * not run or that blocked: every could-not-run outcome carries a blocking finding,
+ * so the one clause covers both. It does its work in the SARIF notification, which
+ * reads this directly; the text report sorts those gates out before it gets here.
+ */
+export function intentEmptyChangeSet(gate: GateOutcome): boolean {
+  return (
+    gate.role === 'intent' &&
+    !gate.findings.some((finding) => finding.blocking) &&
+    gate.intent?.changedPaths === 0
+  );
+}
+
+/** How the verdict sentence names an intent gate that ran and checked nothing. */
+export function intentNothingWording(gate: GateOutcome): string {
+  return intentCheckedNothing(gate)
+    ? `${gate.role} ran but found no contract to check against`
+    : `${gate.role} ran on an empty change set, so no path was judged against its contract`;
+}
+
+/**
+ * The outcome word on a gate's log line when it found nothing and exited 0. An
+ * intent gate with no contract gets the words of the pull-request path's skipped
+ * line for the same state, though it did run and so has an exit code to give.
+ */
+function intentCleanWords(gate: GateOutcome): string {
+  if (intentCheckedNothing(gate)) {
+    return `skipped (${skipWording('no-contract').line})`;
+  }
+  return intentEmptyChangeSet(gate) ? 'ok, empty change set' : 'ok';
+}
+
+/**
+ * Why the rules commit is not the base branch's tip, on a run the Action moved
+ * past it, as a list of one, or of none. Says what happened and never that
+ * anything merged: the same shape occurs on an open pull request. The text
+ * report and the SARIF log read this one sentence, so they cannot disagree.
+ */
+export function baseMovedSentences(result: RunResult): string[] {
+  const trust = result.trustBase;
+  return trust === null || trust.baseTip === undefined
+    ? []
+    : [
+        `The base branch moved past the merge ref this run is on, to ${trust.baseTip}, which has ` +
+          `the same tree, so the rules are from ${trust.ref}, the commit the merge ref was built from.`,
+      ];
 }

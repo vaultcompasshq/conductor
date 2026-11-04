@@ -9,12 +9,13 @@ README.md for the Action and docs/ for the policy file and the hook.
 
 This repository is a convenience layer, not a fourth gate. It scans nothing
 and has no rules about anybody's code: the only findings it raises are about
-the gates themselves, `conductor/gate-missing`,
-`conductor/gate-output-unparseable` and `conductor/gate-failed`, plus the two
-diagnostics it raises when it cannot reconcile a gate's own blocking count,
+the gates themselves: `conductor/gate-missing`,
+`conductor/gate-output-unparseable` and `conductor/gate-failed`, which count
+toward the exit code, and diagnostics that never do:
 `conductor/blocking-count-mismatch` and
-`conductor/blocking-threshold-unknown`. It never writes into a gate's own
-config.
+`conductor/blocking-threshold-unknown`, plus the `conductor/` notes on what the
+vulnerabilities gate was handed and how it was run, such as
+`conductor/lockfiles-empty`. It never writes into a gate's own config.
 
 Pull-request mode does not change that. On a run with `--trust-base` the
 umbrella reads its OWN policy file from the base ref and passes the same ref

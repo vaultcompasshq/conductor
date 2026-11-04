@@ -371,9 +371,9 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
       `identical tree (${headTree}), so the policy would come from the tree being judged and ` +
       'there would be nothing for pull-request mode to compare. Likely cause: the base already ' +
       'carries this tree, which usually means the pull request was merged while this job was ' +
-      'queued; if so, nothing here needs fixing, and a later push re-runs the check. Otherwise ' +
-      'the trust base names the head or merge commit: pass the base branch (for example ' +
-      'origin/main) instead. Nothing was checked.'
+      'queued. ' +
+      `${EQUAL_TREE_ADVICE} ` +
+      'Nothing was checked.'
     );
   }
 
@@ -1555,4 +1555,44 @@ export function refuseHeadControlledData(
     }
   }
   return null;
+}
+
+/** What a run refused for carrying HEAD's tree tells the reader to do. */
+const EQUAL_TREE_ADVICE =
+  'A pull request that landed gets no later push, so nothing re-runs this check: this run stays ' +
+  'red and its changes went unchecked here. One still open re-runs on its next push. The Action judges this shape against the commit the merge ref was ' +
+  'built from only on a full clone (fetch-depth: 0) with the same control files at both commits. ' +
+  'If neither case applies, the trust base names the head or merge commit: pass the base branch ' +
+  '(for example origin/main) instead.';
+
+/**
+ * The trust base with the base branch's tip to name in the report, when the
+ * Action moved the trust base past it. FOR DISPLAY ONLY: nothing that decides
+ * anything reads `baseTip`. The value comes from the environment, so it is
+ * honored only when the repository bears it out: a full id of a commit that is
+ * neither HEAD nor the trust base, with HEAD's tree, and the trust base is HEAD's
+ * first parent. Anything else is ignored without a word: the sentence is the only
+ * thing it could change, and leaving it out is true.
+ *
+ * The CLI cannot work this out alone. It sees the private ref at HEAD's first
+ * parent, which is also what every ordinary pull-request run looks like, and it
+ * never sees the tip the Action moved away from. It can only check what it is told.
+ */
+export function withMovedBaseTip<T extends { ref: string }>(
+  repoRoot: string,
+  trustBase: T,
+  value: string | undefined
+): T & { baseTip?: string } {
+  if (value === undefined || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)) {
+    return trustBase;
+  }
+  const base = resolveRev(repoRoot, trustBase.ref, 'commit');
+  const borneOut =
+    base !== null &&
+    value !== base &&
+    resolveRev(repoRoot, value, 'commit') === value &&
+    value !== resolveRev(repoRoot, 'HEAD', 'commit') &&
+    headTreeEqualsBase(repoRoot, value) &&
+    headParents(repoRoot)[0] === base;
+  return borneOut ? { ...trustBase, baseTip: value } : trustBase;
 }

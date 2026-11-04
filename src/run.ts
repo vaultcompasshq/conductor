@@ -144,7 +144,7 @@ export interface ControlProposal {
  * the policy file at the base ref with the one at the head commit. It is
  * reported and never acted on: the base ref's policy is the one that ran.
  */
-export interface RunTrustBase {
+export interface RunTrustBase extends BaseTipForDisplay {
   /** The ref the umbrella took its own policy from. */
   ref: string;
   /** Whether the head commit's own policy file differs from that one. */
@@ -934,4 +934,14 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     exitCode,
     ...(preview === undefined ? {} : { preview }),
   };
+}
+
+/** The part of a trust base only the reports read. */
+interface BaseTipForDisplay {
+  /**
+   * The base branch's tip, when the Action moved this trust base past it
+   * (`withMovedBaseTip`, trust-base.ts). Printed by the reports and read by
+   * nothing else.
+   */
+  baseTip?: string;
 }

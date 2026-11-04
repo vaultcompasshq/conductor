@@ -124,7 +124,7 @@ import { type GateOutcome, cleanOutputLine, cleanPreviewLine } from './gate-runn
 import { NATIVE_CONTRACT_PATH, isLegacyContractPath } from './intent-prepare.js';
 import { INTENT_WARNING } from './normalize.js';
 import {
-  gateOutcomeWords,
+  baseMovedSentences, gateOutcomeWords, intentEmptyChangeSet, intentNothingWording,
   intentCheckedNothing,
   intentSkipReason,
   skewFound,
@@ -532,7 +532,7 @@ function makeRun(
  */
 function diagnosticFindings(result: RunResult): Finding[] {
   return result.gates.flatMap((gate) =>
-    gate.diagnostics.map((diagnostic) => ({
+    gate.diagnostics.filter((diagnostic) => diagnostic.code !== NOTHING_TO_SCAN).map((diagnostic) => ({
       schemaVersion: 1 as const,
       product: UMBRELLA_DRIVER_NAME,
       productVersion: null,
@@ -1249,7 +1249,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...deferredNotifications(result),
     ...excludedNotifications(result),
     ...treeUnchangedNotifications(result),
-    ...skippedNotifications(result),
+    ...skippedNotifications(result), ...emptyChangeSetNotifications(result), ...nothingToScanNotifications(result), ...baseMovedNotifications(result),
     ...unenforcedNotifications(result),
     ...legacyStateDirNotifications(result),
     ...weakMatchNotifications(result),
@@ -1318,4 +1318,55 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
   }
 
   return JSON.stringify({ $schema: SARIF_SCHEMA, version: '2.1.0', runs }, null, 2);
+}
+
+/**
+ * The base branch moved past the merge ref, as a notification: what this run
+ * was judged against is a statement about the run. The same sentence as the
+ * text report.
+ */
+function baseMovedNotifications(result: RunResult): Notification[] {
+  return baseMovedSentences(result).map((message) => ({
+    id: 'conductor/base-moved',
+    message,
+    details: { ref: result.trustBase?.ref ?? null, baseTip: result.trustBase?.baseTip ?? null },
+  }));
+}
+
+/**
+ * An intent gate that ran with a contract on no changed paths, as a notification:
+ * how much a run covered, by the rule at skippedNotifications. In the gate's own
+ * namespace, like its no-contract skip, with the words of the verdict sentence. A
+ * gate with no contract is left to that skip, which already says it checked nothing.
+ */
+function emptyChangeSetNotifications(result: RunResult): Notification[] {
+  return result.gates
+    .filter((gate) => intentEmptyChangeSet(gate) && !intentCheckedNothing(gate))
+    .map((gate) => ({
+      id: `${gate.product}/empty-change-set`,
+      message: `${intentNothingWording(gate)}.`,
+      details: { role: gate.role, product: gate.product, reason: 'empty-change-set' },
+    }));
+}
+
+/** The gate diagnostic the log carries as a notification, never a result. */
+const NOTHING_TO_SCAN = 'conductor/nothing-to-scan';
+
+/**
+ * A gate with nothing to scan, as a notification.
+ *
+ * True on every run until somebody adds a lockfile, so by the rule at
+ * skippedNotifications it says how much a run covered and is not a result. The
+ * sentence is the gate's diagnostic, unchanged, which the text report prints too.
+ */
+function nothingToScanNotifications(result: RunResult): Notification[] {
+  return result.gates.flatMap((gate) =>
+    gate.diagnostics
+      .filter((diagnostic) => diagnostic.code === NOTHING_TO_SCAN)
+      .map((diagnostic) => ({
+        id: diagnostic.code,
+        message: diagnostic.message,
+        details: { role: gate.role, product: gate.product },
+      }))
+  );
 }
