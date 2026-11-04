@@ -76,7 +76,7 @@ jobs:
           echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  $bin/osv-scanner" | sha256sum -c -
           chmod +x "$bin/osv-scanner"
           echo "$bin" >> "$GITHUB_PATH"
-      - uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+      - uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         if: always()
         with:
@@ -542,8 +542,8 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README name v0.17.0 that way, as
-`vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0`.
+SHA instead. The recipes in this README name v0.18.0 that way, as
+`vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0`.
 
 ```yaml
 name: guardrails
@@ -565,7 +565,7 @@ jobs:
         with:
           node-version: '22.23.4'
       - id: conductor
-        uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+        uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
@@ -664,7 +664,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+        uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
         with:
           output: conductor.sarif
           # The gate versions are left out on purpose: the defaults travel
@@ -887,7 +887,7 @@ jobs:
         # seconds) plus 300 seconds for the preview, rounded up. A step
         # timeout below that can kill a full gitleaks scan and leave no verdict.
         timeout-minutes: 30
-        uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+        uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
         with:
           pr-comment: true
           advisory: true
@@ -1023,7 +1023,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+        uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1102,12 +1102,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+        uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
+        uses: vaultcompasshq/conductor@717e6f5ff6acc934344c2ab49643ece615d5c9ff # v0.18.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
