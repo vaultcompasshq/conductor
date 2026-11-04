@@ -21,7 +21,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { NATIVE_CONTRACT_PATHS } from '../src/intent-prepare.js';
 import { INTENT_SPEC_LINES } from '../src/output-text.js';
+import { PRODUCTS } from '../src/policy.js';
+import { profileFor } from '../src/products.js';
+import { childEnv, shimGit } from './helpers/child-env.js';
+import { CLEAN_DEP_GUARD, CLEAN_VAULT_GUARD, stubGate } from './helpers/stub-gate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -310,13 +315,31 @@ describe('action.yml enters pull-request mode', () => {
     // Comment lines are stripped first: the comment in the action explains
     // why neither SHA is used, and a rule that fired on the explanation would
     // push the explanation out of the file.
+    //
+    // The one permitted reader is the fetch step, issue 159: it takes each of
+    // the two under one name. The second half of this test proves only that the
+    // env values appear nowhere but in those two comparison lines, not that the
+    // step writes or publishes the right commit: a first_parent assigned from
+    // $head or from the second parent passes here. The issue 159 behavior tests
+    // below, which assert the published id and the private ref, cover that.
+    const COMPARED_ONLY = ['CONDUCTOR_RUN_SHA', 'CONDUCTOR_PR_HEAD_SHA'];
     const code = [
-      ...steps.flatMap((step) => Object.values(step.env ?? {})),
+      ...steps.flatMap((step) =>
+        Object.entries(step.env ?? {})
+          .filter(([key]) => !(step.id === 'fetch-base' && COMPARED_ONLY.includes(key)))
+          .map(([, value]) => value)
+      ),
       ...script.split('\n').filter((line) => !line.trim().startsWith('#')),
     ].join('\n');
 
     expect(code).not.toMatch(/github\.sha/);
     expect(code).not.toMatch(/head\.sha/);
+
+    const uses = script.split('\n').filter((line) => COMPARED_ONLY.some((name) => line.includes(name)));
+    expect(uses.map((line) => line.trim())).toEqual([
+      '[ "$head" = "${CONDUCTOR_RUN_SHA:-}" ] || return 1',
+      '[ "${parent_ids[2]}" = "${CONDUCTOR_PR_HEAD_SHA:-}" ] || return 1',
+    ]);
   });
 
   it('reads every value from the environment rather than expanding it into the script', () => {
@@ -502,6 +525,8 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       afterFetch?: string;
       /** Every `git update-ref` fails, as a lock file or a permissions problem would make it. */
       failUpdateRef?: boolean;
+      /** A sh line the shim runs before anything else, with the call's own "$@". */
+      shimLine?: string;
     } = {}
   ): {
     status: number;
@@ -529,6 +554,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
         // Every git call that inherited the token, by subcommand.
         `if [ -n "\${TRUST_BASE_TOKEN:-}" ]; then printf '%s\\n' "$1" >> ${JSON.stringify(tokenSeenPath)}; fi`,
         shimOptions.failUpdateRef === true ? 'if [ "$1" = "update-ref" ]; then exit 1; fi' : '',
+        shimOptions.shimLine ?? '',
         'if [ "$1" = "fetch" ]; then',
         `  printf '%s\\n' "$*" >> ${JSON.stringify(fetchLogPath)}`,
         `  printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s;KEY2=%s;VALUE2=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" "$GIT_CONFIG_KEY_2" "$GIT_CONFIG_VALUE_2" >> ${JSON.stringify(fetchEnvLogPath)}`,
@@ -911,6 +937,516 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     expect(run.ran).toBe(true);
     expect(run.conductorEnv).not.toContain('ACTIONS_ID_TOKEN_REQUEST');
     expect(run.conductorEnv).not.toContain('oidc-request-secret');
+  });
+
+  /**
+   * Issue 159. A run on GitHub's merge ref M0, parents (B0, H), whose base
+   * branch has since moved to a commit with M0's exact tree. Real git on both
+   * sides and the step's own script: only the three values the step reads
+   * from expressions are supplied by hand, because the harness cannot evaluate
+   * the env mapping (the mapping itself is asserted below).
+   */
+  describe('when the base branch moved to a commit with the merge ref\'s own tree (issue 159)', () => {
+    type Landing = 'merge' | 'squash' | 'rebase' | 'fast-forward';
+
+    interface MovedBase {
+      origin: string;
+      seed: string;
+      b0: string;
+      h: string;
+      m0: string;
+      tip: string;
+      /** A commit on no branch: neither the base nor the pull request. */
+      side: string;
+    }
+
+    const write = (root: string, relative: string, content: string): void => {
+      mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+      writeFileSync(path.join(root, relative), content);
+    };
+
+    const revParse = (rev: string, cwd: string): string => git(['rev-parse', rev], cwd).trim();
+
+    function makeMovedBase(
+      options: {
+        landing?: Landing;
+        baseFiles?: Record<string, string>;
+        /** What the pull request's own commit changes, beside feature.txt. */
+        editHead?: (seed: string) => void;
+        /** Runs after the landing, before the push, with main checked out. */
+        afterLanding?: (seed: string) => void;
+      } = {}
+    ): MovedBase {
+      const origin = tempDir();
+      git(['init', '--quiet', '--bare', '-b', 'main'], origin);
+      const seed = tempDir();
+      git(['clone', '--quiet', origin, seed], os.tmpdir());
+      git(['config', 'user.email', 'test@example.com'], seed);
+      git(['config', 'user.name', 'Test'], seed);
+
+      write(seed, 'file.txt', 'base\n');
+      for (const [relative, content] of Object.entries(options.baseFiles ?? {})) {
+        write(seed, relative, content);
+      }
+      git(['add', '-A'], seed);
+      git(['commit', '--quiet', '-m', 'base'], seed);
+      git(['push', '--quiet', 'origin', 'main'], seed);
+      const b0 = revParse('HEAD', seed);
+
+      git(['checkout', '--quiet', '-b', 'feature'], seed);
+      write(seed, 'feature.txt', 'feature\n');
+      options.editHead?.(seed);
+      git(['add', '-A'], seed);
+      git(['commit', '--quiet', '-m', 'feature'], seed);
+      const h = revParse('HEAD', seed);
+
+      git(['checkout', '--quiet', '--detach', b0], seed);
+      git(['merge', '--quiet', '--no-ff', '--no-edit', 'feature'], seed);
+      const m0 = revParse('HEAD', seed);
+      git(['push', '--quiet', 'origin', `+${m0}:refs/pull/1/merge`], seed);
+
+      git(['checkout', '--quiet', 'main'], seed);
+      switch (options.landing ?? 'merge') {
+        case 'merge':
+          git(['merge', '--quiet', '--no-ff', '--no-edit', 'feature'], seed);
+          break;
+        case 'squash':
+          git(['merge', '--quiet', '--squash', 'feature'], seed);
+          git(['commit', '--quiet', '-m', 'squashed'], seed);
+          break;
+        case 'rebase':
+          // Built by hand so the id differs from H even within one clock second.
+          git(['reset', '--quiet', '--hard', git(['commit-tree', `${h}^{tree}`, '-p', b0, '-m', 'rebased'], seed).trim()], seed);
+          break;
+        case 'fast-forward':
+          git(['merge', '--quiet', '--ff-only', 'feature'], seed);
+          break;
+      }
+      options.afterLanding?.(seed);
+      git(['push', '--quiet', 'origin', 'main'], seed);
+
+      const side = git(['commit-tree', `${b0}^{tree}`, '-p', b0, '-m', 'side'], seed).trim();
+      return { origin, seed, b0, h, m0, tip: revParse('main', seed), side };
+    }
+
+    /** A commit with the tip's tree and these parents, published where a checkout can fetch it. */
+    function commitWithTipTree(moved: MovedBase, parents: string[]): string {
+      const parentArgs = parents.flatMap((parent) => ['-p', parent]);
+      const made = git(['commit-tree', `${moved.tip}^{tree}`, ...parentArgs, '-m', 'made by hand'], moved.seed).trim();
+      git(['push', '--quiet', 'origin', `+${made}:refs/pull/2/merge`], moved.seed);
+      return made;
+    }
+
+    /** A full checkout of `sha`, or a shallow one of the merge ref. */
+    function checkoutAt(moved: MovedBase, sha: string, depth?: number): string {
+      const workdir = tempDir();
+      git(['init', '--quiet', '-b', 'scratch'], workdir);
+      git(['remote', 'add', 'origin', `file://${moved.origin}`], workdir);
+      if (depth === undefined) {
+        git(['fetch', '--quiet', 'origin', '+refs/heads/*:refs/remotes/origin/*', '+refs/pull/*:refs/remotes/pull/*'], workdir);
+      } else {
+        git(['fetch', '--quiet', `--depth=${depth}`, 'origin', '+refs/pull/1/merge:refs/remotes/pull/1/merge'], workdir);
+      }
+      git(['checkout', '--quiet', '--detach', sha], workdir);
+
+      const server = tempDir();
+      mkdirSync(path.join(server, 'acme'), { recursive: true });
+      symlinkSync(moved.origin, path.join(server, 'acme', 'widgets.git'));
+      serverFor.set(workdir, server);
+      return workdir;
+    }
+
+    const pullRequestEnv = (moved: MovedBase, head = moved.m0): Record<string, string> => ({
+      CONDUCTOR_EVENT_NAME: 'pull_request',
+      CONDUCTOR_RUN_SHA: head,
+      CONDUCTOR_PR_HEAD_SHA: moved.h,
+    });
+
+    function expectRepointed(run: ReturnType<typeof runFetchScript>, workdir: string, moved: MovedBase): void {
+      expect(run.status).toBe(0);
+      expect(run.sha).toBe(moved.b0);
+      expect(git(['show-ref', '--verify', '--hash', PRIVATE_REF], workdir).trim()).toBe(moved.b0);
+    }
+
+    function expectKeptTip(run: ReturnType<typeof runFetchScript>, workdir: string, moved: MovedBase): void {
+      expect(run.status).toBe(0);
+      expect(run.sha).toBe(moved.tip);
+      expect(git(['show-ref', '--verify', '--hash', PRIVATE_REF], workdir).trim()).toBe(moved.tip);
+      expect(run.output).not.toContain('::notice');
+    }
+
+    it('reads the three values from expressions in the step env, never from the event file', () => {
+      const env = stepEnv('fetch-base');
+      expect(env.CONDUCTOR_EVENT_NAME).toBe('${{ github.event_name }}');
+      expect(env.CONDUCTOR_RUN_SHA).toBe('${{ github.sha }}');
+      expect(env.CONDUCTOR_PR_HEAD_SHA).toBe('${{ github.event.pull_request.head.sha }}');
+      expect(fetchScript).not.toContain('GITHUB_EVENT_PATH');
+    });
+
+    it.each<Landing>(['merge', 'squash', 'rebase', 'fast-forward'])(
+      'repoints to the first parent when the base moved to the same tree: %s',
+      (landing) => {
+        const moved = makeMovedBase({ landing });
+        const workdir = checkoutAt(moved, moved.m0);
+
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+
+        expectRepointed(run, workdir, moved);
+        const notice = run.output.split('\n').find((line) => line.startsWith('::notice::')) ?? '';
+        expect(notice).toContain(moved.tip);
+        expect(notice).toContain(moved.b0);
+        // The same shape occurs on an open pull request, so the line may not
+        // claim a merge happened.
+        expect(notice).not.toMatch(/\bmerged\b/i);
+        expect(run.tokenSeenBy).toEqual([]);
+      }
+    );
+
+    it('keeps the tip, byte for byte as before, when the three values are not supplied', () => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+      expectKeptTip(runFetchScript(workdir), workdir, moved);
+    });
+
+    it.each(['push', 'pull_request_target', 'merge_group', ''])(
+      'keeps the tip when the event is "%s"',
+      (event) => {
+        const moved = makeMovedBase();
+        const workdir = checkoutAt(moved, moved.m0);
+        const run = runFetchScript(workdir, { ...pullRequestEnv(moved), CONDUCTOR_EVENT_NAME: event });
+        expectKeptTip(run, workdir, moved);
+      }
+    );
+
+    it('keeps the tip when HEAD is a commit other than github.sha, though every other fact matches', () => {
+      const moved = makeMovedBase();
+      const other = commitWithTipTree(moved, [moved.b0, moved.h]);
+      const workdir = checkoutAt(moved, other);
+
+      // The control: the same commit repoints once it IS github.sha, so the
+      // one difference is what stopped the case below.
+      const control = checkoutAt(moved, other);
+      expectRepointed(runFetchScript(control, pullRequestEnv(moved, other)), control, moved);
+
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved, moved.m0)), workdir, moved);
+    });
+
+    it('keeps the tip when github.sha is empty', () => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+      const run = runFetchScript(workdir, { ...pullRequestEnv(moved), CONDUCTOR_RUN_SHA: '' });
+      expectKeptTip(run, workdir, moved);
+    });
+
+    it('keeps the tip when the trees differ: the base moved further', () => {
+      const moved = makeMovedBase({
+        afterLanding: (seed) => {
+          write(seed, 'later.txt', 'later\n');
+          git(['add', '-A'], seed);
+          git(['commit', '--quiet', '-m', 'later'], seed);
+        },
+      });
+      const workdir = checkoutAt(moved, moved.m0);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    it('keeps the tip when HEAD is the tip', () => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.tip);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved, moved.tip)), workdir, moved);
+    });
+
+    it('keeps the tip when HEAD has one parent', () => {
+      const moved = makeMovedBase({ landing: 'squash' });
+      const one = commitWithTipTree(moved, [moved.b0]);
+      const workdir = checkoutAt(moved, one);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved, one)), workdir, moved);
+    });
+
+    it('keeps the tip when HEAD has three parents: not the shape of GitHub\'s merge ref', () => {
+      const moved = makeMovedBase();
+      git(['push', '--quiet', 'origin', `+${moved.side}:refs/pull/3/merge`], moved.seed);
+      const three = commitWithTipTree(moved, [moved.b0, moved.h, moved.side]);
+      const workdir = checkoutAt(moved, three);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved, three)), workdir, moved);
+    });
+
+    it('keeps the tip when the first parent already is the tip: the issue 69 shape', () => {
+      const moved = makeMovedBase();
+      const net = commitWithTipTree(moved, [moved.tip, moved.h]);
+      const workdir = checkoutAt(moved, net);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved, net)), workdir, moved);
+    });
+
+    it('keeps the tip when the second parent is not the pull request head', () => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+      const run = runFetchScript(workdir, { ...pullRequestEnv(moved), CONDUCTOR_PR_HEAD_SHA: moved.side });
+      expectKeptTip(run, workdir, moved);
+    });
+
+    it('keeps the tip when the first parent is not an ancestor of the tip', () => {
+      const moved = makeMovedBase();
+      const off = commitWithTipTree(moved, [moved.side, moved.h]);
+      const workdir = checkoutAt(moved, off);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved, off)), workdir, moved);
+    });
+
+    it.each([1, 2])('keeps the tip on a checkout of fetch-depth %i', (depth) => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0, depth);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    const CONTROL_FILES = [
+      '.guardrails.yaml',
+      '.gitleaks.toml',
+      '.gitleaksignore',
+      'osv-scanner.toml',
+      '.dep-guard.json',
+      '.dep-guard.local.json',
+      '.dep-guard.baseline.json',
+      '.vault-guard.json',
+      '.vault-guard.local.json',
+      '.vault-guard.baseline.json',
+      '.gitattributes',
+      '.intent-guard/intent-contract.yaml',
+      '.intent-guard/config.yaml',
+      '.conductor/intent-contract.yaml',
+      '.conductor/config.yaml',
+    ];
+
+    it.each(CONTROL_FILES)('keeps the tip when a control file differs: %s', (name) => {
+      const moved = makeMovedBase({
+        baseFiles: { [name]: 'at the first parent\n' },
+        editHead: (seed) => write(seed, name, 'at the tip\n'),
+      });
+      const workdir = checkoutAt(moved, moved.m0);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    it.each(CONTROL_FILES)('keeps the tip when a control file is absent only at the first parent: %s', (name) => {
+      const moved = makeMovedBase({ editHead: (seed) => write(seed, name, 'added\n') });
+      const workdir = checkoutAt(moved, moved.m0);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    it.each(CONTROL_FILES)('keeps the tip when a control file is absent only at the tip: %s', (name) => {
+      const moved = makeMovedBase({
+        baseFiles: { [name]: 'at the first parent\n' },
+        editHead: (seed) => rmSync(path.join(seed, name)),
+      });
+      const workdir = checkoutAt(moved, moved.m0);
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    // The shim prints git's real answer and then fails, so the step keeps the
+    // tip only because it read the exit status, not because the output was empty.
+    it.each(['ls-tree', 'rev-list', 'merge-base'])('keeps the tip when %s cannot be read', (subcommand) => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+      const run = runFetchScript(workdir, pullRequestEnv(moved), {
+        shimLine: `if [ "$1" = "${subcommand}" ]; then "$REAL_GIT" "$@"; exit 128; fi`,
+      });
+      expectKeptTip(run, workdir, moved);
+    });
+
+    it('treats a file changing only its mode as different', () => {
+      const moved = makeMovedBase({
+        baseFiles: { '.gitleaks.toml': 'same bytes\n' },
+        editHead: (seed) => chmodSync(path.join(seed, '.gitleaks.toml'), 0o755),
+      });
+      const workdir = checkoutAt(moved, moved.m0);
+      expect(git(['rev-parse', `${moved.b0}:.gitleaks.toml`], workdir)).toBe(
+        git(['rev-parse', `${moved.tip}:.gitleaks.toml`], workdir)
+      );
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    it('treats a file swapped for a symlink with the same blob as different', () => {
+      const moved = makeMovedBase({
+        // A link's blob is its target, so this file and that link share one id.
+        baseFiles: { '.gitleaks.toml': 'other.toml' },
+        editHead: (seed) => {
+          rmSync(path.join(seed, '.gitleaks.toml'));
+          symlinkSync('other.toml', path.join(seed, '.gitleaks.toml'));
+        },
+      });
+      const workdir = checkoutAt(moved, moved.m0);
+      expect(git(['rev-parse', `${moved.b0}:.gitleaks.toml`], workdir)).toBe(
+        git(['rev-parse', `${moved.tip}:.gitleaks.toml`], workdir)
+      );
+      expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+    });
+
+    it('still repoints when a control file is absent on both sides, or the same on both', () => {
+      const absent = makeMovedBase();
+      const absentDir = checkoutAt(absent, absent.m0);
+      expectRepointed(runFetchScript(absentDir, pullRequestEnv(absent)), absentDir, absent);
+
+      const same = makeMovedBase({
+        baseFiles: { '.guardrails.yaml': 'version: 1\ngates: {}\n', '.intent-guard/intent-contract.yaml': 'x: 1\n' },
+      });
+      const sameDir = checkoutAt(same, same.m0);
+      expectRepointed(runFetchScript(sameDir, pullRequestEnv(same)), sameDir, same);
+    });
+
+    it('compares the control files at the repository root when working-directory is a subdirectory', () => {
+      // The CLI reads every one of them from the top level, whatever directory
+      // the step runs in, so that is where they have to agree.
+      const differs = makeMovedBase({
+        baseFiles: { '.guardrails.yaml': 'first parent\n', 'packages/app/keep.txt': 'keep\n' },
+        editHead: (seed) => write(seed, '.guardrails.yaml', 'tip\n'),
+      });
+      const differsDir = checkoutAt(differs, differs.m0);
+      const differsSub = path.join(differsDir, 'packages', 'app');
+      serverFor.set(differsSub, serverFor.get(differsDir) as string);
+      expect(runFetchScript(differsSub, pullRequestEnv(differs)).sha).toBe(differs.tip);
+
+      const clean = makeMovedBase({
+        baseFiles: { '.guardrails.yaml': 'same\n', 'packages/app/keep.txt': 'keep\n' },
+      });
+      const cleanDir = checkoutAt(clean, clean.m0);
+      const cleanSub = path.join(cleanDir, 'packages', 'app');
+      serverFor.set(cleanSub, serverFor.get(cleanDir) as string);
+      expect(runFetchScript(cleanSub, pullRequestEnv(clean)).sha).toBe(clean.b0);
+    });
+
+    it('holds every control file conductor knows in the step list', () => {
+      const listed = /control_files=\(([\s\S]*?)\)/.exec(fetchScript)?.[1]?.split(/\s+/).filter((name) => name !== '') ?? [];
+      expect([...listed].sort()).toEqual([...CONTROL_FILES].sort());
+
+      const known = [
+        '.guardrails.yaml',
+        ...NATIVE_CONTRACT_PATHS,
+        ...PRODUCTS.flatMap((product) => {
+          const profile = profileFor(product);
+          return [profile.configFile, profile.ignoreFile?.name ?? null];
+        }).filter((name): name is string => name !== null),
+      ];
+      expect(known.length).toBeGreaterThanOrEqual(6);
+      for (const name of known) {
+        expect(listed).toContain(name);
+      }
+    });
+
+    it('fails closed when update-ref fails after the conditions pass', () => {
+      // No stale ref was planted, so the removal at the top of the step makes
+      // no update-ref call: the repoint is the first that can fail.
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+
+      const run = runFetchScript(workdir, pullRequestEnv(moved), { failUpdateRef: true });
+
+      expect(run.status).not.toBe(0);
+      expect(run.sha).toBeNull();
+      expect(run.output).toContain('::error::');
+      expect(run.fetchLog.length).toBe(1);
+    });
+
+    it('leaves no private ref when only the repoint write fails and the delete works', () => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+
+      const run = runFetchScript(workdir, pullRequestEnv(moved), {
+        shimLine: 'if [ "$1" = "update-ref" ] && [ "$3" != "-d" ]; then exit 1; fi',
+      });
+
+      expect(run.status).not.toBe(0);
+      expect(run.sha).toBeNull();
+      expect(resolves(PRIVATE_REF, workdir)).toBe(false);
+    });
+
+    it('fails closed when update-ref reports success and the ref did not move', () => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+
+      const run = runFetchScript(workdir, pullRequestEnv(moved), {
+        shimLine: 'if [ "$1" = "update-ref" ] && [ "$3" != "-d" ]; then exit 0; fi',
+      });
+
+      expect(run.status).not.toBe(0);
+      expect(run.sha).toBeNull();
+      expect(resolves(PRIVATE_REF, workdir)).toBe(false);
+    });
+
+    describe('end to end, through the built CLI', () => {
+      const POLICY = [
+        'version: 1',
+        'gates:',
+        '  dependencies:',
+        '    product: dep-guard',
+        '  secrets:',
+        '    product: vault-guard',
+        '',
+      ].join('\n');
+
+      function runBuiltCli(workdir: string, trustBase: string): { status: number | null; stdout: string } {
+        const bin = tempDir();
+        stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
+        stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
+        shimGit(bin);
+        const result = spawnSync(
+          process.execPath,
+          [path.join(ROOT, 'dist', 'cli.js'), 'run', '--stage', 'ci', '--trust-base', trustBase],
+          { cwd: workdir, encoding: 'utf8', env: { ...childEnv(bin), GITHUB_BASE_REF: 'main' } }
+        );
+        return { status: result.status, stdout: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+      }
+
+      it('is refused against the tip, and judged against the repointed first parent', () => {
+        const moved = makeMovedBase({ baseFiles: { '.guardrails.yaml': POLICY } });
+
+        const today = checkoutAt(moved, moved.m0);
+        const refused = runBuiltCli(today, runFetchScript(today).sha ?? '');
+        expect(refused.status).toBe(2);
+        expect(refused.stdout).toMatch(/identical tree/);
+
+        const workdir = checkoutAt(moved, moved.m0);
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+        expectRepointed(run, workdir, moved);
+
+        const judged = runBuiltCli(workdir, run.sha ?? '');
+        expect(judged.stdout).not.toMatch(/refusing|Nothing was checked/);
+        expect(judged.stdout).toMatch(/dep-guard/);
+        expect(judged.status).toBe(0);
+      });
+
+      it('reaches the equal-tree exception on a net-empty pull request', () => {
+        // A file committed and then backed out: H, M0, the tip and B0 all carry
+        // one tree. This policy has no history gate, so this proves only that the
+        // run is accepted and exits 0 with nothing refused; what a history gate
+        // does on an equal tree is pinned by the issue 69 tests in tests/cli.test.ts.
+        const moved = makeMovedBase({
+          baseFiles: { '.guardrails.yaml': POLICY },
+          editHead: (seed) => {
+            git(['add', '-A'], seed);
+            git(['commit', '--quiet', '-m', 'added'], seed);
+            rmSync(path.join(seed, 'feature.txt'));
+          },
+        });
+        expect(revParse(`${moved.tip}^{tree}`, moved.seed)).toBe(revParse(`${moved.b0}^{tree}`, moved.seed));
+        const workdir = checkoutAt(moved, moved.m0);
+
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+        expectRepointed(run, workdir, moved);
+
+        const judged = runBuiltCli(workdir, run.sha ?? '');
+        expect(judged.stdout).not.toMatch(/refusing|Nothing was checked/);
+        expect(judged.status).toBe(0);
+      });
+
+      it('still refuses the first parent when the private ref was not repointed: the ref stays the authority', () => {
+        const moved = makeMovedBase({ baseFiles: { '.guardrails.yaml': POLICY } });
+        const workdir = checkoutAt(moved, moved.m0);
+        expect(runFetchScript(workdir).sha).toBe(moved.tip);
+
+        const refused = runBuiltCli(workdir, moved.b0);
+
+        expect(refused.status).toBe(2);
+        expect(refused.stdout).toMatch(/refusing/);
+      });
+    });
   });
 });
 

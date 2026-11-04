@@ -839,7 +839,9 @@ runs:
     #
     # WHAT IT DOES. Fetches the base branch, forced, from the explicit server
     # URL into the private ref refs/conductor/trust-base, then publishes the
-    # FETCHED COMMIT ID (full hex) as the `sha` output. The gates step hands
+    # FETCHED COMMIT ID (full hex) as the `sha` output, or, on the one shape
+    # the block before that output describes (issue 159), the id of the merge
+    # ref's first parent with the private ref moved to it. The gates step hands
     # conductor that id, never a ref name: git resolves a name through DWIM
     # rules that include refs/tags/<name>, so a pushed tag named origin/<base>
     # or refs/conductor/trust-base would otherwise be taken for the ref, while a
@@ -864,7 +866,9 @@ runs:
     # a stale or absent trust base. A stale private ref is removed first, and
     # the removal is checked (a planted ref plus a .lock file makes both the
     # fetch and the delete fail: that is a failure, not something to swallow).
-    # After a successful fetch the private ref must equal the fetched commit.
+    # After a successful fetch the private ref must equal the fetched commit,
+    # and after a move it must equal the first parent; a mismatch or a failed
+    # move fails the step too.
     - name: Fetch the trust base
       id: fetch-base
       if: ${{ github.base_ref != '' && inputs.trust-base == '' }}
@@ -874,6 +878,9 @@ runs:
         GITHUB_BASE_REF: ${{ github.base_ref }}
         TRUST_BASE_TOKEN: ${{ github.token }}
         GIT_TERMINAL_PROMPT: '0'
+        CONDUCTOR_EVENT_NAME: ${{ github.event_name }}
+        CONDUCTOR_RUN_SHA: ${{ github.sha }}
+        CONDUCTOR_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         set -euo pipefail
         fail() {
@@ -947,7 +954,90 @@ runs:
           git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
           fail "refs/conductor/trust-base does not name the commit that was just fetched (ref: '${ref_sha}', fetched: '${fetch_head_sha}'), so something else wrote it. Nothing was checked."
         fi
-        printf 'sha=%s\n' "$ref_sha" >> "$GITHUB_OUTPUT"
+
+        # THE BASE BRANCH MOVED TO THIS MERGE REF'S OWN TREE (issue 159). The
+        # fetched tip then carries HEAD's exact tree, which the CLI refuses
+        # because the policy would come from the tree being judged, and every
+        # gate is could-not-run. GitHub built this merge ref from a base commit,
+        # its first parent, and the gates can run against that commit, with
+        # the commits between that base and the pull request's head still in
+        # range for the history gate.
+        #
+        # EQUAL TREES PROVE NOTHING ABOUT A MERGE, so no gate is skipped on their
+        # account and the notice never claims one. Every fact below must hold; one that
+        # cannot be read counts as not holding, and then nothing here changes
+        # and the CLI's refusal stands.
+        #
+        # HEAD MUST BE github.sha. That is what limits this to the merge commit
+        # GitHub built: a workflow can check out something else, whose parents
+        # its author chose, and every other fact here could then be arranged.
+        # The second-parent comparison is a cross-check and not that limit.
+        #
+        # THE CONTROL FILES MUST AGREE, with mode and type, because the gates
+        # read them from the trust base: a first parent older than the tip must
+        # not hand a run older rules than the tip holds. --full-tree because the
+        # CLI reads them at the top level, not under working-directory. A file a
+        # policy names by a custom path is not in this list (docs/INVARIANTS.md).
+        control_files=(
+          .guardrails.yaml
+          .gitleaks.toml
+          .gitleaksignore
+          osv-scanner.toml
+          .dep-guard.json
+          .dep-guard.local.json
+          .dep-guard.baseline.json
+          .vault-guard.json
+          .vault-guard.local.json
+          .vault-guard.baseline.json
+          .gitattributes
+          .intent-guard/intent-contract.yaml
+          .intent-guard/config.yaml
+          .conductor/intent-contract.yaml
+          .conductor/config.yaml
+        )
+        first_parent=''
+        first_parent_can_judge() {
+          local head head_tree tip_tree parents control_file at_parent at_tip
+          local -a parent_ids
+          [ "${CONDUCTOR_EVENT_NAME:-}" = "pull_request" ] || return 1
+          head="$(git rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || return 1
+          [[ "$head" =~ $sha_shape ]] || return 1
+          [ "$head" = "${CONDUCTOR_RUN_SHA:-}" ] || return 1
+          [ "$head" != "$ref_sha" ] || return 1
+          head_tree="$(git rev-parse --verify --quiet 'HEAD^{tree}' 2>/dev/null)" || return 1
+          tip_tree="$(git rev-parse --verify --quiet "${ref_sha}^{tree}" 2>/dev/null)" || return 1
+          [[ "$head_tree" =~ $sha_shape ]] || return 1
+          [ "$head_tree" = "$tip_tree" ] || return 1
+          parents="$(git rev-list --parents -n 1 HEAD -- 2>/dev/null)" || return 1
+          read -r -a parent_ids <<< "$parents" || return 1
+          [ "${#parent_ids[@]}" -eq 3 ] || return 1
+          [[ "${parent_ids[1]}" =~ $sha_shape ]] || return 1
+          [ "${parent_ids[1]}" != "$ref_sha" ] || return 1
+          [ "${parent_ids[2]}" = "${CONDUCTOR_PR_HEAD_SHA:-}" ] || return 1
+          git merge-base --is-ancestor "${parent_ids[1]}" "$ref_sha" >/dev/null 2>&1 || return 1
+          for control_file in "${control_files[@]}"; do
+            at_parent="$(git ls-tree --full-tree "${parent_ids[1]}" -- "$control_file" 2>/dev/null)" || return 1
+            at_tip="$(git ls-tree --full-tree "$ref_sha" -- "$control_file" 2>/dev/null)" || return 1
+            [ "$at_parent" = "$at_tip" ] || return 1
+          done
+          first_parent="${parent_ids[1]}"
+        }
+
+        published_sha="$ref_sha"
+        if first_parent_can_judge; then
+          if ! git update-ref --no-deref refs/conductor/trust-base "$first_parent" >/dev/null 2>&1; then
+            git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+            fail "refs/conductor/trust-base could not be moved to ${first_parent}, the commit this run's merge ref was built from (a lock file or a permissions problem), so there is no trust base. Nothing was checked."
+          fi
+          repointed_sha="$(git show-ref --verify --hash refs/conductor/trust-base 2>/dev/null || true)"
+          if [ "$repointed_sha" != "$first_parent" ]; then
+            git update-ref --no-deref -d refs/conductor/trust-base >/dev/null 2>&1 || true
+            fail "refs/conductor/trust-base does not name ${first_parent} after it was moved there (ref: '${repointed_sha}'), so something else wrote it. Nothing was checked."
+          fi
+          published_sha="$first_parent"
+          printf '::notice::conductor: the base branch moved past the merge ref this run is on, to %s, which has the same tree. This run is judged against %s, the commit the merge ref was built from.\n' "$ref_sha" "$first_parent"
+        fi
+        printf 'sha=%s\n' "$published_sha" >> "$GITHUB_OUTPUT"
 
     - name: Run the gates
       id: gates

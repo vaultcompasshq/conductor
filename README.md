@@ -507,7 +507,14 @@ its configuration from the base branch and the pull request cannot change the
 rules it is judged by; a change to the rules shows as a proposal line and
 takes effect after merge. See
 [The pull-request trust boundary](docs/pull-request-trust-boundary.md). On any
-other event it passes nothing and behaviour is unchanged. The `trust-base`
+other event it passes nothing and behaviour is unchanged. One shape passes a
+different commit: when the base branch has moved to a commit with the exact
+tree of the run's merge ref, as when a pull request lands while its job is
+queued, that commit cannot judge the run, so the step moves the private ref to
+the commit the merge ref was built from and prints a notice naming both. That
+needs a full clone (`fetch-depth: 0`) and every control file listed in
+[The pull-request trust boundary](docs/pull-request-trust-boundary.md) the same
+at both commits; otherwise the run stays could-not-run, exit 2. The `trust-base`
 input names the ref explicitly, for a platform where `GITHUB_BASE_REF` is not
 set. **On a `pull_request` or `pull_request_target` event this input is
 refused outright, in the validate step** (issue #58). On `pull_request` the

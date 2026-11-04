@@ -316,7 +316,9 @@ to remove the input; see [The Action](../README.md#the-action).
 that variable is set, an explicit `--trust-base` is accepted only when it is
 `refs/conductor/trust-base`, the private ref the Action fetches the base
 branch into and always passes (that ref is the authority and is not compared
-with anything), or resolves to the same commit as
+with anything; see "When the base branch reaches the merge ref's own tree"
+below for the one shape where the Action moves it), or resolves to the same
+commit as
 `refs/remotes/origin/$GITHUB_BASE_REF`. So an ordinary pull-request run is
 unaffected. A ref naming the pull request's own branch, or anything else that
 disagrees, is refused with both refs and both commits named, through the same
@@ -326,6 +328,40 @@ a tag and a branch or remote-tracking ref (a tag named `origin/main`) is
 refused as ambiguous: spell the ref in full. When neither resolves, this fails
 closed too, naming it, for the same reason the fetch-depth remedy below
 exists.
+
+### When the base branch reaches the merge ref's own tree
+
+A pull request that lands while its job is queued leaves the job on a merge
+ref whose tree equals the base branch's new tip. That tip cannot judge the run:
+the policy would come from the tree being judged. Equal trees do not prove a
+merge, so nothing is skipped for it. The same shape occurs on an open pull
+request that duplicates something that just landed, and its history can still
+hold a secret.
+
+Instead, on a `pull_request` event, the Action judges the run against the
+commit the merge ref was built from, its first parent, moving
+`refs/conductor/trust-base` there and printing a notice naming both commits.
+Every one of these has to hold, or the run stays could-not-run, exit 2, as it
+was before:
+
+- HEAD is `github.sha`, so this is the merge commit GitHub built.
+- HEAD has exactly two parents, and the second is the pull request's head.
+- HEAD's tree equals the tip's tree, HEAD is not the tip, and the first parent
+  is not the tip either.
+- The first parent is an ancestor of the tip. On a checkout without the full
+  history (`fetch-depth: 1` or `2`) that cannot be shown, so the refusal stays.
+- Each of these has the same entry at the first parent and the tip, mode and
+  type included, or is absent from both: `.guardrails.yaml`, `.gitleaks.toml`,
+  `.gitleaksignore`, `osv-scanner.toml`, `.dep-guard.json`,
+  `.dep-guard.local.json`, `.dep-guard.baseline.json`, `.vault-guard.json`,
+  `.vault-guard.local.json`, `.vault-guard.baseline.json`, `.gitattributes`,
+  `.intent-guard/intent-contract.yaml`, `.intent-guard/config.yaml`,
+  `.conductor/intent-contract.yaml` and `.conductor/config.yaml`.
+
+So a pull request that changes one of those files and lands while queued stays
+red, because the first parent's rules would be older than the tip's. A finding
+on a pull request that has already landed still reports red, which is the true
+result. Direct CLI use is unchanged: the move lives in the Action's fetch step.
 
 **Neither layer closes anything against a pull request that edits its own
 workflow file.** A CLI invocation on a pull request can simply omit

@@ -2057,7 +2057,9 @@ workflow_dispatch run ever has one) fetches
 the base into `refs/conductor/trust-base` (forced, from `$GITHUB_SERVER_URL/
 $GITHUB_REPOSITORY.git`, with the token in GIT_CONFIG_* environment variables,
 never argv), verifies the ref equals FETCH_HEAD, and publishes the FULL COMMIT
-ID. The gates step hands conductor and every gate that id, NEVER a ref name: git
+ID: the fetched tip, or the merge ref's first parent with the ref moved to it
+on the one shape in "When the base branch reaches the merge ref's own tree"
+below. The gates step hands conductor and every gate that id, NEVER a ref name: git
 resolves a name through DWIM rules that include `refs/tags/<name>`, so a pushed
 tag named `refs/conductor/trust-base` or `origin/<base>` would otherwise be
 taken for the ref, while a full 40- or 64-hex id is the object (pinned by "a
@@ -2113,7 +2115,8 @@ that gate only.)
 
 THE INTENT GATE'S BASE IS SPELLED IN FULL TOO (`resolveBaseRefInRepo`,
 src/intent-base.ts). On a pull request with no explicit `--base` it is
-`refs/conductor/trust-base` when that exists, else
+`refs/conductor/trust-base` when that exists (the tip, or the first parent on
+the shape below), else
 `refs/remotes/origin/<GITHUB_BASE_REF>`; when the private ref exists it wins
 and is not compared with the remote-tracking ref (it is the authority, for the
 same reason as above). Paths come from `git diff --name-only -z` split on NUL,
@@ -2398,6 +2401,94 @@ is unchanged, as a note beside the others (issue #69)"): the full-report line, t
 branch for an empty gate list, and the SARIF notification at note level,
 absent entirely when nothing was skipped this way.
 
+### When the base branch reaches the merge ref's own tree
+
+New for issue 159. A pull request that lands while its job is queued leaves the
+job on a merge ref whose tree equals the base branch's new tip, and the
+equal-tree refusal above makes every gate could-not-run. The fix is not a skip:
+equal trees do not prove a merge, the same shape occurs on an open pull request
+that duplicates what just landed, and its history can still hold a secret. So
+the Action's fetch step (`first_parent_can_judge`, action.yml:999-1024) moves
+the private ref to HEAD's first parent, publishes that id, and prints a notice
+that names both commits and does not claim a merge. No TypeScript decides this:
+the CLI accepts the id because it equals the private ref, which stays the only
+authority (pinned by "still refuses the first parent when the private ref was
+not repointed: the ref stays the authority" in tests/action.test.ts). A net-empty
+pull request then lands in the equal-tree exception above, which is how the
+history gate reaches it (pinned by "reaches the equal-tree exception on a
+net-empty pull request" in the same file).
+
+EVERY CONDITION MUST HOLD, AND ONE THAT CANNOT BE READ DOES NOT. Otherwise the
+step changes nothing and today's refusal stands, so the failure direction is
+the same as before.
+
+1. The event is `pull_request`, from the step's env expression. Not
+   `pull_request_target`.
+2. HEAD is `github.sha`. THIS IS WHAT LIMITS THE RULE TO GITHUB'S MERGE COMMIT:
+   a workflow can check out something else, whose parents its author chose.
+3. HEAD's tree equals the fetched tip's, and HEAD is not the tip.
+4. HEAD has exactly two parents.
+5. The first parent is not the tip; that shape is the equal-tree exception's.
+6. The second parent is the event's `pull_request.head.sha`. A cross-check, not
+   the limit.
+7. The first parent is an ancestor of the tip, so the rules come from a real
+   base-branch commit. A checkout of `fetch-depth: 1` or `2` fails this.
+8. Each control file has the same `git ls-tree --full-tree` entry at the first
+   parent and the tip (mode, type and id), or is absent from both:
+   `.guardrails.yaml`, `.gitleaks.toml`, `.gitleaksignore`, `osv-scanner.toml`,
+   `.dep-guard.json`, `.dep-guard.local.json`, `.dep-guard.baseline.json`,
+   `.vault-guard.json`, `.vault-guard.local.json`, `.vault-guard.baseline.json`,
+   `.gitattributes`, `.intent-guard/intent-contract.yaml`,
+   `.intent-guard/config.yaml`, `.conductor/intent-contract.yaml` and
+   `.conductor/config.yaml`. A merge ref's first parent can be many
+   commits behind the tip, so without this a run could be judged by rules older
+   than the tip holds. `--full-tree` because the CLI reads these at the top level
+   whatever `working-directory` says. The accepted cost: a pull request that
+   changes one of these files and lands while queued stays red.
+
+A failed move, or a move the re-read does not confirm, fails the step, publishes
+no `sha` and removes the ref.
+
+NOT COVERED, ON PURPOSE. Condition 8 does not reach a config file a policy names
+by a custom path, a gitleaks `[extend]` target, the `package.json` workspaces and
+Python manifests dep-guard reads from the base, dep-guard's `.npmrc` (a registry
+setting, not a rule), `docs/superpowers/specs` (a pull request adding its own
+spec is common, so listing it would keep ordinary pull requests red, and the
+worst case is an older spec, still judged), an archived contract under
+`.intent-guard/contracts` or `.conductor/contracts`, or any control file a gate
+adds later. Reaching those needs a tightening inside the merge ref's lag, a pull
+request whose result equals the tip's tree exactly, and that tightening living in
+an unlisted file. The result is a run under older rules.
+
+A LINK AT A CONTROL DIRECTORY IS NOT SEEN EITHER, because `git ls-tree` lists
+nothing below a symbolic link. With a link at `.intent-guard` or `.conductor` on
+both sides, with different targets, the file below it lists as absent at both,
+and conductor's own reader refuses such a path. The one-sided case was measured:
+a real directory with no contract at the first parent, and at the tip a link to a
+frozen contract. That repoints and exits 0 with nothing checked, and a later pull
+request on that tip gets exit 2. So on that one shape this rule gives a clean run
+that judged nothing, where the refusal would have said so.
+
+Direct CLI use has none of this, because moving a ref is a write and
+src/trust-base.ts only reads.
+
+Pinned by, in tests/action.test.ts, "keeps the tip when HEAD is a commit other
+than github.sha, though every other fact matches", "keeps the tip when HEAD has
+three parents: not the shape of GitHub's merge ref", "keeps the tip when the
+first parent already is the tip: the issue 69 shape", "keeps the tip when the
+first parent is not an ancestor of the tip", "treats a file changing only its
+mode as different", "treats a file swapped for a symlink with the same blob as
+different", "compares the control files at the repository root when
+working-directory is a subdirectory", "holds every control file conductor knows
+in the step list", "fails closed when update-ref reports success and the ref did
+not move" and "leaves no private ref when only the repoint write fails and the
+delete works". The per-event, per-file, per-landing and read-failure cases are
+parameterized in the same describe. The list test holds the step to the names
+`src/products.ts` and `NATIVE_CONTRACT_PATHS` know. The dep-guard and vault-guard
+files, the two `config.yaml` paths and `.gitattributes` are known to conductor by
+no export, so they sit in that test's literal list only, and a gate that adds a
+control file is not noticed by it.
+
 ### An explicit trust-base redirect gets a refusal at two places, and neither closes the whole hole
 
 New for issue #58. `refuseTrustBaseRef` above only refuses a ref that
@@ -2425,7 +2516,7 @@ unprotected branch runs its own author's workflow file regardless, and
 `merge_group` never sets `GITHUB_BASE_REF` at all). Off those events the
 input works exactly as before, since that is what it exists for. Refused with
 the value given and the fix, which is to remove the input: the action already
-fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1125). THE TWO EVENTS ARE
+fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1215). THE TWO EVENTS ARE
 REFUSED FOR DIFFERENT REASONS, and the validate step's own message says so:
 on `pull_request` the workflow file IS the pull request's own, so the input
 is settable by the thing it judges; on `pull_request_target` the workflow
@@ -2445,9 +2536,12 @@ everywhere else. When it is set, the given `--trust-base` is accepted only
 when it resolves to the SAME COMMIT as `origin/<githubBaseRef>`, which is
 exactly the commit the composite action fetches into
 `refs/conductor/trust-base` and then passes (`--trust-base "$TRUST_BASE_SHA"`,
-action.yml:1125; an explicit `trust-base` input is passed only when it is
-set, action.yml:1106-1107, and the validate step has already refused that
-input on a pull request), so an ordinary pull-request run is unaffected. A ref naming the pull request's own branch,
+action.yml:1215; an explicit `trust-base` input is passed only when it is
+set, action.yml:1196-1197, and the validate step has already refused that
+input on a pull request; on the shape in "When the base branch reaches the merge
+ref's own tree" the action passes the merge ref's first parent instead, accepted
+because it equals the private ref and not because it equals
+`origin/<githubBaseRef>`), so an ordinary pull-request run is unaffected. A ref naming the pull request's own branch,
 or anything else that disagrees, is refused naming both refs and both
 commits.
 
@@ -4382,7 +4476,7 @@ repository text; the Action copies it only on a whole-line match on line 3
 or 4. The strings are `INTENT_SPEC_LINES` (src/output-text.ts:1428-1433),
 printed after the present-on-base line, at most one, in the precedence
 ambiguous, none-changed, winner-changed, weak; the Action matches each of
-lines 3 and 4 whole (action.yml:1250-1256). Pinned by
+lines 3 and 4 whole (action.yml:1340-1346). Pinned by
 tests/action.test.ts ("copies an intent-spec line from line 3 or 4 to the
 step summary, whole lines only") and tests/intent-run.test.ts ("prints the
 changed-winner line, not the weak one, when the new winner is weak", and
@@ -5308,7 +5402,7 @@ blocking-count-mismatch branch gets the "This run was advisory" wording and
 never the "Findings were advisory" one. End to end through the CLI: "maps a blocking run to
 exit 0 with the advisory wording, and pins the same run at exit 1 without
 the flag" and "leaves a could-not-run gate at exit 2, the load-bearing case
-advisory must never touch" in tests/cli.test.ts. The Action's own wiring: tests/action.test.ts:244 ("adds --advisory to the gates invocation only when the input is exactly "true"") and tests/action-pr-comment.test.ts:901 ("adds --advisory to the render run only when the input is exactly "true", proven by running the step"), both of which run the real step script
+advisory must never touch" in tests/cli.test.ts. The Action's own wiring: tests/action.test.ts:249 ("adds --advisory to the gates invocation only when the input is exactly "true"") and tests/action-pr-comment.test.ts:901 ("adds --advisory to the render run only when the input is exactly "true", proven by running the step"), both of which run the real step script
 against a conductor stub that records its argv rather than pattern-matching
 the YAML, following the same device tests/action.test.ts already uses for
 the trust-base fetch guard (commit f32c638, "Parse action.yml instead of
