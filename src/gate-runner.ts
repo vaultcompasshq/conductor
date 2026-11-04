@@ -903,7 +903,7 @@ export interface GateOutcome {
    * Where its contract came from and what the change set was measured
    * against: the two facts that decide what the gate's verdict is even about.
    */
-  intent?: { contractSource: ContractSource; baseRef: string | null; note?: string };
+  intent?: { contractSource: ContractSource; baseRef: string | null; note?: string; changedPaths?: number };
   /**
    * Present only on a pull-request run. Whether this gate was put into
    * pull-request mode, and what it said was proposed.
@@ -1843,7 +1843,7 @@ export function runGate(gate: GatePolicy, options: RunGateOptions): GateOutcome 
           intent: {
             contractSource: options.intent.contractSource,
             baseRef: options.intent.baseRef,
-            ...(options.intent.note === undefined ? {} : { note: options.intent.note }),
+            ...(options.intent.note === undefined ? {} : { note: options.intent.note }), ...(options.intent.paths === null ? {} : { changedPaths: options.intent.paths.length }),
           },
         }
       : options.intentContract === undefined

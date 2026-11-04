@@ -1298,7 +1298,7 @@ describe('external gate exit semantics', () => {
     expect(note?.message).not.toMatch(/no tracked lockfile; treated as clean/);
     expect(note?.message).toMatch(/read no lockfile/);
     expect(note?.message).toMatch(
-      /Tracked manifests not handed to osv-scanner: \.github\/workflows\/ci\.yml, Dockerfile, go\.sum, pyproject\.toml, svc\/Dockerfile\.prod\./
+      /Tracked dependency files not handed to osv-scanner: \.github\/workflows\/ci\.yml, Dockerfile, go\.sum, pyproject\.toml, svc\/Dockerfile\.prod\./
     );
     expect(note?.message).not.toMatch(/no gate read/);
     expect(note?.message).not.toMatch(/node_modules|vendor|testdata/);
@@ -1348,7 +1348,7 @@ describe('external gate exit semantics', () => {
     const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
     const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
     expect(note?.message).toMatch(
-      /Tracked manifests not handed to osv-scanner: app\/pubspec\.yaml, deno\.lock, ios\/Podfile\.lock, mix\.exs\./
+      /Tracked dependency files not handed to osv-scanner: app\/pubspec\.yaml, deno\.lock, ios\/Podfile\.lock, mix\.exs\./
     );
   });
 
@@ -1360,7 +1360,7 @@ describe('external gate exit semantics', () => {
     const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
     expect(out.argv).not.toContain('Gopkg.lock');
     const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
-    expect(note?.message).toContain('Tracked manifests not handed to osv-scanner: Gopkg.lock.');
+    expect(note?.message).toContain('Tracked dependency files not handed to osv-scanner: Gopkg.lock.');
   });
 
   it('names unread manifests even when other lockfiles were handed over, as a note (review of 1b.2, item 5)', () => {
@@ -1388,7 +1388,7 @@ describe('external gate exit semantics', () => {
       const note = out.run.diagnostics.find((d) => d.code === 'conductor/manifests-not-handed');
       expect([exit, note?.message]).toEqual([
         exit,
-        'Tracked manifests not handed to osv-scanner: deno.lock, ios/Podfile.lock.',
+        'Tracked dependency files not handed to osv-scanner: deno.lock, ios/Podfile.lock.',
       ]);
       // A note, never a gate diagnostic: it does not by itself push a clean
       // run off the one-line summary.
@@ -1404,7 +1404,7 @@ describe('external gate exit semantics', () => {
     const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
     const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan');
     expect(note?.message).toMatch(/read no lockfile/);
-    expect(note?.message).not.toMatch(/Tracked manifests/);
+    expect(note?.message).not.toMatch(/Tracked dependency files/);
   });
 
   it('is could-not-run when the tracked lockfiles cannot be listed', () => {
@@ -2092,5 +2092,34 @@ describe('the preview under the proposed rules, one gate at a time', () => {
     expect(previewSpawnTimeout(10_000, { ...p, clock: () => 700_000 })).toBe(10_000);
     expect(previewSpawnTimeout(10_000, { ...p, clock: () => 1_000_001 })).toBe(0);
     expect(previewSpawnOptions(10_000, p, { A: '1' })).toEqual({ timeout: 1_500, killSignal: 'SIGKILL', env: { A: '1', XDG_CACHE_HOME: 'cache' } });
+  });
+});
+
+describe('the note on tracked dependency files not handed to osv-scanner', () => {
+  const osv = () => gate({ role: 'vulnerabilities', product: 'osv-scanner', stage: 'ci' });
+
+  it('names package.json and a workflow when the repository has no lockfile, calls neither a manifest, and stays clean', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { 'package.json': '{"dependencies":{"x":"1.0.0"}}\n', '.github/workflows/ci.yml': 'on: push\n' }, 'no lockfile');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.6.0', exit: 1, stdout: '' });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+
+    expect(out.exitCode).toBe(0);
+    expect(out.findings).toEqual([]);
+    const note = out.diagnostics.find((d) => d.code === 'conductor/nothing-to-scan')?.message;
+    expect(note).toContain('Tracked dependency files not handed to osv-scanner: .github/workflows/ci.yml, package.json.');
+    expect(note).not.toMatch(/manifests/);
+  });
+
+  it('does not name a package.json beside a lockfile the gate was handed', () => {
+    const repo = tempGitRepo();
+    commitFiles(repo, { 'package.json': '{}\n', 'package-lock.json': '{}\n' }, 'with a lockfile');
+    const bin = tempDir();
+    stubGate(bin, 'osv-scanner', { versionLine: 'osv-scanner version: 2.4.0', exit: 0, stdout: CLEAN_OSV_SCANNER });
+    const out = runGate(osv(), { repoRoot: repo, staged: false, pathValue: bin, tempRoot: tempDir() });
+
+    expect(out.argv).toContain('package-lock.json');
+    expect(out.run.diagnostics.some((d) => d.code === 'conductor/manifests-not-handed')).toBe(false);
   });
 });

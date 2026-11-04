@@ -1068,3 +1068,11 @@ describe('README documents the advisory recipe without continue-on-error', () =>
     expect(section).toMatch(/pull-requests:\s*write/);
   });
 });
+
+describe('action.yml: the fallback render run reads no replace ref', () => {
+  it('on the fallback path conductor runs with replacement off, as in the gates step', () => {
+    const run = runPrCommentScript({ VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' });
+    expect(run.conductorRan).toBe(true);
+    expect(run.conductorEnv).toMatch(/^GIT_NO_REPLACE_OBJECTS=1$/m);
+  });
+});

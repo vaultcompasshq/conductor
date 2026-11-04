@@ -193,8 +193,9 @@ pull request adds an unpinned line to it. When the repository tracks none
 of these, osv-scanner is not spawned at all and the gate is reported clean
 with a `conductor/nothing-to-scan` note, so a docs-only repository is not
 red on every pull request. The note says that nothing was scanned and names
-the tracked manifests that were not handed to osv-scanner (a
-`pyproject.toml`, a `go.sum`, a `Dockerfile`, a workflow, or a requirements
+the tracked dependency files that were not handed to osv-scanner (a
+`pyproject.toml`, a `go.sum`, a `Dockerfile`, a workflow, a `package.json` with
+no handed JavaScript lockfile in its directory or an ancestor, or a requirements
 file the pin check left out), so a green gate is not read as a scan of
 them. A `go.mod` or a pinned requirements file is handed over and so is
 never on that list. It says nothing about what other gates read. When
@@ -244,8 +245,9 @@ code and the `enforce` flags the run already had.
   all (none is enabled, or every enabled one was deferred to a later stage,
   had nothing to judge, or was skipped), or every gate that ran examined
   nothing: the vulnerabilities gate with no lockfile it reads, or the intent
-  gate with no contract to check against. The second case was `pass` in
-  0.8.x. The exit status is unchanged, since nothing failed, but this is not
+  gate with no contract to check against or an empty change set, which it
+  ran on without judging any path. The second case was `pass` in
+  0.8.x, and the empty change set was `pass` through 0.17.x. The exit status is unchanged, since nothing failed, but this is not
   a pass: nothing was verified. In the Action the `verdict` output carries
   this token, so a workflow can tell it apart from `pass`.
 - `advisory-blocked (N)`: the run would have exited 1, and `--advisory` made

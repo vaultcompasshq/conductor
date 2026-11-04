@@ -203,7 +203,7 @@ describe('the vulnerabilities line tells a clean scan from nothing to scan (issu
             diagnostics: [
               {
                 code: 'conductor/nothing-to-scan',
-                message: 'osv-scanner read no lockfile, so nothing was scanned. Tracked manifests not handed to osv-scanner: pyproject.toml.',
+                message: 'osv-scanner read no lockfile, so nothing was scanned. Tracked dependency files not handed to osv-scanner: pyproject.toml.',
               },
             ],
           }),
@@ -213,7 +213,7 @@ describe('the vulnerabilities line tells a clean scan from nothing to scan (issu
     );
     expect(text).not.toMatch(/lockfiles /);
     expect(text).not.toMatch(/sources-with-findings/);
-    expect(text).toMatch(/conductor\/nothing-to-scan: .*Tracked manifests not handed to osv-scanner: pyproject\.toml/);
+    expect(text).toMatch(/conductor\/nothing-to-scan: .*Tracked dependency files not handed to osv-scanner: pyproject\.toml/);
   });
 });
 
@@ -1836,6 +1836,31 @@ describe('the per-gate job log lines', () => {
       'conductor: gate dependencies (dep-guard): skipped (--gate did not name it), no exit code',
       'conductor: gate vulnerabilities (osv-scanner): skipped (head tree equals the base tree), no exit code',
     ]);
+  });
+
+  it('words an intent gate that ran on no contract as the pull-request path words its skip', () => {
+    const skipped = 'conductor: gate intent (intent-guard): skipped (no contract), no exit code';
+    const [ran] = gateLogLines(
+      result(
+        [
+          outcome({
+            role: 'intent',
+            product: 'intent-guard',
+            productVersion: '1.10.4',
+            exitCode: 0,
+            run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { skipReason: 'no contract' } },
+          }),
+        ],
+        0
+      )
+    );
+    const [prepared] = gateLogLines(
+      result([], 0, [], [{ role: 'intent', product: 'intent-guard', reason: 'no-contract', detail: 'd' }])
+    );
+
+    expect(prepared).toBe(skipped);
+    // It did run, so unlike the skip it has a version and an exit code to give.
+    expect(ran).toBe('conductor: gate intent (intent-guard 1.10.4): skipped (no contract), exit 0');
   });
 
   it('shows the gate own reason in the full text report section as well', () => {

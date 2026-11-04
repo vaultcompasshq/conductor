@@ -2109,9 +2109,22 @@ precondition (no pull-request code before the action in the job) covers: the
 files behind `GITHUB_ENV` (`NODE_OPTIONS=--require`, `GIT_CONFIG_*`,
 `GIT_DIR`), `GITHUB_PATH`, `.git/config` changes (a remote URL,
 `url.insteadOf`, `core.fsmonitor`, credential helpers, `core.sshCommand`), git
-hooks such as `reference-transaction`, and replace refs or grafts. (The
-gitleaks spawn sets `GIT_NO_REPLACE_OBJECTS=1`, which narrows the last one for
-that gate only.)
+hooks such as `reference-transaction`, and replace refs or grafts. (Every git
+call the CLI makes through src/git.ts, the gitleaks spawn, and the action's
+fetch, gates and fallback render steps set `GIT_NO_REPLACE_OBJECTS=1`, and the
+two action steps that run conductor pass it to every gate it spawns. That
+narrows replace refs on a run through the action; a direct CLI run passes it
+to gitleaks only. It does not touch grafts. The fetch step alone also points
+`GIT_GRAFT_FILE` at a path that cannot exist, so its decision to move the trust
+base reads real parents; the gates step and the CLI still read a graft file, and a
+shallow boundary is unaffected. Pinned by "publishes the first parent of the real
+merge commit, not the grafted parent", "keeps the tip when the real first parent
+has other control files, though the grafted one has the tip's", "publishes the first parent
+of the real merge commit, not the replacement parent", "keeps the tip when the
+real trees differ, though the replacements carry one tree" and "the gates step
+runs conductor, and so every gate it spawns, with replacement off" in
+tests/action.test.ts, and "on the fallback path conductor runs with replacement
+off, as in the gates step" in tests/action-pr-comment.test.ts.)
 
 THE INTENT GATE'S BASE IS SPELLED IN FULL TOO (`resolveBaseRefInRepo`,
 src/intent-base.ts). On a pull request with no explicit `--base` it is
@@ -2408,7 +2421,7 @@ job on a merge ref whose tree equals the base branch's new tip, and the
 equal-tree refusal above makes every gate could-not-run. The fix is not a skip:
 equal trees do not prove a merge, the same shape occurs on an open pull request
 that duplicates what just landed, and its history can still hold a secret. So
-the Action's fetch step (`first_parent_can_judge`, action.yml:999-1024) moves
+the Action's fetch step (`first_parent_can_judge`, action.yml:1005-1030) moves
 the private ref to HEAD's first parent, publishes that id, and prints a notice
 that names both commits and does not claim a merge. No TypeScript decides this:
 the CLI accepts the id because it equals the private ref, which stays the only
@@ -2472,6 +2485,24 @@ that judged nothing, where the refusal would have said so.
 Direct CLI use has none of this, because moving a ref is a write and
 src/trust-base.ts only reads.
 
+THE REPORT SAYS THE BASE MOVED, AND THE VALUE BEHIND THAT SENTENCE DECIDES
+NOTHING. The fetch step publishes the tip it moved past as the `base-tip` output,
+and the gates step hands it over as `CONDUCTOR_BASE_TIP`. `withMovedBaseTip`
+(src/trust-base.ts) honors it only when the repository bears it out: a full id
+of a commit, neither HEAD nor the trust base, with HEAD's tree, and the trust base
+is HEAD's first parent. Otherwise it is ignored without a word. The only readers
+of the result are `baseMovedSentences` (src/output-text.ts) and the SARIF
+`conductor/base-moved` notification. The CLI cannot derive this: the private ref
+at HEAD's first parent is also what every ordinary pull-request run looks like,
+and the tip is gone by the time it runs. Checking the value does not make it an
+authority: a value that passes changes one sentence and no decision. Pinned by
+"still refuses the first parent when the private ref was not repointed: the ref
+stays the authority" (it also sets the value, and the run is still refused), "says
+so in the SARIF log as a notification, never a result", "prints nothing when the
+value is %s, in the text report or the SARIF log" and "prints nothing when the
+trust base is not the first parent of HEAD, though the tip has its tree" in
+tests/action.test.ts.
+
 Pinned by, in tests/action.test.ts, "keeps the tip when HEAD is a commit other
 than github.sha, though every other fact matches", "keeps the tip when HEAD has
 three parents: not the shape of GitHub's merge ref", "keeps the tip when the
@@ -2516,7 +2547,7 @@ unprotected branch runs its own author's workflow file regardless, and
 `merge_group` never sets `GITHUB_BASE_REF` at all). Off those events the
 input works exactly as before, since that is what it exists for. Refused with
 the value given and the fix, which is to remove the input: the action already
-fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1215). THE TWO EVENTS ARE
+fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1232). THE TWO EVENTS ARE
 REFUSED FOR DIFFERENT REASONS, and the validate step's own message says so:
 on `pull_request` the workflow file IS the pull request's own, so the input
 is settable by the thing it judges; on `pull_request_target` the workflow
@@ -2536,8 +2567,8 @@ everywhere else. When it is set, the given `--trust-base` is accepted only
 when it resolves to the SAME COMMIT as `origin/<githubBaseRef>`, which is
 exactly the commit the composite action fetches into
 `refs/conductor/trust-base` and then passes (`--trust-base "$TRUST_BASE_SHA"`,
-action.yml:1215; an explicit `trust-base` input is passed only when it is
-set, action.yml:1196-1197, and the validate step has already refused that
+action.yml:1232; an explicit `trust-base` input is passed only when it is
+set, action.yml:1213-1214, and the validate step has already refused that
 input on a pull request; on the shape in "When the base branch reaches the merge
 ref's own tree" the action passes the merge ref's first parent instead, accepted
 because it equals the private ref and not because it equals
@@ -4354,9 +4385,12 @@ A statement about HOW MUCH OF THE POLICY A RUN COVERED is a NOTIFICATION.
 It is true of the configuration rather than of this change, identical on
 every run until somebody edits the policy file, and on the adoption ramp
 deliberately true for weeks. A permanent alert is a dismissed alert, and
-it teaches the reader to dismiss the next one. Five cases live here:
+it teaches the reader to dismiss the next one. Six cases live here:
 `conductor/gate-deferred` (src/output-sarif.ts:538-546),
-`conductor/gate-excluded` (src/output-sarif.ts:602-609), the per-product
+`conductor/gate-excluded` (src/output-sarif.ts:602-609),
+`conductor/nothing-to-scan` (`nothingToScanNotifications`, pinned by "moves
+nothing-to-scan out of results, with the gate named and the sentence unchanged"
+in tests/output-sarif.test.ts), the per-product
 skipped advisory, whose id is the product and the skip reason and so is
 either `no-contract` or `contract-waived` (src/output-sarif.ts:673-685),
 `conductor/gate-not-enforced` (src/output-sarif.ts:960-993), and
@@ -4476,7 +4510,7 @@ repository text; the Action copies it only on a whole-line match on line 3
 or 4. The strings are `INTENT_SPEC_LINES` (src/output-text.ts:1428-1433),
 printed after the present-on-base line, at most one, in the precedence
 ambiguous, none-changed, winner-changed, weak; the Action matches each of
-lines 3 and 4 whole (action.yml:1340-1346). Pinned by
+lines 3 and 4 whole (action.yml:1357-1363). Pinned by
 tests/action.test.ts ("copies an intent-spec line from line 3 or 4 to the
 step summary, whole lines only") and tests/intent-run.test.ts ("prints the
 changed-winner line, not the weak one, when the new winner is weak", and
@@ -6133,6 +6167,22 @@ now says it checked nothing, in the verdict sentence's own words, and that
 this is not a clean result. Pinned by tests/output-text.test.ts ("does not
 word a push-mode intent run with no contract like a clean result" and
 "keeps the clean wording for an unenforced gate that did check something").
+
+AN INTENT GATE WITH A CONTRACT AND NO CHANGED PATHS is in `gateCheckedNothing`
+too (`intentEmptyChangeSet`, src/output-text.ts). It reads the path count the
+preparation worked out, and never fires for a gate that blocked, which covers one
+that could not run: every could-not-run outcome carries a blocking finding.
+So a branch the named base already carries gets "ran on an empty change set"
+rather than "every enabled gate ran", and the one-line summary is not used. The
+SARIF log carries the same sentence as the notification
+`intent-guard/empty-change-set`. No exit code changes. The clause has no effect on
+the text report, whose earlier branches sort those gates first; the notification
+reads the predicate directly, and that is where the tests below go red. Pinned
+by "is nothing-checked when it is the only gate, and exits 0 as before", "never
+words a block on an empty change set as checked nothing", "raises no empty-change-set
+notification for a gate that could not run" and "says so in the SARIF log with the
+words of the verdict, as a notification and never a result" in
+tests/intent-run.test.ts.
 
 A DIRECTLY SPAWNED INTENT GATE THAT CHECKED NOTHING IS REPORTED LIKE THE
 PULL-REQUEST SKIP (issue 103). intent-guard 1.10.4 keeps JSON status `ok`

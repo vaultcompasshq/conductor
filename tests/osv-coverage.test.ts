@@ -209,7 +209,7 @@ describe('coverage wording (test 5)', () => {
     expect(out.diagnostics[2]!.message).toBe(
       'osv-scanner had nothing it could scan: 2 requirements file(s) not pinned (requirements.txt, ' +
         'web/requirements-dev.txt). The verdict is clean because there was nothing to read, not because ' +
-        'a scan found nothing. Tracked manifests not handed to osv-scanner: requirements.txt, ' +
+        'a scan found nothing. Tracked dependency files not handed to osv-scanner: requirements.txt, ' +
         'web/requirements-dev.txt.'
     );
   });
@@ -281,5 +281,51 @@ describe('the pin check is a ratchet on a pull request (test 6)', () => {
     put(repo, { 'requirements.txt': 'jinja2==2.4.1\nfoo>=1\n' });
     const { head } = runOsv(repo);
     expect(head.argv).toEqual(['scan source --format json --lockfile package-lock.json']);
+  });
+});
+
+describe('a package.json no handed lockfile could have resolved', () => {
+  const noted = (repo: string): string =>
+    runOsv(repo).out.run.diagnostics.find((entry) => entry.code === 'conductor/manifests-not-handed')?.message ?? '';
+
+  it('names the package with no lockfile and not its neighbour with one', () => {
+    const note = noted(
+      repoWith({
+        'services/a/package.json': '{}\n',
+        'services/a/package-lock.json': '{}\n',
+        'services/b/package.json': '{}\n',
+      })
+    );
+    expect(note).toContain('Tracked dependency files not handed to osv-scanner: services/b/package.json.');
+    expect(note).not.toContain('services/a/package.json');
+  });
+
+  it('names it when the only thing handed belongs to another ecosystem', () => {
+    const note = noted(repoWith({ 'requirements.txt': PINNED, 'frontend/package.json': '{}\n' }));
+    expect(note).toContain('Tracked dependency files not handed to osv-scanner: frontend/package.json.');
+
+    const beside = noted(repoWith({ 'poetry.lock': '# empty\n', 'package.json': '{}\n' }));
+    expect(beside).toContain('Tracked dependency files not handed to osv-scanner: package.json.');
+  });
+
+  it('stays quiet about a workspace member under a root lockfile', () => {
+    const note = noted(
+      repoWith({
+        'package.json': '{}\n',
+        'yarn.lock': '# empty\n',
+        'packages/x/package.json': '{}\n',
+      })
+    );
+    expect(note).toBe('');
+  });
+
+  it('does not read a directory sharing a prefix with the lockfile directory as under it', () => {
+    const note = noted(
+      repoWith({
+        'app/pnpm-lock.yaml': 'lockfileVersion: 9\n',
+        'app-two/package.json': '{}\n',
+      })
+    );
+    expect(note).toContain('app-two/package.json');
   });
 });

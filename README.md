@@ -382,9 +382,10 @@ it is what makes a team switch a hook off.
 It is not a sixth gate. It finds no bugs of its own and scans nothing.
 Every finding about your code came from one of the five gates and is
 labelled with which one. The only findings it adds are about the gates
-themselves, and they are labelled `conductor`. There are five, listed under
-"What is in and what is out" below; the main ones are a gate that is
-switched on and could not run, and a gate whose output it could not read.
+themselves, and they are labelled `conductor`. Three can fail a run; the rest
+are non-blocking notes, all listed under "What is in and what is out" below.
+The main ones are a gate that is switched on and could not run, and a gate
+whose output it could not read.
 Those exist
 because a report that reads clean when nothing looked is the failure this
 whole family exists to prevent.
@@ -716,8 +717,12 @@ keeping pull-request code out of the job covers the rest: `GITHUB_ENV`
 (`NODE_OPTIONS=--require`, `GIT_CONFIG_*`, `GIT_DIR`), `GITHUB_PATH`,
 `.git/config` changes (a remote URL, `url.insteadOf`, `core.fsmonitor`,
 credential helpers, `core.sshCommand`), git hooks such as
-`reference-transaction`, and replace refs or grafts. Say it plainly:
-package.json lifecycle scripts (`preinstall`, `install`, `postinstall`,
+`reference-transaction`, and replace refs or grafts. (The action's fetch, gates
+and fallback render steps set `GIT_NO_REPLACE_OBJECTS=1` for themselves and
+for the gates they run, which narrows replace refs. The fetch step alone also
+reads through a graft file, for its decision to move the trust base; the gates
+and the CLI still see one.)
+Say it plainly: package.json lifecycle scripts (`preinstall`, `install`, `postinstall`,
 `prepare`) run by an install bypass "require review on `.github/workflows`",
 because the pull request supplies them, not the workflow file. Branch
 protection on the workflow directory does not stop them, so the gates must
@@ -1220,9 +1225,11 @@ binary (the adopter installs gitleaks and osv-scanner), and any finding of
 the umbrella's own about
 anybody's CODE. The findings it does raise are all about the gates
 themselves: `conductor/gate-missing`, `conductor/gate-output-unparseable`
-and `conductor/gate-failed`, plus the two diagnostics
-`conductor/blocking-count-mismatch` and
-`conductor/blocking-threshold-unknown`.
+and `conductor/gate-failed`, which count toward the exit code, and diagnostics
+that never do: `conductor/blocking-count-mismatch` and
+`conductor/blocking-threshold-unknown`, plus the `conductor/` notes on what the
+vulnerabilities gate was handed and how it was run, such as
+`conductor/lockfiles-empty`.
 
 Also out: intent at the cohesion level, which is what a merge or a
 promotion would want; and anything that

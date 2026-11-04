@@ -123,7 +123,9 @@ skipped line, in the verdict and on the one-line summary of a clean run, so a
 reader can tell "nobody has written one" from "somebody decided against one"
 wherever they meet it. An ambiguous branch, one two specs match equally,
 lands in the same advisory state under its own `intent-guard/spec-ambiguous`
-id, and never reaches the exit code either.
+id, and never reaches the exit code either. A gate with a contract that ran on
+no changed paths gets `intent-guard/empty-change-set`, with the verdict's own
+sentence, and that never reaches the exit code either.
 
 **A repository that does not use the intent gate** can switch it off rather
 than live with the no-contract line on every pull request: set `enabled: false`

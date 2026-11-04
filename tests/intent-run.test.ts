@@ -167,7 +167,7 @@ describe('a pull-request run against an imported spec', () => {
         spec: 'docs/superpowers/specs/2026-09-03-widget-cache-design.md',
         plan: 'docs/superpowers/plans/2026-09-03-widget-cache.md', match: expect.objectContaining({ strength: 'exact' }),
       },
-      baseRef: 'main',
+      baseRef: 'main', changedPaths: 1,
     });
   });
 
@@ -1985,5 +1985,130 @@ describe('an intent gate that says skipReason on a directly spawned run (issue 1
     expect(
       (umbrella?.invocations?.[0].toolExecutionNotifications ?? []).map((entry) => entry.descriptor.id)
     ).not.toContain('intent-guard/no-contract');
+  });
+});
+
+describe('an intent gate handed an empty change set', () => {
+  const INTENT_AND_DEPS = parsePolicy(
+    'version: 1\ngates:\n  dependencies:\n    product: dep-guard\n  intent:\n    product: intent-guard\n',
+    POLICY_FILE_NAME
+  );
+
+  /** A frozen contract and a branch the named base already carries, by a merge commit. */
+  function landed(): string {
+    const root = repo();
+    write(root, '.intent-guard/intent-contract.yaml', 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n');
+    commit(root, 'contract');
+    git(root, ['checkout', '--quiet', 'main']);
+    git(root, ['-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'merge', '--quiet', '--no-ff', '--no-edit', 'feat/widget-cache']);
+    git(root, ['checkout', '--quiet', 'feat/widget-cache']);
+    return root;
+  }
+
+  function withDeps(root: string): RunResult {
+    const bin = binWith(CHECK_PASSING);
+    stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD, exit: 0 });
+    return runAll(INTENT_AND_DEPS, { repoRoot: root, staged: false, pathValue: bin, env: {}, base: 'main' });
+  }
+
+  it('is nothing-checked when it is the only gate, and exits 0 as before', () => {
+    const result = run(landed(), binWith(CHECK_PASSING), { base: 'main' });
+
+    expect(result.exitCode).toBe(0);
+    expect(verdictToken(result, false)).toBe('nothing-checked');
+    const text = renderText(result, { verbose: true });
+    expect(text).toMatch(/verdict: exit 0, nothing was checked: intent ran on an empty change set/);
+    expect(text).not.toMatch(/every enabled gate ran/);
+  });
+
+  it('qualifies the verdict beside a gate that did check something, and does not use the clean summary', () => {
+    const result = withDeps(landed());
+
+    expect(result.exitCode).toBe(0);
+    expect(verdictToken(result, false)).toBe('pass');
+    for (const text of [renderText(result, { verbose: true }), renderText(result)]) {
+      expect(text).toMatch(/not every enabled gate checked something: intent ran on an empty change set/);
+      expect(text).not.toMatch(/every enabled gate ran/);
+    }
+  });
+
+  it('says so on the gate log line', () => {
+    const line = gateLogLines(run(landed(), binWith(CHECK_PASSING), { base: 'main' }))[0];
+    expect(line).toMatch(/ok, empty change set, exit 0$/);
+  });
+
+  it('keeps the plain verdict when the branch did change something', () => {
+    const root = repo();
+    write(root, '.intent-guard/intent-contract.yaml', 'contract_id: ic-1\nfrozen_by: user\napproval:\n  approved_by: a person\n');
+    commit(root, 'contract');
+    const result = run(root, binWith(CHECK_PASSING), { base: 'main' });
+
+    expect(verdictToken(result, false)).toBe('pass');
+    expect(renderText(result, { verbose: true })).toMatch(/every enabled gate ran and none blocked/);
+  });
+
+  it('never words a block on an empty change set as checked nothing', () => {
+    const result = run(landed(), binWith(CHECK_BLOCKING, 1), { base: 'main' });
+
+    expect(result.exitCode).toBe(1);
+    expect(renderText(result, { verbose: true })).not.toMatch(/empty change set/);
+    expect(renderSarif(result, '0.18.0')).not.toMatch(/empty.change.set/);
+  });
+
+  it('raises no empty-change-set notification for a gate that could not run', () => {
+    const result = run(landed(), binWith('this is not the JSON the gate prints\n'), { base: 'main' });
+
+    // The path count is on the outcome, so only the predicate's own clause stands here.
+    expect(result.gates[0].couldNotRun).not.toBeNull();
+    expect(result.gates[0].intent?.changedPaths).toBe(0);
+    expect(renderSarif(result, '0.18.0')).not.toMatch(/empty.change.set/);
+  });
+
+  it('says so in the SARIF log with the words of the verdict, as a notification and never a result', () => {
+    const result = run(landed(), binWith(CHECK_PASSING), { base: 'main' });
+    const log = JSON.parse(renderSarif(result, '0.18.0')) as {
+      runs: Array<{
+        tool: { driver: { name: string } };
+        results: Array<{ ruleId: string }>;
+        invocations?: Array<{
+          toolExecutionNotifications?: Array<{
+            descriptor: { id: string };
+            message: { text: string };
+            level: string;
+          }>;
+        }>;
+      }>;
+    };
+    const umbrella = log.runs.find((entry) => entry.tool.driver.name === 'conductor');
+    const notice = umbrella?.invocations?.[0].toolExecutionNotifications?.find(
+      (entry) => entry.descriptor.id === 'intent-guard/empty-change-set'
+    );
+
+    expect(notice?.level).toBe('note');
+    const sentence = notice?.message.text.replace(/\.$/, '') ?? 'absent';
+    expect(sentence).toBe('intent ran on an empty change set, so no path was judged against its contract');
+    expect(renderText(result, { verbose: true })).toContain(sentence);
+    expect(log.runs.flatMap((entry) => entry.results).map((entry) => entry.ruleId)).not.toContain(
+      'intent-guard/empty-change-set'
+    );
+  });
+
+  it('leaves a gate with no contract to its no-contract notification, once', () => {
+    const noContract = JSON.stringify({
+      status: 'ok',
+      exitCode: 0,
+      reasons: [],
+      warnings: [],
+      contractFound: false,
+      contractFrozen: false,
+      crossSessionDrift: null,
+    });
+    const result = run(landed(), binWith(noContract), { base: 'main' });
+    expect(result.gates[0].intent?.changedPaths).toBe(0);
+
+    const log = renderSarif(result, '0.18.0');
+
+    expect(log.match(/"id": "intent-guard\/no-contract"/g)?.length).toBeGreaterThan(0);
+    expect(log).not.toMatch(/empty.change.set/);
   });
 });

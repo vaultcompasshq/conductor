@@ -536,6 +536,8 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     /** The subcommands of every git call that had TRUST_BASE_TOKEN in its environment. */
     tokenSeenBy: string[];
     sha: string | null;
+    /** The fetched tip, published only when the run moved past it. */
+    baseTip: string | null;
   } {
     const bin = tempDir();
     const fetchLogPath = path.join(tempDir(), 'git-fetch-calls.txt');
@@ -587,6 +589,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     });
 
     const shaLine = fileLines(githubOutput).find((line) => line.startsWith('sha='));
+    const baseTipLine = fileLines(githubOutput).find((line) => line.startsWith('base-tip='));
     return {
       status: result.status ?? -1,
       output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
@@ -594,6 +597,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       fetchEnvLog: fileLines(fetchEnvLogPath),
       tokenSeenBy: fileLines(tokenSeenPath),
       sha: shaLine === undefined ? null : shaLine.slice('sha='.length),
+      baseTip: baseTipLine === undefined ? null : baseTipLine.slice('base-tip='.length),
     };
   }
 
@@ -939,6 +943,13 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     expect(run.conductorEnv).not.toContain('oidc-request-secret');
   });
 
+  it('the gates step runs conductor, and so every gate it spawns, with replacement off', () => {
+    const { workdir } = makeShallowCheckout();
+    const run = runGatesScript(workdir, { GITHUB_BASE_REF: '' });
+    expect(run.ran).toBe(true);
+    expect(run.conductorEnv).toMatch(/^GIT_NO_REPLACE_OBJECTS=1$/m);
+  });
+
   /**
    * Issue 159. A run on GitHub's merge ref M0, parents (B0, H), whose base
    * branch has since moved to a commit with M0's exact tree. Real git on both
@@ -1041,6 +1052,9 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     function checkoutAt(moved: MovedBase, sha: string, depth?: number): string {
       const workdir = tempDir();
       git(['init', '--quiet', '-b', 'scratch'], workdir);
+      // Some tests make commits here. A CI runner has no identity to fall back on.
+      git(['config', 'user.email', 'test@example.com'], workdir);
+      git(['config', 'user.name', 'Test'], workdir);
       git(['remote', 'add', 'origin', `file://${moved.origin}`], workdir);
       if (depth === undefined) {
         git(['fetch', '--quiet', 'origin', '+refs/heads/*:refs/remotes/origin/*', '+refs/pull/*:refs/remotes/pull/*'], workdir);
@@ -1065,12 +1079,14 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     function expectRepointed(run: ReturnType<typeof runFetchScript>, workdir: string, moved: MovedBase): void {
       expect(run.status).toBe(0);
       expect(run.sha).toBe(moved.b0);
+      expect(run.baseTip).toBe(moved.tip);
       expect(git(['show-ref', '--verify', '--hash', PRIVATE_REF], workdir).trim()).toBe(moved.b0);
     }
 
     function expectKeptTip(run: ReturnType<typeof runFetchScript>, workdir: string, moved: MovedBase): void {
       expect(run.status).toBe(0);
       expect(run.sha).toBe(moved.tip);
+      expect(run.baseTip).toBeNull();
       expect(git(['show-ref', '--verify', '--hash', PRIVATE_REF], workdir).trim()).toBe(moved.tip);
       expect(run.output).not.toContain('::notice');
     }
@@ -1251,6 +1267,140 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       expectKeptTip(run, workdir, moved);
     });
 
+    // The other half of the case above: only the read at one side fails, and
+    // the file is absent at the tip, so empty output would compare as agreement.
+    it.each<[string, 'b0' | 'tip']>([
+      ['the first parent', 'b0'],
+      ['the tip', 'tip'],
+    ])('keeps the tip when ls-tree cannot read %s and prints nothing', (_label, side) => {
+      const moved = makeMovedBase();
+      const workdir = checkoutAt(moved, moved.m0);
+      const run = runFetchScript(workdir, pullRequestEnv(moved), {
+        shimLine: `if [ "$1" = "ls-tree" ] && [ "$3" = "${moved[side]}" ]; then exit 128; fi`,
+      });
+      expectKeptTip(run, workdir, moved);
+    });
+
+    describe('reads through no replace ref', () => {
+      /**
+       * Replacement objects for the tip and for HEAD, written into the checkout
+       * as a step that ran before this one could write them. Under replacement
+       * the two carry one tree and a first parent that is an ancestor of the
+       * tip, so every fact the step reads would hold for that other commit.
+       */
+      function plantReplacements(moved: MovedBase, workdir: string): string {
+        const tree = `${moved.b0}^{tree}`;
+        const chosen = git(['commit-tree', tree, '-p', moved.b0, '-m', 'chosen'], workdir).trim();
+        const tip = git(['commit-tree', tree, '-p', chosen, '-m', 'tip'], workdir).trim();
+        const head = git(['commit-tree', tree, '-p', chosen, '-p', moved.h, '-m', 'head'], workdir).trim();
+        git(['replace', moved.tip, tip], workdir);
+        git(['replace', moved.m0, head], workdir);
+        // The plant is live for a reader that does not turn replacement off.
+        expect(git(['rev-list', '--parents', '-n', '1', moved.m0, '--'], workdir).trim().split(' ')[1]).toBe(chosen);
+        expect(git(['rev-parse', `${moved.tip}^{tree}`], workdir).trim()).toBe(git(['rev-parse', tree], workdir).trim());
+        return chosen;
+      }
+
+      it('publishes the first parent of the real merge commit, not the replacement parent', () => {
+        const moved = makeMovedBase();
+        const workdir = checkoutAt(moved, moved.m0);
+        const chosen = plantReplacements(moved, workdir);
+
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+
+        expect(run.sha).not.toBe(chosen);
+        expectRepointed(run, workdir, moved);
+        expect(run.output).not.toContain(chosen);
+      });
+
+      it('keeps the tip when the real trees differ, though the replacements carry one tree', () => {
+        const moved = makeMovedBase({
+          afterLanding: (seed) => {
+            write(seed, 'later.txt', 'later\n');
+            git(['add', '-A'], seed);
+            git(['commit', '--quiet', '-m', 'later'], seed);
+          },
+        });
+        const workdir = checkoutAt(moved, moved.m0);
+        const chosen = plantReplacements(moved, workdir);
+
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+
+        expect(run.sha).not.toBe(chosen);
+        expectKeptTip(run, workdir, moved);
+      });
+    });
+
+    describe('reads through no graft', () => {
+      /**
+       * A graft file written into the checkout, as a step that ran before this
+       * one could write it. Under it HEAD's first parent is a commit with the tip's
+       * tree, and that commit is an ancestor of the tip.
+       */
+      function plantGraft(moved: MovedBase, workdir: string): string {
+        const chosen = git(['commit-tree', `${moved.tip}^{tree}`, '-p', moved.b0, '-m', 'chosen'], workdir).trim();
+        const grafts = path.join(workdir, '.git', 'info', 'grafts');
+        mkdirSync(path.dirname(grafts), { recursive: true });
+        writeFileSync(grafts, `${moved.m0} ${chosen} ${moved.h}\n${moved.tip} ${chosen}\n`);
+        // The plant is live for a reader that does not turn grafts off.
+        expect(git(['rev-list', '--parents', '-n', '1', moved.m0, '--'], workdir).trim().split(' ')[1]).toBe(chosen);
+        return chosen;
+      }
+
+      it('publishes the first parent of the real merge commit, not the grafted parent', () => {
+        const moved = makeMovedBase();
+        const workdir = checkoutAt(moved, moved.m0);
+        const chosen = plantGraft(moved, workdir);
+
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+
+        expect(run.sha).not.toBe(chosen);
+        expectRepointed(run, workdir, moved);
+        expect(run.output).not.toContain(chosen);
+      });
+
+      it('keeps the tip when the real first parent has other control files, though the grafted one has the tip\'s', () => {
+        const moved = makeMovedBase({
+          baseFiles: { '.gitleaks.toml': 'first\n' },
+          afterLanding: (seed) => {
+            write(seed, '.gitleaks.toml', 'later\n');
+            git(['add', '-A'], seed);
+            git(['commit', '--quiet', '-m', 'later'], seed);
+          },
+        });
+        // HEAD's tree has to be the tip's for the step to look at parents at all,
+        // and here it is not, so a merge with the tip's tree stands in for HEAD.
+        const head = commitWithTipTree(moved, [moved.b0, moved.h]);
+        const workdir = checkoutAt(moved, head);
+        const chosen = git(['commit-tree', `${moved.tip}^{tree}`, '-p', moved.b0, '-m', 'chosen'], workdir).trim();
+        const grafts = path.join(workdir, '.git', 'info', 'grafts');
+        mkdirSync(path.dirname(grafts), { recursive: true });
+        writeFileSync(grafts, `${head} ${chosen} ${moved.h}\n${moved.tip} ${chosen}\n`);
+
+        const run = runFetchScript(workdir, pullRequestEnv(moved, head));
+
+        expect(run.sha).not.toBe(chosen);
+        expectKeptTip(run, workdir, moved);
+      });
+
+      it.each([1, 2])('still reads a checkout %i deep as shallow, and keeps the tip', (depth) => {
+        const moved = makeMovedBase();
+        const workdir = checkoutAt(moved, moved.m0, depth);
+
+        // The shallow boundary is not read from the graft file, and a missing
+        // graft file draws no complaint from git.
+        const parents = spawnSync('git', ['rev-list', '--parents', '-n', '1', moved.m0, '--'], {
+          cwd: workdir,
+          encoding: 'utf8',
+          env: { ...process.env, GIT_GRAFT_FILE: '/dev/null/conductor-no-grafts' },
+        });
+        expect(parents.stderr).toBe('');
+        expect(parents.stdout.trim().split(' ').length).toBe(depth === 1 ? 1 : 3);
+
+        expectKeptTip(runFetchScript(workdir, pullRequestEnv(moved)), workdir, moved);
+      });
+    });
+
     it('treats a file changing only its mode as different', () => {
       const moved = makeMovedBase({
         baseFiles: { '.gitleaks.toml': 'same bytes\n' },
@@ -1381,17 +1531,26 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
         '',
       ].join('\n');
 
-      function runBuiltCli(workdir: string, trustBase: string): { status: number | null; stdout: string } {
+      function runBuiltCli(
+        workdir: string,
+        trustBase: string,
+        env: Record<string, string> = {},
+        flags: string[] = []
+      ): { status: number | null; stdout: string; report: string } {
         const bin = tempDir();
         stubGate(bin, 'dep-guard', { stdout: CLEAN_DEP_GUARD });
         stubGate(bin, 'vault-guard', { stdout: CLEAN_VAULT_GUARD });
         shimGit(bin);
         const result = spawnSync(
           process.execPath,
-          [path.join(ROOT, 'dist', 'cli.js'), 'run', '--stage', 'ci', '--trust-base', trustBase],
-          { cwd: workdir, encoding: 'utf8', env: { ...childEnv(bin), GITHUB_BASE_REF: 'main' } }
+          [path.join(ROOT, 'dist', 'cli.js'), 'run', '--stage', 'ci', '--trust-base', trustBase, ...flags],
+          { cwd: workdir, encoding: 'utf8', env: { ...childEnv(bin), GITHUB_BASE_REF: 'main', ...env } }
         );
-        return { status: result.status, stdout: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+        return {
+          status: result.status,
+          stdout: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+          report: result.stdout ?? '',
+        };
       }
 
       it('is refused against the tip, and judged against the repointed first parent', () => {
@@ -1445,6 +1604,129 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
 
         expect(refused.status).toBe(2);
         expect(refused.stdout).toMatch(/refusing/);
+
+        // The display value is no authority either: naming a tip does not make
+        // an unmoved private ref accept the first parent.
+        const stillRefused = runBuiltCli(workdir, moved.b0, { CONDUCTOR_BASE_TIP: moved.tip });
+        expect(stillRefused.status).toBe(2);
+        expect(stillRefused.stdout).toMatch(/refusing/);
+      });
+
+      describe('saying the base moved', () => {
+        function repointed(): { workdir: string; sha: string; tip: string } {
+          const moved = makeMovedBase({ baseFiles: { '.guardrails.yaml': POLICY } });
+          const workdir = checkoutAt(moved, moved.m0);
+          const run = runFetchScript(workdir, pullRequestEnv(moved));
+          expectRepointed(run, workdir, moved);
+          return { workdir, sha: run.sha ?? '', tip: run.baseTip ?? '' };
+        }
+
+        it('says so in the text report, naming the tip and claiming no merge, with the same exit status', () => {
+          const { workdir, sha, tip } = repointed();
+          const plain = runBuiltCli(workdir, sha, {}, ['--verbose']);
+          const told = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: tip }, ['--verbose']);
+
+          expect(plain.stdout).not.toMatch(/moved past/);
+          expect(told.stdout).toMatch(/base branch moved past the merge ref/);
+          expect(told.stdout).toContain(tip);
+          expect(told.stdout).not.toMatch(/\bmerged\b/i);
+          expect(told.status).toBe(plain.status);
+        });
+
+        it('says so on the one-line clean summary too', () => {
+          const { workdir, sha, tip } = repointed();
+          const told = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: tip });
+          expect(told.stdout).toMatch(/base branch moved past the merge ref/);
+          expect(told.stdout).toContain(tip);
+        });
+
+        it('says so in the SARIF log as a notification, never a result', () => {
+          const { workdir, sha, tip } = repointed();
+          const told = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: tip }, ['--format', 'sarif']);
+          const log = JSON.parse(told.report) as {
+            runs: Array<{
+              tool: { driver: { name: string } };
+              results: Array<{ ruleId: string }>;
+              invocations?: Array<{
+                toolExecutionNotifications: Array<{ descriptor: { id: string }; message: { text: string } }>;
+              }>;
+            }>;
+          };
+          const umbrella = log.runs.find((run) => run.tool.driver.name === 'conductor');
+          const notice = umbrella?.invocations?.[0]?.toolExecutionNotifications.find(
+            (entry) => entry.descriptor.id === 'conductor/base-moved'
+          );
+          expect(notice?.message.text).toMatch(/base branch moved past the merge ref/);
+          expect(notice?.message.text).toContain(tip);
+          expect(notice?.message.text).not.toMatch(/\bmerged\b/i);
+          expect(umbrella?.results.map((entry) => entry.ruleId)).not.toContain('conductor/base-moved');
+        });
+
+        it.each([
+          ['carries text', 'abc\n::error::written by a step'],
+          ['is short', 'abc123'],
+          ['is empty', ''],
+        ])('prints nothing when the value %s', (_label, value) => {
+          const { workdir, sha } = repointed();
+          const told = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: value }, ['--verbose']);
+          expect(told.stdout).not.toMatch(/moved past/);
+          expect(told.stdout).not.toContain('written by a step');
+          expect(told.status).toBe(0);
+        });
+
+        it('prints nothing when the value is the commit the rules came from', () => {
+          const { workdir, sha } = repointed();
+          const told = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: sha }, ['--verbose']);
+          expect(told.stdout).not.toMatch(/moved past/);
+        });
+
+        it.each([
+          ['an id naming no object', (): string => 'a'.repeat(40)],
+          ['HEAD itself', (workdir: string): string => git(['rev-parse', 'HEAD'], workdir).trim()],
+          ['a commit with another tree', (workdir: string, sha: string): string =>
+            git(['commit-tree', `${sha}^{tree}`, '-m', 'other tree'], workdir).trim()],
+          ['the id of a tree, not a commit', (workdir: string): string => git(['rev-parse', 'HEAD^{tree}'], workdir).trim()],
+        ])('prints nothing when the value is %s, in the text report or the SARIF log', (_label, value) => {
+          const { workdir, sha } = repointed();
+          const id = value(workdir, sha);
+
+          const told = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: id }, ['--verbose']);
+          expect(told.status).toBe(0);
+          expect(told.stdout).not.toMatch(/moved past/);
+
+          const log = runBuiltCli(workdir, sha, { CONDUCTOR_BASE_TIP: id }, ['--format', 'sarif']).report;
+          expect(log).not.toContain('conductor/base-moved');
+          expect(log).not.toContain(`"baseTip": "${id}"`);
+        });
+
+        it('prints nothing when the value is the trust base of a merge that changes nothing', () => {
+          const moved = makeMovedBase({ baseFiles: { '.guardrails.yaml': POLICY } });
+          const head = git(['commit-tree', `${moved.b0}^{tree}`, '-p', moved.b0, '-p', moved.h, '-m', 'net empty'], moved.seed).trim();
+          git(['push', '--quiet', 'origin', `+${head}:refs/pull/3/merge`], moved.seed);
+          const workdir = checkoutAt(moved, head);
+          git(['update-ref', PRIVATE_REF, moved.b0], workdir);
+
+          const told = runBuiltCli(workdir, moved.b0, { CONDUCTOR_BASE_TIP: moved.b0 }, ['--verbose']);
+
+          expect(told.stdout).not.toMatch(/refusing/);
+          expect(told.stdout).not.toMatch(/moved past/);
+        });
+
+        it('prints nothing when the trust base is not the first parent of HEAD, though the tip has its tree', () => {
+          const moved = makeMovedBase({ baseFiles: { '.guardrails.yaml': POLICY } });
+          const head = commitWithTipTree(moved, [moved.side, moved.h]);
+          const workdir = checkoutAt(moved, head);
+          git(['update-ref', PRIVATE_REF, moved.b0], workdir);
+
+          const told = runBuiltCli(workdir, moved.b0, { CONDUCTOR_BASE_TIP: moved.tip }, ['--verbose']);
+
+          expect(told.stdout).not.toMatch(/refusing/);
+          expect(told.stdout).not.toMatch(/moved past/);
+        });
+
+        it('reaches the gates step from the fetch step output, through the step env', () => {
+          expect(stepEnv('gates').CONDUCTOR_BASE_TIP).toBe('${{ steps.fetch-base.outputs.base-tip }}');
+        });
       });
     });
   });

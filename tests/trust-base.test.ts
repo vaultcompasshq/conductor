@@ -140,7 +140,12 @@ describe('refusing a trust base', () => {
     // usual reason is a pull request merged while its job was queued.
     expect(refusal).toMatch(/the base already carries this tree/);
     expect(refusal).toMatch(/merged while this job was queued/);
-    expect(refusal).toMatch(/nothing here needs fixing, and a later push re-runs the check/);
+    // A landed pull request gets no later push, so the sentence may not promise
+    // one for it, and the one fallback the Action has needs a full clone.
+    expect(refusal).toMatch(/A pull request that landed gets no later push, so nothing re-runs this check: this run stays red and its changes went unchecked here\./); expect(refusal).not.toMatch(/needs nothing further/);
+    expect(refusal).toMatch(/One still open re-runs on its next push/);
+    expect(refusal).toMatch(/only on a full clone \(fetch-depth: 0\)/);
+    expect(refusal).not.toMatch(/a later push re-runs/);
   });
 
   it('refuses when there is no head commit to compare against', () => {
