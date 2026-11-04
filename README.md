@@ -237,7 +237,7 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.17.0
+   conductor 0.18.0
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 

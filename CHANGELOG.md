@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-04
+
+**Not a security release.** Three changes: the Action judges a pull request
+whose base moved while its job was queued against the commit the merge ref was
+built from (issue 159), the intent gate's no-contract skip line is one sentence
+and a link (issue 103), and the backward-pin refusal prints the line to write
+(issue 145). The gate versions are unchanged: dep-guard 0.18.1, vault-guard
+1.13.1 and intent-guard 1.10.4. `@vaultcompass/conductor` moves to 0.18.0 on
+npm and the `conductor-version` default moves in lockstep.
+
 ### Changed
 
 - On a `pull_request` run whose base branch has moved to a commit with the
