@@ -2416,7 +2416,7 @@ gap this entry states last and precisely.
 
 THE ACTION REFUSES AN EXPLICIT REDIRECT ON `pull_request` AND
 `pull_request_target` EVENTS, in the validate step (`action.yml`, the check
-at action.yml:494-498). Modelled on the backward-pin rule earlier in the same
+at action.yml:495-499). Modelled on the backward-pin rule earlier in the same
 step: the same event test, `GITHUB_BASE_REF` non-empty, declared in the
 step's own `env:` mapping from `github.base_ref` so it cannot come from the
 workflow file; and the same scope, `pull_request` and `pull_request_target`
@@ -2425,7 +2425,7 @@ unprotected branch runs its own author's workflow file regardless, and
 `merge_group` never sets `GITHUB_BASE_REF` at all). Off those events the
 input works exactly as before, since that is what it exists for. Refused with
 the value given and the fix, which is to remove the input: the action already
-fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1124). THE TWO EVENTS ARE
+fetches the base commit and passes that commit id (`--trust-base "$TRUST_BASE_SHA"`, action.yml:1125). THE TWO EVENTS ARE
 REFUSED FOR DIFFERENT REASONS, and the validate step's own message says so:
 on `pull_request` the workflow file IS the pull request's own, so the input
 is settable by the thing it judges; on `pull_request_target` the workflow
@@ -2445,8 +2445,8 @@ everywhere else. When it is set, the given `--trust-base` is accepted only
 when it resolves to the SAME COMMIT as `origin/<githubBaseRef>`, which is
 exactly the commit the composite action fetches into
 `refs/conductor/trust-base` and then passes (`--trust-base "$TRUST_BASE_SHA"`,
-action.yml:1124; an explicit `trust-base` input is passed only when it is
-set, action.yml:1105-1106, and the validate step has already refused that
+action.yml:1125; an explicit `trust-base` input is passed only when it is
+set, action.yml:1106-1107, and the validate step has already refused that
 input on a pull request), so an ordinary pull-request run is unaffected. A ref naming the pull request's own branch,
 or anything else that disagrees, is refused naming both refs and both
 commits.
@@ -4382,7 +4382,7 @@ repository text; the Action copies it only on a whole-line match on line 3
 or 4. The strings are `INTENT_SPEC_LINES` (src/output-text.ts:1428-1433),
 printed after the present-on-base line, at most one, in the precedence
 ambiguous, none-changed, winner-changed, weak; the Action matches each of
-lines 3 and 4 whole (action.yml:1249-1255). Pinned by
+lines 3 and 4 whole (action.yml:1250-1256). Pinned by
 tests/action.test.ts ("copies an intent-spec line from line 3 or 4 to the
 step summary, whole lines only") and tests/intent-run.test.ts ("prints the
 changed-winner line, not the weak one, when the new winner is weak", and
@@ -5137,7 +5137,7 @@ render step's `mktemp`, `rm` and `env` (its fallback run needs the prefix
 to find the gates). The fix is a per-invocation prefix, so no use inherits
 another's entry.
 
-**The audit's failure carries its reason.** action.yml:738-788 captures the
+**The audit's failure carries its reason.** action.yml:739-789 captures the
 audit through a command substitution, writes `verification-failed` and
 `verification-reason` to the step outputs, prints a workflow error naming
 that no gate ran, which audit failed (over the installed tree), and what to do
@@ -5330,7 +5330,7 @@ CONDUCTOR DOWNLOADS NO THIRD-PARTY BINARY. The external gates are resolved
 from `PATH` (or an absolute `command:`) only, exactly like the family gates
 outside node_modules; their profiles say `managed: false`
 (src/products.ts:163 and 201); and the Action installs exactly its four
-npm packages and has no input for either tool (action.yml:667-671). A
+npm packages and has no input for either tool (action.yml:668-672). A
 missing external binary is `binary-missing`, could-not-run, exit 2 for an
 enforced gate, never a skip. Pinned by "exits 1 when only an external gate
 blocks, and 2 when an external binary is missing" in tests/run.test.ts.

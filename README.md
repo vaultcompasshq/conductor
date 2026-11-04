@@ -601,8 +601,8 @@ refuses a pin below them, and that bump's own pull request goes red with
 nothing wrong in it. The fix is in the same pull request: raise each pinned
 line to the new tag's default (the CHANGELOG entry for the tag lists them,
 and so does the table in [Upgrading](docs/upgrading.md)), or delete it. The
-spelled-out example below names them when a workflow wants that
-transparency, and carries that cost.
+example below leaves them out for that reason; add an exact forward pin when
+a workflow needs one, and accept that it then has to be raised by hand.
 
 **The gates the Action installs are as new as the tag** (issue 146). A
 tag's defaults can reach npm the same day the tag does, so they can be
@@ -659,17 +659,14 @@ jobs:
         uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
         with:
           output: conductor.sarif
-          # Exact versions, never a range and never "latest". These three
-          # lines decide which gate programs judge a pull request, so a pull
-          # request's own lockfile no longer does. They are only as protected
-          # as this file is: require review on .github/workflows in your
-          # branch protection. Bump them like any other pin, in a pull
-          # request of their own. On a pull request the action refuses a pin
-          # below what the pinned action.yml ships, and the three lines can
-          # be left out entirely to take that action's own versions.
-          dep-guard-version: 0.18.1
-          vault-guard-version: 1.13.1
-          intent-guard-version: 1.10.4
+          # The gate versions are left out on purpose: the defaults travel
+          # with the tag above, so a bump of that line moves the gates with it.
+          # To pin a gate forward, add an exact version such as
+          # `dep-guard-version: x.y.z`, never a range and never "latest". A
+          # pin decides which gate program judges a pull request, so it is
+          # only as protected as this file is: require review on
+          # .github/workflows in your branch protection. On a pull request the
+          # action refuses a pin below what the pinned action.yml ships.
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         # Always: the log is most worth having on the run that failed.
         if: always()
