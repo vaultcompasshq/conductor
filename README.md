@@ -60,7 +60,7 @@ jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Install gitleaks and osv-scanner
@@ -77,7 +77,7 @@ jobs:
           chmod +x "$bin/osv-scanner"
           echo "$bin" >> "$GITHUB_PATH"
       - uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         if: always()
         with:
           sarif_file: conductor.sarif
@@ -151,7 +151,7 @@ required.
        product: osv-scanner
    ```
 
-   **Globally, and that is the guidance for CI too.** A devDependency is
+   **Install globally; that is the guidance for CI too.** A devDependency is
    fine beside it for your own pre-commit hook, and nothing about a local
    run changed, but under the Action keep it at the Action's pin or a push
    run is could-not-run (see "The Action" below). It is not what gates
@@ -287,8 +287,8 @@ required.
 
 2. **Open the first pull request in advisory mode.** Add `.guardrails.yaml`
    and the workflow together, with `advisory: true` and `pr-comment: true`
-   on the conductor step -- the recipe under "Running the gates as an
-   advisory check" below is a complete copy-paste job -- and leave the check
+   on the conductor step (the recipe under "Running the gates as an
+   advisory check" below is a complete copy-paste job), and leave the check
    out of branch protection for this one pull request. The step still exits
    2 on this pull request even with `advisory: true`: the base branch has no
    policy yet, so the run has no rules, and `advisory` never touches that
@@ -305,7 +305,7 @@ required.
 
 4. **Go required.** Once a few ordinary pull requests have shown the report
    reads the way you expect, remove `advisory: true` from the conductor step
-   and require the job's own check context in branch protection -- `gates`
+   and require the job's own check context in branch protection: `gates`
    in the recipes below, the job name, never the context the SARIF-upload
    step reports under. That is the whole of turning this from an advisory
    job into the one required check.
@@ -382,8 +382,10 @@ it is what makes a team switch a hook off.
 It is not a sixth gate. It finds no bugs of its own and scans nothing.
 Every finding about your code came from one of the five gates and is
 labelled with which one. The only findings it adds are about the gates
-themselves, and they are labelled `conductor`: a gate that is switched on
-and could not run, and a gate whose output it could not read. Those exist
+themselves, and they are labelled `conductor`. There are five, listed under
+"What is in and what is out" below; the main ones are a gate that is
+switched on and could not run, and a gate whose output it could not read.
+Those exist
 because a report that reads clean when nothing looked is the failure this
 whole family exists to prevent.
 
@@ -546,7 +548,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # From 0.8.0 a shallow checkout on a pull-request run is
           # could-not-run for the history gate.
@@ -558,7 +560,7 @@ jobs:
         uses: vaultcompasshq/conductor@f5c68efe4dd3f17738e72b19411fea0e829bc2b8 # v0.17.0
         with:
           output: conductor.sarif
-      - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         if: always()
         continue-on-error: true
         with:
@@ -625,7 +627,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Required. From 0.8.0 a shallow checkout on a pull-request run is
           # could-not-run for the history gate. Without a full history there
@@ -668,7 +670,7 @@ jobs:
           dep-guard-version: 0.18.1
           vault-guard-version: 1.13.1
           intent-guard-version: 1.10.4
-      - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         # Always: the log is most worth having on the run that failed.
         if: always()
         # The sarif path is published BEFORE the gates run, so on the exit 2
@@ -687,7 +689,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
@@ -862,7 +864,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # From 0.8.0 a shallow checkout on a pull-request run is
           # could-not-run for the history gate.
@@ -1219,7 +1221,7 @@ and `conductor/gate-failed`, plus the two diagnostics
 `conductor/blocking-threshold-unknown`.
 
 Also out: intent at the cohesion level, which is what a merge or a
-promotion would want and which the audits do by hand today; and anything that
+promotion would want; and anything that
 runs inside an agent session or on save, which intent-guard's own optional
 session hooks already cover.
 
