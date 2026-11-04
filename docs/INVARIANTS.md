@@ -795,7 +795,7 @@ Five properties, each load-bearing:
   build below it is could-not-run there. The TAG constants are the tested
   versions this TAG ships. One constant serving both is how raising one
   silently raises the other. As of v0.18.0 the two differ for dep-guard (TAG
-  constant 0.18.1, floor 0.10.1), vault-guard (TAG constant 1.13.1, floor
+  constant 0.18.2, floor 0.10.1), vault-guard (TAG constant 1.13.1, floor
   1.9.1) and intent-guard (TAG constant 1.10.4, floor 1.8.1); a tag that ships
   a newer gate raises the TAG constants and need not raise the floor.
 - The comparison is against those hardcoded constants, never against anything

@@ -16,13 +16,15 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [0.18.0] - 2026-11-04
 
-**Not a security release.** Three changes: the Action judges a pull request
+**A security release, through its dep-guard default.** It moves the Action's
+default dep-guard to 0.18.2, a security release of that gate; see dep-guard's own
+changelog. Upgrade for that. Three other changes: the Action judges a pull request
 whose base moved while its job was queued against the commit the merge ref was
 built from (issue 159), the intent gate's no-contract skip line is short
 and links the rules (issue 103), and the backward-pin refusal prints the line to write
-(issue 145). The gate versions are unchanged: dep-guard 0.18.1, vault-guard
-1.13.1 and intent-guard 1.10.4. `@vaultcompass/conductor` moves to 0.18.0 on
-npm and the `conductor-version` default moves in lockstep.
+(issue 145). The other gate versions are unchanged: vault-guard 1.13.1 and
+intent-guard 1.10.4. `@vaultcompass/conductor` moves to 0.18.0 on npm and the
+`conductor-version` default moves in lockstep.
 
 ### Changed
 
