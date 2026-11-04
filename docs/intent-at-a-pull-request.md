@@ -125,10 +125,20 @@ wherever they meet it. An ambiguous branch, one two specs match equally,
 lands in the same advisory state under its own `intent-guard/spec-ambiguous`
 id, and never reaches the exit code either.
 
+**A repository that does not use the intent gate** can switch it off rather
+than live with the no-contract line on every pull request: set `enabled: false`
+on the `intent` gate in `.guardrails.yaml`. Measured on conductor 0.17.0 with
+intent-guard 1.10.4, the report then prints
+`disabled  intent  intent-guard  enabled: false in .guardrails.yaml; it did not run`
+and the verdict reads `verdict: exit 0, every enabled gate ran and none
+blocked.` With the gate enabled and no contract, the same run reads `verdict:
+exit 0, no gate blocked, but not every enabled gate checked something: intent
+had no contract to check against.` On a pull request the policy is read from
+the base, so the change takes effect from the next pull request after the one
+that makes it merges.
+
 **A repository with no contract yet is not a repository this gate can act
-on**, and the no-contract skip line names `docs/superpowers/specs`, which is
-a convention from this family's own tooling and not one an outside adopter
-has reason to recognise. The next step, if you want this gate to have an
+on.** The next step, if you want this gate to have an
 opinion here, is the one intent-guard's own documentation describes: draft a
 contract naming the paths worth protecting, then freeze it, and keep the
 frozen file committed so rule 2 above finds it on every pull request from

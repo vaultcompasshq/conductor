@@ -2569,4 +2569,13 @@ describe('action.yml: a backward pin refusal leads with what happened, then the 
     expect(first).toContain(`it asks for ${tagVersion(prefix)}, which is older than `);
     expect(first).toMatch(/Fix: remove the input, or raise it to \S+ or later\.$/);
   });
+
+  it('gives the literal line to write on a second line', () => {
+    const prefix = TAG_CONSTANTS[VERSION_INPUTS[0]];
+    const run = runValidateScript(scriptWithFutureTag(prefix), {}, { GITHUB_BASE_REF: 'main' });
+    const second = run.stderr.split('\n')[1] ?? '';
+
+    const raised = `${tagPart(prefix, 'MAJOR')}.${Number(tagPart(prefix, 'MINOR')) + 1}.${tagPart(prefix, 'PATCH')}`;
+    expect(second).toBe(`conductor: the line to write: ${VERSION_INPUTS[0]}: ${raised}`);
+  });
 });

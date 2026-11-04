@@ -1439,7 +1439,7 @@ describe('the branch-name convention through both preparations', () => {
       `matches 2 specs equally on "${base}" (${SPECS}/2026-01-01-widget-cache-index.md, ` +
         `${SPECS}/2026-01-02-widget-cache-rev.md)`
     );
-    expect(skip.detail).not.toMatch(/carries no frozen|no spec under/);
+    expect(skip.detail).not.toMatch(/carries no frozen|no spec under|No contract on the base/);
     expect(skip.detail).toContain('Before conductor 0.11.0 this branch name chose');
     expect(skip.proposals).toEqual([
       expect.stringMatching(new RegExp(`^${NATIVE_CONTRACT_PATH.replace('.', '\\.')} is in this pull request`)),
@@ -1542,10 +1542,9 @@ describe('the branch-name convention through both preparations', () => {
       kind: 'skip',
       reason: 'no-contract',
       detail:
-        `No contract on the base: "${base}" carries no frozen ${NATIVE_CONTRACT_PATHS.join(' or ')} ` +
-        `and no spec under ${SPECS} for branch "feat/widget-cache". On a pull-request run the intent ` +
-        'contract comes from the base ref only, so nothing in this pull request can become it; once a ' +
-        'contract or spec is on the base branch, the next pull request is judged against it.',
+        `No contract on the base: "${base}" has no frozen contract or spec for branch ` +
+        '"feat/widget-cache". See ' +
+        'https://github.com/vaultcompasshq/conductor/blob/main/docs/intent-at-a-pull-request.md',
     });
   });
 });

@@ -60,7 +60,9 @@ that role today. The last two are external tools you install yourself.
 
 **`enabled`** defaults to true. A gate that is enabled and whose binary
 cannot be found is a blocking finding of the umbrella's own
-(`conductor/gate-missing`), never a silent skip.
+(`conductor/gate-missing`), never a silent skip. A repository that does not
+use the intent gate can set `enabled: false` on it; [Intent at a pull
+request](intent-at-a-pull-request.md) shows what the report then says.
 
 **`stage`** says when a gate runs: `commit`, `push`, or `ci`. Stages are
 **cumulative** in that order, so a gate runs at its own stage and at every

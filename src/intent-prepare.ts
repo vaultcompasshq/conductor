@@ -1478,12 +1478,9 @@ function prepareAgainstTrustBase(options: IntentPrepareOptions, trustBase: strin
   return noSpecChosen(
     branch,
     atBase.selection,
-    `No contract on the base: "${trustBase}" carries no frozen ` +
-      `${NATIVE_CONTRACT_PATHS.join(' or ')} and no spec under ${SPEC_DIR} for ` +
-      `${branch === null ? 'this branch' : `branch "${branch}"`}. On a pull-request run the ` +
-      'intent contract comes from the base ref only, so nothing in this pull request can ' +
-      'become it; once a contract or spec is on the base branch, the next pull request is ' +
-      'judged against it.',
+    `No contract on the base: "${trustBase}" has no frozen contract or spec for ` +
+      `${branch === null ? 'this branch' : `branch "${branch}"`}. See ` +
+      'https://github.com/vaultcompasshq/conductor/blob/main/docs/intent-at-a-pull-request.md',
     proposals,
     trustBase
   );

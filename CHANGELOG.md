@@ -14,6 +14,23 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Changed
+
+- The intent gate's no-contract skip line is now one sentence and a link to
+  docs/intent-at-a-pull-request.md (issue 103). It repeated about sixty words
+  on every pull request of a repository with no contract; the rules it
+  restated were already in
+  docs/intent-at-a-pull-request.md. That page now also says how a repository
+  that does not use the intent gate switches it off (`enabled: false`), and
+  docs/policy-file.md points to it. No check, verdict or exit code changes.
+- The Action's backward-pin refusal prints a second stderr line giving the
+  literal line to write, for example
+  `conductor: the line to write: dep-guard-version: 0.18.1` (issue 145). The
+  first line and the refusal itself are unchanged.
+- The README's spelled-out workflow example no longer pins the three gate
+  versions, so it takes the recommended shape: the defaults travel with the
+  tag, and an exact forward pin can be added when needed.
+
 ## [0.17.0] - 2026-11-02
 
 **A security release.** It closes the findings of the 2026-11-01 cohesion
