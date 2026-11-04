@@ -44,6 +44,7 @@ tag with no row here has an entry that does not state its defaults; read
 
 | Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
 | --- | --- | --- | --- |
+| v0.18.0 | package | 0.18.0 | none (gate defaults unchanged: dep-guard 0.18.1, vault-guard 1.13.1, intent-guard 1.10.4) |
 | v0.17.0 | package | 0.17.0 | dep-guard 0.18.1 (from 0.18.0), vault-guard 1.13.1 (from 1.13.0), intent-guard 1.10.4 (from 1.10.3) |
 | v0.16.0 | package | 0.16.0 | dep-guard 0.18.0 (from 0.17.0), vault-guard 1.13.0 (from 1.12.1), intent-guard 1.10.3 (from 1.10.2) |
 | v0.15.0 | package | 0.15.0 | dep-guard 0.17.0 (from 0.16.1), intent-guard 1.10.2 (from 1.10.1) |
