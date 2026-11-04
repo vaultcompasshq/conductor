@@ -1052,6 +1052,9 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     function checkoutAt(moved: MovedBase, sha: string, depth?: number): string {
       const workdir = tempDir();
       git(['init', '--quiet', '-b', 'scratch'], workdir);
+      // Some tests make commits here. A CI runner has no identity to fall back on.
+      git(['config', 'user.email', 'test@example.com'], workdir);
+      git(['config', 'user.name', 'Test'], workdir);
       git(['remote', 'add', 'origin', `file://${moved.origin}`], workdir);
       if (depth === undefined) {
         git(['fetch', '--quiet', 'origin', '+refs/heads/*:refs/remotes/origin/*', '+refs/pull/*:refs/remotes/pull/*'], workdir);
