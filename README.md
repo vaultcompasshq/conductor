@@ -229,7 +229,7 @@ required.
 
    Your terminal also shows one status line per gate, written to stderr so a
    CI job log has a per-gate record even when the report goes to a file,
-   such as `conductor: gate dependencies (dep-guard 0.18.1): ok, exit 0` or
+   such as `conductor: gate dependencies (dep-guard 0.18.2): ok, exit 0` or
    a `skipped (deferred to stage ci)` line for a deferred gate. They carry
    nothing the summary does not; to see only the summary, redirect stderr
    (`conductor run --staged --stage commit 2>/dev/null` in the hook).
@@ -241,7 +241,7 @@ required.
    verdict-token: blocked (1)
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.18.1  exit 0  153ms  via dep-guard on path
+   dependencies  dep-guard 0.18.2  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
      mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online false   lookups 0   skipped-by-deadline 0
 
