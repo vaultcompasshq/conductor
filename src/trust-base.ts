@@ -80,10 +80,10 @@ import { gitComplaint, runGit, runGitBytes } from './git.js';
 
 /**
  * The private, fully spelled ref the composite action fetches the base branch
- * into (action.yml, gates step). Nothing else writes it and no short name can
- * shadow it: git resolves a short name like origin/main through refs/tags/
- * BEFORE refs/remotes/, so a tag pushed by anyone able to push tags would
- * otherwise choose the commit the rules are read from.
+ * into, or moves to the merge ref's first parent on issue 159's one shape
+ * (action.yml, fetch-base step). Nothing else writes it and no short name can
+ * shadow it: git resolves origin/main through refs/tags/ BEFORE refs/remotes/,
+ * so a tag pushed by anyone able to push tags would choose the rules' commit.
  */
 export const PRIVATE_TRUST_BASE_REF = 'refs/conductor/trust-base';
 
@@ -402,8 +402,8 @@ export function refuseTrustBaseRef(repoRoot: string, ref: string): string | null
  * else -- a push, a schedule, workflow_dispatch, merge_group, a local run, or
  * a platform that never sets it. When it is set, the given ref is accepted
  * only when it is the FULL COMMIT ID the composite action's "Fetch the trust
- * base" step published (which must equal refs/conductor/trust-base, the
- * authority, or refs/remotes/origin/<githubBaseRef>, both read with show-ref),
+ * base" step published, the tip or on one shape its first parent (it must equal
+ * refs/conductor/trust-base, the authority, or refs/remotes/origin/<githubBaseRef>, both via show-ref),
  * or is that private ref itself, or -- for an explicit trust base -- resolves
  * to the same commit as refs/remotes/origin/<githubBaseRef>. So an ordinary
  * pull-request run through the action returns null here, before

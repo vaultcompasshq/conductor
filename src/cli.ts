@@ -804,11 +804,11 @@ export function buildProgram(): Command {
     )
     .option(
       '--base <ref>',
-      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to the base branch (refs/conductor/trust-base, else refs/remotes/origin/<GITHUB_BASE_REF>, as a commit id) when GITHUB_BASE_REF is set.'
+      'measure the intent gate against what this branch changed since <ref>, rather than against the index. In Actions this defaults to the base the action resolved (refs/conductor/trust-base, else refs/remotes/origin/<GITHUB_BASE_REF>, as a commit id) when GITHUB_BASE_REF is set.'
     )
     .option(
       '--trust-base <ref>',
-      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action fetches the base branch and passes its full commit id on a pull_request event.'
+      'pull-request mode: read .guardrails.yaml from this ref instead of from the tree being judged, and pass the same ref to every gate that supports it. A policy change in the pull request is reported as a proposal and never takes effect for the run, so a pull request cannot change the rules it is judged by. In Actions the composite action fetches the base branch and passes its full commit id on a pull_request event, or the commit the merge ref was built from when the fetched tip has the merge ref\'s exact tree.'
     )
     .option(
       '--output <path>',

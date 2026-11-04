@@ -16,6 +16,17 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Changed
 
+- On a `pull_request` run whose base branch has moved to a commit with the
+  merge ref's exact tree, as when a pull request lands while its job is queued,
+  the Action now judges the run against the commit the merge ref was built from
+  and prints a notice naming both, instead of every gate being could-not-run
+  with exit 2 (issue 159). Equal trees are not treated as proof of a merge and
+  skip nothing on their own: the gates run against that commit and report what
+  they find, which on the limit stated in docs/INVARIANTS.md can be a contract
+  gate with nothing to check. It needs a full clone and the same control files
+  at both commits; otherwise the refusal stands.
+  docs/pull-request-trust-boundary.md lists the conditions. Direct CLI use is
+  unchanged.
 - The intent gate's no-contract skip line is now one sentence and a link to
   docs/intent-at-a-pull-request.md (issue 103). It repeated about sixty words
   on every pull request of a repository with no contract; the rules it
