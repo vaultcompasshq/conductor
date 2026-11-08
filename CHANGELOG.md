@@ -14,6 +14,21 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Changed
+
+- docs/INVARIANTS.md cites code by name rather than by line (issue 170):
+  `src/run.ts#runAll` for a top-level declaration, `action.yml#runs.steps.gates`
+  for an action.yml key path, and a test by its title, and
+  `pnpm lint` fails a name its file does not declare and any line citation
+  into `src/`, `tests/`, `scripts/` or `action.yml`, written as FILE:LINE
+  or in the common prose forms such as `src/run.ts line 10`, so a moved
+  line no longer leaves a citation pointing at the wrong code.
+- Internal structure only, no change to any output: every rule id the
+  umbrella writes is now listed once in `src/rule-ids.ts` with its class,
+  and `src/osv-coverage.ts` takes its ids from there; `escapeNonAscii` moved
+  to a dependency-free `src/escape.ts`, re-exported from `src/policy-diff.ts`
+  so its importers are unchanged.
+
 ## [0.18.0] - 2026-11-04
 
 **A security release, through its dep-guard default.** It moves the Action's

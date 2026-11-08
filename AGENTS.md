@@ -37,10 +37,11 @@ gate depend on the umbrella to function.
 `pnpm lint` runs `scripts/check-public-hygiene.mjs`, the public-repository
 hygiene guard (see below), and `scripts/check-invariant-citations.mjs`,
 which fails when a citation in `docs/INVARIANTS.md` into `src/`, `tests/`,
-`scripts/` or `action.yml` cites a line outside that file, cites a test
-title that file does not contain, or uses a citation form it cannot read.
-It checks that cited lines and titles exist, not that a cited test pins
-the claim beside it. `pnpm test` builds first, since some tests spawn the
+`scripts/` or `action.yml` names a symbol (`src/run.ts#runAll`) or key path
+(`action.yml#runs.steps.gates`) that file does not declare, cites a test
+title that file does not contain, cites a line, or uses a citation form it
+cannot read. It checks that cited symbols and titles exist, not that the
+cited code or test is what the claim beside it is about. `pnpm test` builds first, since some tests spawn the
 compiled `dist/` output.
 
 ## Hygiene rules for tracked files
@@ -56,9 +57,10 @@ compiled `dist/` output.
   internal product names it stands for are never written down in this
   repository.
 
-`pnpm lint` also fails when `docs/INVARIANTS.md` cites a line outside a
-file under `src/`, `tests/`, `scripts/` or `action.yml`, cites a test title
-that file does not contain, or uses a citation form the check cannot read
+`pnpm lint` also fails when `docs/INVARIANTS.md` cites a symbol or key path
+that a file under `src/`, `tests/`, `scripts/` or `action.yml` does not
+declare, cites a test title that file does not contain, cites a line in
+one of them, or uses a citation form the check cannot read
 (`scripts/check-invariant-citations.mjs`).
 
 See CONTRIBUTING.md, public repository hygiene section, for the full detail

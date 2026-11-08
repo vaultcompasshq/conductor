@@ -9,6 +9,7 @@
 // takes only `enabled`, `stage` and `enforce` from it for the preview under
 // the proposed rules, a run that decides nothing.
 
+import { escapeNonAscii } from './escape.js';
 import type { GatePolicy, GateRole, Policy } from './policy.js';
 import { GATE_ROLES, PRODUCT_FOR_ROLE, parsePolicy } from './policy.js';
 
@@ -106,17 +107,9 @@ export function diffPolicies(base: Policy, head: Policy | null): PolicyKeyChange
   return changes;
 }
 
-/**
- * Every character outside printable ASCII as a \uXXXX escape (an astral
- * character as its two surrogate escapes), so head-chosen text cannot smuggle
- * a bidi override or a zero-width character into the report. Used for a head
- * policy value here, and for every preview line (cleanPreviewLine,
- * src/gate-runner.ts), whose gate text the head's own control files can
- * choose (audit 2026-10-27, N3).
- */
-export function escapeNonAscii(text: string): string {
-  return text.replace(/[^\x20-\x7e]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
-}
+// escapeNonAscii lives in src/escape.ts, a dependency-free leaf; it is
+// re-exported here so existing importers keep working unchanged.
+export { escapeNonAscii };
 
 function renderValue(value: unknown): string {
   if (value === undefined) return '(absent)';

@@ -17,6 +17,12 @@ import {
   type IncludeRead,
   type PinCheck,
 } from './requirements-pin.js';
+import {
+  LOCKFILE_NO_LONGER_SCANNED,
+  REQUIREMENTS_DIRECT_ONLY,
+  REQUIREMENTS_NOT_PINNED,
+  REQUIREMENTS_NOT_SCANNED,
+} from './rule-ids.js';
 import { readFileAtRefBytes } from './trust-base.js';
 
 export interface OsvSelection {
@@ -144,7 +150,7 @@ export function selectOsvInputs(args: {
           suffix = ' Newly pinned in this pull request.';
         }
       }
-      notes.push({ code: 'conductor/requirements-direct-only', message: `${file}: ${DIRECT_ONLY}${suffix}` });
+      notes.push({ code: REQUIREMENTS_DIRECT_ONLY, message: `${file}: ${DIRECT_ONLY}${suffix}` });
       continue;
     }
     if (base !== null) {
@@ -158,18 +164,18 @@ export function selectOsvInputs(args: {
           ? 'Its copy on the base is pinned, so the file stays scanned under the ratchet; the lines named are read as written.'
           : 'Its copy on the base could not be read, so the file stays scanned; the lines named are read as written.';
         diagnostics.push({
-          code: 'conductor/requirements-not-pinned',
+          code: REQUIREMENTS_NOT_PINNED,
           message: `${file} is scanned although ${lines}. ${why}`,
         });
         notes.push({
-          code: 'conductor/requirements-direct-only',
+          code: REQUIREMENTS_DIRECT_ONLY,
           message: `${file}: ${DIRECT_ONLY} ${baseCheck.pinned ? 'Pinned on the base; scanned under the ratchet.' : 'Base copy unreadable; scanned under the ratchet.'}`,
         });
         continue;
       }
     }
     notScanned.push(file);
-    diagnostics.push({ code: 'conductor/requirements-not-scanned', message: notScannedMessage(file, headCheck) });
+    diagnostics.push({ code: REQUIREMENTS_NOT_SCANNED, message: notScannedMessage(file, headCheck) });
   }
 
   return { handed: handed.sort(), notScanned, diagnostics, notes, closures };
@@ -186,7 +192,7 @@ export function selectOsvInputs(args: {
  */
 export function noLongerScanned(repoRoot: string, ref: string, tracked: ReadonlySet<string>): Diagnostic[] {
   return (noLongerScannedFiles(repoRoot, ref, tracked) ?? []).map((file) => ({
-    code: 'conductor/lockfile-no-longer-scanned',
+    code: LOCKFILE_NO_LONGER_SCANNED,
     message:
       `${file} is tracked on the base and not in this pull request, so it is no longer scanned ` +
       '(by either run). Its removal is visible in the diff.',
