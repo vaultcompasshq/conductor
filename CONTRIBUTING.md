@@ -68,17 +68,34 @@ scan or the dash rule: those run on every tracked file, this one included, and
 a file's name is scanned too, since a file path is visible on a public tree
 whether or not its contents are scanned.
 
-The citation check then reads `docs/INVARIANTS.md` and checks two things:
-that every cited line or range into `src/*.ts`, `tests/*.ts`,
-`scripts/*.mjs` or `action.yml` lies inside that file, and that every cited
-test title exists in the cited file. A range may be written `10-12`,
-`10 to 12` or `10 through 12`. A follow-on number after a citation
-(`file:52, 58 and 75`, `file:136-142 for the level, and 1015-1020`, or
-`file:1704 to 1802 (fail closed), 1819`) is checked against that same file.
+The citation check then reads `docs/INVARIANTS.md` and checks that every
+cited symbol and every cited test title exists in the cited file. Code is
+cited by name, never by line: `src/run.ts#runAll` for a top-level function,
+const, let, class, type, interface, enum or namespace in a file under
+`src/`, `tests/` or `scripts/`, `src/policy.ts#PolicyError.constructor` for
+a member of a top-level class, and `action.yml#runs.steps.gates` or
+`action.yml#inputs.trust-base` for `action.yml`, a dotted key path in which
+a list entry is named by its `id`. A symbol that is not declared fails,
+naming the file, the symbol and the nearest declared names, so a rename
+fails the check and a moved line does not matter. Where a claim is about a
+line inside a function, cite the function.
 
-A title in parentheses after a line (`file:52 ("title")`) must be the
-exact title of a runnable `it` or `test` in that file, and the line must
-sit inside that test. A title cited with no line must also exist exactly:
+A line citation into one of those files (`file:52`, `file:10-12`) fails
+outright, because a line that exists is not evidence that it is the code
+the sentence is about (`LINE_CITATIONS_REFUSED` in the script). So do the
+common prose forms: `src/run.ts line 10`, `src/run.ts (line 10)`,
+`src/run.ts at lines 10-12`, `src/run.ts:L10`, `src/run.ts#runAll:10`,
+`src/run.ts#runAll, line 10`, and `line 10 of src/run.ts`. Other wordings
+(`near line 10`, `L10` after a space, a spelled-out number) are not caught,
+so do not write a line number beside a path at all; cite the symbol. Paths
+outside those roots, such as `package.json`
+or another Markdown file, are not checked; name the key or section in
+words instead. The script still range-checks a line citation, and still
+checks that a title after one (`file:52 ("title")`) is the test the line
+sits in, but only when the flag is turned off; with it on, both forms
+fail.
+
+A title cited with no line must exist exactly:
 written before the file (`"a", "b" and "c" in tests/...`, `"title", also
 in tests/...`, or `"title" in the same file`, meaning the test file named
 last before it) it must be a runnable `it` or `test`; written after the
@@ -91,9 +108,10 @@ A form this check cannot read fails rather than passing: a single-quoted
 or backtick title, a quoted title with no `in`, a quoted title after
 `file:line` that is not in parentheses, a line number in parentheses after
 a quoted title, `in the same file` with no test file named before it, or a
-path prefixed with `./`. A passing check means the cited lines and titles
-exist; it does not show that the cited test pins the claim beside it. That
-is a reading of the test, done when the citation is written or changed.
+path prefixed with `./`. A passing check means the cited symbols and titles
+exist; it does not show that the cited code or test is what the claim beside
+it is about. That is a reading of the code, done when the citation is
+written or changed.
 
 ## Commit messages
 

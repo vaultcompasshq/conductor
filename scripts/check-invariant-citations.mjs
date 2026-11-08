@@ -1,7 +1,20 @@
 #!/usr/bin/env node
-// Checks two things about docs/INVARIANTS.md: every cited line or range
-// into src/, tests/, scripts/ or action.yml lies inside that file, and
-// every cited test title exists in the cited file.
+// Checks three things about docs/INVARIANTS.md: every cited symbol
+// (FILE#name) is a top-level declaration in that file, or for action.yml a
+// key path in it; every cited test title exists in the cited file; and, while
+// line citations are still read, every cited line or range into src/,
+// tests/, scripts/ or action.yml lies inside that file.
+//
+// A symbol citation is FILE#name for a top-level function, const, let, var,
+// class, type, interface, enum or namespace, or FILE#Class.member for a
+// member of a top-level class. In action.yml it is a dotted key path,
+// action.yml#inputs.trust-base or action.yml#runs.steps.gates, where a list
+// entry is named by its id. A rename fails the check; a moved line does not
+// matter.
+//
+// Once LINE_CITATIONS_REFUSED is true, a FILE:LINE citation into src/,
+// tests/, scripts/ or action.yml fails outright, because a line that exists
+// is not evidence that it is the code the sentence is about.
 //
 // A range is "10-12", "10 to 12" or "10 through 12", and a number that
 // continues a citation is checked against the same file. A title in
@@ -12,15 +25,39 @@
 // describe. Every name in a list is checked. A citation form this check
 // cannot read fails.
 //
-// Passing means the cited lines and titles exist. Whether the cited test
-// pins the claim beside it is read from the test when the citation is
-// written or changed; this check does not judge it.
+// Passing means the cited symbols, key paths and titles exist. Whether the
+// cited code or test is what the claim beside it is about is read when the
+// citation is written or changed; this check does not judge it.
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DOC = 'docs/INVARIANTS.md';
+// True: every FILE:LINE citation into src/, tests/, scripts/ or action.yml
+// is a finding of its own. False would restore the old reading, where a
+// line is only range-checked.
+export const LINE_CITATIONS_REFUSED = true;
+const SOURCE_PATH = String.raw`(?:src|tests)\/[A-Za-z0-9._/-]+\.ts|scripts\/[A-Za-z0-9._/-]+\.mjs|action\.yml`;
+// FILE#name, FILE#Class.member, or action.yml#dotted.key-path. A trailing
+// full stop ends the sentence, not the name, because every segment after a
+// dot must start with a name character.
+const SYMBOL_NAME = String.raw`[A-Za-z_$][\w$-]*(?:\.[A-Za-z_$][\w$-]*)*`;
+const SYMBOL_CITE = new RegExp(String.raw`(?<![\w./-])(${SOURCE_PATH})#(${SYMBOL_NAME})`, 'g');
+const DOT_SLASH_SYMBOL = new RegExp(String.raw`(?<![\w.-])\.\/(?:${SOURCE_PATH})#${SYMBOL_NAME}`, 'g');
+// A line number written in prose beside a cited path rather than as
+// FILE:LINE: "src/run.ts line 10", "src/run.ts (line 10)", "src/run.ts at
+// lines 10-12", "src/run.ts#runAll, line 10", "src/run.ts:L10",
+// "src/run.ts#runAll:10", and "line 10 of src/run.ts". Refused with the
+// FILE:LINE form, since each one drifts the same way. Only these common
+// forms are caught; CONTRIBUTING.md says not to write a line number beside
+// a path at all.
+const PROSE_LINE = new RegExp(
+  String.raw`(?<![\w./-])(?:${SOURCE_PATH})(?::L\d+|#${SYMBOL_NAME}:L?\d+(?:\s*-\s*\d+)?|(?:#${SYMBOL_NAME})?,?\s+\(?(?:at\s+)?lines?\s+\d+(?:\s*-\s*\d+)?)` +
+    String.raw`|\blines?\s+\d+(?:\s*-\s*\d+)?\s+(?:of|in)\s+(?:${SOURCE_PATH})(?![\w/-])`,
+  'g'
+);
 // A range is written "10-12", "10 to 12" or "10 through 12"; all three are
 // read as the same range, so a worded range is checked rather than ending
 // the chain of follow-on lines after it.
@@ -413,6 +450,210 @@ export function testDeclarations(source) {
   return decls;
 }
 
+const TOP_LEVEL_DECLARATION =
+  /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:(function)\s*\*?\s*|(class|const\s+enum|const|let|var|type|interface|enum|namespace)\s+)([A-Za-z_$][\w$]*)/;
+const CLASS_MEMBER =
+  /^(?:(?:public|private|protected|static|readonly|async|override|abstract|declare|get|set)\s+)*(#?[A-Za-z_$][\w$]*)\s*(?:[(<]|[?!]?\s*[:=;])/;
+
+// The names a symbol citation may use for a source file: every top-level
+// declaration, read only at brace depth zero and outside strings, comments
+// and regular expressions, so a declaration-shaped line inside a template
+// literal or a function body is not taken for one. A member of a top-level
+// class is named Class.member.
+export function topLevelDeclarations(source) {
+  const found = [];
+  let i = 0;
+  let line = 1;
+  let atLineStart = true;
+  let indent = 0;
+  let depth = 0;
+  let pendingClass = null;
+  let classBody = null;
+
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '\n') {
+      line++;
+      atLineStart = true;
+      indent = 0;
+      i++;
+      continue;
+    }
+    if (atLineStart && (c === ' ' || c === '\t')) {
+      indent++;
+      i++;
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '/') {
+      while (i < source.length && source[i] !== '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      i += 2;
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        if (source[i] === '\n') {
+          line++;
+        }
+        i++;
+      }
+      i = Math.min(source.length, i + 2);
+      atLineStart = false;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      const next = skipString(source, i);
+      line += countNewlines(source, i, next);
+      i = next;
+      atLineStart = false;
+      continue;
+    }
+    if (c === '/' && regexLikely(source, i)) {
+      const next = skipRegex(source, i);
+      line += countNewlines(source, i, next);
+      i = next;
+      atLineStart = false;
+      continue;
+    }
+    if (atLineStart) {
+      const rest = source.slice(i, source.indexOf('\n', i) === -1 ? source.length : source.indexOf('\n', i));
+      if (depth === 0 && indent === 0) {
+        const decl = rest.match(TOP_LEVEL_DECLARATION);
+        if (decl) {
+          found.push({ name: decl[3], line });
+          pendingClass = decl[2] === 'class' ? decl[3] : null;
+        }
+      } else if (classBody !== null && depth === 1) {
+        const member = rest.match(CLASS_MEMBER);
+        if (member) {
+          found.push({ name: `${classBody}.${member[1]}`, line });
+        }
+      }
+    }
+    atLineStart = false;
+    if (c === '{' || c === '(' || c === '[') {
+      if (c === '{' && depth === 0 && pendingClass !== null) {
+        classBody = pendingClass;
+        pendingClass = null;
+      }
+      depth++;
+    } else if (c === '}' || c === ')' || c === ']') {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) {
+        classBody = null;
+      }
+    } else if (c === ';' && depth === 0) {
+      pendingClass = null;
+    }
+    i++;
+  }
+  return found;
+}
+
+// Every key path an action.yml citation may use: mapping keys joined by
+// dots, with a list entry named by its id. An entry with no id has no key
+// path, so nothing under it can be cited this way.
+export function yamlKeyPaths(source) {
+  const paths = [];
+
+  function walk(node, prefix) {
+    if (isMap(node)) {
+      for (const pair of node.items) {
+        const key = isScalar(pair.key) ? pair.key.value : pair.key;
+        if (typeof key !== 'string' && typeof key !== 'number') {
+          continue;
+        }
+        const here = prefix === '' ? String(key) : `${prefix}.${key}`;
+        paths.push(here);
+        walk(pair.value, here);
+      }
+      return;
+    }
+    if (isSeq(node)) {
+      for (const item of node.items) {
+        const id = isMap(item) ? item.get('id') : undefined;
+        if (typeof id !== 'string' || id === '') {
+          continue;
+        }
+        const here = prefix === '' ? id : `${prefix}.${id}`;
+        paths.push(here);
+        walk(item, here);
+      }
+    }
+  }
+
+  walk(parseDocument(source).contents, '');
+  return paths;
+}
+
+function editDistance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return row[b.length];
+}
+
+export function nearestNames(name, names, count = 3) {
+  return [...new Set(names)]
+    .map((candidate) => ({ candidate, distance: editDistance(name.toLowerCase(), candidate.toLowerCase()) }))
+    .sort((x, y) => x.distance - y.distance || x.candidate.localeCompare(y.candidate))
+    .slice(0, count)
+    .map((entry) => entry.candidate);
+}
+
+export function symbolFindings(text, symbolsIn, docPath = DOC) {
+  const findings = [];
+  for (const match of text.matchAll(DOT_SLASH_SYMBOL)) {
+    const line = lineNumberAt(text, match.index);
+    findings.push(`${docPath}:${line}: ${match[0]} is a citation form this check does not read`);
+  }
+  for (const match of text.matchAll(SYMBOL_CITE)) {
+    const [cite, file, name] = match;
+    const line = lineNumberAt(text, match.index);
+    const names = symbolsIn(file);
+    if (names === undefined) {
+      findings.push(`${docPath}:${line}: ${cite} cites ${file}, which is not a source file`);
+      continue;
+    }
+    if (names.includes(name)) {
+      continue;
+    }
+    const what = file === 'action.yml' ? 'key path' : 'top-level declaration';
+    const nearest = nearestNames(name, names);
+    const hint = nearest.length > 0 ? `; nearest: ${nearest.join(', ')}` : '';
+    findings.push(`${docPath}:${line}: ${file} has no ${what} named "${name}"${hint}`);
+  }
+  return findings;
+}
+
+// Every FILE:LINE citation into a source file, as a finding. Used once
+// LINE_CITATIONS_REFUSED is true; a follow-on number always comes after one
+// of these, so reporting the first is enough to fail the sentence.
+export function lineCitationFindings(text, docPath = DOC) {
+  const findings = [];
+  for (const match of text.matchAll(CITE)) {
+    const line = lineNumberAt(text, match.index);
+    findings.push(
+      `${docPath}:${line}: ${match[0]} cites a line; cite a symbol (FILE#name), a test title, or an action.yml key path (action.yml#key.path) instead`
+    );
+  }
+  for (const match of text.matchAll(PROSE_LINE)) {
+    const line = lineNumberAt(text, match.index);
+    findings.push(
+      `${docPath}:${line}: ${match[0]} names a line in prose; cite a symbol (FILE#name), a test title, or an action.yml key path (action.yml#key.path) instead`
+    );
+  }
+  return findings;
+}
+
 function skipSpaceBack(text, i) {
   while (i >= 0 && /[ \t]/.test(text[i])) {
     i--;
@@ -786,15 +1027,41 @@ export function citationSources(root = ROOT) {
     ...lineCountsUnder(path.join(root, 'tests')),
     ...lineCountsUnder(path.join(root, 'scripts'), ['.mjs']),
   ]);
-  counts.set('action.yml', countLines(readFileSync(path.join(root, 'action.yml'), 'utf8')));
+  const action = readFileSync(path.join(root, 'action.yml'), 'utf8');
+  counts.set('action.yml', countLines(action));
   const tests = new Map([
     ...indexTests(path.join(root, 'tests'), ['.ts']),
     ...indexTests(path.join(root, 'scripts'), ['.mjs']),
   ]);
+  const symbols = new Map();
   return {
     lineCount: (file) => counts.get(file),
     testsIn: (file) => tests.get(file),
+    symbolsIn: (file) => {
+      if (!counts.has(file)) {
+        return undefined;
+      }
+      if (!symbols.has(file)) {
+        const source = file === 'action.yml' ? action : readFileSync(path.join(root, file), 'utf8');
+        symbols.set(
+          file,
+          file === 'action.yml' ? yamlKeyPaths(source) : topLevelDeclarations(source).map((decl) => decl.name)
+        );
+      }
+      return symbols.get(file);
+    },
   };
+}
+
+// Everything this check reports about a document: line, title and symbol
+// citations, and every line citation as well once LINE_CITATIONS_REFUSED is
+// true.
+export function allFindings(text, sources, docPath = DOC, refuseLines = LINE_CITATIONS_REFUSED) {
+  return [
+    ...(refuseLines ? lineCitationFindings(text, docPath) : []),
+    ...citationFindings(text, sources.lineCount, docPath, sources.testsIn),
+    ...symbolFindings(text, sources.symbolsIn, docPath),
+  ];
 }
 
 function indexTests(dir, extensions) {
@@ -822,20 +1089,20 @@ function indexTests(dir, extensions) {
 function main() {
   const text = readFileSync(path.join(ROOT, DOC), 'utf8');
   const sources = citationSources();
-  const findings = citationFindings(text, sources.lineCount, DOC, sources.testsIn);
+  const findings = allFindings(text, sources);
 
   if (findings.length > 0) {
     for (const finding of findings) {
       console.error(`x ${finding}`);
     }
     console.error(
-      '\ncheck-invariant-citations: a cited range is outside its file, a cited test name is not a runnable test in that file, or the citation is a form this check does not read. Re-derive it from the function or test the sentence describes.'
+      '\ncheck-invariant-citations: a cited symbol or key path is not in its file, a cited test name is not a runnable test in that file, a line is cited, or the citation is a form this check does not read. Re-derive it from the function or test the sentence describes.'
     );
     process.exit(1);
   }
 
   console.log(
-    'check-invariant-citations: every cited line in docs/INVARIANTS.md is inside its file, and every cited test title exists in its file.'
+    'check-invariant-citations: every cited symbol and key path in docs/INVARIANTS.md is declared in its file, and every cited test title exists in its file.'
   );
 }
 

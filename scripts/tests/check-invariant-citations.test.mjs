@@ -4,11 +4,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  allFindings,
   citationFindings,
   citationSources,
   countLines,
+  LINE_CITATIONS_REFUSED,
   lineCountsUnder,
+  symbolFindings,
   testDeclarations,
+  topLevelDeclarations,
+  yamlKeyPaths,
 } from '../check-invariant-citations.mjs';
 
 const DOC = 'docs/INVARIANTS.md';
@@ -426,11 +431,236 @@ describe('testDeclarations', () => {
   });
 });
 
+describe('topLevelDeclarations', () => {
+  const names = (src) => topLevelDeclarations(src).map((decl) => decl.name);
+
+  it('reads every top-level declaration kind', () => {
+    const src = [
+      'export function one() {}',
+      'export async function two() {}',
+      'function* three() {}',
+      'export const FOUR = 4;',
+      'let five = 5;',
+      'export class Six {}',
+      'export type Seven = string;',
+      'export interface Eight {}',
+      'export enum Nine { A }',
+      'export const enum Ten { B }',
+      'export default function eleven() {}',
+      '',
+    ].join('\n');
+    expect(names(src)).toEqual([
+      'one',
+      'two',
+      'three',
+      'FOUR',
+      'five',
+      'Six',
+      'Seven',
+      'Eight',
+      'Nine',
+      'Ten',
+      'eleven',
+    ]);
+  });
+
+  it('does not read a declaration inside a function body, a template literal or a comment', () => {
+    const src = [
+      'export function outer() {',
+      'const inner = 1;',
+      '}',
+      'const script = `',
+      'function fromTemplate() {}',
+      '`;',
+      '/*',
+      'function fromComment() {}',
+      '*/',
+      '// function fromLineComment() {}',
+      '',
+    ].join('\n');
+    expect(names(src)).toEqual(['outer', 'script']);
+  });
+
+  it('names a member of a top-level class Class.member', () => {
+    const src = [
+      'export class GateError extends Error {',
+      '  readonly code: string;',
+      '  constructor(code: string) {',
+      '    super(code);',
+      '    const local = 1;',
+      '  }',
+      '  static from(raw: unknown): GateError {',
+      '    return new GateError(String(raw));',
+      '  }',
+      '}',
+      'const after = { member: 1 };',
+      '',
+    ].join('\n');
+    expect(names(src)).toEqual([
+      'GateError',
+      'GateError.code',
+      'GateError.constructor',
+      'GateError.from',
+      'after',
+    ]);
+  });
+
+  it('reads the real exports of a source file', () => {
+    const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const src = readFileSync(path.join(root, 'src/exit-codes.ts'), 'utf8');
+    expect(names(src)).toEqual([
+      'ExitBlocksInput',
+      'gateExitBlocks',
+      'EXIT_OK',
+      'EXIT_BLOCKED',
+      'EXIT_COULD_NOT_RUN',
+      'ExitInput',
+      'composeExitCode',
+      'describeExitCode',
+    ]);
+  });
+});
+
+describe('yamlKeyPaths', () => {
+  const src = [
+    'inputs:',
+    '  trust-base:',
+    '    default: ""',
+    'runs:',
+    '  steps:',
+    '    - name: Run the gates',
+    '      id: gates',
+    '      run: echo hi',
+    '    - name: No id',
+    '      run: echo there',
+    '',
+  ].join('\n');
+
+  it('names mapping keys by dotted path and list entries by id', () => {
+    expect(yamlKeyPaths(src)).toEqual([
+      'inputs',
+      'inputs.trust-base',
+      'inputs.trust-base.default',
+      'runs',
+      'runs.steps',
+      'runs.steps.gates',
+      'runs.steps.gates.name',
+      'runs.steps.gates.id',
+      'runs.steps.gates.run',
+    ]);
+  });
+});
+
+describe('symbolFindings', () => {
+  const declared = (file) =>
+    file === 'src/run.ts' ? ['runAll', 'refusedTrustBase', 'RunResult', 'GateError.from'] : undefined;
+
+  it('accepts a cited symbol the file declares', () => {
+    const text = 'The run is src/run.ts#runAll, and its type src/run.ts#RunResult.\n';
+    expect(symbolFindings(text, declared)).toEqual([]);
+  });
+
+  it('accepts a cited class member', () => {
+    expect(symbolFindings('See src/run.ts#GateError.from.\n', declared)).toEqual([]);
+  });
+
+  it('reports a cited symbol the file does not declare, naming the file and the nearest names', () => {
+    const text = 'Pinned in\nsrc/run.ts#runEverything.\n';
+    expect(symbolFindings(text, declared)).toEqual([
+      `${DOC}:2: src/run.ts has no top-level declaration named "runEverything"; nearest: RunResult, runAll, refusedTrustBase`,
+    ]);
+  });
+
+  it('reports a symbol whose declaration was renamed', () => {
+    const before = ['export function runAll() {}', ''].join('\n');
+    const after = ['export function runEveryGate() {}', ''].join('\n');
+    const text = 'See src/run.ts#runAll.\n';
+    const from = (src) => (file) =>
+      file === 'src/run.ts' ? topLevelDeclarations(src).map((decl) => decl.name) : undefined;
+    expect(symbolFindings(text, from(before))).toEqual([]);
+    expect(symbolFindings(text, from(after))).toEqual([
+      `${DOC}:1: src/run.ts has no top-level declaration named "runAll"; nearest: runEveryGate`,
+    ]);
+  });
+
+  it('reports a symbol cited in a file that is not a source file', () => {
+    expect(symbolFindings('See src/gone.ts#runAll.\n', declared)).toEqual([
+      `${DOC}:1: src/gone.ts#runAll cites src/gone.ts, which is not a source file`,
+    ]);
+  });
+
+  it('accepts an action.yml key path that exists and reports one that does not', () => {
+    const action = ['runs:', '  steps:', '    - name: Run the gates', '      id: gates', ''].join('\n');
+    const keys = (file) => (file === 'action.yml' ? yamlKeyPaths(action) : undefined);
+    expect(symbolFindings('See action.yml#runs.steps.gates.\n', keys)).toEqual([]);
+    expect(symbolFindings('See action.yml#runs.steps.render.\n', keys)).toEqual([
+      `${DOC}:1: action.yml has no key path named "runs.steps.render"; nearest: runs.steps.gates, runs.steps, runs.steps.gates.id`,
+    ]);
+  });
+
+  it('rejects a ./ prefixed symbol citation', () => {
+    expect(symbolFindings('See ./src/run.ts#runAll.\n', declared)).toEqual([
+      `${DOC}:1: ./src/run.ts#runAll is a citation form this check does not read`,
+    ]);
+  });
+});
+
+describe('line citations once refused', () => {
+  const sources = {
+    lineCount: () => 10,
+    testsIn: () => [{ name: 'does not throw', start: 1, end: 4 }],
+    symbolsIn: (file) => (file === 'src/run.ts' ? ['runAll'] : undefined),
+  };
+
+  it('reports every line citation into src, tests, scripts and action.yml', () => {
+    const text = 'See src/run.ts:2, tests/run.test.ts:3 ("does not throw"), scripts/pr-comment.mjs:1 and action.yml:4.\n';
+    expect(allFindings(text, sources, DOC, true)).toEqual([
+      `${DOC}:1: src/run.ts:2 cites a line; cite a symbol (FILE#name), a test title, or an action.yml key path (action.yml#key.path) instead`,
+      `${DOC}:1: tests/run.test.ts:3 cites a line; cite a symbol (FILE#name), a test title, or an action.yml key path (action.yml#key.path) instead`,
+      `${DOC}:1: scripts/pr-comment.mjs:1 cites a line; cite a symbol (FILE#name), a test title, or an action.yml key path (action.yml#key.path) instead`,
+      `${DOC}:1: action.yml:4 cites a line; cite a symbol (FILE#name), a test title, or an action.yml key path (action.yml#key.path) instead`,
+    ]);
+  });
+
+  it('still reads line citations while the rule is off', () => {
+    const text = 'See src/run.ts:2.\n';
+    expect(allFindings(text, sources, DOC, false)).toEqual([]);
+  });
+
+  it('accepts symbol and test-title citations with the rule on', () => {
+    const text = 'See src/run.ts#runAll, pinned by tests/run.test.ts ("does not throw") and "does not throw" in tests/run.test.ts.\n';
+    expect(allFindings(text, sources, DOC, true)).toEqual([]);
+  });
+
+  it.each([
+    'src/run.ts line 10',
+    'src/run.ts (line 10)',
+    'line 10 of src/run.ts',
+    'src/run.ts:L10',
+    'src/run.ts#runAll:10',
+    'src/run.ts at lines 10-12',
+    'src/run.ts#runAll, line 10',
+  ])('refuses a line named in prose: %s', (form) => {
+    const findings = allFindings(`See ${form} for it.\n`, sources, DOC, true);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatch(/names a line in prose/);
+  });
+
+  it('leaves prose about lines alone when no source path is beside it', () => {
+    const text = 'The report prints lines 1 to 4, and src/run.ts#runAll runs the gates.\n';
+    expect(allFindings(text, sources, DOC, true)).toEqual([]);
+  });
+
+  it('is on for docs/INVARIANTS.md', () => {
+    expect(LINE_CITATIONS_REFUSED).toBe(true);
+  });
+});
+
 describe('docs/INVARIANTS.md', () => {
-  it('cites no range past the end of its file and no missing test name', () => {
+  it('cites no line, no missing symbol or key path, and no missing test name', () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
     const text = readFileSync(path.join(root, DOC), 'utf8');
     const sources = citationSources(root);
-    expect(citationFindings(text, sources.lineCount, DOC, sources.testsIn)).toEqual([]);
+    expect(allFindings(text, sources)).toEqual([]);
   });
 });
