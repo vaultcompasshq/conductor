@@ -446,12 +446,16 @@ that exits 1 with stdout that will not parse as JSON is could-not-run
 would tell a user their code is at fault when their config is.
 
 What the gate itself said rides along on the could-not-run result as
-`couldNotRun.gateSaid`: the first stderr line that is not informational (a
-`note:` block, gitleaks' rename-detection warnings, osv-scanner's progress
-lines), preferring a block that
+`couldNotRun.gateSaid`. A gate that wrote JSON is quoted from its `couldNotRun`
+field when that field is present (a string, or an object's message and code).
+Otherwise a stderr that contains a `note (...)` or `warning (...)` line is
+quoted from the last line that is neither. Otherwise it is the first stderr
+line that is not informational (a `note:` block, gitleaks' rename-detection
+warnings, osv-scanner's progress lines), preferring a block that
 starts at an INCOMPLETE or ERR marker, or for a gate whose output is JSON on
 stdout a string `reason` field; absent when every line is informational
-(`statedReasonFromStderr`, src/gate-runner.ts#statedReasonFromStderr, with osv-scanner's
+(`gateStatedReason`, src/gate-runner.ts#gateStatedReason, whose stderr half is
+`statedReasonFromStderr`, src/gate-runner.ts#statedReasonFromStderr, with osv-scanner's
 progress patterns at src/gate-runner.ts#OSV_PROGRESS). It is sanitised to
 ASCII and cut to 160 characters. It is read after the exit code has been
 judged and never changes the outcome or the exit code, and its absence is
@@ -468,7 +472,10 @@ by tests/gate-runner.test.ts ("carries the first stderr line of an exit 2
 gate as a bounded, sanitised excerpt"), tests/gate-runner.test.ts ("falls back to a reason field in
 stdout JSON when stderr is empty, and never changes the exit 2") and tests/gate-runner.test.ts
 ("carries no excerpt, and does not throw, when an exit 2 gate printed nothing
-usable"). The excerpt is also written to the job log on stderr in the per-gate
+usable"). The dep-guard preference is pinned by
+tests/stated-reason.test.ts ("a stderr with notes first and the error last quotes the error"),
+tests/stated-reason.test.ts ("a gate with JSON couldNotRun quotes that") and
+tests/stated-reason.test.ts ("a stderr with only one line is unchanged"). The excerpt is also written to the job log on stderr in the per-gate
 log line, cleaned and capped.
 
 Pinned by tests/gate-runner.test.ts ("treats exit 2 as could-not-run
