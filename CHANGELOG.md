@@ -14,6 +14,21 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-09
+
+**A patch release that moves the Action's default gates.** dep-guard moves
+from 0.18.2 to 0.20.0, vault-guard from 1.13.1 to 1.13.3 and intent-guard from
+1.10.4 to 1.10.6. Each of those gate releases can newly block or fail a run
+that passed before, so read their changelogs before upgrading: dep-guard 0.19.0
+reports a non-boolean install-script flag as lockfile tamper, and 0.20.0 adds a
+named-package deny list (configured in dep-guard's own `.dep-guard.json`, not
+in the conductor policy) and makes a plain `--base` run with an invalid or
+symlinked base config a could-not-run; vault-guard 1.13.2 moves its ignore
+library to version 7, which changes what some ignore patterns exclude; and
+intent-guard 1.10.6's fixes can newly block. `@vaultcompass/conductor` moves
+to 0.18.1 on npm and the `conductor-version` default moves in lockstep.
+conductor's own behaviour and output do not change.
+
 ### Changed
 
 - docs/INVARIANTS.md cites code by name rather than by line (issue 170):

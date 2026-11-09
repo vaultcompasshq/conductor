@@ -2041,10 +2041,10 @@ describe('action.yml installs the gates without trusting them first', () => {
     // the install; they are not what makes the check cover the right thing.
     // Naming a package that is not installed is the quiet case: the audit
     // skips it and still exits 0.
-    expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.13.1');
-    expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.10.4');
-    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.18.0');
-    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.18.2');
+    expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.13.3');
+    expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.10.6');
+    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.18.1');
+    expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.20.0');
   });
 
   it('carries a version override into the manifest as well as the install', () => {
@@ -2076,10 +2076,10 @@ describe('action.yml installs the gates outside the tree', () => {
     for (const input of VERSION_INPUTS) {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
-    expect(action.inputs?.['conductor-version']?.default).toBe('0.18.0');
-    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.18.2');
-    expect(action.inputs?.['vault-guard-version']?.default).toBe('1.13.1');
-    expect(action.inputs?.['intent-guard-version']?.default).toBe('1.10.4');
+    expect(action.inputs?.['conductor-version']?.default).toBe('0.18.1');
+    expect(action.inputs?.['dep-guard-version']?.default).toBe('0.20.0');
+    expect(action.inputs?.['vault-guard-version']?.default).toBe('1.13.3');
+    expect(action.inputs?.['intent-guard-version']?.default).toBe('1.10.6');
   });
 
   it('accepts an exact version', () => {
@@ -2123,10 +2123,10 @@ describe('action.yml installs the gates outside the tree', () => {
       'install',
       '-g',
       '--ignore-scripts',
-      '@vaultcompass/conductor@0.18.0',
-      '@vaultcompass/dep-guard@0.18.2',
-      '@vaultcompass/vault-guard@1.13.1',
-      '@vaultcompass/intent-guard@1.10.4',
+      '@vaultcompass/conductor@0.18.1',
+      '@vaultcompass/dep-guard@0.20.0',
+      '@vaultcompass/vault-guard@1.13.3',
+      '@vaultcompass/intent-guard@1.10.6',
       'audit',
       'signatures',
     ]);
@@ -2541,10 +2541,10 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag the TAG constants
-    // are 0.18.0 (conductor), 0.18.2 (dep-guard), 1.13.1 (vault-guard) and
-    // 1.10.4 (intent-guard). Only an input whose shipped patch is above 0 has a
+    // are 0.18.1 (conductor), 0.20.0 (dep-guard), 1.13.3 (vault-guard) and
+    // 1.10.6 (intent-guard). Only an input whose shipped patch is above 0 has a
     // lower patch to refuse on the UNMODIFIED step, and as of this tag
-    // dep-guard, vault-guard and intent-guard do while conductor ships
+    // conductor, vault-guard and intent-guard do while dep-guard ships
     // patch 0. The arm is also driven on the same step with
     // one constant's patch advanced by one (the shipped version itself is the
     // lower patch), the way the minor arm is driven in the cases above, and any
@@ -2609,15 +2609,15 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // `1.10.0` sorts BELOW `1.8.0` as text and above it as a version, and
     // refusing it would refuse the very direction this rule leaves open.
     const forward: Array<[string, string]> = [
-      ['INTENT_GUARD_VERSION', '1.10.4'],
+      ['INTENT_GUARD_VERSION', '1.10.6'],
       ['INTENT_GUARD_VERSION', '1.11.0'],
       ['INTENT_GUARD_VERSION', '2.0.0'],
       ['INTENT_GUARD_VERSION', '10.0.0'],
-      ['DEP_GUARD_VERSION', '0.18.2'],
-      ['DEP_GUARD_VERSION', '0.19.0'],
-      ['VAULT_GUARD_VERSION', '1.13.1'],
+      ['DEP_GUARD_VERSION', '0.20.0'],
+      ['DEP_GUARD_VERSION', '0.21.0'],
+      ['VAULT_GUARD_VERSION', '1.13.3'],
       ['VAULT_GUARD_VERSION', '1.14.0'],
-      ['CONDUCTOR_VERSION', '0.18.0'],
+      ['CONDUCTOR_VERSION', '0.18.1'],
       ['CONDUCTOR_VERSION', '0.19.0'],
     ];
     for (const [variable, value] of forward) {
