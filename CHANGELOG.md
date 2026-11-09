@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Fixed
+
+- A could-not-run headline now quotes the gate's own stated reason (issue 178).
+  When the gate wrote JSON and it carries `couldNotRun`, that field is quoted
+  (its message and its code). Otherwise, when stderr contains a `note (...)`
+  or `warning (...)` line, the last line that is neither is quoted, so a
+  dep-guard 0.20.0 note no longer hides the could-not-run line. Any other
+  stderr keeps the previous line. The verdict, the exit code and the findings
+  are unchanged.
+
 ## [0.18.1] - 2026-11-09
 
 **A patch release that moves the Action's default gates.** dep-guard moves

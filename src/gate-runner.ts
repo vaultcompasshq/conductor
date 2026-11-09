@@ -576,18 +576,129 @@ function statedReasonFromStderr(stderr: string): string | null {
 }
 
 /**
+ * dep-guard's diagnostic lines, `note (code): ...` and `warning (code): ...`.
+ * A `note:` block (vault-guard) does not match: the parenthesis is the
+ * difference, and that block stays on the first-line rule.
+ */
+const PAREN_NOTE = /^(?:note|warning) \(/i;
+
+/**
+ * The last stderr line that is not a `note (...)` or `warning (...)` line,
+ * when the stderr has at least one of those. Null when this shape is absent,
+ * so the caller keeps the first-line rule for every other gate.
+ */
+function lastLineAfterParentheticalNotes(stderr: string): string | null {
+  const lines = stripAnsi(stderr)
+    .split('\n')
+    .map((raw) => plainLine(raw))
+    .filter((text) => text !== '');
+  if (!lines.some((text) => PAREN_NOTE.test(text))) {
+    return null;
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const text = lines[i]!;
+    if (!PAREN_NOTE.test(text)) {
+      return sanitizeGateSaid(text);
+    }
+  }
+  return null;
+}
+
+/** Stdout parsed as one JSON object, or null when it is not JSON or will not parse. */
+function jsonStdout(stdout: string | null | undefined, stdoutIsJson: boolean): Record<string, unknown> | null {
+  if (!stdoutIsJson || typeof stdout !== 'string' || !stdout.trimStart().startsWith('{')) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** A gate's own couldNotRun field, as one quoted line. Null when the field is absent. */
+function couldNotRunExcerpt(record: Record<string, unknown> | null): string | null {
+  if (record === null) {
+    return null;
+  }
+  const run = record.run;
+  const candidates = [
+    record.couldNotRun,
+    typeof run === 'object' && run !== null ? (run as Record<string, unknown>).couldNotRun : undefined,
+  ];
+  for (const candidate of candidates) {
+    const excerpt = formatCouldNotRun(candidate);
+    if (excerpt !== null) {
+      return excerpt;
+    }
+  }
+  return null;
+}
+
+function formatCouldNotRun(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return sanitizeGateSaid(value);
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const field = value as Record<string, unknown>;
+  const message = typeof field.message === 'string' ? field.message : null;
+  const code = typeof field.code === 'string' ? field.code : null;
+  if (message !== null && code !== null) {
+    return sanitizeGateSaid(`${message} (${code})`);
+  }
+  if (message !== null) {
+    return sanitizeGateSaid(message);
+  }
+  if (code !== null) {
+    return sanitizeGateSaid(code);
+  }
+  return null;
+}
+
+/** A string `reason` field, top level or on `run`, the fallback the first-line rule already had. */
+function reasonExcerpt(record: Record<string, unknown> | null): string | null {
+  if (record === null) {
+    return null;
+  }
+  const run = record.run;
+  const candidates = [
+    record.reason,
+    typeof run === 'object' && run !== null ? (run as Record<string, unknown>).reason : undefined,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string') {
+      const excerpt = sanitizeGateSaid(candidate);
+      if (excerpt !== null) {
+        return excerpt;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * What a gate that exited with a non-verdict code said about why.
  *
  * TOTAL, and never a decision: the caller has already settled that this is a
- * could-not-run, and nothing here can change that. stderr is preferred, since
- * that is where every gate in the family prints its reason on exit 2
- * (dep-guard, intent-guard and vault-guard all do), read by the rule in
- * `statedReasonFromStderr`: the line the gate marks as the failure, never an
- * informational line. Failing that, stdout is parsed only for a gate whose
- * output is JSON on stdout, and only a string `reason` field (top level, or
- * on `run`) is read; anything else, including output that does not parse, is
- * simply no excerpt. An absent excerpt is better than quoting a warning as
- * the cause; the full stderr is still printed in the text report.
+ * could-not-run, and nothing here can change that.
+ *
+ *  1. A gate that wrote JSON is quoted from its couldNotRun field when that
+ *     field is present (top level, or on `run`): a string as itself, or an
+ *     object from its message and, when it has one, its code.
+ *  2. Otherwise, when stderr contains a `note (...)` or `warning (...)` line,
+ *     the last line that is neither. dep-guard 0.20.0 prints those notes
+ *     before the could-not-run line, and the first-line rule quoted the note.
+ *  3. Otherwise the line `statedReasonFromStderr` already chose, and failing
+ *     that a string `reason` field on JSON stdout.
+ *
+ * An absent excerpt is better than quoting a warning as the cause; the full
+ * stderr is still printed in the text report.
  */
 export function gateStatedReason(
   stderr: string,
@@ -595,32 +706,20 @@ export function gateStatedReason(
   stdoutIsJson: boolean
 ): string | null {
   try {
+    const record = jsonStdout(stdout, stdoutIsJson);
+    const fromCouldNotRun = couldNotRunExcerpt(record);
+    if (fromCouldNotRun !== null) {
+      return fromCouldNotRun;
+    }
+    const fromTail = lastLineAfterParentheticalNotes(stderr);
+    if (fromTail !== null) {
+      return fromTail;
+    }
     const fromStderr = statedReasonFromStderr(stderr);
     if (fromStderr !== null) {
       return fromStderr;
     }
-    if (!stdoutIsJson || typeof stdout !== 'string' || !stdout.trimStart().startsWith('{')) {
-      return null;
-    }
-    const parsed: unknown = JSON.parse(stdout);
-    if (typeof parsed !== 'object' || parsed === null) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    const run = record.run;
-    const candidates = [
-      record.reason,
-      typeof run === 'object' && run !== null ? (run as Record<string, unknown>).reason : undefined,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string') {
-        const excerpt = sanitizeGateSaid(candidate);
-        if (excerpt !== null) {
-          return excerpt;
-        }
-      }
-    }
-    return null;
+    return reasonExcerpt(record);
   } catch {
     return null;
   }

@@ -204,3 +204,39 @@ describe('the stated reason decides nothing', () => {
     }
   });
 });
+
+describe('a dep-guard could-not-run quotes the stated cause', () => {
+  it('a stderr with notes first and the error last quotes the error', () => {
+    const stderr =
+      'note (lockfile-format-manifest-only): yarn.lock is the only lockfile\n' +
+      'warning (deny-review-overdue): the deny list review is overdue\n' +
+      'dep-guard: the deny list cannot say what these install (deny-lockfile-unread)\n';
+    expect(gateStatedReason(stderr, null, false)).toBe(
+      'dep-guard: the deny list cannot say what these install (deny-lockfile-unread)'
+    );
+  });
+
+  it('a gate with JSON couldNotRun quotes that', () => {
+    const stdout = JSON.stringify({
+      reason: 'not this',
+      run: {
+        couldNotRun: {
+          code: 'deny-lockfile-unread',
+          message: 'the deny list cannot say what these install',
+        },
+      },
+    });
+    const stderr =
+      'note (lockfile-format-manifest-only): yarn.lock is the only lockfile\n' +
+      'dep-guard: a different stderr line\n';
+    expect(gateStatedReason(stderr, stdout, true)).toBe(
+      'the deny list cannot say what these install (deny-lockfile-unread)'
+    );
+  });
+
+  it('a stderr with only one line is unchanged', () => {
+    expect(gateStatedReason('error: the corpus file is missing\n', null, false)).toBe(
+      'error: the corpus file is missing'
+    );
+  });
+});
