@@ -21,9 +21,9 @@ an explicit pin is unaffected, which is how a stale pin can sit unnoticed
 until the first pull request after the upgrade.
 
 **Pin the action ref to a full commit SHA** with the tag as a comment, for
-example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.18.0`. To
+example `uses: vaultcompasshq/conductor@<40-character SHA> # v0.18.1`. To
 find the SHA for a tag, run
-`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.18.0` or read it off
+`gh api repos/vaultcompasshq/conductor/git/ref/tags/v0.18.1` or read it off
 the Releases page.
 
 **Dependabot or Renovate bumping that SHA changes the action ref only.** It
@@ -44,6 +44,7 @@ tag with no row here has an entry that does not state its defaults; read
 
 | Action tag | Kind | `conductor-version` default | Gate defaults the entry says moved |
 | --- | --- | --- | --- |
+| v0.18.1 | package | 0.18.1 | dep-guard 0.20.0 (from 0.18.2), vault-guard 1.13.3 (from 1.13.1), intent-guard 1.10.6 (from 1.10.4) |
 | v0.18.0 | package | 0.18.0 | dep-guard 0.18.2 (from 0.18.1) |
 | v0.17.0 | package | 0.17.0 | dep-guard 0.18.1 (from 0.18.0), vault-guard 1.13.1 (from 1.13.0), intent-guard 1.10.4 (from 1.10.3) |
 | v0.16.0 | package | 0.16.0 | dep-guard 0.18.0 (from 0.17.0), vault-guard 1.13.0 (from 1.12.1), intent-guard 1.10.3 (from 1.10.2) |

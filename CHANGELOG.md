@@ -14,6 +14,16 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-09
+
+**A patch release that moves the Action's default gates.** dep-guard moves to
+0.20.0, which adds a named-package deny list (a package named in the policy's
+deny list blocks the run) and makes a plain `--base` run validate the base
+config; vault-guard moves to 1.13.3 and intent-guard to 1.10.6, which carry
+those gates' re-grade fixes. `@vaultcompass/conductor` moves to 0.18.1 on npm
+and the `conductor-version` default moves in lockstep. Nothing else a consumer
+sees changes.
+
 ### Changed
 
 - docs/INVARIANTS.md cites code by name rather than by line (issue 170):
