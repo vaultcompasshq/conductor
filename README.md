@@ -48,11 +48,18 @@ The hook runs every enabled gate on each commit and, when the commit is
 clean, prints one summary line, plus one status line per gate on stderr.
 Each gate can also be installed and run on its own.
 
-Then the same gates on every pull request, as one pinned workflow:
+Then the same gates on every pull request, a lighter run on each push to
+main, and a full scan every day, as one pinned workflow:
 
 ```yaml
 name: guardrails
-on: [pull_request, push]
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
 permissions:
   contents: read
   security-events: write
@@ -77,6 +84,8 @@ jobs:
           chmod +x "$bin/osv-scanner"
           echo "$bin" >> "$GITHUB_PATH"
       - uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        with:
+          stage: ${{ github.event_name == 'push' && 'push' || 'ci' }}
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         if: always()
         with:
@@ -91,6 +100,38 @@ its rules from the base branch, so a change cannot turn off the check that
 exists to catch it. The first pull request under a new policy cannot be judged
 by that policy, so read the careful path below before you make the check
 required.
+
+What each trigger runs. A pull request runs every gate at stage `ci`, and the
+history scan reads only that pull request's own range, so a pull request is
+judged on what it changes. A push to main runs at stage `push`: the
+dependencies and secrets gates over the tree, and not the history scan or
+osv-scanner, which are named as deferred in the report. The daily schedule
+and a manual run have no base, so they run at stage `ci` over the whole of git
+history and every tracked lockfile. The `fetch-depth: 0` above is what makes
+that history scan possible: a shallow checkout makes the history gate
+could-not-run on a pull request or a scheduled run alike, and exit 2 when the
+gate is enforced (on a pull request it is always enforced).
+
+What this gives up. A secret pushed straight to main with no pull request, and
+a new advisory against a dependency already on main, are seen at the next
+scheduled run, up to a day later, rather than on the push. Every change that
+goes through a pull request is still fully judged.
+
+Expect the scheduled run to be red at first. It judges the history and the
+lockfiles as they stand, including what was there before conductor, and every
+finding blocks. When it blocks, the report says how many of the findings
+predate the policy file and lists each tool's own ignore file as the way to
+record a reviewed one; see "Adoption ramp" below. A scheduled run is not a
+required check, and a red one is the backlog, shown honestly. GitHub disables
+scheduled workflows in a public repository after a period without repository
+activity, and a failing scheduled run notifies whoever last edited the
+schedule, so check that the schedule is still running.
+
+The expression that picks the stage (`github.event_name == 'push' && 'push' ||
+'ci'`) is standard Actions syntax but has not been run on a real runner for
+this recipe. Check that the first push run's report lists secrets-history and
+vulnerabilities as deferred, and that the first scheduled run does not, before
+you rely on it.
 
 ## Part of the Vault & Compass guardrails
 
@@ -190,6 +231,15 @@ required.
    adds one pre-commit hook on top of that, running every enabled gate whose
    stage is `commit`. A CI-only adopter that never runs conductor locally can
    stop at the first `conductor init`, with no hook at all.
+
+   The first run with no base (a local `conductor run`, a push, a scheduled
+   run) judges all of git history and every tracked lockfile, so on a
+   repository with history it can block on findings that were there before
+   conductor. It still exits 1 and every finding still blocks; when the
+   history or vulnerabilities gate blocks, the report adds an "existing
+   findings" section saying how many predate the policy file, how many are in
+   files that are gone, and what to do. A pull request is judged only on its
+   own change.
 
    **`.git/hooks` is never part of a clone**, so a hook one checkout has does
    not follow a teammate's clone, or a fresh clone of your own: hooks are per
@@ -358,7 +408,15 @@ first pull request gets switched off. The order that works:
 
    conductor reads `.gitleaksignore` from the base branch on a pull request,
    so adding the line takes effect after its own merge, like any other
-   control change.
+   control change. A finding the report lists as "also in" other commits is
+   one secret seen in several commits (a merge reports a pull request's change
+   again), and each of those commits has its own fingerprint: put one line per
+   commit the finding lists, its own and each "also in", or the copy comes
+   back under another fingerprint. Two cautions. gitleaks drops an ignored
+   finding without reporting it, so conductor does not count it: unlike an
+   osv-scanner suppression, nothing in the report shows it. And one line
+   silences every secret on that line in that commit that the same rule
+   matches, not only the one you reviewed.
 
 4. **Switch to enforce.** When a few ordinary pull requests report only what
    you expect, remove `advisory: true`, and set `enforce: true` on the gates
@@ -743,7 +801,10 @@ shallow checkout on a pull-request run is could-not-run for the history gate,
 naming `fetch-depth: 0` (exit 2, whatever `enforce` says). At the default
 depth of 1 the checkout is shallow, the range from the base to HEAD holds one
 grafted commit, and a secret added and then removed inside the pull request
-would never be seen. conductor does not deepen the checkout for you.
+would never be seen. conductor does not deepen the checkout for you. A run
+with no base (a push, a scheduled run, a local run) has the same need: a
+shallow checkout cuts the whole history it reads off at the graft, and the
+history gate is could-not-run there too.
 
 **The two external gates are installed by your workflow, not by the
 Action.** The Action still installs exactly its four npm packages and has no
@@ -812,9 +873,10 @@ could-not-run (`timed-out`), never a pass.
   job before it can fire. Keep it well under.
 
 Measure your own full scan once, on the runner it will run on, and set the
-limit with headroom. The recommended split: every pull request scans its own
-range, and the full history is scanned on a schedule with a limit sized for
-it. Two existing ways to make it: by stage, since `secrets-history` defaults
+limit with headroom. The recommended split, and the one the quick start
+above uses: every pull request scans its own range, pushes to main run at
+stage `push`, and the full history is scanned on a daily schedule with a limit
+sized for it. Two existing ways to make it: by stage, since `secrets-history` defaults
 to stage `ci` and a push workflow run with the Action's `stage: push` input
 (or `conductor run --stage push`) leaves ci-stage gates out; or by trigger,
 running the workflow on pull requests and a schedule and not on push. With

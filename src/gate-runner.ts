@@ -2260,11 +2260,20 @@ function runGateInner(
   // A history gate cannot vouch for history it was not given. Checked before
   // the version probe so nothing is executed for a run that cannot be honest.
   if (profileFor(gate.product).readsHistory && isShallowRepository(options.repoRoot)) {
+    // Two wordings: a pull-request run reads a range from the base to HEAD,
+    // and a run with no base (local, push, scheduled) reads the whole history,
+    // where a range and a pull request are not what is being cut off.
+    const cause =
+      options.trustBase !== undefined
+        ? 'is truncated: with the default actions/checkout depth of 1 the range from the base to HEAD ' +
+          'holds a single grafted commit, and a secret added and then removed inside the pull ' +
+          'request would never be seen.'
+        : 'is truncated: the whole history this gate reads is cut off at the graft (with the default ' +
+          'actions/checkout depth of 1, at the single checked-out commit), so older commits and a ' +
+          'secret added and later removed would never be seen.';
     const detail =
       `${gate.product} did not run, because this checkout is shallow and the git history it reads ` +
-      'is truncated: with the default actions/checkout depth of 1 the range from the base to HEAD ' +
-      'holds a single grafted commit, and a secret added and then removed inside the pull ' +
-      'request would never be seen. Fix: check out with fetch-depth: 0 (actions/checkout) or run ' +
+      `${cause} Fix: check out with fetch-depth: 0 (actions/checkout) or run ` +
       'git fetch --unshallow, then run again. conductor does not deepen the checkout itself.';
     return {
       ...base,

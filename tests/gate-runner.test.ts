@@ -1515,6 +1515,29 @@ describe('a gate that reads history, in a shallow checkout (C2)', () => {
     expect(out.enforce).toBe(false);
   });
 
+  it('with no base, speaks of the whole history and never of a range or a pull request', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: shallowClone(), staged: false, pathValue: bin, tempRoot: tempDir() });
+    const detail = out.couldNotRun?.detail ?? '';
+    expect(detail).toContain('the whole history this gate reads is cut off at the graft');
+    expect(detail).toContain('fetch-depth: 0');
+    expect(detail).toContain('git fetch --unshallow');
+    expect(detail).not.toContain('range from the base');
+    expect(detail).not.toContain('inside the pull request');
+    expect(out.couldNotRun?.reason).toBe('history-shallow');
+  });
+
+  it('under a trust base, keeps the range and pull-request wording', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '' });
+    const out = runGate(gl(), { repoRoot: shallowClone(), staged: false, pathValue: bin, tempRoot: tempDir(), trustBase: 'origin/main' });
+    const detail = out.couldNotRun?.detail ?? '';
+    expect(detail).toContain('the range from the base to HEAD');
+    expect(detail).toContain('inside the pull request');
+    expect(detail).toContain('fetch-depth: 0');
+  });
+
   it('spawns gitleaks with GIT_NO_REPLACE_OBJECTS=1, so replace refs and grafts cannot cut the history it reads', () => {
     const bin = tempDir();
     const envLog = path.join(tempDir(), 'env.txt');

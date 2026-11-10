@@ -16,6 +16,18 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ### Added
 
+- An "existing findings" section in the text report. On a run with no trust
+  base (a local run, a push, a scheduled run) that is blocked (exit 1, never
+  a could-not-run exit 2) by the history or vulnerabilities gate, the report
+  says how many findings are in
+  commits made before the policy file was first committed, how many are in
+  files gone at HEAD, and what to do: the stage split, each tool's own ignore
+  mechanism (with the caveat that `.gitleaksignore` is uncounted) and each
+  family gate's own baseline. Words only: the exit code, the verdict token
+  and which findings block are unchanged. SARIF has no matching note yet.
+- `conductor init` says, when gitleaks is detected, that the first run with
+  no base judges all of git history, and, in a shallow checkout, that the
+  history gate will not run until it is unshallowed.
 - **One line per gate, where a reviewer already looks (issue 105).** Every
   full text report now carries, directly under the verdict token, one line
   per gate: `gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking`, or
@@ -56,6 +68,12 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   gate's section and finding; only a terminal got the short form. The
   compact body the comment gets on a refusal gains the fixed trust-base line
   and the per-gate lines.
+- The README quick start is now the stage split: pull requests at stage `ci`,
+  pushes to main at stage `push`, a daily scheduled full scan and a manual
+  run, with `fetch-depth: 0` and what the split gives up stated beside it.
+- The history-shallow could-not-run detail on a run with no base no longer
+  speaks of a range from the base or of a pull request. Enforcement is
+  unchanged.
 - The verdict, the verdict token, the exit code and the SARIF log are
   unchanged by all of the above.
 

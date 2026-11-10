@@ -116,6 +116,50 @@ describe('external gates at init (3.4b)', () => {
     init(repo, { pathValue: bin });
     expect(readFileSync(path.join(repo, POLICY_FILE_NAME), 'utf8')).not.toContain('CI must');
   });
+
+  it('says what the first run will show, only when gitleaks is detected', () => {
+    const bin = tempDir();
+    shim(bin, 'gitleaks');
+    const withGitleaks = renderInitHuman(init(gitRepo(), { pathValue: bin }));
+    expect(withGitleaks).toContain(
+      'the first conductor run with no base judges all of git history; a pull request judges only its own change.'
+    );
+    expect(withGitleaks).not.toContain('every lockfile');
+    const both = tempDir();
+    shim(both, 'gitleaks');
+    shim(both, 'osv-scanner');
+    expect(renderInitHuman(init(gitRepo(), { pathValue: both }))).toContain(
+      'judges all of git history and every lockfile; a pull request'
+    );
+    const without = renderInitHuman(init(gitRepo()));
+    expect(without).not.toContain('judges all of git history');
+    const vaultBin = tempDir();
+    shim(vaultBin, 'vault-guard');
+    expect(renderInitHuman(init(gitRepo(), { pathValue: vaultBin }))).not.toContain('judges all of git history');
+  });
+
+  it('says the history gate will not run in a shallow checkout, only when gitleaks is detected', () => {
+    const source = gitRepo();
+    execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'second'], { cwd: source });
+    const shallow = path.join(tempDir(), 'clone');
+    execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${source}`, shallow]);
+    const bin = tempDir();
+    shim(bin, 'gitleaks');
+    const text = renderInitHuman(init(shallow, { pathValue: bin }));
+    expect(text).toContain('this checkout is shallow, so the history gate will not run here until it is unshallowed');
+    expect(text).toContain('fetch-depth: 0');
+    // The gate stays enabled: the line is words, not a policy decision.
+    expect(readFileSync(path.join(shallow, POLICY_FILE_NAME), 'utf8')).toMatch(
+      /secrets-history:\n\s+product: gitleaks\n\s+enabled: true/
+    );
+
+    const shallowToo = path.join(tempDir(), 'clone');
+    execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${source}`, shallowToo]);
+    const noGitleaks = renderInitHuman(init(shallowToo, { pathValue: '' }));
+    expect(noGitleaks).not.toContain('this checkout is shallow');
+    const full = renderInitHuman(init(gitRepo(), { pathValue: bin }));
+    expect(full).not.toContain('this checkout is shallow');
+  });
 });
 
 describe('the manifest and .gitignore (3.4c)', () => {

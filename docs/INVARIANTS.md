@@ -5831,6 +5831,91 @@ Known open, each a limit rather than a bypass on a pull request:
    version already in the same lockfile (same package, version and path)
    compares as present-on-base.
 
+## The existing-findings section is words only
+
+Unreleased. On a run with NO trust base (a local run, a push, a scheduled
+run) that exits 1 because the history gate or the vulnerabilities gate
+blocks, the text report adds one section before the verdict sentence saying
+how many of the findings predate the policy, how many are in files gone at
+HEAD, and what to do next. A could-not-run exit 2 gets no section.
+
+THE SECTION NEVER CHANGES THE EXIT CODE, THE VERDICT TOKEN OR A BLOCKING FLAG.
+`runAll` (src/run.ts#runAll) computes the facts after `exitCode` and
+`summary` are fixed, through `collectExistingFindings`
+(src/existing-findings.ts#collectExistingFindings), only on a run with no
+trust base whose composed exit is 1, and inside `guardPreview`
+(src/run.ts#guardPreview), so a throw is no section and never exit 2. The text
+report prints them with `existingFindingsLines`
+(src/existing-findings.ts#existingFindingsLines) and again requires a null
+trust base and exit 1, in `renderText` (src/output-text.ts#renderText).
+Nothing that decides a verdict reads the field. Pinned at the whole-run level
+by tests/run.test.ts ("a no-base blocked run sets the field, and exit code,
+token and blocking flags equal the run with the collection off"),
+tests/run.test.ts ("a trust-base run never sets the field"),
+tests/run.test.ts ("a could-not-run exit 2 sets no field and prints no
+section"), tests/run.test.ts ("a throw in the collection is no section, never
+exit 2 and never a lost report") and tests/run.test.ts ("prints the section
+only on exit 1, even if the field were present on an exit 2 result"); the
+last three were checked by mutation (removing the exit-1 condition in
+`runAll` and in `renderText`, and removing the guard, each turns them red).
+Also tests/existing-findings.test.ts ("changes no exit code, verdict token,
+verdict line or blocking flag"). Not pinned: SARIF carries no matching
+notification, and the section is not exercised end to end against the real
+gitleaks and osv-scanner binaries by a test, only by a hand run recorded in
+the change that added it.
+
+A HISTORY FINDING COUNTS AS PREDATING THE POLICY ONLY WHEN EVERY COMMIT IT
+CARRIES DOES. The kept commit of a collapsed finding can be the newest, or
+the one a forged date made oldest, so it alone proves nothing: the finding
+counts only when the kept commit and every `alsoIn` commit are ancestors of
+the first parent of EVERY commit that adds `.guardrails.yaml`: the oldest such
+commit on HEAD's first-parent chain, plus every commit reachable from HEAD that
+adds it relative to ANY parent, merges included (`git log -m`; a merge that
+introduces the file in its own conflict resolution can sit off the first-parent
+chain), on any branch (an intersection of ancestor sets, up to 20 add commits,
+else no number; src/existing-findings.ts#collectExistingFindings).
+The first-parent chain alone is wrong when it runs through a branch that
+forked before the policy and merged the policy in: the merge is the only
+"add" on that chain, so every commit on the branch looked old. Pinned by
+tests/existing-findings.test.ts ("a local branch that forked before the policy
+and merged main in: only what predates the policy on main counts (case H)"),
+which, with the extra collection removed, turns red, by tests/existing-findings.test.ts
+("a merge that introduces the policy in its own conflict resolution, off the
+first-parent chain, still constrains the count (case J)"), which turns red with
+`--no-merges` in place of `-m`, and by the two-branch and octopus cases in the
+same describe block. A cost of the intersection: a
+commit on main made after a pull request branch forked, and before its
+no-ff merge added the policy, is not counted as predating. A
+policy that is in no commit and not in HEAD's tree is reported as not
+committed yet; a policy that arrived with the root commit predates nothing;
+anything git cannot answer leaves the number out of the report rather than
+guessing. Pinned by tests/existing-findings.test.ts ("does not count a
+finding whose kept commit is old but whose alsoIn holds a newer commit
+(forged-date shape)"), checked by mutation: counting only the kept commit
+turns that test red. Gaming it changes a sentence, never an exit code.
+
+THE "then:" LINES NAME ONLY THINGS THAT EXIST TODAY: the stage split, the
+`.gitleaksignore` file (one line per commit a finding lists, with the caveat
+that gitleaks drops those findings uncounted and one line silences every
+secret on that line in that commit that the same rule matches),
+`[[IgnoredVulns]]` in `osv-scanner.toml` (which osv-scanner counts and the
+normalizer reports as suppressed), and the two family gates' own baselines
+(said to cover the dependencies and secrets gates, not these findings).
+It names no conductor command that records findings as known. Pinned by
+tests/existing-findings.test.ts ("names only things that exist today, with
+the gitleaks caveat"). The dep-guard baseline file name appears in the
+README and the baseline module of the installed dep-guard 0.18.1; how the
+file is produced is dep-guard's own documentation and was not checked here.
+
+THE HISTORY-SHALLOW WORDING DEPENDS ON THE MODE. Under a trust base the detail
+speaks of the range from the base to HEAD and of the pull request; with no
+base it says the whole history the gate reads is cut off at the graft. Both
+name `fetch-depth: 0`, and the enforcement rule above is unchanged
+(src/gate-runner.ts#runGateInner). Pinned by tests/gate-runner.test.ts ("with
+no base, speaks of the whole history and never of a range or a pull request")
+and tests/gate-runner.test.ts ("under a trust base, keeps the range and
+pull-request wording").
+
 ## The repository root comes from --project or the cwd, and is passed explicitly everywhere
 
 Unreleased, issue #55. dep-guard, vault-guard and intent-guard each take a

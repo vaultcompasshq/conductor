@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { type Finding, compareFindings } from './envelope.js';
-import { EXIT_COULD_NOT_RUN, composeExitCode, gateExitBlocks } from './exit-codes.js';
+import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, composeExitCode, gateExitBlocks } from './exit-codes.js';
+import { type ExistingFindings, collectExistingFindings } from './existing-findings.js';
 import {
   type GateOutcome,
   type RunGateOptions,
@@ -249,6 +250,13 @@ export interface RunResult {
   };
   exitCode: number;
   /**
+   * Facts for the "existing findings" message: present only on a run with no
+   * trust base where the history or vulnerabilities gate blocked. WORDS ONLY:
+   * computed after `exitCode` and `summary` are fixed, read by the text
+   * report, and never read back by anything that decides a verdict.
+   */
+  existingFindings?: ExistingFindings;
+  /**
    * The preview under the proposed rules: the roles whose `enabled` or
    * `stage` the pull request changes, run once more under those keys. It
    * decides nothing: computed after every field above is fixed, and never
@@ -284,6 +292,14 @@ export interface RunPreview {
 
 export interface RunOptions {
   repoRoot: string;
+  /**
+   * A test hook: replaces the collection of the existing-findings facts, so a
+   * test can inject a throw or switch the collection off. No CLI path sets it.
+   */
+  existingFindingsCollector?: (
+    outcomes: readonly GateOutcome[],
+    repoRoot: string
+  ) => ExistingFindings | null;
   staged: boolean;
   pathValue: string;
   /**
@@ -902,6 +918,18 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     bySeverity,
   };
   const proposals = collectProposals(outcomes, options.trustBase, preparationProposals);
+  // Words only, and never on a pull-request run: counted after the exit code
+  // is fixed, so nothing it reads can move it.
+  // Only on a blocked run (exit 1 as composed); a could-not-run run says that.
+  // Guarded like the preview: a throw here is no section, never exit 2 and
+  // never a lost report.
+  const existing =
+    options.trustBase === undefined && exitCode === EXIT_BLOCKED
+      ? guardPreview(
+          () => (options.existingFindingsCollector ?? collectExistingFindings)(outcomes, options.repoRoot),
+          () => null
+        )
+      : null;
   // Before the preview too, so a preview of up to 300 s cannot move it.
   const generatedAt = (options.now?.() ?? new Date()).toISOString();
 
@@ -940,6 +968,7 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     proposals,
     summary,
     exitCode,
+    ...(existing === null ? {} : { existingFindings: existing }),
     ...(preview === undefined ? {} : { preview }),
   };
 }

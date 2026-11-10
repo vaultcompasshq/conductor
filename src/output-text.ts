@@ -24,6 +24,7 @@
 
 import { type Finding, compareFindings } from './envelope.js';
 import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, gateExitBlocks } from './exit-codes.js';
+import { existingFindingsLines } from './existing-findings.js';
 import {
   CONDUCTOR_OWN_REASONS,
   type GateOutcome,
@@ -2156,6 +2157,19 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // A refused run prints no finding line at all, so no asterisk.
   if (!refused && result.findings.some((finding) => finding.severityIsDerived)) {
     lines.push('', '* severity assigned by the umbrella; that gate reports no per-finding severity.');
+  }
+
+  // After the gates and before the verdict. Words only: it reads nothing the
+  // verdict reads and changes none of it. Never on a trust-base run, and only
+  // on a blocked run (exit 1 as composed, before any advisory mapping): a
+  // run that could not run says that, not how old its findings are.
+  if (
+    result.existingFindings !== undefined &&
+    result.trustBase === null &&
+    !refused &&
+    result.exitCode === EXIT_BLOCKED
+  ) {
+    lines.push('', ...existingFindingsLines(result.existingFindings));
   }
 
   lines.push('', verdict(result, Boolean(options.advisory)));

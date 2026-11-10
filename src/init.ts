@@ -788,6 +788,21 @@ function finishPlan(
           `false in ${POLICY_FILE_NAME} if that is not wanted.`
       );
     }
+    // What the first run will show, said once at the point the history gate is
+    // switched on. Words only: it changes no policy key and no verdict.
+    if (detected.has('secrets-history')) {
+      notes.push(
+        `Note: the first conductor run with no base judges all of git history${
+          detected.has('vulnerabilities') ? ' and every lockfile' : ''
+        }; a pull request judges only its own change.`
+      );
+      if (gitOutput(root, ['rev-parse', '--is-shallow-repository']) === 'true') {
+        notes.push(
+          'Note: this checkout is shallow, so the history gate will not run here until it is unshallowed ' +
+            '(git fetch --unshallow), and CI needs fetch-depth: 0 on actions/checkout. The gate stays enabled.'
+        );
+      }
+    }
   } else {
     // Never rewritten. The policy file is the one artifact a user edits by
     // hand, and re-running init must not have an opinion about their edits.
