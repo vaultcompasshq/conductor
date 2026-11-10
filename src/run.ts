@@ -430,6 +430,14 @@ function disabledGates(policy: Policy): DisabledGate[] {
 }
 
 /**
+ * How the could-not-run detail of every gate of a refused run starts. The
+ * per-gate summary line (src/output-text.ts, gateSummaryLine) reads it to say
+ * "trust base refused" from the outcome alone. Wording only: a gate carrying
+ * it is could-not-run either way.
+ */
+export const TRUST_BASE_REFUSED_DETAIL = 'the trust base could not be used: ';
+
+/**
  * The run that never happened, because the trust base could not be judged
  * against.
  *
@@ -460,7 +468,7 @@ export function refusedTrustBase(
 ): RunResult {
   const { gates, deferred, excluded } = partitionGates(policy, options.stage);
   const outcomes = gates.map((gate) =>
-    preparationFailed({ ...gate, enforce: true }, `the trust base could not be used: ${detail}`)
+    preparationFailed({ ...gate, enforce: true }, `${TRUST_BASE_REFUSED_DETAIL}${detail}`)
   );
   const findings = outcomes.flatMap((outcome) => outcome.findings).sort(compareFindings);
 

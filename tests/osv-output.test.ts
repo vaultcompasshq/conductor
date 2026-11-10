@@ -164,7 +164,12 @@ describe('block mode, and a comparison unavailable for a lockfile', () => {
     expect(lines).toContain(
       '  base comparison unavailable for web/package-lock.json: osv-scanner exited 127 on the base copies; counted as introduced'
     );
-    expect(lines[2]).toBe('conductor run: 1 gate(s), 2 finding(s)');
+    // The head block, then the count line: the split the comparison made,
+    // the gate, and the two findings by name.
+    expect(lines[2]).toBe('new in this pull request: 1 (vulnerabilities gate; 1 already on the base)');
+    expect(lines[3]).toBe('gate vulnerabilities (osv-scanner 2.4.0): ran, exit 1, 2 blocking');
+    expect(lines[4]).toBe('findings: 2 (2 blocking):');
+    expect(lines[7]).toBe('conductor run: 1 gate(s), 2 finding(s)');
     expect(lines.some((l) => l.startsWith('present-on-base:'))).toBe(false);
   });
 });

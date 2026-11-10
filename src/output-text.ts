@@ -38,8 +38,9 @@ import { isLegacyContractPath, legacyChangedSentence } from './intent-prepare.js
 import type { ReportedMatch } from './intent-prepare.js';
 import { SPEC_DIR } from './intent-spec.js';
 import { PRODUCT_FOR_ROLE } from './policy.js';
+import { summaryField } from './escape.js';
 import { escapeNonAscii } from './policy-diff.js';
-import { type RunResult, guardPreview } from './run.js';
+import { type RunResult, TRUST_BASE_REFUSED_DETAIL, guardPreview } from './run.js';
 
 // A file path in a finding is the head's choice on any pull-request run (a
 // file named with a right-to-left override in it), so in the text report,
@@ -369,14 +370,7 @@ function conventionLines(gate: GateOutcome): { under: string[]; chosenBy: string
   return { under, chosenBy };
 }
 
-function gateSection(gate: GateOutcome, verbose: boolean, refusedOnTerminal = false): string[] {
-  // A gate the refused trust base stopped, on a terminal: the refusal is at
-  // the top of the report once, so the section is one line and no more.
-  // Every other caller (a file, a pipe, a pull request comment) keeps the full
-  // section, byte for byte.
-  if (refusedOnTerminal) {
-    return [`  ${gate.role}  ${gate.product}  did not run: the trust base was refused (above)`];
-  }
+function gateSection(gate: GateOutcome, verbose: boolean): string[] {
   const lines: string[] = ['', header(gate, verbose)];
 
   // Under the header, on every outcome that carries it: gitleaks' own
@@ -723,6 +717,11 @@ function trustBaseLines(result: RunResult): string[] {
   if (result.trustBase.notGiven === true) {
     return ['  pull-request mode: no trust base was given, so no rules were read.'];
   }
+  // A refused ref gave no rules and no gate was asked what the pull request
+  // proposes, so neither "rules from <ref>" nor a proposal count is true.
+  if (result.trustBase.refusal !== null && result.trustBase.refusal !== undefined) {
+    return ['  pull-request mode: the trust base was refused, so no rules were read.'];
+  }
   const lines = [
     `  pull-request mode: rules from ${result.trustBase.ref}. ${proposalCount(result)}.`,
   ];
@@ -1009,6 +1008,231 @@ export function gateLogLines(result: RunResult, options: { terminal?: boolean } 
     lines.push(notRun(gate.role, gate.product, 'head tree equals the base tree'));
   }
   return lines;
+}
+
+/**
+ * A version as the summary lines print it: version characters only, since a
+ * probed version can carry anything after x.y.z, or the words for none.
+ */
+function summaryVersion(raw: string | null): string {
+  const version = raw === null ? '' : versionCharacters(raw);
+  return version === '' ? 'version unknown' : version;
+}
+
+/**
+ * ONE LINE FOR ONE GATE, from its outcome alone (issue 105): ran, with the
+ * gate version, the exit code and the blocking count, or did not run, with
+ * the reason. The line the step summary and the pull request comment lead
+ * with, so a gate that did not run can never read as one that passed.
+ *
+ * A CLOSED SHAPE. Every word is conductor's own (a role, a product, a
+ * could-not-run reason) and every other field is a number or a version cut
+ * to version characters, so nothing a pull request or a gate printed reaches
+ * the line. action.yml and scripts/lib/pr-comment.mjs copy a line only when
+ * it matches that shape whole.
+ *
+ * The blocking count is the findings the report marks blocking, not the
+ * token's count: a gate that exited non-zero with none marked says "exit 1,
+ * 0 blocking", which is what happened. A gate whose resolved version is not
+ * the one the run expected is could-not-run (version-skew) since 0.13.0, so
+ * that line is the one that prints both versions.
+ *
+ * Describes, decides nothing: the exit code was composed before this is read.
+ */
+export function gateSummaryLine(gate: GateOutcome): string {
+  const head = `gate ${gate.role} (${gate.product} ${summaryVersion(gate.productVersion)}): `;
+  const enforcement = gate.enforce ? '' : ', not enforced';
+  if (gate.couldNotRun !== null) {
+    const refused =
+      gate.couldNotRun.reason === 'preparation-failed' && gate.couldNotRun.detail.startsWith(TRUST_BASE_REFUSED_DETAIL);
+    if (refused) {
+      // Never spawned, so nobody asked it for a version: no version at all,
+      // as for a deferred or disabled gate. "version unknown" is kept for a
+      // gate that was asked and did not say.
+      return `gate ${gate.role} (${gate.product}): did not run (trust base refused)${enforcement}`;
+    }
+    const pinned =
+      gate.versionSkew === undefined ? '' : `, the action pinned ${summaryVersion(gate.versionSkew.expected)}`;
+    return `${head}did not run (${gate.couldNotRun.reason})${pinned}${enforcement}`;
+  }
+  // AT MOST THREE DIGITS, which the closed shape in action.yml and
+  // scripts/lib/pr-comment.mjs relies on. A gate reaches this branch only
+  // when its exit code is one its product lists as clean or blocked
+  // (src/products.ts: 0, 1 and 3 today); any other status, a Windows
+  // 32-bit one or a signal's null included, is could-not-run in runGate
+  // and takes the branch above, which prints no exit code.
+  const exit = gate.exitCode === null ? 'no exit code' : `exit ${gate.exitCode}`;
+  const blocking = gate.findings.filter((finding) => finding.blocking).length;
+  const nothing = gateCheckedNothing(gate) ? ', checked nothing' : '';
+  return `${head}ran, ${exit}, ${blocking} blocking${nothing}${enforcement}`;
+}
+
+/**
+ * The per-gate lines of a run: one per gate that has an outcome, then one per
+ * enabled gate that was never spawned (in the job log's own words for why),
+ * then one per gate the policy file switches off. The same closed shape.
+ */
+export function gateSummaryLines(result: RunResult): string[] {
+  const notRun = (gate: { role: string; product: string }, what: string): string =>
+    `gate ${gate.role} (${gate.product}): ${what}`;
+  return [
+    ...result.gates.map(gateSummaryLine),
+    ...result.deferred.map((gate) => notRun(gate, `skipped (deferred to stage ${gate.stage})`)),
+    ...result.skipped.map((gate) => notRun(gate, `skipped (${skipWording(gate.reason).line})`)),
+    ...result.excluded.map((gate) => notRun(gate, 'skipped (--gate did not name it)')),
+    ...result.treeUnchanged.map((gate) => notRun(gate, 'skipped (head tree equals the base tree)')),
+    ...(result.disabled ?? []).map((gate) => notRun(gate, 'disabled (enabled: false)')),
+  ];
+}
+
+/**
+ * The two fixed lines for a run whose trust base gave no rules. They name no
+ * ref and carry none of the refusal's own text, which is printed once in the
+ * report under them.
+ */
+export const TRUST_BASE_LINES = [
+  'trust-base: refused, no rules were read and no gate ran',
+  'trust-base: not given on a pull-request job, no rules were read and no gate ran',
+] as const;
+
+/**
+ * THE RUN-LEVEL SLOT: the fixed lines about the run as a whole, printed
+ * directly under the verdict token and above the per-gate lines. Each is a
+ * closed shape (a fixed sentence, or one with numbers in it), so the Action
+ * and the comment poster can copy them without reading anything a pull
+ * request wrote. A later line about the run is added here and to the two
+ * closed sets that read it, and nowhere else.
+ *
+ * The present-on-base line stays first and the intent-spec line second, the
+ * two positions an Action older than this slot reads.
+ */
+export function runLevelLines(result: RunResult): string[] {
+  const reported = presentOnBaseReported(result);
+  const specLine = intentSpecLine(result);
+  const refusal = result.trustBase?.refusal;
+  const refused = refusal !== undefined && refusal !== null;
+  // What this pull request introduced (issue 102, first cut), from the one
+  // split conductor already computes: the vulnerabilities gate's comparison
+  // with the base, which runs only when its head scan found something. The
+  // line says which gate, because no other gate compares with the base and a
+  // bare count would claim their findings were all split too. Absent when no
+  // comparison ran. No second base scan is made for it.
+  const compared = result.gates.flatMap((gate) => (gate.baseComparison === undefined ? [] : [gate.baseComparison]));
+  const sum = (pick: (comparison: (typeof compared)[number]) => number): number =>
+    compared.reduce((total, comparison) => total + pick(comparison), 0);
+  return [
+    ...(reported === 0 ? [] : [`present-on-base: ${reported} reported, not blocking`]),
+    ...(specLine === null ? [] : [specLine]),
+    ...(refused ? [TRUST_BASE_LINES[result.trustBase?.notGiven === true ? 1 : 0]] : []),
+    ...(compared.length === 0
+      ? []
+      : [
+          `new in this pull request: ${sum((c) => c.introduced)} (vulnerabilities gate; ` +
+            `${sum((c) => c.presentOnBase)} already on the base)`,
+        ]),
+  ];
+}
+
+/** How many findings the head block and the job log name before "and M more". */
+export const FINDINGS_NAMED = 10;
+
+/** The longest a named-finding line can be: its fixed words plus the four field caps below. */
+export const FINDING_LINE_MAX = 520;
+
+/** Where a named finding is: the package and its version, the file and line, or the paths. */
+function namedSubject(entry: Finding[]): string {
+  const first = entry[0] as Finding;
+  const subject = first.subject;
+  if (first.product === 'osv-scanner' && subject.kind === 'package') {
+    return osvSubject(entry);
+  }
+  switch (subject.kind) {
+    case 'package': {
+      const version = typeof first.details.version === 'string' ? `@${first.details.version}` : '';
+      return `${subject.name}${version} (${subject.manifest})`;
+    }
+    case 'location':
+      return `${subject.file}:${subject.line}`;
+    case 'paths': {
+      const more = subject.paths.length - 3;
+      return `${subject.paths.slice(0, 3).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+    }
+    default:
+      return subjectLabel(first);
+  }
+}
+
+/**
+ * THE BLOCKING FINDINGS, NAMED (issue 144): a count line over every finding,
+ * then the first `limit` BLOCKING entries as gate, rule, where and the
+ * reason, then "and M more blocking". A finding that does not block is
+ * counted and not named: it is in the gate's section. When none blocks the
+ * count line stands alone, with no colon and no list. "Blocking" is the
+ * gate's own mark on the finding, whatever --advisory or enforce: false
+ * then does with the exit code. For the head block of the text report, which the Action copies to
+ * the step summary and the comment poster lifts above the collapsed report,
+ * and for the job log. Empty when no gate that ran reported one.
+ *
+ * EVERY FIELD IS TEXT A PULL REQUEST CAN CHOOSE (a path, a package name, a
+ * rule a user pattern named, a message), so each goes through summaryField
+ * (src/escape.ts) and nothing else writes one: a line is one printable ASCII
+ * line with no backtick, tag or workflow command, at most FINDING_LINE_MAX
+ * long, and always starts with the fixed word "finding: ", so it can never
+ * be read as a per-gate line or a verdict.
+ *
+ * Only gates that RAN are named. A gate that could not run carries the
+ * umbrella's own finding about the gate, and its per-gate line already says
+ * it did not run. An osv-scanner advisory is one entry however many lockfiles
+ * carry it, as in the gate's section. The heading is a parameter because a
+ * later run mode lists the same findings under different words.
+ */
+export function findingSummaryLines(
+  result: RunResult,
+  options: { heading?: string; limit?: number } = {}
+): string[] {
+  const heading = options.heading ?? 'findings';
+  const limit = options.limit ?? FINDINGS_NAMED;
+  const entries = result.gates
+    .filter((gate) => gate.couldNotRun === null)
+    .flatMap(findingEntries)
+    .sort((a, b) => compareFindings(a[0] as Finding, b[0] as Finding));
+  if (entries.length === 0) {
+    return [];
+  }
+  // T and B count FINDINGS, as every other count on the report does. K and M
+  // count the LINES below, which are entries: one osv advisory on one
+  // package is one line however many lockfiles carry it. K and M are always
+  // the same unit as each other.
+  const total = entries.reduce((sum, entry) => sum + entry.length, 0);
+  const blocking = entries.flat().filter((finding) => finding.blocking).length;
+  const named = entries.filter((entry) => entry.some((finding) => finding.blocking));
+  if (named.length === 0) {
+    return [`${heading}: ${total} (0 blocking)`];
+  }
+  const shown = named.slice(0, limit);
+  const more = named.length - shown.length;
+  const lines = [`${heading}: ${total} (${blocking} blocking)${more > 0 ? `, the first ${shown.length}` : ''}:`];
+  for (const entry of shown) {
+    const first = entry[0] as Finding;
+    const subject = summaryField(namedSubject(entry), 160);
+    lines.push(
+      `finding: BLOCKING ${summaryField(first.product, 40)} ` +
+        `${summaryField(first.ruleId, 80)}${subject === '' ? '' : ` ${subject}`}: ${summaryField(first.message, 200)}`
+    );
+  }
+  if (more > 0) {
+    lines.push(`and ${more} more blocking`);
+  }
+  return lines;
+}
+
+/**
+ * The same lines for the job log, so a run whose report went to a file still
+ * says what was found where its log is read (issue 144: a blocked run's log
+ * said only "findings (36, 36 blocking)").
+ */
+export function findingLogLines(result: RunResult): string[] {
+  return findingSummaryLines(result).map((line) => `conductor: ${line}`);
 }
 
 type VersionSkew = NonNullable<GateOutcome['versionSkew']>;
@@ -1510,15 +1734,6 @@ export interface TextOptions {
    * that did not block, never about a gate that did not run.
    */
   advisory?: boolean;
-
-  /**
-   * The report is going straight to a terminal (cli.ts: stdout is a TTY and
-   * no --output). Only one thing reads it: a refused trust base prints its
-   * refusal once at the top and one line per gate, rather than the refusal
-   * again in every gate's section and again in every gate's finding. A file,
-   * a pipe and a pull request comment never set it and are unchanged.
-   */
-  terminal?: boolean;
 }
 
 /**
@@ -1834,15 +2049,24 @@ function versionLine(version: string | undefined): string[] {
 }
 
 /**
- * The version line, then the verdict-token line directly under it: the first
- * two lines of every report that carries a token. Without a version the
- * token is the first line. The closing verdict sentence is a separate thing
- * and stays where it was.
+ * THE HEAD BLOCK: the version line, the verdict-token line directly under it
+ * (the first line without a version), then the run-level fixed lines, then
+ * one line per gate, then the named findings. Contiguous, in that order. A
+ * reader of the report (the Action, the comment poster) takes lines from the
+ * third on for as long as each matches and stops at the first that does not.
+ * Down to the last per-gate line every line is a closed shape: no text from
+ * a gate or a pull request sits there. The named findings under them do
+ * carry such text, each field escaped and capped by summaryField, each line
+ * starting with a fixed word. The closing verdict sentence is a separate
+ * thing and stays where it was.
  */
 function headerLines(result: RunResult, options: TextOptions): string[] {
   return [
     ...versionLine(options.version),
     `verdict-token: ${verdictToken(result, Boolean(options.advisory))}`,
+    ...runLevelLines(result),
+    ...gateSummaryLines(result),
+    ...findingSummaryLines(result),
   ];
 }
 
@@ -1883,30 +2107,31 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // question, what failed the run, and that one is enforced gates only. Two
   // different questions, so two numbers, and the section headers and the
   // "not enforced" lines are what connect them.
-  // The fixed third line (osv design, section 4.4), printed only when known
-  // advisories were reported and not blocking. The Action copies it to the
-  // job summary when, and only when, line 3 is exactly this shape, so a pass
-  // that carries them does not read as spotless there either.
-  const reported = presentOnBaseReported(result);
-  // The intent-spec line follows it, so the present-on-base line, when
-  // present, stays line 3 and every report without an intent-spec line keeps
-  // the shape the Action already reads.
-  const specLine = intentSpecLine(result);
+  // The head block carries the fixed lines the Action copies to the job
+  // summary: the present-on-base line (osv design, section 4.4), the
+  // intent-spec line, and one line per gate.
+  //
+  // A REFUSED RUN prints its refusal once, here, and no gate section: every
+  // gate is already "did not run (trust base refused)" in the head block,
+  // and a section per gate repeated the refusal in each header and again in
+  // each gate's finding. Its count line counts nothing either: refusedTrustBase
+  // fills result.gates and result.findings with one could-not-run outcome per
+  // enabled gate, so "N gate(s), N finding(s)" described a run that did not
+  // happen (the same defect jobLogSummary was fixed for, issue #46).
+  const refused = refusal.length > 0;
   const lines: string[] = [
     ...headerLines(result, options),
-    ...(reported === 0 ? [] : [`present-on-base: ${reported} reported, not blocking`]),
-    ...(specLine === null ? [] : [specLine]),
     ...refusal,
-    ...(refusal.length === 0 ? [] : ['']),
-    `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
+    ...(refused ? [''] : []),
+    refused
+      ? 'conductor run: no gate ran and nothing was checked'
+      : `conductor run: ${result.gates.length} gate(s), ${result.findings.length} finding(s)`,
   ];
 
-  const refusedOnTerminal = options.terminal === true && refusal.length > 0;
-  if (refusedOnTerminal && result.gates.length > 0) {
-    lines.push('');
-  }
-  for (const gate of result.gates) {
-    lines.push(...gateSection(gate, Boolean(options.verbose), refusedOnTerminal));
+  if (!refused) {
+    for (const gate of result.gates) {
+      lines.push(...gateSection(gate, Boolean(options.verbose)));
+    }
   }
 
   const aside = [
@@ -1928,8 +2153,8 @@ export function renderText(result: RunResult, options: TextOptions = {}): string
   // A derived severity is marked with a trailing asterisk above; say what
   // that means rather than leaving a reader to guess, and only when one is
   // actually on screen.
-  // A compact terminal refusal prints no finding line at all, so no asterisk.
-  if (!refusedOnTerminal && result.findings.some((finding) => finding.severityIsDerived)) {
+  // A refused run prints no finding line at all, so no asterisk.
+  if (!refused && result.findings.some((finding) => finding.severityIsDerived)) {
     lines.push('', '* severity assigned by the umbrella; that gate reports no per-finding severity.');
   }
 
