@@ -1377,3 +1377,75 @@ function prRepo(): string {
   git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test', 'commit', '--quiet', '-m', 'branch');
   return repo;
 }
+
+describe('the existing-findings facts in a whole run (words only)', () => {
+  const run = (extra: Partial<RunOptions> = {}, bin = fiveStubs()) =>
+    runAll(ALL_FIVE, { repoRoot: lockfileRepo(), staged: false, pathValue: bin, tempRoot: tempDir(), ...extra });
+  const off = { existingFindingsCollector: () => null };
+  const decided = (result: ReturnType<typeof runAll>) => ({
+    exitCode: result.exitCode,
+    token: verdictToken(result, false),
+    blocking: result.findings.map((f) => f.blocking),
+    summary: result.summary,
+  });
+
+  it('a no-base blocked run sets the field, and exit code, token and blocking flags equal the run with the collection off', () => {
+    const bin = fiveStubs();
+    const on = run({}, bin);
+    const disabled = run(off, bin);
+    expect(on.exitCode).toBe(1);
+    expect(on.existingFindings?.history).toBeGreaterThan(0);
+    expect(disabled.existingFindings).toBeUndefined();
+    expect(decided(on)).toEqual(decided(disabled));
+  });
+
+  it('a trust-base run never sets the field', () => {
+    const bin = tempDir();
+    stubGate(bin, 'gitleaks', {
+      versionSubcommand: true,
+      versionLine: '8.30.1',
+      reportFlag: '--report-path',
+      reportBody: readFileSync(path.join(FIXTURES, 'gitleaks-8.30.1-history-blocking.json'), 'utf8'),
+      exit: 3,
+      stdout: '',
+    });
+    const result = run(
+      { trustBase: { ref: 'HEAD', policyChanged: false, refusal: null, treeUnchanged: true } },
+      bin
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.existingFindings).toBeUndefined();
+  });
+
+  it('a could-not-run exit 2 sets no field and prints no section', () => {
+    const bin = fiveStubs();
+    rmSync(path.join(bin, 'osv-scanner'));
+    const result = run({}, bin);
+    expect(result.exitCode).toBe(2);
+    expect(result.existingFindings).toBeUndefined();
+    expect(renderText(result)).not.toContain('existing findings:');
+  });
+
+  it('prints the section only on exit 1, even if the field were present on an exit 2 result', () => {
+    const bin = fiveStubs();
+    const blocked = run({}, bin);
+    expect(renderText(blocked)).toContain('existing findings:');
+    expect(renderText({ ...blocked, exitCode: 2 })).not.toContain('existing findings:');
+  });
+
+  it('a throw in the collection is no section, never exit 2 and never a lost report', () => {
+    const bin = fiveStubs();
+    const thrown = run(
+      {
+        existingFindingsCollector: () => {
+          throw new Error('injected');
+        },
+      },
+      bin
+    );
+    expect(thrown.exitCode).toBe(1);
+    expect(thrown.existingFindings).toBeUndefined();
+    expect(decided(thrown)).toEqual(decided(run(off, bin)));
+    expect(renderText(thrown)).toContain('verdict: exit 1');
+  });
+});
