@@ -14,7 +14,59 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Added
+
+- **One line per gate, where a reviewer already looks (issue 105).** Every
+  full text report now carries, directly under the verdict token, one line
+  per gate: `gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking`, or
+  `did not run (binary-missing)`, or `skipped (no contract)`, or `disabled
+  (enabled: false)`. The Action copies those lines to the step summary, and
+  the pull request comment leads with them. A gate that did not run never
+  reads as one that passed. When the installed gate is not the version the
+  action pinned, the line prints both: `did not run (version-skew), the
+  action pinned 0.20.0`.
+- **The blocking findings by name in the job log, the step summary and the
+  comment (issue 144, the summary half).** A count of every finding, then
+  the first ten that block, as gate, rule, place and reason, then `and N
+  more blocking`. A finding that does not block is counted and not named;
+  when none blocks the line is the count alone, `findings: 77 (0 blocking)`.
+  The job log prints them when the report went to a file. Uploading the
+  SARIF log by default is not part of this change.
+- **The comment leads with the verdict, a row per gate and the named
+  findings, with the whole report collapsed under them (issue 102, a first
+  cut).** When the vulnerabilities gate compared the pull request with the
+  base branch, the comment and the summary also carry `new in this pull
+  request: N (vulnerabilities gate; M already on the base)`. No other gate
+  compares with the base, so the line is absent when that comparison did not
+  run, and nothing here scans the base a second time. A report with no
+  per-gate line, which is what a conductor older than this one writes, is
+  posted as it always was.
+
+### Changed
+
+- **The text report has a head block.** Lines 1 and 2 are still the version
+  and the verdict token, and a present-on-base or intent-spec line still
+  follows them first. The per-gate lines and the named findings come next,
+  before the `conductor run:` count line, which used to be line 3 of a
+  report with neither of those lines. A script that reads the count line by
+  position needs to find it by its `conductor run:` prefix instead.
+- **A refused trust base prints its refusal once on every surface**, with
+  each gate as `did not run (trust base refused)` and no gate section. A
+  report written to a file or a pipe used to repeat the refusal in every
+  gate's section and finding; only a terminal got the short form. The
+  compact body the comment gets on a refusal gains the fixed trust-base line
+  and the per-gate lines.
+- The verdict, the verdict token, the exit code and the SARIF log are
+  unchanged by all of the above.
+
 ### Fixed
+
+- A refused run's text report no longer says `rules from <ref>` with a
+  count of proposed control changes, when no rule was read and no gate was
+  asked. It says the trust base was refused and no rules were read.
+- A refused run's text report no longer counts `N gate(s), N finding(s)`
+  for a run in which nothing ran. It says no gate ran and nothing was
+  checked.
 
 - A could-not-run headline now quotes the gate's own stated reason (issue 178).
   When the gate wrote JSON and it carries `couldNotRun`, that field is quoted

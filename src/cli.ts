@@ -44,6 +44,7 @@ import {
 } from './init.js';
 import { renderSarif } from './output-sarif.js';
 import {
+  findingLogLines,
   gateLogLines,
   jobLogSummary,
   previewLogLines,
@@ -288,15 +289,6 @@ const PROJECT_OPTION_HELP =
  */
 function applyAdvisory(exitCode: number, advisory: boolean): number {
   return advisory && exitCode === EXIT_BLOCKED ? EXIT_OK : exitCode;
-}
-
-/**
- * Whether the text report is rendered for a terminal: only when it goes to
- * stdout (no --output) and stdout is a TTY. A file, a pipe and the
- * --text-report copy never are, so they stay byte for byte as before.
- */
-export function rendersToTerminal(output: string | undefined, stdoutIsTTY: boolean | undefined): boolean {
-  return output === undefined && stdoutIsTTY === true;
 }
 
 /**
@@ -928,22 +920,19 @@ export function buildProgram(): Command {
         // there: each finding's `properties.blocking` is the gate's own
         // decision (see output-sarif.ts) and is unaffected by this flag,
         // exactly as the text report's per-finding BLOCKING marker is.
-        const renderTextReport = (terminal: boolean): string =>
+        // One rendering for a terminal, a file, a pipe and the --text-report
+        // copy: a refused run is the short form on every one of them.
+        const renderTextReport = (): string =>
           renderText(result, {
             verbose: Boolean(options.verbose),
             version: pkg.version,
             compact: Boolean(options.compactOnRefusal),
             advisory,
-            ...(terminal ? { terminal: true } : {}),
           });
-        // Only a report printed straight to a terminal is told so; a file,
-        // a pipe and the --text-report copy render exactly as before.
-        const toTerminal = rendersToTerminal(options.output, process.stdout.isTTY);
-        const rendered =
-          format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderTextReport(toTerminal);
+        const rendered = format === 'sarif' ? `${renderSarif(result, pkg.version)}\n` : renderTextReport();
         // The SAME result, rendered a second time, never a second run: the
         // token in this file is for the run that set the exit code below.
-        const textReport = options.textReport === undefined ? undefined : renderTextReport(false);
+        const textReport = options.textReport === undefined ? undefined : renderTextReport();
 
         if (options.output === undefined) {
           process.stdout.write(rendered);
@@ -993,6 +982,10 @@ export function buildProgram(): Command {
         // for an unwritable file.
         const logLines = [
           ...gateLogLines(result, process.stderr.isTTY === true ? { terminal: true } : {}),
+          // The findings by name, only when the report went to a file: then
+          // the log is the one place a reader of the job sees them (issue
+          // 144). A report on stdout names them itself, directly above.
+          ...(options.output === undefined ? [] : findingLogLines(result)),
           ...proposalLogLines(result),
           ...previewLogLines(result),
           ...versionSkewWarnings(result),

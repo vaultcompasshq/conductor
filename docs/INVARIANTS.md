@@ -4456,11 +4456,13 @@ message text unchanged, and silent when the gate sent no warnings).
 The exit-code assertion is a different test, tests/output-sarif.test.ts ("leaves the exit code alone in every one of those cases"), and it sits before that describe.
 
 The intent-spec header line is one of four fixed strings and carries no
-repository text; the Action copies it only on a whole-line match on line 3
-or 4. The strings are `INTENT_SPEC_LINES` (src/output-text.ts#INTENT_SPEC_LINES),
+repository text; the Action copies it only on a whole-line match in the
+report's head block, which it reads from line 3 and leaves at the first line
+that is not one of its closed shapes (see "The head block" below; before
+that block existed it read lines 3 and 4). The strings are `INTENT_SPEC_LINES` (src/output-text.ts#INTENT_SPEC_LINES),
 printed after the present-on-base line, at most one, in the precedence
-ambiguous, none-changed, winner-changed, weak; the Action matches each of
-lines 3 and 4 whole (action.yml#runs.steps.gates). Pinned by
+ambiguous, none-changed, winner-changed, weak; the Action matches each
+line whole (action.yml#runs.steps.gates). Pinned by
 tests/action.test.ts ("copies an intent-spec line from line 3 or 4 to the
 step summary, whole lines only") and tests/intent-run.test.ts ("prints the
 changed-winner line, not the weak one, when the new winner is weak", and
@@ -6212,3 +6214,161 @@ writes there; only an unset `core.hooksPath` with husky declared in
 package.json or a tracked `.husky/` sends the hook to `.husky/pre-commit`.
 Pinned by "does not redirect when core.hooksPath is set explicitly to
 .git/hooks, the path git then runs (B2)" in tests/init-phase3.test.ts.
+
+## The head block: what reaches the step summary and the top of the comment
+
+New with the per-gate summary line (issues 105, 144 and 102). The step
+summary and the pull request comment render markdown, and the text report
+carries text a pull request can choose (a path, a package name, a rule a
+user pattern named, a finding's message). So a line of the report reaches
+either surface outside the fenced report only under one of two rules, and
+which rule each line is under is written here.
+
+THE HEAD BLOCK IS READ BY POSITION. Every full text report starts with the
+version line, the verdict-token line, the run-level fixed lines, one line
+per gate, then the named findings, contiguous and in that order
+(src/output-text.ts#headerLines). The gates step
+(action.yml#runs.steps.gates) and the comment poster
+(scripts/lib/pr-comment.mjs#headBlock) each read from line 3 for as long as
+the whole of each line matches a shape they hold, and stop at the first line
+that does not; neither searches the report. A line further down, in a gate
+section, is never copied, whatever it looks like. Pinned by
+tests/action.test.ts ("never copies a gate-shaped line from below the head
+block, where a finding can write one") and scripts/tests/pr-comment.test.mjs
+("never lifts a line from below the head block, where a finding can write
+one"). Mutation-checked: turning the stop into a skip, in the gates step and
+in `headBlock` separately, turns three named tests red each time.
+
+RULE ONE, A CLOSED SHAPE: the run-level lines and the per-gate lines. A
+per-gate line (src/output-text.ts#gateSummaryLine, and
+src/output-text.ts#gateSummaryLines for a gate that was never spawned or is
+switched off) is built from the outcome alone and holds only a role, a
+product, a could-not-run reason or a stage, each from conductor's own fixed
+lists, numbers, and a version cut to version characters
+(src/gate-runner.ts#versionCharacters), because a probed version can carry
+anything after x.y.z. It says `ran, exit N, M blocking` or `did not run
+(reason)`; a gate with `couldNotRun` set never renders the word `ran`. The
+run-level lines (src/output-text.ts#runLevelLines) are fixed sentences, some
+with numbers: the present-on-base line, the four intent-spec lines
+(src/output-text.ts#INTENT_SPEC_LINES), the two trust-base lines
+(src/output-text.ts#TRUST_BASE_LINES) and the `new in this pull request`
+count. They name no ref, branch or file. The slot is above the per-gate
+lines and closes at the first of them. A later run-level line is added in
+three places and nowhere else: `runLevelLines`, `run_level_shape` in the
+gates step, and `RUN_LEVEL_LINE` in scripts/lib/pr-comment.mjs. Pinned by
+tests/summary-line.test.ts ("says did not run with the reason for every
+could-not-run reason, and never ran", "keeps only version characters of a
+version, so gate output cannot write the line") and tests/action.test.ts
+("copies a per-gate line only when the whole line is the closed shape",
+"puts the run-level lines above the per-gate lines, and closes the slot at
+the first gate line").
+
+RULE TWO, ESCAPED AND CAPPED: the named findings
+(src/output-text.ts#findingSummaryLines). Their fields are exactly the text
+rule one keeps out. Every field goes through `summaryField`
+(src/escape.ts#summaryField) and nothing else writes one: the result is one
+line of printable ASCII with no backtick, angle bracket or ampersand, with
+`::` and `##[` broken up, cut at a fixed length. Each line starts with the
+fixed words `finding: BLOCKING `, so it is never a per-gate line or a
+verdict. ONLY WHAT BLOCKS IS NAMED: the count line counts every finding of
+the gates that ran (`findings: T (B blocking)`), the lines under it are the
+first ten entries that carry the gate's own blocking mark, whatever
+--advisory or `enforce: false` then does with the exit code, and `and M more
+blocking` counts the rest of those. When none blocks the count line stands
+alone, without its colon, and ends the block. T and B count findings; the
+lines shown and M count entries, the same unit as each other (one osv
+advisory on one package is one entry however many lockfiles carry it):
+tests/summary-line.test.ts ("counts the lines shown and the lines left in
+the same unit when an advisory spans lockfiles", "is the count line alone,
+with no colon and no list, when nothing blocks"). The two
+consumers do not take that on trust: each copies a finding line only into a
+code fence, only inside the block the count line opens, at most 25 of them,
+and replaces a line that holds a backtick or anything outside printable
+ASCII. Pinned by tests/escape.test.ts (one case per injection class:
+newline and control characters, backtick, HTML, workflow command, non-ASCII,
+length), tests/summary-line.test.ts ("keeps every hostile field on one
+printable line with no backtick, tag or workflow command"),
+tests/action.test.ts ("keeps a hostile finding inside the fence: no
+backtick, tag, workflow command or second line", "replaces a finding line
+that holds a backtick or anything unprintable, and never copies it") and
+scripts/tests/pr-comment.test.mjs ("replaces a finding line holding a
+backtick or anything unprintable, and copies at most 25").
+Mutation-checked: removing the backtick test from the gates step turns the
+second action test red.
+
+"PRINTABLE ASCII" IN THE GATES STEP IS CHECKED IN THE C LOCALE. The step's
+checks are bracket ranges (`[0-9]`, `[0-9A-Za-z.+-]`, `[ -~]`), and what a
+range holds is the locale's decision: under a UTF-8 locale the bash macOS
+ships (3.2) takes an accented Latin letter for a member of `[ -~]` and of
+`[A-Za-z]`. The step sets `LC_ALL=C` after conductor has exited and before
+its first check (action.yml#runs.steps.gates), which covers the token, the
+head block, the proposed lines and the preview line; conductor and the gates
+keep the runner's locale. The poster's checks are JavaScript regular
+expressions, which have no locale. Pinned by tests/action.test.ts ("never
+copies a per-gate line whose version holds an accented letter", "replaces a
+finding line that holds an accented letter, and a proposed line that does"),
+which run the step under /bin/bash with LANG and LC_ALL set to en_US.UTF-8
+rather than under the first bash on PATH with neither set, and by "is run
+where an unset locale would let an accented letter through (the macOS system
+bash)", which fails on macOS if that shell stops showing the weakness and
+the two tests above stop proving anything. Mutation-checked: removing the
+locale line turns both red.
+
+THE SCAN IS BOUNDED: no further than line 100 of the report, never past a
+line over 600 characters, at most 25 finding lines. tests/action.test.ts and
+scripts/tests/pr-comment.test.mjs each carry "reads no further than line 100
+of the report" and "stops at a line over 600 characters, and takes one of
+exactly 600". An exit code in a per-gate line is at most three digits
+because a gate reads as ran only on an exit code its product lists as clean
+or blocked (src/products.ts#PROFILES); any other status is
+could-not-run, and that line prints no exit code.
+
+THE THREE SPELLINGS OF THE SHAPES AGREE. The renderer is TypeScript, the
+gates step is bash and the poster is JavaScript with no build step, so the
+shapes are written three times. What the renderer prints is fed through the
+other two: tests/action.test.ts ("accepts every head block line the text
+report renders, for every kind of line", "accepts the findings lines the
+text report renders, cut and uncut and with none blocking") and
+tests/summary-line.test.ts ("for a mixed run, a refused run, a run with no
+trust base given, and a clean one").
+
+A REFUSED RUN IS THE REFUSAL ONCE AND EACH GATE AS DID NOT RUN, on every
+surface. `renderText` (src/output-text.ts#renderText) prints the fixed
+trust-base line, one `did not run (trust base refused)` line per gate
+(with no version, since a gate that was never spawned was never asked for
+one), the
+refusal and its detail once, and no gate section; it says neither where
+rules came from nor how many gates and findings there were, since no rule
+was read and nothing ran. `gateSummaryLine` knows a refused gate from its
+outcome by the detail prefix `refusedTrustBase` writes
+(src/run.ts#TRUST_BASE_REFUSED_DETAIL); that changes the words in the
+parentheses and nothing else, the gate is could-not-run either way. In the
+comment the report under the gate rows starts open on such a run and
+collapsed on every other, decided by the fixed trust-base line in the head
+block (scripts/tests/pr-comment.test.mjs, "starts the report open on a run
+with no trust base, and collapsed on every other"). A report with no
+per-gate line at all, which is what a conductor older than the head block
+writes, is not collapsed and is posted as it always was ("posts a report
+with no per-gate line exactly as before, as a conductor without the head
+block writes it", same file). Pinned
+by tests/summary-line.test.ts ("prints the refusal detail once, each gate as
+did not run, and no gate section", "never says rules came from the ref,
+since none were read", "never counts gates and findings on a run where
+nothing ran").
+
+NONE OF THIS DECIDES ANYTHING. Every line is read off a `RunResult` whose
+exit code was already composed; the exit code, the verdict token and SARIF
+are unchanged by all of it. The named findings are a second, shorter
+listing: the first ten blocking entries, with the rest counted, and they
+change no count on the report.
+
+NOT claimed. That the text inside a finding line is true: a pull request
+chooses its own paths and messages, and can make its own finding line read
+however it likes within the escaping above. That markdown punctuation other
+than the backtick is escaped: an underscore or a bracket in a path is left
+alone, and is inert only because both consumers print these lines inside a
+code fence. That an Action older than this block shows per-gate lines: it
+reads lines 3 and 4 only, and still gets the present-on-base and intent-spec
+lines, which stay first. That `new in this pull request` covers every gate:
+it is the vulnerabilities gate's base comparison, which is the only split
+conductor computes, and it is absent when that comparison did not run.

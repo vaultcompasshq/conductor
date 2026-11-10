@@ -1205,6 +1205,33 @@ describe('conductor run --text-report (issue #85)', () => {
     expect(result.stdout).toMatch(/; verdict-token blocked \(\d+\); sarif report written to /);
   });
 
+  // Issue 144: a blocked run's log said only "findings (N, N blocking)".
+  it('names the findings in the job log when the report went to a file, and in the report head', () => {
+    const repo = repoWithPolicy(INTENT_ONLY);
+    const bin = tempDir();
+    stubGate(bin, 'intent-guard', { stdout: BLOCKED, exit: 1 });
+    const out = tempDir();
+    const text = path.join(out, 'report.txt');
+
+    const toFile = runCli(
+      repo,
+      ['run', '--staged', '--format', 'sarif', '--output', path.join(out, 's.sarif'), '--text-report', text],
+      bin
+    );
+    const logged = toFile.stderr.split('\n').filter((line) => line.startsWith('conductor: finding'));
+    expect(logged[0]).toMatch(/^conductor: findings: \d+ \(\d+ blocking\):$/);
+    expect(logged.slice(1).every((line) => /^conductor: finding: (BLOCKING|report) intent-guard /.test(line))).toBe(true);
+    expect(logged.length).toBeGreaterThan(1);
+    const report = readFileSync(text, 'utf8').split('\n');
+    expect(report[2]).toMatch(/^gate intent \(intent-guard [0-9.]+\): ran, exit 1, \d+ blocking$/);
+    expect(report.slice(3, 3 + logged.length)).toEqual(logged.map((line) => line.replace(/^conductor: /, '')));
+
+    // On stdout the report itself names them, so the log does not repeat it.
+    const toStdout = runCli(repo, ['run', '--staged'], bin);
+    expect(toStdout.stderr).not.toMatch(/^conductor: finding/m);
+    expect(toStdout.stdout).toMatch(/^finding: (BLOCKING|report) intent-guard /m);
+  });
+
   it('says could-not-run in the report and exits 2 when a gate is missing', () => {
     const repo = repoWithPolicy(INTENT_ONLY);
     const out = tempDir();
@@ -1845,7 +1872,8 @@ describe('pull-request mode through the CLI', () => {
     // head's file is an inventory here and nothing else: it cannot lower the
     // exit code, and enabled: false on the dependency gate in it is why only
     // the secrets gate would be named if it could.
-    expect(result.stdout).toMatch(/DID NOT RUN \(preparation-failed\)/);
+    expect(result.stdout).toMatch(/^gate secrets \(vault-guard\): did not run \(trust base refused\)$/m);
+    expect(result.stdout).not.toMatch(/^gate dependencies /m);
     expect(result.stdout).toMatch(/verdict: exit 2/);
   });
 
@@ -1969,7 +1997,11 @@ describe('pull-request mode through the CLI', () => {
     // ref-unresolvable refusal above: this is the same could-not-run family,
     // and the report follows the same shape rather than inventing a second
     // one for "the ref resolved but carried no file".
-    expect(result.stdout).toMatch(/DID NOT RUN \(preparation-failed\)/);
+    expect(result.stdout).toMatch(/^gate secrets \(vault-guard\): did not run \(trust base refused\)$/m);
+    // The two wording defects on a refused run: no rules were read, so the
+    // report never says where they came from, and nothing ran to count.
+    expect(result.stdout).not.toMatch(/rules from/);
+    expect(result.stdout).not.toMatch(/\d+ gate\(s\), \d+ finding\(s\)/);
   });
 
   it('shrinks to the version, verdict and reason under --compact-on-refusal, on the same could-not-run adopter gap', () => {
@@ -1988,16 +2020,19 @@ describe('pull-request mode through the CLI', () => {
 
     expect(result.status).toBe(2);
     const lines = result.stdout.trimEnd().split('\n');
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(7);
     expect(lines[0]).toMatch(/^conductor \d+\.\d+\.\d+$/);
     expect(lines[1]).toBe('verdict-token: could-not-run');
-    expect(lines[2]).toMatch(/^verdict: exit 2/);
-    expect(lines[3]).toMatch(/refused the trust base/);
+    // The head block: the fixed trust-base line, then one line per gate.
+    expect(lines[2]).toBe('trust-base: refused, no rules were read and no gate ran');
+    expect(lines[3]).toBe('gate secrets (vault-guard): did not run (trust base refused)');
+    expect(lines[4]).toMatch(/^verdict: exit 2/);
+    expect(lines[5]).toMatch(/refused the trust base/);
     // The detail line the full report would have printed for this case,
     // including the remedy: the pull request's own .guardrails.yaml is a
     // proposal and never takes effect until it lands on the base branch.
-    expect(lines[4]).toMatch(/No \.guardrails\.yaml on "base"/);
-    expect(lines[4]).toMatch(/is a proposal/);
+    expect(lines[6]).toMatch(/No \.guardrails\.yaml on "base"/);
+    expect(lines[6]).toMatch(/is a proposal/);
     expect(result.stdout).not.toMatch(/step log/i);
   });
 

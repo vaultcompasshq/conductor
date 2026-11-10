@@ -239,6 +239,11 @@ required.
    ```
    conductor 0.18.1
    verdict-token: blocked (1)
+   gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking
+   gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking
+   gate intent (intent-guard): skipped (deferred to stage ci)
+   findings: 1 (1 blocking):
+   finding: BLOCKING vault-guard vault-guard/anthropic jest.config.mjs:14: Possible secret of type 'anthropic'
    conductor run: 2 gate(s), 1 finding(s)
 
    dependencies  dep-guard 0.20.0  exit 0  153ms  via dep-guard on path
@@ -255,6 +260,11 @@ required.
 
    verdict: exit 1, 1 blocking finding(s) in 1 of 2 enforced gate(s).
    ```
+
+   The lines under the verdict token are the report's head: one line per
+   gate (ran, did not run, skipped or disabled), then how many findings
+   there are and the first ten that block, by name. The sections under them
+   carry the detail, and every finding that does not block.
 
    The `mode`, `corpusBuiltAt`, `lockfileFormat`, `online`, `lookups` and
    `skipped-by-deadline` line under
@@ -1043,14 +1053,48 @@ a re-run find and update that same comment, so a push does not pile up a new
 comment every time, the way the manual recipe below does. It runs on a
 `pull_request` or `pull_request_target` event only, and it runs whether the
 gates step passed or failed, since a blocking run is the one an advisory
-check most needs a developer to actually see. The first line of every
-comment carries the version of conductor that produced it, the second line
-carries the verdict token (see [The verdict token](docs/commands.md#the-verdict-token)), and when the
-trust base was refused and no gate ran at all, the comment shrinks to the
-version, the verdict, and the refusal reason (with its remedy, when one
-applies) rather than the full per-gate report, so an adopter with no policy
-on the base ref yet does not get a full sticky comment whose only content is
-"refused, nothing checked" on every push.
+check most needs a developer to actually see.
+
+**What the comment looks like.** It leads with the verdict, then one row per
+gate, then the findings by name, and the whole report is collapsed under
+them, one click away:
+
+```text
+conductor verdict: blocked (1)
+
+gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking
+gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking
+gate vulnerabilities (osv-scanner version unknown): did not run (binary-missing)
+
+findings: 14 (12 blocking), the first 10:
+finding: BLOCKING vault-guard vault-guard/github-token src/config.js:2: Possible secret of type 'github-token'
+...
+and 2 more blocking
+```
+
+A gate line says `ran`, with the gate's own version, its exit code and how
+many findings it marked blocking, or `did not run`, with the reason, or
+`skipped` or `disabled`, with why. A gate that did not run never reads as
+one that passed. A line such as `ran, exit 1, 0 blocking` under a `pass` is
+the gate's own exit code for findings that do not block this run: the
+vulnerabilities gate exits 1 on advisories that were already on the base
+branch, which conductor reports and does not block on. The findings line
+counts every finding and names only the ones that block, the first ten of
+them; when none blocks it is the count alone, `findings: 77 (0 blocking)`,
+and the rest are in the report. When the installed gate is not the version the action
+pinned, the line prints both (`did not run (version-skew), the action pinned
+0.20.0`). When the vulnerabilities gate compared the pull request with the
+base branch, the comment leads with `new in this pull request: N
+(vulnerabilities gate; M already on the base)`; no other gate compares with
+the base, so the line is absent on a run where that comparison did not
+happen. Inside the collapsed report the first line carries the version of
+conductor that produced it and the second the verdict token (see
+[The verdict token](docs/commands.md#the-verdict-token)). When the trust
+base was refused and no gate ran at all, the report under the gate rows
+shrinks to the version, the verdict, and the refusal reason (with its
+remedy, when one applies) and starts open, so an adopter with no policy on the base ref yet
+does not get a full sticky comment whose only content is "refused, nothing
+checked" on every push.
 
 **It is a no-op on a pull request from a fork.** The default `GITHUB_TOKEN`
 there is read-only regardless of the `pull-requests: write` permission you
@@ -1075,6 +1119,20 @@ could not be verified and no gate ran, the summary says
 `conductor verdict: could-not-run (<reason>)` and the output is
 `could-not-run`. The output is empty when the installed `conductor-version`
 predates the token.
+
+**The job summary names the gates and the findings too.** Under the verdict
+line the summary carries the same rows the comment leads with: one line per
+gate (`ran`, `did not run`, `skipped` or `disabled`, as above), then the
+count of findings and the first ten that block, by gate, rule, place and
+reason, then `and N more blocking`. The job log prints the same finding
+lines. So a run that blocked says what it
+caught without anybody opening the SARIF log, and a run where a gate could
+not run says which gate and why on the page a reviewer already looks at.
+Those lines are copied from the head of the text report, by position: a gate
+line only when the whole line is built from conductor's own words and
+numbers, and a finding line (whose path, package name and message come from
+the scanned repository) only inside a code block, after conductor has
+escaped and shortened each field.
 
 **The sticky match only ever adopts conductor's own comment.** On
 `pull_request_target` this step runs with a write token even though the

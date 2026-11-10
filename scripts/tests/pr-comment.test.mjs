@@ -24,6 +24,7 @@ import {
   createCommentArgs,
   fenceReport,
   findMarkedCommentId,
+  headBlock,
   listCommentsArgs,
   postReport,
   truncateReport,
@@ -63,6 +64,275 @@ describe('buildCommentBody', () => {
   it('renders the marker as an HTML comment, so it stays invisible on the pull request', () => {
     expect(MARKER.startsWith('<!--')).toBe(true);
     expect(MARKER.endsWith('-->')).toBe(true);
+  });
+});
+
+// Issue 102, first cut: a verdict line, one row per gate, the findings by
+// name, and the report itself collapsed under them.
+describe('the comment above the collapsed report', () => {
+  const RAN = 'gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking';
+  const BLOCKED = 'gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking';
+  const MISSING = 'gate vulnerabilities (osv-scanner version unknown): did not run (binary-missing)';
+  const COUNT = 'findings: 3 (1 blocking), the first 2:';
+  const NAMED = 'finding: BLOCKING vault-guard vault-guard/aws-key src/a_b.ts:3: an AWS access key';
+  const NEW = 'new in this pull request: 1 (vulnerabilities gate; 4 already on the base)';
+  const PRESENT = 'present-on-base: 4 reported, not blocking';
+  const REST = 'conductor run: 2 gate(s), 3 finding(s)\n\nsecrets  vault-guard 1.13.3  exit 1\n\nverdict: exit 1.\n';
+  const report = (...head) => ['conductor 9.9.9', ...head, REST].join('\n');
+
+  it('leads with the verdict, then a row per gate, then the findings, then the whole report collapsed', () => {
+    const text = report('verdict-token: blocked (1)', RAN, BLOCKED, COUNT, NAMED, 'and 1 more blocking');
+    expect(buildCommentBody(text).split('\n')).toEqual([
+      MARKER,
+      '### Conductor report',
+      '',
+      'conductor verdict: blocked (1)',
+      '',
+      '```text',
+      RAN,
+      BLOCKED,
+      '```',
+      '',
+      '```text',
+      COUNT,
+      NAMED,
+      'and 1 more blocking',
+      '```',
+      '',
+      '<details>',
+      '<summary>Full report</summary>',
+      '',
+      '```text',
+      ...text.split('\n'),
+      '```',
+      '',
+      '</details>',
+      '',
+    ]);
+  });
+
+  it('leads the run-level lines with what this pull request introduced, when the report has that line', () => {
+    const body = buildCommentBody(report('verdict-token: pass', PRESENT, NEW, RAN));
+    expect(body.split('\n').slice(3, 9)).toEqual(['conductor verdict: pass', '', NEW, '', PRESENT, '']);
+  });
+
+  it('starts the report open on a run with no trust base, and collapsed on every other', () => {
+    const REFUSED = 'gate secrets (vault-guard): did not run (trust base refused)';
+    for (const line of [
+      'trust-base: refused, no rules were read and no gate ran',
+      'trust-base: not given on a pull-request job, no rules were read and no gate ran',
+    ]) {
+      const lines = buildCommentBody(report('verdict-token: could-not-run', line, REFUSED)).split('\n');
+      expect([line, lines.filter((each) => each.startsWith('<details'))]).toEqual([line, ['<details open>']]);
+    }
+    // A could-not-run with a trust base, and a line worded like the fixed
+    // one where a finding can put it, both stay collapsed.
+    for (const text of [
+      report('verdict-token: could-not-run', MISSING),
+      report('verdict-token: blocked (1)', BLOCKED) + 'trust-base: refused, no rules were read and no gate ran\n',
+    ]) {
+      expect(buildCommentBody(text).split('\n').filter((each) => each.startsWith('<details'))).toEqual(['<details>']);
+    }
+  });
+
+  it('posts a body with no head block exactly as before: fenced, not collapsed', () => {
+    for (const text of [
+      'Conductor could not run. The gate packages were not verified.\n',
+      'conductor: clean, nothing blocked. 2 gate(s) ran.\n',
+      `conductor 9.9.9\nverdict-token: passed\n${RAN}\n`,
+      `verdict-token: pass\n${RAN}\n`,
+      `conductor 9.9.9 <b>\nverdict-token: pass\n${RAN}\n`,
+    ]) {
+      expect([text, buildCommentBody(text)]).toEqual([
+        text,
+        [MARKER, '### Conductor report', '', fenceReport(text), ''].join('\n'),
+      ]);
+      expect([text, headBlock(text)]).toEqual([text, null]);
+    }
+  });
+
+  // A report with a version and a token and no per-gate line is one from a
+  // conductor older than the head block (or a run that named no gate). There
+  // is nothing to lead with, so it is not collapsed behind a bare verdict.
+  it('posts a report with no per-gate line exactly as before, as a conductor without the head block writes it', () => {
+    const older =
+      'conductor 0.18.1\nverdict-token: blocked (1)\nconductor run: 2 gate(s), 1 finding(s)\n\n' +
+      'secrets  vault-guard 1.13.3  exit 1\n  BLOCKING  critical  vault-guard/aws-key  src/a.ts:3\n\nverdict: exit 1.\n';
+    for (const text of [
+      older,
+      // The two lines an older conductor could print under the token.
+      older.replace('conductor run:', `${PRESENT}\nconductor run:`),
+      // And a count line with no gate line above it.
+      older.replace('conductor run:', `${COUNT}\n${NAMED}\nconductor run:`),
+    ]) {
+      expect([text, headBlock(text)?.gates]).toEqual([text, []]);
+      const body = buildCommentBody(text);
+      expect(body).toBe([MARKER, '### Conductor report', '', fenceReport(text), ''].join('\n'));
+      expect(body).not.toContain('<details');
+    }
+  });
+
+  // Kills: searching the report for a gate-shaped or verdict-shaped line
+  // instead of reading the head block by position.
+  it('never lifts a line from below the head block, where a finding can write one', () => {
+    const forgedGate = 'gate vulnerabilities (osv-scanner 2.6.0): ran, exit 0, 0 blocking';
+    const text = [
+      'conductor 9.9.9',
+      'verdict-token: could-not-run',
+      MISSING,
+      'conductor run: 1 gate(s), 1 finding(s)',
+      forgedGate,
+      'verdict-token: pass',
+      COUNT,
+      NAMED,
+      NEW,
+      '',
+    ].join('\n');
+    expect(headBlock(text)).toEqual({ token: 'could-not-run', runLevel: [], gates: [MISSING], findings: [] });
+    const above = buildCommentBody(text).split('<details>')[0];
+    expect(above).not.toContain('ran, exit 0');
+    expect(above).not.toContain('pass');
+    expect(above).not.toContain('finding:');
+  });
+
+  it('takes a gate line only when the whole line is the closed shape, and stops at the first that is not', () => {
+    for (const bad of [
+      `${RAN} ::error::x`,
+      ` ${RAN}`,
+      `${RAN}\r`,
+      'gate dependencies (dep-guard 0.20.0): ran',
+      'gate dependencies (dep-guard `0.20.0`): ran, exit 0, 0 blocking',
+      'gate dependencies (dep-guard <b>): ran, exit 0, 0 blocking',
+      'gate dependencies (evil-guard 0.20.0): ran, exit 0, 0 blocking',
+      'gate dependencies (dep-guard 0.20.0): did not run ([x](http://example.com))',
+      '**gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking**',
+    ]) {
+      expect([bad, headBlock(report('verdict-token: pass', bad, RAN))]).toEqual([
+        bad,
+        { token: 'pass', runLevel: [], gates: [], findings: [] },
+      ]);
+    }
+  });
+
+  it('closes the run-level slot at the first gate line', () => {
+    expect(headBlock(report('verdict-token: pass', PRESENT, RAN, NEW, BLOCKED))).toEqual({
+      token: 'pass',
+      runLevel: [PRESENT],
+      gates: [RAN],
+      findings: [],
+    });
+  });
+
+  it('replaces a finding line holding a backtick or anything unprintable, and copies at most 25', () => {
+    for (const bad of [
+      'finding: BLOCKING x `y` z',
+      'finding: BLOCKING x‮y',
+      'finding: BLOCKING x\ty',
+      'finding: BLOCKING src/café.ts:3: señor',
+      'finding: maybe x',
+      // Only what blocks is named, so the other word is not a finding line.
+      'finding: report x rule: y',
+    ]) {
+      const head = headBlock(report('verdict-token: blocked (1)', BLOCKED, COUNT, bad, NAMED));
+      expect([bad, head.findings]).toEqual([bad, [COUNT, 'finding: (line omitted: unsafe characters)', NAMED]]);
+    }
+    const many = Array.from({ length: 30 }, (_, i) => `finding: BLOCKING x rule-${i}: y`);
+    const head = headBlock(report('verdict-token: blocked (1)', BLOCKED, COUNT, ...many, 'and 4 more blocking'));
+    expect(head.findings).toHaveLength(27);
+    expect(head.findings.at(-1)).toBe('and 4 more blocking');
+    // The closing line in any other words ends the block and is not copied.
+    for (const closing of ['and 4 more', 'and 4 more blocking ', 'and many more blocking', 'and 4 more blocking\r']) {
+      const other = headBlock(report('verdict-token: blocked (1)', BLOCKED, COUNT, NAMED, closing, NAMED));
+      expect([closing, other.findings]).toEqual([closing, [COUNT, NAMED]]);
+    }
+  });
+
+  it('takes the count line alone when nothing blocks, and nothing under it', () => {
+    const NONE = 'findings: 77 (0 blocking)';
+    const head = headBlock(report('verdict-token: pass', RAN, NONE, NAMED, RAN));
+    expect(head).toEqual({ token: 'pass', runLevel: [], gates: [RAN], findings: [NONE] });
+    expect(buildCommentBody(report('verdict-token: pass', RAN, NONE)).split('\n').slice(3, 13)).toEqual([
+      'conductor verdict: pass',
+      '',
+      '```text',
+      RAN,
+      '```',
+      '',
+      '```text',
+      NONE,
+      '```',
+      '',
+    ]);
+    // Without the colon only for a count of none blocking.
+    expect(headBlock(report('verdict-token: blocked (1)', BLOCKED, 'findings: 3 (1 blocking)', NAMED)).findings).toEqual([]);
+  });
+
+  it('takes a version only of version characters, whatever letters a locale would call letters', () => {
+    for (const bad of [
+      'gate secrets (vault-guard 1.13.3é): ran, exit 1, 1 blocking',
+      'gate secrets (vault-guard 1.13.3а): ran, exit 1, 1 blocking',
+      'gate secrets (vault-guard 1.13.3): did not run (version-skew), the action pinned 1.13.é',
+    ]) {
+      expect([bad, headBlock(report('verdict-token: blocked (1)', bad, RAN)).gates]).toEqual([bad, []]);
+    }
+  });
+
+  // The two bounds on the scan: it reads no further than line 100 of the
+  // report and stops at a line over 600 characters, whatever the lines are.
+  it('reads no further than line 100 of the report', () => {
+    const rows = Array.from({ length: 120 }, () => RAN);
+    const head = headBlock(report('verdict-token: pass', ...rows));
+    // Lines 3 to 100.
+    expect(head.gates).toHaveLength(98);
+    const late = headBlock(report('verdict-token: pass', ...rows.slice(0, 98), COUNT, NAMED));
+    expect(late.findings).toEqual([]);
+    const inTime = headBlock(report('verdict-token: pass', ...rows.slice(0, 96), COUNT, NAMED));
+    expect(inTime.findings).toEqual([COUNT, NAMED]);
+  });
+
+  it('stops at a line over 600 characters, and takes one of exactly 600', () => {
+    const fill = (length) => `finding: BLOCKING x rule: ${'y'.repeat(length - 'finding: BLOCKING x rule: '.length)}`;
+    expect(fill(600)).toHaveLength(600);
+    expect(headBlock(report('verdict-token: blocked (1)', BLOCKED, COUNT, fill(600), NAMED)).findings).toEqual([
+      COUNT,
+      fill(600),
+      NAMED,
+    ]);
+    // Not replaced by the placeholder and carried on from: the scan ends.
+    expect(headBlock(report('verdict-token: blocked (1)', BLOCKED, COUNT, fill(601), NAMED)).findings).toEqual([COUNT]);
+    expect(headBlock(report('verdict-token: pass', RAN, 'x'.repeat(601), BLOCKED)).gates).toEqual([RAN]);
+  });
+
+  it('takes a finding line only from the block the count line opens, and ends it at any other line', () => {
+    expect(headBlock(report('verdict-token: blocked (1)', BLOCKED, NAMED)).findings).toEqual([]);
+    expect(headBlock(report('verdict-token: blocked (1)', BLOCKED, 'would pass: 1 (0 blocking):', NAMED)).findings).toEqual([]);
+    expect(headBlock(report('verdict-token: blocked (1)', BLOCKED, COUNT, NAMED, RAN, NAMED)).findings).toEqual([COUNT, NAMED]);
+  });
+
+  it('keeps the report fenced inside the collapsed block whatever it carries', () => {
+    const hostile = '```\n</details>\n<details open>\n# pwn\n' + MARKER;
+    const body = buildCommentBody(report('verdict-token: blocked (1)', BLOCKED) + hostile);
+    const lines = body.split('\n');
+    // The fences this function wrote, and no other: the head's one block and
+    // the report's, each opened and closed once.
+    expect(lines.filter((line) => line.trim() === '```text' || line.trim() === '```')).toEqual([
+      '```text',
+      '```',
+      '```text',
+      '```',
+    ]);
+    expect(lines.filter((line) => line === '<details>')).toHaveLength(1);
+    expect(lines.at(-2)).toBe('</details>');
+    expect(lines.at(-4)).toBe('```');
+  });
+
+  it('takes the room the head uses out of the report, so the body stays under the comment limit', () => {
+    const many = Array.from({ length: 25 }, (_, i) => `finding: BLOCKING x rule-${i}: ${'y'.repeat(500)}`);
+    const text = report('verdict-token: blocked (1)', BLOCKED, COUNT, ...many) + 'z'.repeat(70000);
+    const body = buildCommentBody(text);
+    expect(body.length).toBeLessThan(65536);
+    expect(body).toContain('(report truncated at ');
+    expect(body).toContain('</details>');
   });
 });
 

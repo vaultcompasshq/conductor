@@ -22,7 +22,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { NATIVE_CONTRACT_PATHS } from '../src/intent-prepare.js';
-import { INTENT_SPEC_LINES } from '../src/output-text.js';
+import type { GateOutcome } from '../src/gate-runner.js';
+import type { Finding } from '../src/envelope.js';
+import {
+  INTENT_SPEC_LINES,
+  TRUST_BASE_LINES,
+  findingSummaryLines,
+  gateSummaryLines,
+  renderText,
+} from '../src/output-text.js';
+import { type RunResult, refusedTrustBase } from '../src/run.js';
 import { PRODUCTS } from '../src/policy.js';
 import { profileFor } from '../src/products.js';
 import { childEnv, shimGit } from './helpers/child-env.js';
@@ -2785,6 +2794,10 @@ describe('action.yml: the verdict token from the gates step', () => {
     previewFlag?: boolean;
     /** The preview input; undefined is the input's own default, 'true'. */
     preview?: string;
+    /** The shell that runs the step; the first `bash` on PATH when left out. */
+    shell?: string;
+    /** LANG and LC_ALL for the step; neither is set when left out. */
+    locale?: string;
   }): VerdictRun {
     const supportsFlag = options.supportsFlag ?? true;
     const dir = tempDir();
@@ -2855,7 +2868,11 @@ describe('action.yml: the verdict token from the gates step', () => {
     if (options.summaryPath !== 'none') {
       env.GITHUB_STEP_SUMMARY = options.summaryPath ?? summary;
     }
-    const result = spawnSync('bash', ['-c', gatesScript], { cwd: dir, encoding: 'utf8', env });
+    if (options.locale !== undefined) {
+      env.LANG = options.locale;
+      env.LC_ALL = options.locale;
+    }
+    const result = spawnSync(options.shell ?? 'bash', ['-c', gatesScript], { cwd: dir, encoding: 'utf8', env });
     const read = (file: string): string => {
       try {
         return readFileSync(file, 'utf8');
@@ -3126,6 +3143,544 @@ describe('action.yml: the verdict token from the gates step', () => {
       ]) {
         const other = runGatesForVerdict({ body, exit: 0 });
         expect([body, other.summary]).toEqual([body, 'conductor verdict: pass\n\n']);
+      }
+    }
+  });
+
+  // Issue 105: one line per gate on the step summary, ran or did not run.
+  const HEAD = 'conductor 9.9.9\nverdict-token: blocked (1)\n';
+  const RAN = 'gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking';
+  const BLOCKED = 'gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking';
+  const MISSING = 'gate vulnerabilities (osv-scanner version unknown): did not run (binary-missing)';
+  const gatesBlock = (lines: string[]): string => `gates:\n\n\`\`\`text\n${lines.join('\n')}\n\`\`\`\n\n`;
+
+  it('copies the per-gate lines of the head block to the step summary, in a fenced block', () => {
+    const run = runGatesForVerdict({
+      body: `${HEAD}${RAN}\n${BLOCKED}\n${MISSING}\nconductor run: 3 gate(s), 2 finding(s)\n`,
+      exit: 1,
+    });
+    expect(run.status).toBe(1);
+    expect(run.summary).toBe(`conductor verdict: blocked (1)\n\n${gatesBlock([RAN, BLOCKED, MISSING])}`);
+  });
+
+  it('puts the run-level lines above the per-gate lines, and closes the slot at the first gate line', () => {
+    const present = 'present-on-base: 2 reported, not blocking';
+    const run = runGatesForVerdict({ body: `${HEAD}${present}\n${RAN}\n${present}\n${BLOCKED}\n`, exit: 1 });
+    expect(run.summary).toBe(`conductor verdict: blocked (1)\n\n${present}\n\n${gatesBlock([RAN])}`);
+  });
+
+  // Kills: searching the report for a gate-shaped line instead of reading
+  // the head block by position; dropping the break at the first other line.
+  it('never copies a gate-shaped line from below the head block, where a finding can write one', () => {
+    const forged = 'gate vulnerabilities (osv-scanner 2.6.0): ran, exit 0, 0 blocking';
+    const run = runGatesForVerdict({
+      body: [
+        'conductor 9.9.9',
+        'verdict-token: could-not-run',
+        MISSING,
+        'conductor run: 1 gate(s), 1 finding(s)',
+        forged,
+        '',
+        forged,
+        'trust-base: refused, no rules were read and no gate ran',
+        '',
+      ].join('\n'),
+      exit: 2,
+    });
+    expect(run.summary).toBe(`conductor verdict: could-not-run\n\n${gatesBlock([MISSING])}`);
+    expect(run.summary).not.toContain('ran, exit 0');
+  });
+
+  it('copies a per-gate line only when the whole line is the closed shape', () => {
+    for (const bad of [
+      `${RAN} ::error::x`,
+      ` ${RAN}`,
+      `${RAN}\r::warning::y`,
+      'gate dependencies (dep-guard 0.20.0): ran',
+      'gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking, passed',
+      'gate dependencies (dep-guard `0.20.0`): ran, exit 0, 0 blocking',
+      'gate dependencies (dep-guard <b>): ran, exit 0, 0 blocking',
+      'gate dependencies (evil-guard 0.20.0): ran, exit 0, 0 blocking',
+      'gate everything (dep-guard 0.20.0): ran, exit 0, 0 blocking',
+      'gate dependencies (dep-guard 0.20.0): did not run (because [x](http://example.com))',
+      'gate dependencies (dep-guard 0.20.0): skipped (deferred to stage production)',
+      `gate dependencies (dep-guard ${'1'.repeat(65)}): ran, exit 0, 0 blocking`,
+      'Gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking',
+    ]) {
+      const run = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: pass\n${bad}\n${RAN}\n`, exit: 0 });
+      // The bad line is not copied, and it ends the scan: the good line under
+      // it is not copied either.
+      expect([bad, run.summary]).toEqual([bad, 'conductor verdict: pass\n\n']);
+    }
+  });
+
+  // Issue 144: the findings by name, under the per-gate lines.
+  const COUNT_LINE = 'findings: 3 (1 blocking), the first 2:';
+  const NAMED = 'finding: BLOCKING vault-guard vault-guard/aws-key src/a_b.ts:3: an AWS access key';
+  const NAMED_2 = 'finding: BLOCKING dep-guard dep-guard/typosquat left-pad@1.3.0 (package.json): one letter from leftpad';
+  const MORE = 'and 1 more blocking';
+  const fence = (lines: string[]): string => `\`\`\`text\n${lines.join('\n')}\n\`\`\`\n\n`;
+
+  it('copies the named findings to the step summary in a fenced block, under the gates', () => {
+    const run = runGatesForVerdict({
+      body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${NAMED}\n${NAMED_2}\n${MORE}\nconductor run: 1 gate(s), 3 finding(s)\n${NAMED}\n`,
+      exit: 1,
+    });
+    expect(run.summary).toBe(
+      `conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}${fence([COUNT_LINE, NAMED, NAMED_2, MORE])}`
+    );
+  });
+
+  it('copies the count line alone when nothing blocks, and nothing under it', () => {
+    const none = 'findings: 77 (0 blocking)';
+    const run = runGatesForVerdict({
+      body: `conductor 9.9.9\nverdict-token: pass\n${RAN}\n${none}\n${NAMED}\n${RAN}\n`,
+      exit: 0,
+    });
+    expect(run.summary).toBe(`conductor verdict: pass\n\n${gatesBlock([RAN])}${fence([none])}`);
+    // Without the colon only for a count of none blocking.
+    const some = runGatesForVerdict({ body: `${HEAD}${BLOCKED}\nfindings: 3 (1 blocking)\n${NAMED}\n`, exit: 1 });
+    expect(some.summary).toBe(`conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}`);
+  });
+
+  // The drift pin for the findings lines, as the per-gate one below: what the
+  // renderer prints for a cut list and for nothing blocking is copied whole.
+  it('accepts the findings lines the text report renders, cut and uncut and with none blocking', () => {
+    const leak = (blocking: boolean, i: number): Finding => ({
+      schemaVersion: 1,
+      product: 'vault-guard',
+      productVersion: '1.13.3',
+      ruleId: 'vault-guard/aws-key',
+      severity: 'high',
+      severityIsDerived: false,
+      blocking,
+      message: `an AWS access key ${i}`,
+      subject: { kind: 'location', file: `src/a${i}.ts`, line: 3, column: 1 },
+      fingerprint: null,
+      details: {},
+    });
+    const secrets = (findings: Finding[]): RunResult => ({
+      schemaVersion: 1,
+      generatedAt: '2026-11-10T00:00:00.000Z',
+      gates: [
+        {
+          role: 'secrets',
+          product: 'vault-guard',
+          productVersion: '1.13.3',
+          argv: [],
+          binary: null,
+          exitCode: findings.some((each) => each.blocking) ? 1 : 0,
+          durationMs: 1,
+          stage: 'commit',
+          enforce: true,
+          couldNotRun: null,
+          findings,
+          run: { failOn: 'medium', suppressed: 0, ignored: 0, diagnostics: [], details: {} },
+          diagnostics: [],
+          stderr: '',
+        } as GateOutcome,
+      ],
+      deferred: [],
+      skipped: [],
+      excluded: [],
+      treeUnchanged: [],
+      findings: [],
+      trustBase: null,
+      proposals: [],
+      summary: { blocking: 0, byProduct: {}, bySeverity: {} },
+      exitCode: findings.some((each) => each.blocking) ? 1 : 0,
+    });
+    const list = (blocking: number, other: number): Finding[] => [
+      ...Array.from({ length: blocking }, (_, i) => leak(true, i)),
+      ...Array.from({ length: other }, (_, i) => leak(false, i)),
+    ];
+    for (const [blocking, other, lines] of [
+      [13, 4, 12],
+      [2, 4, 3],
+      [0, 5, 1],
+    ] as const) {
+      const report = secrets(list(blocking, other));
+      const expected = findingSummaryLines(report);
+      expect(expected).toHaveLength(lines);
+      const body = renderText(report, { version: '9.9.9', verbose: true });
+      const run = runGatesForVerdict({ body, exit: blocking > 0 ? 1 : 0 });
+      const token = (body.split('\n')[1] ?? '').replace('verdict-token: ', '');
+      expect(token).toMatch(blocking > 0 ? /^blocked \(/ : /^pass$/);
+      expect(run.summary).toBe(`conductor verdict: ${token}\n\n${gatesBlock(gateSummaryLines(report))}${fence(expected)}`);
+    }
+  });
+
+  // THE LOCALE. A bracket range is what the locale says it is: under a UTF-8
+  // locale the bash that macOS ships (3.2) counts an accented Latin letter as
+  // a member of [ -~] and of [A-Za-z], so "printable ASCII" and "a version
+  // character" each let one through until the step set the C locale for its
+  // own checks. PINNED TO THE SHELL AND THE LOCALE THAT SHOWED IT: /bin/bash,
+  // never the first bash on PATH (a newer one from a package manager compares
+  // ranges by code point and would pass with or without the fix), with LANG
+  // and LC_ALL set to a UTF-8 locale in the step's own environment. The
+  // probe below is the same range test with no locale line; where it lets the
+  // letter through, the step is being tested in the conditions that matter.
+  describe('under a UTF-8 locale, in the system shell', () => {
+    const SYSTEM_BASH = '/bin/bash';
+    const UTF8 = 'en_US.UTF-8';
+    const E_ACUTE = 'é';
+    const rangeTakesAccent = (): boolean =>
+      spawnSync(SYSTEM_BASH, ['-c', `shape='^[ -~]+$'; [[ "caf${E_ACUTE}" =~ $shape ]]`], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '', LANG: UTF8, LC_ALL: UTF8 },
+      }).status === 0;
+    const forgedVersion = `gate secrets (vault-guard 1.13.3${E_ACUTE}): ran, exit 1, 1 blocking`;
+    const forgedPin = `gate secrets (vault-guard 1.13.3): did not run (version-skew), the action pinned 1.13.${E_ACUTE}`;
+    const forgedFinding = `finding: BLOCKING vault-guard rule src/caf${E_ACUTE}.ts:3: señor`;
+
+    it('is run where an unset locale would let an accented letter through (the macOS system bash)', () => {
+      // On macOS this must hold, or the tests below prove nothing there. On
+      // another system the range may already be bytes; they still run.
+      if (process.platform === 'darwin') {
+        expect(rangeTakesAccent()).toBe(true);
+      }
+    });
+
+    it('never copies a per-gate line whose version holds an accented letter', () => {
+      for (const forged of [forgedVersion, forgedPin]) {
+        const run = runGatesForVerdict({
+          body: `${HEAD}${RAN}\n${forged}\n${MISSING}\n`,
+          exit: 1,
+          shell: SYSTEM_BASH,
+          locale: UTF8,
+        });
+        expect([forged, run.status, run.summary]).toEqual([forged, 1, `conductor verdict: blocked (1)\n\n${gatesBlock([RAN])}`]);
+      }
+    });
+
+    it('replaces a finding line that holds an accented letter, and a proposed line that does', () => {
+      const run = runGatesForVerdict({
+        body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${forgedFinding}\n${NAMED}\n${MORE}\n`,
+        exit: 1,
+        shell: SYSTEM_BASH,
+        locale: UTF8,
+      });
+      expect(run.summary).toBe(
+        `conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}` +
+          fence([COUNT_LINE, 'finding: (line omitted: unsafe characters)', NAMED, MORE])
+      );
+      const proposed = runGatesForVerdict({
+        body: `${HEAD}${BLOCKED}\nconductor run: 1 gate(s), 1 finding(s)\n  proposed  vault-guard  .vault-guard.json caf${E_ACUTE}\n`,
+        exit: 1,
+        shell: SYSTEM_BASH,
+        locale: UTF8,
+      });
+      expect(proposed.summary).toContain('proposed  vault-guard  (line omitted: unsafe characters)');
+      expect(proposed.summary).not.toContain(E_ACUTE);
+    });
+
+    it('still copies every plain line, so the locale line costs nothing', () => {
+      const run = runGatesForVerdict({
+        body: `${HEAD}${RAN}\n${BLOCKED}\n${COUNT_LINE}\n${NAMED}\n${MORE}\n`,
+        exit: 1,
+        shell: SYSTEM_BASH,
+        locale: UTF8,
+      });
+      expect(run.summary).toBe(
+        `conductor verdict: blocked (1)\n\n${gatesBlock([RAN, BLOCKED])}${fence([COUNT_LINE, NAMED, MORE])}`
+      );
+    });
+  });
+
+  // The two bounds on the scan: no further than line 100 of the report, and
+  // never past a line over 600 characters.
+  it('reads no further than line 100 of the report', () => {
+    const rows = Array.from({ length: 120 }, () => RAN);
+    const all = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: pass\n${rows.join('\n')}\n`, exit: 0 });
+    // Lines 3 to 100.
+    expect(all.summary).toBe(`conductor verdict: pass\n\n${gatesBlock(rows.slice(0, 98))}`);
+    const late = runGatesForVerdict({
+      body: `${HEAD}${rows.slice(0, 98).join('\n')}\n${COUNT_LINE}\n${NAMED}\n`,
+      exit: 1,
+    });
+    expect(late.summary).toBe(`conductor verdict: blocked (1)\n\n${gatesBlock(rows.slice(0, 98))}`);
+    const inTime = runGatesForVerdict({
+      body: `${HEAD}${rows.slice(0, 96).join('\n')}\n${COUNT_LINE}\n${NAMED}\n`,
+      exit: 1,
+    });
+    expect(inTime.summary).toBe(
+      `conductor verdict: blocked (1)\n\n${gatesBlock(rows.slice(0, 96))}${fence([COUNT_LINE, NAMED])}`
+    );
+  });
+
+  it('stops at a line over 600 characters, and takes one of exactly 600', () => {
+    const stem = 'finding: BLOCKING x rule: ';
+    const fill = (length: number): string => `${stem}${'y'.repeat(length - stem.length)}`;
+    const exact = runGatesForVerdict({ body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${fill(600)}\n${NAMED}\n`, exit: 1 });
+    expect(exact.summary).toBe(
+      `conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}${fence([COUNT_LINE, fill(600), NAMED])}`
+    );
+    // Not replaced by the placeholder and carried on from: the scan ends.
+    const over = runGatesForVerdict({ body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${fill(601)}\n${NAMED}\n`, exit: 1 });
+    expect(over.summary).toBe(`conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}${fence([COUNT_LINE])}`);
+    const gateRow = runGatesForVerdict({ body: `${HEAD}${RAN}\n${'x'.repeat(601)}\n${BLOCKED}\n`, exit: 1 });
+    expect(gateRow.summary).toBe(`conductor verdict: blocked (1)\n\n${gatesBlock([RAN])}`);
+  });
+
+  // Kills: copying a finding line without the count line above it; reading
+  // finding lines from anywhere but directly under that line.
+  it('copies a finding line only from the block the count line opens', () => {
+    for (const body of [
+      `${HEAD}${BLOCKED}\n${NAMED}\n`,
+      `${HEAD}${BLOCKED}\nconductor run: 1 gate(s), 1 finding(s)\n${COUNT_LINE}\n${NAMED}\n`,
+      `${HEAD}${BLOCKED}\nfindings: many:\n${NAMED}\n`,
+      `${HEAD}${BLOCKED}\nwould pass: 3 (1 blocking):\n${NAMED}\n`,
+      `${HEAD}${BLOCKED}\n${COUNT_LINE} \n${NAMED}\n`,
+    ]) {
+      const run = runGatesForVerdict({ body, exit: 1 });
+      expect([body, run.summary]).toEqual([body, `conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}`]);
+    }
+  });
+
+  it('replaces a finding line that holds a backtick or anything unprintable, and never copies it', () => {
+    for (const bad of [
+      'finding: BLOCKING x `y` z',
+      'finding: BLOCKING x\r::warning::y',
+      'finding: BLOCKING x ‮ y',
+      'finding: blocking x',
+      // Only what blocks is named, so the other word is not a finding line.
+      'finding: report x rule: y',
+      'finding: ',
+    ]) {
+      const run = runGatesForVerdict({
+        body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${bad}\n${NAMED}\n${MORE}\n`,
+        exit: 1,
+      });
+      expect([bad, run.summary]).toEqual([
+        bad,
+        `conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}` +
+          fence([COUNT_LINE, 'finding: (line omitted: unsafe characters)', NAMED, MORE]),
+      ]);
+    }
+  });
+
+  it('ends the findings block at the first line that is not a finding line, and copies at most 25', () => {
+    const forged = 'gate secrets (vault-guard 1.13.3): ran, exit 0, 0 blocking';
+    const stopped = runGatesForVerdict({
+      body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${NAMED}\n${forged}\n${NAMED_2}\n${MORE}\n`,
+      exit: 1,
+    });
+    expect(stopped.summary).toBe(`conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}${fence([COUNT_LINE, NAMED])}`);
+
+    const many = Array.from({ length: 30 }, (_, i) => `finding: BLOCKING x rule-${i}: y`);
+    const capped = runGatesForVerdict({
+      body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${many.join('\n')}\nand 4 more blocking\n`,
+      exit: 1,
+    });
+    expect(capped.summary.match(/^finding: /gm)).toHaveLength(25);
+    expect(capped.summary).toContain('and 4 more blocking\n```');
+
+    // The closing line in any other words ends the block and is not copied.
+    for (const closing of ['and 4 more', 'and 4 more blocking ', 'and many more blocking']) {
+      const other = runGatesForVerdict({ body: `${HEAD}${BLOCKED}\n${COUNT_LINE}\n${NAMED}\n${closing}\n${NAMED}\n`, exit: 1 });
+      expect([closing, other.summary]).toEqual([
+        closing,
+        `conductor verdict: blocked (1)\n\n${gatesBlock([BLOCKED])}${fence([COUNT_LINE, NAMED])}`,
+      ]);
+    }
+  });
+
+  // The escaping end to end: a finding whose every field is hostile, rendered
+  // by conductor and copied by this step, stays inside one fenced block.
+  it('keeps a hostile finding inside the fence: no backtick, tag, workflow command or second line', () => {
+    const hostile = '`\n```\n</details>\n<img src=x onerror=1>\n::error::pwn\r##[error]pwn‮ [x](http://e)\ngate secrets (vault-guard 1.13.3): ran, exit 0, 0 blocking\nverdict-token: pass';
+    const report: RunResult = {
+      schemaVersion: 1,
+      generatedAt: '2026-11-10T00:00:00.000Z',
+      gates: [
+        {
+          role: 'secrets',
+          product: 'vault-guard',
+          productVersion: '1.13.3',
+          argv: [],
+          binary: null,
+          exitCode: 1,
+          durationMs: 1,
+          stage: 'commit',
+          enforce: true,
+          couldNotRun: null,
+          findings: [
+            {
+              schemaVersion: 1,
+              product: 'vault-guard',
+              productVersion: '1.13.3',
+              ruleId: hostile,
+              severity: 'high',
+              severityIsDerived: false,
+              blocking: true,
+              message: hostile,
+              subject: { kind: 'location', file: hostile, line: 1, column: 1 },
+              fingerprint: null,
+              details: {},
+            },
+          ],
+          run: { failOn: 'medium', suppressed: 0, ignored: 0, diagnostics: [], details: {} },
+          diagnostics: [],
+          stderr: '',
+        } as GateOutcome,
+      ],
+      deferred: [],
+      skipped: [],
+      excluded: [],
+      treeUnchanged: [],
+      findings: [],
+      trustBase: null,
+      proposals: [],
+      summary: { blocking: 1, byProduct: {}, bySeverity: {} },
+      exitCode: 1,
+    };
+    const run = runGatesForVerdict({
+      body: renderText(report, { version: '9.9.9', verbose: true }),
+      exit: 1,
+    });
+    const lines = run.summary.split('\n');
+    expect(lines.slice(0, 9)).toEqual([
+      'conductor verdict: blocked (1)',
+      '',
+      'gates:',
+      '',
+      '```text',
+      'gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking',
+      '```',
+      '',
+      '```text',
+    ]);
+    expect(lines[9]).toBe('findings: 1 (1 blocking):');
+    expect(lines[10]).toMatch(/^finding: BLOCKING vault-guard [\x20-\x7e]+$/);
+    expect(lines.slice(11)).toEqual(['```', '', '']);
+    expect(lines[10]).not.toMatch(/[`<>]/);
+    expect(run.summary).not.toContain('::error::');
+    expect(run.summary).not.toContain('##[');
+    expect(run.summary).not.toContain('ran, exit 0');
+    expect(run.summary.match(/```/g)).toHaveLength(4);
+    expect(run.stdout.split(/\r\n|\r|\n/).filter((line) => line.startsWith('::'))).toHaveLength(0);
+  });
+
+  it('copies no head block line when the token was replaced', () => {
+    const run = runGatesForVerdict({ body: `conductor 9.9.9\nverdict-token: pass\n${RAN}\n`, exit: 2 });
+    expect(run.summary).toBe('conductor verdict: could-not-run\n\n');
+  });
+
+  // The drift pin: what src/output-text.ts renders is what this step accepts.
+  // A line the renderer prints that the shapes here do not match would stop
+  // the scan, and every line after it would be missing from the summary.
+  it('accepts every head block line the text report renders, for every kind of line', () => {
+    const gate = (overrides: Partial<GateOutcome>): GateOutcome =>
+      ({
+        role: 'dependencies',
+        product: 'dep-guard',
+        productVersion: '0.20.0',
+        argv: [],
+        binary: null,
+        exitCode: 0,
+        durationMs: 1,
+        stage: 'commit',
+        enforce: true,
+        couldNotRun: null,
+        findings: [],
+        run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: {} },
+        diagnostics: [],
+        stderr: '',
+        ...overrides,
+      }) as GateOutcome;
+    const reasons = [
+      'binary-missing',
+      'configured-command-missing',
+      'spawn-failed',
+      'gate-error',
+      'unparseable-output',
+      'preparation-failed',
+      'trust-base-unverified',
+      'gate-program-refused',
+      'gate-version-unsupported',
+      'report-missing',
+      'history-shallow',
+      'timed-out',
+      'lockfile-emptied',
+      'version-skew',
+      'version-unverified',
+      'lockfile-emptied-unverified',
+    ] as const;
+    const mixed: RunResult = {
+      schemaVersion: 1,
+      generatedAt: '2026-11-10T00:00:00.000Z',
+      gates: [
+        gate({}),
+        gate({ enforce: false, exitCode: 1 }),
+        gate({ productVersion: null, exitCode: null }),
+        gate({
+          role: 'intent',
+          product: 'intent-guard',
+          run: { failOn: null, suppressed: 0, ignored: 0, diagnostics: [], details: { contractFound: false } },
+        }),
+        gate({ productVersion: '2.0.0-rc.1+build `<x>', exitCode: 128 }),
+        ...reasons.map((reason) =>
+          gate({ exitCode: null, enforce: reason !== 'timed-out', couldNotRun: { reason, detail: 'x' } })
+        ),
+        gate({
+          exitCode: null,
+          couldNotRun: { reason: 'version-skew', detail: 'x' },
+          versionSkew: { expected: '0.20.0', found: '0.17.0', source: 'path', path: 'x' },
+        }),
+      ],
+      deferred: [
+        { role: 'intent', product: 'intent-guard', stage: 'commit' },
+        { role: 'intent', product: 'intent-guard', stage: 'push' },
+        { role: 'intent', product: 'intent-guard', stage: 'ci' },
+      ],
+      skipped: [
+        { role: 'intent', product: 'intent-guard', reason: 'no-contract', detail: 'x' },
+        { role: 'intent', product: 'intent-guard', reason: 'contract-waived', detail: 'x' },
+        { role: 'intent', product: 'intent-guard', reason: 'spec-ambiguous', detail: 'x' },
+      ],
+      excluded: [{ role: 'secrets-history', product: 'gitleaks' }],
+      treeUnchanged: [{ role: 'secrets', product: 'vault-guard' }],
+      disabled: [{ role: 'vulnerabilities', product: 'osv-scanner' }],
+      findings: [],
+      trustBase: null,
+      proposals: [],
+      summary: { blocking: 0, byProduct: {}, bySeverity: {} },
+      exitCode: 2,
+    };
+    const expected = gateSummaryLines(mixed);
+    expect(expected).toHaveLength(31);
+    const run = runGatesForVerdict({ body: renderText(mixed, { version: '9.9.9', verbose: true }), exit: 2 });
+    expect(run.summary).toBe(`conductor verdict: could-not-run\n\n${gatesBlock(expected)}`);
+
+    // A refused run: the fixed trust-base line, then every gate as did not run.
+    for (const notGiven of [false, true]) {
+      const refused = refusedTrustBase(
+        {
+          version: 1,
+          gates: {
+            secrets: {
+              role: 'secrets',
+              product: 'vault-guard',
+              enabled: true,
+              stage: 'commit',
+              enforce: true,
+              excludedByCli: false,
+              options: {},
+            },
+          },
+          report: { format: 'text' },
+        } as Parameters<typeof refusedTrustBase>[0],
+        notGiven ? '' : 'main',
+        'the ref `x` does not resolve.\n::error::y',
+        notGiven ? { notGiven: true } : {}
+      );
+      for (const compact of [false, true]) {
+        const refusedRun = runGatesForVerdict({ body: renderText(refused, { version: '9.9.9', compact }), exit: 2 });
+        expect(refusedRun.summary).toBe(
+          'conductor verdict: could-not-run\n\n' +
+            `${TRUST_BASE_LINES[notGiven ? 1 : 0]}\n\n` +
+            gatesBlock(['gate secrets (vault-guard): did not run (trust base refused)'])
+        );
       }
     }
   });

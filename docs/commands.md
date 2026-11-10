@@ -230,6 +230,18 @@ set, so a person or a script can read the state without parsing a sentence.
 It decides nothing and never overrules a gate: it is derived from the exit
 code and the `enforce` flags the run already had.
 
+Under the token the full report carries its head block: any fixed line
+about the run as a whole (described under `pass` below, plus a
+`trust-base:` line on a refused run and a `new in this pull request:` count
+when the vulnerabilities gate compared with the base), then one line per
+gate, `gate <role> (<product> <version>): ran, exit N, M blocking` or `did
+not run (<reason>)` or `skipped (<why>)` or `disabled (enabled: false)`,
+then `findings: T (B blocking)` and under it the first ten findings that
+block, by name, each starting `finding: BLOCKING `, then `and N more
+blocking` (when none blocks the count line stands alone). The Action
+copies those lines to the job summary and the pull request comment leads
+with them. The `conductor run:` count line follows the head block.
+
 - `pass`: exit 0, and no gate, enforced or not, has a blocking finding or
   could not run. Under `present-on-base: report` a `pass` can carry known
   vulnerabilities already on the base branch, reported and not blocking;

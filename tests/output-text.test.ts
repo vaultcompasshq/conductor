@@ -427,9 +427,11 @@ describe('the combined text report', () => {
 
   it('puts blocking findings before the rest', () => {
     const lines = text.split('\n').filter((line) => line.includes('dep-guard/'));
-    // Both fixture findings block, and the critical one leads.
-    expect(lines[0]).toMatch(/critical/);
-    expect(lines[0]).toMatch(/typosquat/);
+    // Both fixture findings block, and the critical one leads: first in the
+    // head block's named findings, and first again in the gate's section.
+    expect(lines[0]).toMatch(/^finding: BLOCKING dep-guard dep-guard\/typosquat /);
+    expect(lines[2]).toMatch(/critical/);
+    expect(lines[2]).toMatch(/typosquat/);
   });
 
   it('shows the threshold each gate gated on, rather than one shared number', () => {
@@ -445,7 +447,8 @@ describe('the combined text report', () => {
     // vault-guard drops ignored files before they reach its output, so it
     // has no count to give. Printing "ignored 0" states a fact the gate
     // never stated, and reads as "nothing was ignored".
-    const secretsSection = text.slice(text.indexOf('secrets'));
+    // The section header, not the per-gate summary line above the sections.
+    const secretsSection = text.slice(text.indexOf('\nsecrets  '));
     expect(secretsSection).toMatch(/ignored not reported/);
     expect(secretsSection).not.toMatch(/ignored 0/);
   });
@@ -500,7 +503,10 @@ describe('the combined text report', () => {
 
   it('shows a gate diagnostic without turning it into a finding', () => {
     expect(text).toMatch(/lockfile-missing/);
-    expect(text.match(/dep-guard\//g)).toHaveLength(2);
+    // Two findings, each named once in the head block and once in the
+    // section; the diagnostic adds no third.
+    expect(text.match(/dep-guard\//g)).toHaveLength(4);
+    expect(text.match(/^finding: .*dep-guard\//gm)).toHaveLength(2);
   });
 
   it('ends with a one-line verdict carrying the composed exit code', () => {
@@ -804,14 +810,22 @@ describe('an advisory-capped constraint finding in the text report (issue #34)',
 
   it('marks the capped constraint finding as a report, not BLOCKING', () => {
     const lines = text.split('\n');
-    const messageLine = lines.findIndex((line) => line.includes('advisory critical constraint at risk'));
+    // The message line of the gate's section, under that finding's own
+    // header, not the head block's one-line naming of the same finding.
+    const messageLine = lines.findIndex(
+      (line) => line.startsWith('      ') && line.includes('advisory critical constraint at risk')
+    );
     expect(messageLine).toBeGreaterThan(-1);
     expect(lines[messageLine - 1]).toMatch(/report\s+low\*/);
+    // And the head block, which names only what blocks, does not name it.
+    expect(text).not.toMatch(/^finding: .*advisory critical constraint at risk/m);
   });
 
   it('still marks the scope_creep finding that drove the block as BLOCKING', () => {
     const lines = text.split('\n');
-    const messageLine = lines.findIndex((line) => line.includes('Out-of-scope touched'));
+    const messageLine = lines.findIndex(
+      (line) => line.startsWith('      ') && line.includes('Out-of-scope touched')
+    );
     expect(messageLine).toBeGreaterThan(-1);
     expect(lines[messageLine - 1]).toMatch(/BLOCKING\s+high\*/);
   });
@@ -1619,11 +1633,14 @@ describe('a refused trust base in the text report', () => {
       refused([outcome({ role: 'secrets', product: 'vault-guard', exitCode: null })])
     ).split('\n');
 
-    // No version given, so the verdict-token line is the first line and the
-    // refusal follows it.
+    // No version given, so the verdict-token line is the first line. The
+    // head block follows it (the fixed trust-base line, one line per gate),
+    // and the refusal is the first line after that block.
     expect(lines[0]).toBe('verdict-token: could-not-run');
-    expect(lines[1]).toMatch(/refused the trust base/);
-    expect(lines[1]).toMatch(/origin\/main/);
+    expect(lines[1]).toBe('trust-base: refused, no rules were read and no gate ran');
+    expect(lines[2]).toMatch(/^gate secrets \(vault-guard /);
+    expect(lines[3]).toMatch(/refused the trust base/);
+    expect(lines[3]).toMatch(/origin\/main/);
   });
 
   it('still names the gates the inventory did hold', () => {
@@ -1638,8 +1655,10 @@ describe('a refused trust base in the text report', () => {
       ])
     );
 
-    expect(text).toMatch(/secrets\s+vault-guard/);
-    expect(text).toMatch(/DID NOT RUN/);
+    // One line in the head block, and no section: the refusal is printed
+    // once, under that block.
+    expect(text).toMatch(/^gate secrets \(vault-guard 0\.2\.0\): did not run \(preparation-failed\)$/m);
+    expect(text).not.toMatch(/DID NOT RUN/);
   });
 
   it('never prints the clean one-line summary for a refusal', () => {
@@ -1669,6 +1688,7 @@ describe('a refused trust base in the text report', () => {
       expect(lines).toEqual([
         'conductor 9.9.9',
         'verdict-token: could-not-run',
+        'trust-base: refused, no rules were read and no gate ran',
         'verdict: exit 2, the trust base "origin/main" could not be used, so no gate ran and ' +
           'nothing here is a result of any kind.',
         'conductor: refused the trust base "origin/main". Nothing was checked.',
@@ -1681,17 +1701,18 @@ describe('a refused trust base in the text report', () => {
       const text = renderText(refused(), { compact: true });
       const lines = text.trimEnd().split('\n');
 
-      expect(lines).toHaveLength(4);
+      expect(lines).toHaveLength(5);
       expect(lines[0]).toBe('verdict-token: could-not-run');
-      expect(lines[1]).toMatch(/^verdict: exit 2/);
-      expect(lines[2]).toMatch(/refused the trust base/);
-      expect(lines[3]).toMatch(/does not resolve to a commit/);
+      expect(lines[1]).toBe('trust-base: refused, no rules were read and no gate ran');
+      expect(lines[2]).toMatch(/^verdict: exit 2/);
+      expect(lines[3]).toMatch(/refused the trust base/);
+      expect(lines[4]).toMatch(/does not resolve to a commit/);
       expect(text).not.toMatch(/step log/i);
     });
 
     it('wins over --verbose: a refusal never grows back to the full report under compact', () => {
       const text = renderText(refused(), { compact: true, verbose: true });
-      expect(text.trimEnd().split('\n')).toHaveLength(4);
+      expect(text.trimEnd().split('\n')).toHaveLength(5);
     });
 
     it('does nothing to a run that was not refused, even when requested', () => {

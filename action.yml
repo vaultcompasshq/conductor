@@ -1287,6 +1287,16 @@ runs:
         # or output write that fails must not turn conductor's exit 0 into a
         # failure, and the `exit "$status"` at the bottom is the only exit.
         set +e
+        # THE C LOCALE FOR EVERYTHING BELOW, set after conductor and the gates
+        # have run so that they keep the runner's own. The checks below say
+        # "a digit", "a version character" and "printable ASCII" with bracket
+        # ranges ([0-9], [0-9A-Za-z.+-], [ -~]), and what a range holds is the
+        # locale's decision: under a UTF-8 locale the bash that macOS ships
+        # (3.2) takes an accented Latin letter for a member of [ -~] and of
+        # [A-Za-z], so a report line carrying one would be copied to the
+        # summary as if it were plain ASCII. In the C locale a range is its
+        # bytes and nothing else, and a length is a count of bytes.
+        LC_ALL=C
         if [ "$text_report_supported" -eq 1 ]; then
           # The token line is the SECOND line of the report conductor wrote,
           # read from the file and from no other source, and taken as data:
@@ -1342,25 +1352,124 @@ runs:
             if [ "$verdict_token" = "nothing-checked" ]; then
               printf 'No gate checked anything (none ran, or every gate that ran had nothing to check), so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
             fi
-            # Lines 3 and 4 of the report, and ONLY a line that is exactly the
-            # present-on-base line or one of the four fixed intent-spec lines,
-            # and only when the token above was accepted. A pass with known
-            # advisories reported and not blocking (the vulnerabilities gate
-            # under present-on-base: report) must not read as spotless here,
-            # and neither may a pass whose intent spec was chosen weakly, or
-            # differently than before, or not at all. The intent-spec lines
-            # are a closed set naming no branch, file or token. Anything else
-            # on either line is ignored; the report can carry text from the
-            # scanned repository, so each line is matched whole rather than
-            # searched for.
+            # THE HEAD BLOCK of the report: from line 3 on, the run-level fixed
+            # lines and then one line per gate, read only when the token above
+            # was accepted. A line is copied ONLY when the whole of it is one
+            # of the closed shapes below, and the scan STOPS at the first line
+            # that is not, so it never reaches a gate section. The report can
+            # carry text from the scanned repository further down (a finding's
+            # message can be written to look like any of these lines), which
+            # is why the block is read by position and each line matched
+            # whole, never searched for.
+            #
+            # THE RUN-LEVEL SLOT, a closed set: the present-on-base line, the
+            # four intent-spec lines, the two trust-base lines and the "new in
+            # this pull request" count. They name no ref, branch, file or
+            # token. A pass with known advisories
+            # reported and not blocking must not read as spotless here, and
+            # neither may a pass whose intent spec was chosen weakly, or
+            # differently than before, or not at all. A later run-level line
+            # is added to run_level_shape and to runLevelLines in
+            # src/output-text.ts, and nowhere else. Once a per-gate line has
+            # been read the slot is closed: a run-level line under a gate line
+            # ends the scan.
+            #
+            # THE PER-GATE LINES (issue 105): ran, with the gate version, the
+            # exit code and the blocking count, or did not run, with the
+            # reason. Built only from conductor's own words (the five roles,
+            # the five products, the could-not-run reasons, the three stages),
+            # numbers, and a version of version characters, so a pull request
+            # cannot write one: it cannot make a gate that did not run read as
+            # one that ran. Bounded by a line count and a length check rather
+            # than large regex repeat counts. An exit code is at most three
+            # digits: a gate reads as ran only on an exit code its product
+            # lists as clean or blocked (0, 1, 3); any other status is
+            # could-not-run, and that line prints no exit code.
             if [ "$token_valid" -eq 1 ] && [ -f "$TEXT_REPORT" ]; then
-              intent_spec_shape='^intent-spec: (none chosen, two or more specs matched the branch equally|none chosen, this branch chose a spec before conductor 0\.11\.0|a different spec chosen than before conductor 0\.11\.0, see the report|weak match, see the intent gate in the report)$'
-              for summary_line_number in 3 4; do
-                summary_line="$(sed -n "${summary_line_number}p" "$TEXT_REPORT")"
-                if [[ "$summary_line" =~ ^present-on-base:\ [0-9]+\ reported,\ not\ blocking$ ]] || [[ "$summary_line" =~ $intent_spec_shape ]]; then
-                  printf '%s\n\n' "$summary_line" >> "$GITHUB_STEP_SUMMARY"
+              run_level_shape='^(present-on-base: [0-9]+ reported, not blocking|intent-spec: (none chosen, two or more specs matched the branch equally|none chosen, this branch chose a spec before conductor 0\.11\.0|a different spec chosen than before conductor 0\.11\.0, see the report|weak match, see the intent gate in the report)|trust-base: (refused|not given on a pull-request job), no rules were read and no gate ran|new in this pull request: [0-9]+ \(vulnerabilities gate; [0-9]+ already on the base\))$'
+              gate_version='[0-9A-Za-z.+-]{1,64}'
+              gate_reason='binary-missing|configured-command-missing|spawn-failed|gate-error|unparseable-output|preparation-failed|trust-base-unverified|gate-program-refused|gate-version-unsupported|report-missing|history-shallow|timed-out|lockfile-emptied|version-skew|version-unverified|lockfile-emptied-unverified|trust base refused'
+              gate_shape="^gate (dependencies|secrets|intent|secrets-history|vulnerabilities) \\((dep-guard|vault-guard|intent-guard|gitleaks|osv-scanner)( ($gate_version|version unknown))?\\): (ran, (exit [0-9]{1,3}|no exit code), [0-9]{1,6} blocking(, checked nothing)?(, not enforced)?|did not run \\(($gate_reason)\\)(, the action pinned $gate_version)?(, not enforced)?|skipped \\((deferred to stage (commit|push|ci)|no contract|spec waived|spec ambiguous|--gate did not name it|head tree equals the base tree)\\)|disabled \\(enabled: false\\))\$"
+              #
+              # THE NAMED FINDINGS (issue 144), under the per-gate lines: one
+              # count line in a closed shape, then one "finding: BLOCKING "
+              # line per blocking finding named, then an optional "and N more
+              # blocking". When nothing blocks the count line stands alone,
+              # without its colon, and ends the block. The finding lines are
+              # NOT a closed shape: a rule, a
+              # path, a package name and a message are text a pull request can
+              # choose. conductor escapes and caps every such field with one
+              # function (summaryField, src/escape.ts), and this step does not
+              # take that on trust: a finding line is copied only into a code
+              # fence, only when it starts with the fixed words, is printable
+              # ASCII and holds no backtick, and is otherwise replaced by a
+              # placeholder. At most 25 lines. The count line's heading is a
+              # closed set too; a later heading is added to findings_shape.
+              findings_shape='^(findings): [0-9]{1,7} \([0-9]{1,7} blocking\)(, the first [0-9]{1,3})?:$'
+              none_blocking_shape='^(findings): [0-9]{1,7} \(0 blocking\)$'
+              finding_shape='^finding: BLOCKING [ -~]+$'
+              more_shape='^and [0-9]{1,7} more blocking$'
+              gate_lines=()
+              findings_lines=()
+              finding_total=0
+              head_line_number=0
+              while IFS= read -r head_line || [ -n "$head_line" ]; do
+                head_line_number=$((head_line_number + 1))
+                if [ "$head_line_number" -le 2 ]; then
+                  continue
                 fi
-              done
+                if [ "$head_line_number" -gt 100 ] || [ "${#head_line}" -gt 600 ]; then
+                  break
+                fi
+                if [ "${#findings_lines[@]}" -gt 0 ]; then
+                  # Inside the findings block: finding lines, then the one
+                  # line that may close it. Anything else ends the scan.
+                  if [[ "$head_line" == 'finding: '* ]]; then
+                    finding_total=$((finding_total + 1))
+                    if [ "$finding_total" -le 25 ]; then
+                      if [[ "$head_line" == *'`'* ]] || ! [[ "$head_line" =~ $finding_shape ]]; then
+                        findings_lines+=('finding: (line omitted: unsafe characters)')
+                      else
+                        findings_lines+=("$head_line")
+                      fi
+                    fi
+                  else
+                    if [[ "$head_line" =~ $more_shape ]]; then
+                      findings_lines+=("$head_line")
+                    fi
+                    break
+                  fi
+                elif [ "${#gate_lines[@]}" -eq 0 ] && [[ "$head_line" =~ $run_level_shape ]]; then
+                  printf '%s\n\n' "$head_line" >> "$GITHUB_STEP_SUMMARY"
+                elif [[ "$head_line" =~ $gate_shape ]]; then
+                  gate_lines+=("$head_line")
+                elif [[ "$head_line" =~ $findings_shape ]]; then
+                  findings_lines+=("$head_line")
+                elif [[ "$head_line" =~ $none_blocking_shape ]]; then
+                  findings_lines+=("$head_line")
+                  break
+                else
+                  break
+                fi
+              done < "$TEXT_REPORT"
+              if [ "${#gate_lines[@]}" -gt 0 ]; then
+                {
+                  printf 'gates:\n\n```text\n'
+                  for gate_line in "${gate_lines[@]}"; do
+                    printf '%s\n' "$gate_line"
+                  done
+                  printf '```\n\n'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              if [ "${#findings_lines[@]}" -gt 0 ]; then
+                {
+                  printf '```text\n'
+                  for findings_line in "${findings_lines[@]}"; do
+                    printf '%s\n' "$findings_line"
+                  done
+                  printf '```\n\n'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
               # The pull-request control changes, from the report's own count
               # line and its "  proposed  <product>" lines. Each line is
               # matched whole; the product must be one of the six fixed

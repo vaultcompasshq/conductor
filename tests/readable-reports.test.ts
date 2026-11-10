@@ -19,7 +19,6 @@ import {
   normalizeUnparseableGate,
   osvSuppressions,
 } from '../src/normalize.js';
-import { rendersToTerminal } from '../src/cli.js';
 import { renderSarif } from '../src/output-sarif.js';
 import { FINDINGS_SHOWN_PER_GATE, gateLogLines, renderText, verdictToken } from '../src/output-text.js';
 import { refusedTrustBase } from '../src/run.js';
@@ -34,6 +33,12 @@ function fixture(name: string): unknown {
 function text(name: string): string {
   return readFileSync(path.join(FIXTURES, name), 'utf8');
 }
+
+/**
+ * A line of a gate's own section, as opposed to the head block's named
+ * findings, which name the first few findings a second time by design.
+ */
+const sectionLine = (line: string): boolean => !line.startsWith('finding: ');
 
 function outcome(overrides: Partial<GateOutcome>): GateOutcome {
   return {
@@ -114,7 +119,7 @@ describe('osv-scanner findings readability (3.1)', () => {
 
   it('groups one advisory on one installed package across lockfiles into one line, listed with --verbose', () => {
     const report = renderText(result([osvGate()], 1));
-    const lines = report.split('\n').filter((line) => line.includes('GHSA-35jh-r3h4-6jhm'));
+    const lines = report.split('\n').filter(sectionLine).filter((line) => line.includes('GHSA-35jh-r3h4-6jhm'));
     expect(lines).toEqual(['  BLOCKING  high*     osv-scanner/GHSA-35jh-r3h4-6jhm  lodash@4.17.20 2 lockfiles  fix 4.17.21']);
     expect(report).not.toContain('lockfiles: a/package-lock.json, b/package-lock.json');
     const verbose = renderText(result([osvGate()], 1), { verbose: true });
@@ -266,14 +271,14 @@ describe('report volume (3.3)', () => {
 
   it('rolls up a gate past the cap into one line, and --verbose lifts it', () => {
     const report = renderText(result([many], 1));
-    expect(report.split('\n').filter((line) => line.includes('gitleaks/generic-api-key'))).toHaveLength(
+    expect(report.split('\n').filter(sectionLine).filter((line) => line.includes('gitleaks/generic-api-key'))).toHaveLength(
       FINDINGS_SHOWN_PER_GATE
     );
     expect(report).toContain(
       '  5 more finding(s) in this gate, not shown here: re-run with --verbose, or read the SARIF report (--format sarif).'
     );
     const verbose = renderText(result([many], 1), { verbose: true });
-    expect(verbose.split('\n').filter((line) => line.includes('gitleaks/generic-api-key'))).toHaveLength(
+    expect(verbose.split('\n').filter(sectionLine).filter((line) => line.includes('gitleaks/generic-api-key'))).toHaveLength(
       FINDINGS_SHOWN_PER_GATE + 5
     );
     expect(verbose).not.toContain('more finding(s) in this gate');
@@ -319,7 +324,7 @@ describe('report volume (3.3)', () => {
       run: { failOn: 'any', suppressed: 0, ignored: 0, diagnostics: [], details: {} },
     });
     const report = renderText(result([osv], 1));
-    expect(report.split('\n').filter((line) => line.includes('osv-scanner/GHSA-test-'))).toHaveLength(
+    expect(report.split('\n').filter(sectionLine).filter((line) => line.includes('osv-scanner/GHSA-test-'))).toHaveLength(
       FINDINGS_SHOWN_PER_GATE
     );
     expect(report).toContain('  6 more finding(s) in this gate, not shown here');
@@ -361,18 +366,16 @@ describe('report volume (3.3)', () => {
     { now: () => new Date('2026-10-17T00:00:00Z') }
   );
 
-  it('prints a refusal once on a terminal, with one line per gate', () => {
-    const report = renderText(refused, { terminal: true });
-    expect(report.split('the ref does not resolve').length - 1).toBe(1);
-    expect(report).toContain('  dependencies  dep-guard  did not run: the trust base was refused (above)');
-    expect(report).toContain('  secrets  vault-guard  did not run: the trust base was refused (above)');
-    expect(report.split('\n')[0]).toBe('verdict-token: could-not-run');
-  });
-
-  it('keeps the full refused report everywhere else', () => {
+  // Since the per-gate summary lines (issue 105) this is every refused
+  // report, not only one printed to a terminal: a file, a pipe and a pull
+  // request comment used to repeat the refusal in every gate's section.
+  it('prints a refusal once, with one line per gate, on every surface', () => {
     const report = renderText(refused);
-    expect(report.split('the ref does not resolve').length - 1).toBeGreaterThan(1);
-    expect(report).toContain('DID NOT RUN (preparation-failed)');
+    expect(report.split('the ref does not resolve').length - 1).toBe(1);
+    expect(report).toContain('gate dependencies (dep-guard): did not run (trust base refused)');
+    expect(report).toContain('gate secrets (vault-guard): did not run (trust base refused)');
+    expect(report.split('\n')[0]).toBe('verdict-token: could-not-run');
+    expect(report).not.toContain('DID NOT RUN (preparation-failed)');
   });
 
   it('prints the refused run log as one line on a terminal, one per gate otherwise', () => {
@@ -519,7 +522,7 @@ describe('review fix round', () => {
     );
   });
 
-  it('prints no severity footnote on a compact terminal refusal, which shows no finding line', () => {
+  it('prints no severity footnote on a refusal, which shows no finding line', () => {
     const refused = refusedTrustBase(
       {
         version: 1,
@@ -540,15 +543,7 @@ describe('review fix round', () => {
       'the ref does not resolve.',
       { now: () => new Date('2026-10-17T00:00:00Z') }
     );
-    expect(renderText(refused, { terminal: true })).not.toContain('severity assigned by the umbrella');
-    expect(renderText(refused)).toContain('severity assigned by the umbrella');
-  });
-
-  it('renders for a terminal only when stdout is a TTY and no --output was given', () => {
-    expect(rendersToTerminal(undefined, true)).toBe(true);
-    expect(rendersToTerminal(undefined, false)).toBe(false);
-    expect(rendersToTerminal(undefined, undefined)).toBe(false);
-    expect(rendersToTerminal('conductor.sarif', true)).toBe(false);
+    expect(renderText(refused)).not.toContain('severity assigned by the umbrella');
   });
 
   it('says "no fix listed" when osv-scanner gave no fixed version', () => {
