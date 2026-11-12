@@ -132,7 +132,7 @@ import {
 } from './output-text.js';
 import { POLICY_FILE_NAME } from './policy.js';
 import { policyChangeLine } from './policy-diff.js';
-import { type RunResult, guardPreview } from './run.js';
+import { type RunResult, guardPreview, isProposal, ranProposedPolicy } from './run.js';
 
 const SARIF_SCHEMA =
   'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json';
@@ -341,7 +341,7 @@ function withFallbackLocation(
   );
 }
 
-function toResult(finding: Finding, fallbackUri: string): Record<string, unknown> {
+function toResult(finding: Finding, fallbackUri: string, proposal = false): Record<string, unknown> {
   // A path that escapes the source root gets no physical location, so the
   // path itself is carried here instead. Dropping a location is honest;
   // dropping the information as well would just lose the finding's subject.
@@ -356,6 +356,11 @@ function toResult(finding: Finding, fallbackUri: string): Record<string, unknown
       severity: finding.severity,
       severityIsDerived: finding.severityIsDerived,
       fingerprintStability: finding.fingerprint?.stability ?? 'none',
+      // On a run of the policy a pull request adds (issue 101): `blocking`
+      // above is what the proposed policy WOULD do, and nothing was enforced.
+      // On the result itself, so a consumer that reads results and never the
+      // run's properties still cannot take it for an enforced verdict.
+      ...(proposal ? { proposal: true } : {}),
       ...(unplaceable.length === 0 ? {} : { unresolvablePaths: unplaceable }),
       // The details bag verbatim. Not reshaped, not filtered: it is where
       // each gate puts what it actually established.
@@ -421,7 +426,7 @@ interface Notification {
    * has to be able to tell it from a clean scan of a repository with no
    * gates enabled.
    */
-  level?: 'note' | 'error';
+  level?: 'note' | 'warning' | 'error';
 }
 
 function toNotification(notification: Notification): Record<string, unknown> {
@@ -481,7 +486,9 @@ function makeRun(
   /** The artifact a result with no location of its own is filed against. */
   fallbackUri: string,
   properties?: Record<string, unknown>,
-  invocation?: Invocation
+  invocation?: Invocation,
+  /** Whether this is a run of the policy a pull request adds (issue 101). */
+  proposal = false
 ): Record<string, unknown> {
   const notifications = invocation?.notifications ?? [];
   return {
@@ -500,7 +507,7 @@ function makeRun(
           : { notifications: notificationDeclarations(notifications) }),
       },
     },
-    results: findings.map((finding) => toResult(finding, fallbackUri)),
+    results: findings.map((finding) => toResult(finding, fallbackUri, proposal)),
     ...(invocation === undefined
       ? {}
       : {
@@ -841,12 +848,17 @@ function intentWarningNotifications(result: RunResult): Notification[] {
  * gate that raised each line is in the details.
  */
 function proposalNotifications(result: RunResult): Notification[] {
+  // On a run of the policy the pull request adds, no rule came from the ref:
+  // it has no policy. What did not take effect is said without that claim.
+  const source = ranProposedPolicy(result)
+    ? `There is no policy on ${result.trustBase?.ref ?? 'the base ref'}, and this run took only ` +
+      'enabled, stage and enforce from the policy this pull request adds'
+    : `The rules came from ${result.trustBase?.ref ?? 'the base ref'}`;
   return result.proposals.map((proposal) => ({
     id: 'conductor/control-change-proposed',
     message:
       `This pull request proposes a control change that did NOT take effect for this run: ` +
-      `${proposal.line} (${proposal.product}). The rules came from ` +
-      `${result.trustBase?.ref ?? 'the base ref'}; the proposed change decides what runs once ` +
+      `${proposal.line} (${proposal.product}). ${source}; the proposed change decides what runs once ` +
       'it is on the base branch.',
     details: {
       product: proposal.product,
@@ -903,6 +915,39 @@ function previewNotifications(result: RunResult): Notification[] {
  * inventory named sit beside it in the same run and carry the same sentence,
  * so a consumer that reads only results still learns that nothing ran.
  */
+/**
+ * A run of the policy a pull request adds to a base that has none (issue
+ * 101), said once on the umbrella's run.
+ *
+ * WARNING level, between the notes and the refusal's error: this is not a
+ * coverage statement about one gate, it is that NOTHING in this log was
+ * enforced, and a consumer reading only the log has to be able to tell that
+ * from an enforced run. Not an error, because nothing failed. It always
+ * exists on such a run, so the umbrella's run, and with it
+ * `properties.trustBase.proposal`, is always written.
+ */
+function proposalRunNotifications(result: RunResult): Notification[] {
+  if (!ranProposedPolicy(result)) {
+    return [];
+  }
+  const ref = result.trustBase?.ref ?? '';
+  return [
+    {
+      id: 'conductor/proposal-run',
+      level: 'warning',
+      message:
+        `There is no ${POLICY_FILE_NAME} on "${ref}", so NOTHING IN THIS LOG WAS ENFORCED. This run ` +
+        'took enabled, stage and enforce from the policy this pull request adds and every other ' +
+        'setting from the product defaults. Each result is what would be reported once that policy ' +
+        'is on the base branch' +
+        (isProposal(result)
+          ? ', and the run exits 0 whatever they say.'
+          : '. A gate the proposed policy enforces could not run, so the run is could-not-run.'),
+      details: { ref, reason: 'no-policy-on-base', exitCode: result.exitCode },
+    },
+  ];
+}
+
 function trustBaseRefusedNotifications(result: RunResult): Notification[] {
   const refusal = result.trustBase?.refusal;
   if (refusal === undefined || refusal === null) {
@@ -1227,7 +1272,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
         // only when there is something in it, so a gate that reports none of
         // this keeps the properties shape it had before.
         ...(Object.keys(runDetails(gate)).length === 0 ? {} : { details: runDetails(gate) }),
-      })
+      }, undefined, ranProposedPolicy(result))
     );
   }
 
@@ -1254,6 +1299,7 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
     ...legacyStateDirNotifications(result),
     ...weakMatchNotifications(result),
     ...trustBaseRefusedNotifications(result),
+    ...proposalRunNotifications(result),
     ...programRefusedNotifications(result),
     ...proposalNotifications(result),
     ...trustBaseWithheldNotifications(result),
@@ -1312,7 +1358,8 @@ export function renderSarif(result: RunResult, umbrellaVersion: string): string 
             (result.trustBase?.refusal ?? null) === null &&
             result.gates.every((gate) => gate.couldNotRun === null),
           notifications,
-        }
+        },
+        ranProposedPolicy(result)
       )
     );
   }

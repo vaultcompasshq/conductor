@@ -97,9 +97,18 @@ export function truncateReport(reportText, limit = COMMENT_LIMIT) {
 const VERSION = '[0-9A-Za-z.+-]{1,64}';
 const VERSION_LINE = new RegExp(`^conductor ${VERSION}$`);
 const TOKEN_LINE =
-  /^verdict-token: (pass|nothing-checked|could-not-run|(?:advisory-blocked|unenforced-findings|blocked) \([0-9]+\))$/;
+  /^verdict-token: (pass|nothing-checked|could-not-run|proposal-nothing-checked|(?:advisory-blocked|unenforced-findings|blocked|proposal) \([0-9]+\))$/;
 const NEW_IN_PR_LINE = /^new in this pull request: [0-9]+ \(vulnerabilities gate; [0-9]+ already on the base\)$/;
 const TRUST_BASE_LINE = /^trust-base: (?:refused|not given on a pull-request job), no rules were read and no gate ran$/;
+// The three lines of issue 101. Fixed sentences and one number; they name no
+// ref, branch or file. The first two are the first thing to know about their
+// run, so the comment leads with them.
+const PROPOSAL_LINE =
+  /^proposal: no \.guardrails\.yaml on the base branch, so nothing here was enforced; ([0-9]+) would block once this policy is on the base branch$/;
+const NO_POLICY_LINE =
+  /^no-policy: this workflow checks nothing until \.guardrails\.yaml is on the base branch; run conductor init and merge it$/;
+const POLICY_REMOVED_LINE =
+  /^policy-removed: this pull request deletes \.guardrails\.yaml; once merged, nothing is enforced on the base branch and every pull-request run is refused until a policy is back on it$/;
 const RUN_LEVEL_LINE = new RegExp(
   '^(?:present-on-base: [0-9]+ reported, not blocking' +
     '|intent-spec: (?:none chosen, two or more specs matched the branch equally' +
@@ -107,7 +116,10 @@ const RUN_LEVEL_LINE = new RegExp(
     '|a different spec chosen than before conductor 0\\.11\\.0, see the report' +
     '|weak match, see the intent gate in the report)' +
     '|trust-base: (?:refused|not given on a pull-request job), no rules were read and no gate ran' +
-    '|new in this pull request: [0-9]+ \\(vulnerabilities gate; [0-9]+ already on the base\\))$'
+    '|new in this pull request: [0-9]+ \\(vulnerabilities gate; [0-9]+ already on the base\\)' +
+    `|${PROPOSAL_LINE.source.slice(1, -1)}` +
+    `|${NO_POLICY_LINE.source.slice(1, -1)}` +
+    `|${POLICY_REMOVED_LINE.source.slice(1, -1)})$`
 );
 const GATE_REASON =
   'binary-missing|configured-command-missing|spawn-failed|gate-error|unparseable-output|preparation-failed' +
@@ -122,9 +134,11 @@ const GATE_LINE = new RegExp(
     '|--gate did not name it|head tree equals the base tree)\\)' +
     '|disabled \\(enabled: false\\))$'
 );
-const FINDINGS_LINE = /^(?:findings): [0-9]{1,7} \([0-9]{1,7} blocking\)(?:, the first [0-9]{1,3})?:$/;
+// The second heading is a proposal's: what would block, never what did.
+const FINDINGS_LINE =
+  /^(?:findings|would block once the policy is on the base): [0-9]{1,7} \([0-9]{1,7} blocking\)(?:, the first [0-9]{1,3})?:$/;
 // When nothing blocks, the count line stands alone, without its colon.
-const NONE_BLOCKING_LINE = /^(?:findings): [0-9]{1,7} \(0 blocking\)$/;
+const NONE_BLOCKING_LINE = /^(?:findings|would block once the policy is on the base): [0-9]{1,7} \(0 blocking\)$/;
 const FINDING_LINE = /^finding: BLOCKING [ -~]+$/;
 const MORE_LINE = /^and [0-9]{1,7} more blocking$/;
 
@@ -150,6 +164,17 @@ export function headBlock(reportText) {
   const token = TOKEN_LINE.exec(lines[1] ?? '');
   if (!VERSION_LINE.test(lines[0] ?? '') || token === null) {
     return null;
+  }
+  // A PROPOSAL TOKEN IS READ ONLY WITH ITS LINE, as the gates step reads it:
+  // line 3 must be the fixed proposal line, carrying the token's own number.
+  // The token says "exit 0 and nothing was enforced", and it never leads a
+  // comment without the sentence that says so. Otherwise there is no head
+  // block, and the report is posted whole, as text.
+  if (token[1].startsWith('proposal')) {
+    const line = PROPOSAL_LINE.exec(lines[2] ?? '');
+    if (line === null || (token[1] !== 'proposal-nothing-checked' && token[1] !== `proposal (${line[1]})`)) {
+      return null;
+    }
   }
   const head = { token: token[1], runLevel: [], gates: [], findings: [] };
   let named = 0;
@@ -195,6 +220,8 @@ export function headBlock(reportText) {
  * run-level lines, one row per gate, and the findings by name. Empty for a
  * body with no head block.
  */
+const leadsTheComment = (line) => PROPOSAL_LINE.test(line) || NO_POLICY_LINE.test(line);
+
 function headLines(head) {
   if (head === null) {
     return [];
@@ -203,9 +230,14 @@ function headLines(head) {
   return [
     `conductor verdict: ${head.token}`,
     '',
+    // A proposal or a workflow with no policy is said before anything else:
+    // nothing under it was enforced, or nothing was checked at all.
+    ...head.runLevel.filter(leadsTheComment).flatMap((line) => [line, '']),
     // Led with, when it is there: it is the line adopters asked to read first.
     ...head.runLevel.filter((line) => NEW_IN_PR_LINE.test(line)).flatMap((line) => [line, '']),
-    ...head.runLevel.filter((line) => !NEW_IN_PR_LINE.test(line)).flatMap((line) => [line, '']),
+    ...head.runLevel
+      .filter((line) => !NEW_IN_PR_LINE.test(line) && !leadsTheComment(line))
+      .flatMap((line) => [line, '']),
     ...fenced(head.gates),
     ...fenced(head.findings),
   ];

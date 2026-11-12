@@ -544,6 +544,8 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     fetchEnvLog: string[];
     /** The subcommands of every git call that had TRUST_BASE_TOKEN in its environment. */
     tokenSeenBy: string[];
+    /** One line per git call: the configuration it was given on its command line, then its subcommand. */
+    pinLog: string[];
     sha: string | null;
     /** The fetched tip, published only when the run moved past it. */
     baseTip: string | null;
@@ -555,6 +557,8 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
     writeFileSync(fetchEnvLogPath, '');
     const tokenSeenPath = path.join(tempDir(), 'git-token-seen.txt');
     writeFileSync(tokenSeenPath, '');
+    const pinLogPath = path.join(tempDir(), 'git-pins.txt');
+    writeFileSync(pinLogPath, '');
     const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
     const gitShim = path.join(bin, 'git');
     writeFileSync(
@@ -562,6 +566,12 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       [
         '#!/bin/sh',
         `REAL_GIT=${JSON.stringify(realGit)}`,
+        // The step puts configuration on the command line ahead of the
+        // subcommand. Taken off here so "$1" is the subcommand below, logged,
+        // and handed back to the real git exactly as given, never added.
+        'PINS=""',
+        'while [ "$1" = "-c" ]; do PINS="$PINS -c $2"; shift 2; done',
+        `printf '%s|%s\\n' "$PINS" "$1" >> ${JSON.stringify(pinLogPath)}`,
         // Every git call that inherited the token, by subcommand.
         `if [ -n "\${TRUST_BASE_TOKEN:-}" ]; then printf '%s\\n' "$1" >> ${JSON.stringify(tokenSeenPath)}; fi`,
         shimOptions.failUpdateRef === true ? 'if [ "$1" = "update-ref" ]; then exit 1; fi' : '',
@@ -569,12 +579,12 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
         'if [ "$1" = "fetch" ]; then',
         `  printf '%s\\n' "$*" >> ${JSON.stringify(fetchLogPath)}`,
         `  printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s;KEY2=%s;VALUE2=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" "$GIT_CONFIG_KEY_2" "$GIT_CONFIG_VALUE_2" >> ${JSON.stringify(fetchEnvLogPath)}`,
-        '  "$REAL_GIT" "$@"',
+        '  "$REAL_GIT" $PINS "$@"',
         '  rc=$?',
         `  if [ "$rc" -eq 0 ]; then ${shimOptions.afterFetch ?? ':'}; fi`,
         '  exit $rc',
         'fi',
-        'exec "$REAL_GIT" "$@"',
+        'exec "$REAL_GIT" $PINS "$@"',
         '',
       ].join('\n')
     );
@@ -605,6 +615,7 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
       fetchLog: fileLines(fetchLogPath),
       fetchEnvLog: fileLines(fetchEnvLogPath),
       tokenSeenBy: fileLines(tokenSeenPath),
+      pinLog: fileLines(pinLogPath),
       sha: shaLine === undefined ? null : shaLine.slice('sha='.length),
       baseTip: baseTipLine === undefined ? null : baseTipLine.slice('base-tip='.length),
     };
@@ -1320,6 +1331,44 @@ describe('action.yml shallow-fetches the trust base for a pull-request run', () 
         expect(run.sha).not.toBe(chosen);
         expectRepointed(run, workdir, moved);
         expect(run.output).not.toContain(chosen);
+      });
+
+      // GIT_NO_REPLACE_OBJECTS alone loses to core.useReplaceRefs=true in a
+      // configuration git reads. The step puts the key on the command line of
+      // every git call, where nothing outranks it.
+      it.each(['the repository configuration', 'GIT_CONFIG_COUNT'])(
+        'still publishes the real first parent with replacement turned back on in %s',
+        (where) => {
+          const moved = makeMovedBase();
+          const workdir = checkoutAt(moved, moved.m0);
+          const chosen = plantReplacements(moved, workdir);
+          const inEnvironment: Record<string, string> =
+            where === 'GIT_CONFIG_COUNT'
+              ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.useReplaceRefs', GIT_CONFIG_VALUE_0: 'true' }
+              : {};
+          if (where !== 'GIT_CONFIG_COUNT') {
+            git(['config', 'core.useReplaceRefs', 'true'], workdir);
+          }
+
+          const run = runFetchScript(workdir, { ...pullRequestEnv(moved), ...inEnvironment });
+
+          expect(run.sha).not.toBe(chosen);
+          expectRepointed(run, workdir, moved);
+          expect(run.output).not.toContain(chosen);
+        }
+      );
+
+      it('gives every git call in the step both pins on its command line', () => {
+        const moved = makeMovedBase();
+        const workdir = checkoutAt(moved, moved.m0);
+        const run = runFetchScript(workdir, pullRequestEnv(moved));
+        expect(run.pinLog.length).toBeGreaterThan(5);
+        for (const call of run.pinLog) {
+          expect(call).toMatch(/^ -c core\.useReplaceRefs=false -c core\.commitGraph=false\|[a-z-]+$/);
+        }
+        expect(run.pinLog.map((call) => call.split('|')[1])).toEqual(
+          expect.arrayContaining(['fetch', 'rev-list', 'merge-base', 'ls-tree', 'update-ref', 'rev-parse'])
+        );
       });
 
       it('keeps the tip when the real trees differ, though the replacements carry one tree', () => {

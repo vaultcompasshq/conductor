@@ -353,6 +353,15 @@ judged while still reporting pull-request mode as on. Pass the base
 commit, which is HEAD. If the base branch has no `.guardrails.yaml` at all,
 the run has no rules and exits 2 rather than using the pull request's; the
 file the pull request adds decides what runs once it is on the base branch.
+With `--adoption-proposal`, which the Action passes only on a pull request
+into the default branch, a pull request that adds the first policy is
+instead reported as a proposal: the policy it adds is run, nothing is
+enforced, the exit code is 0 and the verdict token is `proposal (N)` or
+`proposal-nothing-checked`, never `pass`. That is refused, exit 2 as before,
+when the base branch has ever carried a policy file, when the history the
+pull request shares with the base carries one, in a shallow clone, and
+whenever any of that cannot be established. See
+[A proposal](commands.md#a-proposal).
 
 **One narrow exception to the equal-tree refusal (issue #69).** When a pull
 request's net diff is empty -- a value committed and then backed out inside

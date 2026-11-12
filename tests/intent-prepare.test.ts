@@ -139,6 +139,49 @@ function argvLines(logFile: string): string[] {
   return readFileSync(logFile, 'utf8').trim().split('\n');
 }
 
+describe('the environment a preparation spawn is given', () => {
+  const KEYS = ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1'] as const;
+
+  it('hands the preparation child the replace-refs pin after the caller entries', () => {
+    const saved = KEYS.map((key) => [key, process.env[key]] as const);
+    const envLog = path.join(tempDir(), 'intent-env.txt');
+    const bin = tempDir();
+    stubIntentGuard(bin, {
+      envLog,
+      importSpec: { stdout: IMPORT_DRY_RUN },
+      freeze: { stdout: FREEZE },
+    });
+    process.env.GIT_CONFIG_COUNT = '1';
+    process.env.GIT_CONFIG_KEY_0 = 'http.https://example.com/.extraheader';
+    process.env.GIT_CONFIG_VALUE_0 = 'AUTHORIZATION: basic eA==';
+    delete process.env.GIT_CONFIG_KEY_1;
+    delete process.env.GIT_CONFIG_VALUE_1;
+
+    let result: IntentPrepareResult;
+    try {
+      result = prepare(repoWithSpec(), bin);
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+
+    expect(result.kind).toBe('ready');
+    const lines = readFileSync(envLog, 'utf8').trim().split('\n');
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines).toEqual(
+      lines.map(
+        () =>
+          'COUNT=2;KEY0=http.https://example.com/.extraheader;VALUE0=AUTHORIZATION: basic eA==;KEY1=core.useReplaceRefs;VALUE1=false'
+      )
+    );
+  });
+});
+
 describe('a repository whose own contract is frozen', () => {
   function repoWithFrozenContract(): string {
     const root = repoWithSpec();

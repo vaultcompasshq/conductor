@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { type Finding, compareFindings } from './envelope.js';
-import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, composeExitCode, gateExitBlocks } from './exit-codes.js';
+import { EXIT_BLOCKED, EXIT_COULD_NOT_RUN, EXIT_OK, composeExitCode, gateExitBlocks } from './exit-codes.js';
 import { type ExistingFindings, collectExistingFindings } from './existing-findings.js';
 import {
   type GateOutcome,
@@ -198,6 +198,28 @@ export interface RunTrustBase extends BaseTipForDisplay {
    * were read, rather than naming a ref.
    */
   notGiven?: boolean;
+  /**
+   * Set when this run's policy is the one the pull request ADDS, because the
+   * trust base has none (issue 101): `enabled`, `stage` and `enforce` from
+   * the HEAD blob, everything else the product default. Only
+   * `src/cli.ts#policyForRun` sets it, and only after
+   * `src/adoption-proposal.ts#refuseAdoptionProposal` returned null. Every
+   * pull-request protection still keys on the trust base being present, not
+   * on this. What this changes is the exit code (`asProposal`) and the words.
+   */
+  proposal?: { reason: 'no-policy-on-base' };
+  /**
+   * True on a refusal where neither the trust base nor HEAD has a policy
+   * file: the workflow is there and nothing can be checked until a policy
+   * is. The reports add one fixed line saying so.
+   */
+  noPolicy?: boolean;
+  /**
+   * True when the trust base has a policy and HEAD has no policy file: this
+   * pull request deletes it. The run is the ordinary one under the base's
+   * rules; the reports add one fixed line saying what merging it does.
+   */
+  policyRemoved?: boolean;
 }
 
 /**
@@ -480,7 +502,7 @@ export function refusedTrustBase(
   policy: Policy,
   ref: string,
   detail: string,
-  options: { stage?: GateStage; now?: () => Date; notGiven?: boolean }
+  options: { stage?: GateStage; now?: () => Date; notGiven?: boolean; noPolicy?: boolean }
 ): RunResult {
   const { gates, deferred, excluded } = partitionGates(policy, options.stage);
   const outcomes = gates.map((gate) =>
@@ -515,6 +537,7 @@ export function refusedTrustBase(
       policyChanged: false,
       refusal: detail,
       ...(options.notGiven === true ? { notGiven: true } : {}),
+      ...(options.noPolicy === true ? { noPolicy: true } : {}),
     },
     proposals: [],
     summary: {
@@ -548,7 +571,10 @@ function collectProposals(
   const proposals: ControlProposal[] = [];
   if (trustBase?.policyChanged === true) {
     const changes = trustBase.policyChanges ?? [];
-    if (changes.length === 0) {
+    // On a proposal the list holds only the keys that were NOT applied
+    // (src/cli.ts#policyForRun). Empty then means every key the head wrote
+    // was applied, and there is no unapplied change to announce.
+    if (changes.length === 0 && trustBase.proposal === undefined) {
       proposals.push({ product: 'conductor', role: null, line: POLICY_PROPOSAL_LINE });
     }
     for (const change of changes) {
@@ -971,6 +997,56 @@ export function runAll(policy: Policy, options: RunOptions): RunResult {
     ...(existing === null ? {} : { existingFindings: existing }),
     ...(preview === undefined ? {} : { preview }),
   };
+}
+
+/**
+ * Whether this run's policy was the one the pull request adds (issue 101).
+ * A fact about where the rules came from, whatever the run then exited with.
+ */
+export function ranProposedPolicy(result: RunResult): boolean {
+  return result.trustBase?.proposal !== undefined && (result.trustBase.refusal ?? null) === null;
+}
+
+/**
+ * Whether this run is a PROPOSAL OUTCOME: it ran the policy the pull request
+ * adds, and exits 0 because nothing on the base could have been enforced.
+ * False for a run of a proposed policy in which an enforced gate could not
+ * run: that one is could-not-run, exit 2, like any other.
+ */
+export function isProposal(result: RunResult): boolean {
+  return ranProposedPolicy(result) && result.exitCode === EXIT_OK;
+}
+
+/**
+ * THE ONE PLACE A PROPOSAL'S EXIT CODE IS WRITTEN, applied by the CLI to the
+ * result of `runAll` on a run of the policy a pull request adds, exactly as
+ * `refusedTrustBase` writes its own.
+ *
+ * Two answers and no third:
+ *
+ *  - 2 when any gate the proposed policy ENFORCES could not run (ruled
+ *    2026-11-10). A setup fault is what a red check is for, the adoption
+ *    pull request is the cheapest place to fix it, and a named gate under a
+ *    green check is in practice a silent pass. `composeExitCode` already
+ *    said 2 for this; it is kept, never softened. Anything `runAll` returned
+ *    that is not 0 or 1 is kept as could-not-run too.
+ *  - 0 otherwise, whatever the gates found. The base has no policy, so
+ *    nothing here could have been enforced, and a blocking finding is
+ *    reported as what WOULD block once the policy is on the base branch.
+ *
+ * A gate with enforce: false that could not run does not change the code,
+ * as on every other run. Throws when handed a run that was not marked as a
+ * proposed policy, or was refused: turning any other run's exit code into 0
+ * is exactly what this must never do.
+ */
+export function asProposal(result: RunResult): RunResult {
+  if (!ranProposedPolicy(result)) {
+    throw new Error('asProposal was handed a run that is not a run of a proposed policy');
+  }
+  const couldNotRun =
+    (result.exitCode !== EXIT_OK && result.exitCode !== EXIT_BLOCKED) ||
+    result.gates.some((gate) => gate.enforce && gate.couldNotRun !== null);
+  return { ...result, exitCode: couldNotRun ? EXIT_COULD_NOT_RUN : EXIT_OK };
 }
 
 /** The part of a trust base only the reports read. */

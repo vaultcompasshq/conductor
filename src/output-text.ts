@@ -38,10 +38,16 @@ import {
 import { isLegacyContractPath, legacyChangedSentence } from './intent-prepare.js';
 import type { ReportedMatch } from './intent-prepare.js';
 import { SPEC_DIR } from './intent-spec.js';
-import { PRODUCT_FOR_ROLE } from './policy.js';
+import { POLICY_FILE_NAME, PRODUCT_FOR_ROLE } from './policy.js';
 import { summaryField } from './escape.js';
 import { escapeNonAscii } from './policy-diff.js';
-import { type RunResult, TRUST_BASE_REFUSED_DETAIL, guardPreview } from './run.js';
+import {
+  type RunResult,
+  TRUST_BASE_REFUSED_DETAIL,
+  guardPreview,
+  isProposal,
+  ranProposedPolicy,
+} from './run.js';
 
 // A file path in a finding is the head's choice on any pull-request run (a
 // file named with a right-to-left override in it), so in the text report,
@@ -723,9 +729,17 @@ function trustBaseLines(result: RunResult): string[] {
   if (result.trustBase.refusal !== null && result.trustBase.refusal !== undefined) {
     return ['  pull-request mode: the trust base was refused, so no rules were read.'];
   }
-  const lines = [
-    `  pull-request mode: rules from ${result.trustBase.ref}. ${proposalCount(result)}.`,
-  ];
+  // A run of the policy the pull request adds took no rule from the ref: it
+  // has none. The count that follows is of what the head wrote and this run
+  // did NOT apply, plus what the gates said was proposed.
+  const lines = ranProposedPolicy(result)
+    ? [
+        `  pull-request mode: no policy on ${result.trustBase.ref}; this run previews the policy this ` +
+          `pull request adds. ${proposalCount(result)}.`,
+        '  only enabled, stage and enforce were taken from that policy; any other key it sets is ' +
+          'listed as proposed and was not applied.',
+      ]
+    : [`  pull-request mode: rules from ${result.trustBase.ref}. ${proposalCount(result)}.`];
   for (const proposal of result.proposals) {
     lines.push(`  proposed  ${proposal.product.padEnd(13)} ${proposal.line}`);
   }
@@ -823,7 +837,9 @@ export function jobLogSummary(result: RunResult): string {
       ? `pull-request job with no trust base, no rules read: ${refusal.replace(/\.+\s*$/, '')}`
       : `refused the trust base "${result.trustBase?.ref ?? ''}": ${refusal.replace(/\.+\s*$/, '')}`;
   }
-  return `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
+  const counts = `${result.gates.length} gate(s), ${result.findings.length} finding(s)`;
+  // A proposal's counts must not read as an enforced run's.
+  return isProposal(result) ? `proposal, no policy on "${result.trustBase?.ref ?? ''}": ${counts}` : counts;
 }
 
 /**
@@ -1097,6 +1113,49 @@ export const TRUST_BASE_LINES = [
 ] as const;
 
 /**
+ * The fixed line of a PROPOSAL (issue 101): a run of the policy a pull
+ * request adds to a base that has none, which exits 0 and enforced nothing.
+ * One number and no other text that varies: no ref, no branch, no file. The
+ * number is the verdict token's, `wouldBlock`.
+ */
+export function proposalLine(wouldBlockCount: number): string {
+  return (
+    `proposal: no ${POLICY_FILE_NAME} on the base branch, so nothing here was enforced; ` +
+    `${wouldBlockCount} would block once this policy is on the base branch`
+  );
+}
+
+/**
+ * The fixed line of a refused pull-request run where neither the base nor
+ * the pull request has a policy file, and of a run with no trust base that
+ * found no policy file at all (the CLI appends it to the Actions step
+ * summary there). The workflow is present and checks nothing: said in so
+ * many words, since a red step alone was read as a broken tool.
+ */
+export const NO_POLICY_LINE =
+  `no-policy: this workflow checks nothing until ${POLICY_FILE_NAME} is on the base branch; ` +
+  'run conductor init and merge it';
+
+/**
+ * The fixed line of a pull request that deletes the policy file from a base
+ * that has one. That run is the ordinary one under the base's rules, so
+ * without this line the deletion is one "proposed" line among gate output.
+ * What it says about afterwards is what the code does: with no policy on the
+ * base every pull-request run is refused, and a pull request that adds one
+ * back is refused too (src/adoption-proposal.ts#refuseAdoptionProposal, the
+ * first-parent history rule).
+ */
+export const POLICY_REMOVED_LINE =
+  `policy-removed: this pull request deletes ${POLICY_FILE_NAME}; once merged, nothing is enforced on ` +
+  'the base branch and every pull-request run is refused until a policy is back on it';
+
+/** The heading of the named findings on a proposal, in place of "findings". */
+export const PROPOSAL_FINDINGS_HEADING = 'would block once the policy is on the base';
+
+/** The headings `findingSummaryLines` is ever given: a closed set the two readers spell too. */
+export const FINDINGS_HEADINGS = ['findings', PROPOSAL_FINDINGS_HEADING] as const;
+
+/**
  * THE RUN-LEVEL SLOT: the fixed lines about the run as a whole, printed
  * directly under the verdict token and above the per-gate lines. Each is a
  * closed shape (a fixed sentence, or one with numbers in it), so the Action
@@ -1105,7 +1164,12 @@ export const TRUST_BASE_LINES = [
  * closed sets that read it, and nowhere else.
  *
  * The present-on-base line stays first and the intent-spec line second, the
- * two positions an Action older than this slot reads.
+ * two positions an Action older than this slot reads, on every run such an
+ * Action can be handed. The proposal line and the no-policy line go above
+ * them, because each is the first thing to know about its run: an older
+ * Action never passes --adoption-proposal, so it never sees a proposal, and
+ * a refused run has neither of the two older lines. The policy-removed line
+ * is on an ordinary run, so it goes below them.
  */
 export function runLevelLines(result: RunResult): string[] {
   const reported = presentOnBaseReported(result);
@@ -1122,9 +1186,12 @@ export function runLevelLines(result: RunResult): string[] {
   const sum = (pick: (comparison: (typeof compared)[number]) => number): number =>
     compared.reduce((total, comparison) => total + pick(comparison), 0);
   return [
+    ...(isProposal(result) ? [proposalLine(wouldBlock(result))] : []),
+    ...(refused && result.trustBase?.noPolicy === true ? [NO_POLICY_LINE] : []),
     ...(reported === 0 ? [] : [`present-on-base: ${reported} reported, not blocking`]),
     ...(specLine === null ? [] : [specLine]),
     ...(refused ? [TRUST_BASE_LINES[result.trustBase?.notGiven === true ? 1 : 0]] : []),
+    ...(!refused && result.trustBase?.policyRemoved === true ? [POLICY_REMOVED_LINE] : []),
     ...(compared.length === 0
       ? []
       : [
@@ -1233,7 +1300,15 @@ export function findingSummaryLines(
  * said only "findings (36, 36 blocking)").
  */
 export function findingLogLines(result: RunResult): string[] {
-  return findingSummaryLines(result).map((line) => `conductor: ${line}`);
+  return findingSummaryLines(result, findingsHeading(result)).map((line) => `conductor: ${line}`);
+}
+
+/**
+ * The heading option for this run's named findings: on a proposal they are
+ * what would block, never what did.
+ */
+function findingsHeading(result: RunResult): { heading?: string } {
+  return isProposal(result) ? { heading: PROPOSAL_FINDINGS_HEADING } : {};
 }
 
 type VersionSkew = NonNullable<GateOutcome['versionSkew']>;
@@ -1352,6 +1427,15 @@ function blockingCount(gate: RunResult['gates'][number]): number {
 }
 
 /**
+ * N of `proposal (N)`: what would block once the proposed policy is on the
+ * base branch. Counted exactly as `blocked (N)` is, over the gates the
+ * proposed policy enforces, so a gate that could not run is never in it.
+ */
+function wouldBlock(result: RunResult): number {
+  return result.gates.filter((gate) => gate.enforce).reduce((total, gate) => total + blockingCount(gate), 0);
+}
+
+/**
  * The verdict token: a label for the umbrella's OWN exit decision, in a
  * closed set, so a person or a script reading a report or a job summary gets
  * the state without parsing the verdict sentence.
@@ -1393,6 +1477,17 @@ export function verdictToken(result: RunResult, advisory: boolean): string {
   const refused = refusal !== undefined && refusal !== null;
   if (refused || (result.exitCode !== 0 && result.exitCode !== EXIT_BLOCKED)) {
     return 'could-not-run';
+  }
+
+  // A PROPOSAL (issue 101), after the refusal and before every other token:
+  // exit 0 on a run that enforced nothing must never read as pass,
+  // nothing-checked or any token an enforced run can have. `isProposal` is
+  // true only at exit 0, so a run of a proposed policy in which an enforced
+  // gate could not run took the could-not-run branch above.
+  if (isProposal(result)) {
+    return result.gates.length === 0 || result.gates.every(gateCheckedNothing)
+      ? 'proposal-nothing-checked'
+      : `proposal (${wouldBlock(result)})`;
   }
 
   if (result.exitCode === EXIT_BLOCKED) {
@@ -1504,7 +1599,39 @@ function verdict(result: RunResult, advisory: boolean): string {
       : `verdict: exit 2, the trust base "${result.trustBase?.ref ?? ''}" could not be used, ` +
           'so no gate ran and nothing here is a result of any kind.';
   }
+  if (isProposal(result)) {
+    return proposalVerdict(result);
+  }
   return verdictForRun(result, advisory);
+}
+
+/**
+ * The closing sentence of a proposal. Written rather than composed, as the
+ * refusal's is: exit 0 here is not a count of anything, and no clause of
+ * `verdictForRun` ("every enabled gate ran and none blocked") is true of a
+ * run that enforced nothing. --advisory has nothing to say on it.
+ */
+function proposalVerdict(result: RunResult): string {
+  const lead =
+    `verdict: exit 0, proposal, not a verdict: there is no ${POLICY_FILE_NAME} on ` +
+    `"${result.trustBase?.ref ?? ''}", so nothing here could be enforced.`;
+  if (result.gates.length === 0) {
+    return `${lead} The policy this pull request adds ran no gate, so nothing was checked.`;
+  }
+  if (result.gates.every(gateCheckedNothing)) {
+    return (
+      `${lead} Nothing was checked: ${result.gates.map(checkedNothingWording).join('; ')}.`
+    );
+  }
+  // An unenforced gate that could not run changes no exit code, here as
+  // anywhere, and is named so the count beside it is not read as complete.
+  const broken = result.gates.filter((gate) => !gate.enforce && gate.couldNotRun !== null).map((gate) => gate.role);
+  return (
+    `${lead} ${wouldBlock(result)} would block once this policy is on the base branch.` +
+    (broken.length === 0
+      ? ''
+      : ` ${broken.join(', ')} could not run, and the proposed policy has enforce: false there.`)
+  );
 }
 
 function verdictForRun(result: RunResult, advisory: boolean): string {
@@ -1767,6 +1894,12 @@ export interface TextOptions {
  * confusion this family exists to prevent.
  */
 function isFullyClean(result: RunResult): boolean {
+  // A run of the policy a pull request adds enforced nothing, and "clean,
+  // nothing blocked" on one line would be the pass it is not. Always the
+  // full report, with or without --verbose.
+  if (result.trustBase?.proposal !== undefined) {
+    return false;
+  }
   // Every gate that ran checked nothing is the nothing-checked token's state
   // (audit finding F4), and a line opening "clean" would contradict it.
   if (result.exitCode !== 0 || result.gates.length === 0 || result.gates.every(gateCheckedNothing) || result.gates.some(intentEmptyChangeSet)) {
@@ -2067,7 +2200,7 @@ function headerLines(result: RunResult, options: TextOptions): string[] {
     `verdict-token: ${verdictToken(result, Boolean(options.advisory))}`,
     ...runLevelLines(result),
     ...gateSummaryLines(result),
-    ...findingSummaryLines(result),
+    ...findingSummaryLines(result, findingsHeading(result)),
   ];
 }
 

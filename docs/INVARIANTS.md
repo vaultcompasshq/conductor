@@ -214,6 +214,14 @@ an enabled gate could not run, so nothing in the report is a clean result.
 ordered predicates rather than as an arithmetic maximum
 (`composeExitCode`, src/exit-codes.ts#composeExitCode).
 
+ONE RUN'S 0 DOES NOT MEAN THAT, since issue 101: a proposal, the run of the
+policy a pull request adds to a base that has none. Its code is written
+after the composition by one function (src/run.ts#asProposal): 2 is kept
+when a gate that policy enforces could not run, and anything else is 0,
+because nothing could have been enforced. It never reads as an enforced 0:
+the token is `proposal (N)` or `proposal-nothing-checked`. See "The
+adoption proposal" at the end of this file.
+
 The maximum is the obvious implementation and it is wrong, which is why
 the function is shaped to make it hard to write. The three products do not
 mean the same thing by the same number: dep-guard has a third code, 2, for
@@ -912,6 +920,12 @@ that parsed document is used by `diffPolicies` and `previewPolicy`
 (src/policy-diff.ts) and by nothing else: it is never handed to the run that
 decides the exit code, the verdict token and the report's first four lines,
 and a head that will not parse gives null, not an error.
+
+ONE EXCEPTION SINCE ISSUE 101, and it is not a run that decides: when the
+base has no policy file at all and `--adoption-proposal` was given, the run
+is of the policy the pull request adds, through the same `previewPolicy`
+subset, and it enforces nothing. See "The adoption proposal" at the end of
+this file for when that is allowed and what it may exit with.
 
 READS ONLY, AND NEVER INTO THE REPOSITORY: `git rev-parse`, `git show-ref`,
 `git rev-list`, `git ls-tree` and `git cat-file`. No checkout switch, no
@@ -2089,10 +2103,18 @@ call the CLI makes through src/git.ts, the gitleaks spawn, and the action's
 fetch, gates and fallback render steps set `GIT_NO_REPLACE_OBJECTS=1`, and the
 two action steps that run conductor pass it to every gate it spawns. That
 narrows replace refs on a run through the action; a direct CLI run passes it
-to gitleaks only. It does not touch grafts. The fetch step alone also points
+to gitleaks only. THE VARIABLE ALONE DOES NOT HOLD AGAINST CONFIGURATION:
+`core.useReplaceRefs=true` in the repository's configuration, a global one
+or `GIT_CONFIG_COUNT` turns replacement back on over it (git 2.39.3). Since
+issue 101 every git call the CLI makes and every git call in the fetch step
+also passes `core.useReplaceRefs=false` on its command line
+(src/git.ts#PINNED_GIT_CONFIG). A gate's own git calls get the same pins
+through src/git.ts#gateChildEnv, not on the command line. The variable does
+not touch grafts. The fetch step also points
 `GIT_GRAFT_FILE` at a path that cannot exist, so its decision to move the trust
-base reads real parents; the gates step and the CLI still read a graft file, and a
-shallow boundary is unaffected. Pinned by "publishes the first parent of the real
+base reads real parents, and since issue 101 so does every git call the CLI
+makes itself (src/git.ts#pinnedGitEnv); a gate's own git calls still read a
+graft file, and a shallow boundary is unaffected. Pinned by "publishes the first parent of the real
 merge commit, not the grafted parent", "keeps the tip when the real first parent
 has other control files, though the grafted one has the tip's", "publishes the first parent
 of the real merge commit, not the replacement parent", "keeps the tip when the
@@ -6336,8 +6358,11 @@ anything after x.y.z. It says `ran, exit N, M blocking` or `did not run
 run-level lines (src/output-text.ts#runLevelLines) are fixed sentences, some
 with numbers: the present-on-base line, the four intent-spec lines
 (src/output-text.ts#INTENT_SPEC_LINES), the two trust-base lines
-(src/output-text.ts#TRUST_BASE_LINES) and the `new in this pull request`
-count. They name no ref, branch or file. The slot is above the per-gate
+(src/output-text.ts#TRUST_BASE_LINES), the `new in this pull request`
+count, and since issue 101 the proposal line
+(src/output-text.ts#proposalLine), the no-policy line
+(src/output-text.ts#NO_POLICY_LINE) and the policy-removed line
+(src/output-text.ts#POLICY_REMOVED_LINE). They name no ref, branch or file. The slot is above the per-gate
 lines and closes at the first of them. A later run-level line is added in
 three places and nowhere else: `runLevelLines`, `run_level_shape` in the
 gates step, and `RUN_LEVEL_LINE` in scripts/lib/pr-comment.mjs. Pinned by
@@ -6454,6 +6479,446 @@ than the backtick is escaped: an underscore or a bracket in a path is left
 alone, and is inert only because both consumers print these lines inside a
 code fence. That an Action older than this block shows per-gate lines: it
 reads lines 3 and 4 only, and still gets the present-on-base and intent-spec
-lines, which stay first. That `new in this pull request` covers every gate:
+lines, which stay first on every run such an Action can be handed. The
+proposal line and the no-policy line go above them: an older Action never
+passes `--adoption-proposal`, so it never sees a proposal, and a refused run
+has neither of the two older lines. That `new in this pull request` covers every gate:
 it is the vulnerabilities gate's base comparison, which is the only split
 conductor computes, and it is absent when that comparison did not run.
+
+## The adoption proposal: the one exit 0 that enforces nothing
+
+New with issue 101. A pull request that adds the first `.guardrails.yaml`
+cannot be judged by it, because the base has no policy, and until this
+change that run was refused, exit 2, on every adopter's first pull request.
+With `--adoption-proposal` it is reported as a PROPOSAL: the policy the pull
+request adds is run, the result is labelled as not enforced on every
+surface, and the exit code is 0. A run that enforces nothing and exits 0 is
+the most dangerous thing this tool can print, so everything below is about
+when it may happen and how it is kept from reading as a pass.
+
+WITHOUT THE FLAG NOTHING CHANGED. `policyForRun` (src/cli.ts#policyForRun)
+refuses a base with no policy exactly as before, with the same sentence,
+whoever calls the CLI. The flag is a usage error without `--trust-base` and
+with `--staged`. Pinned by tests/adoption-proposal.test.ts ("refuses without
+the flag, as before it existed (B3)", "is a usage error with --staged, and
+without --trust-base"). Mutation-checked: removing the flag test turns the
+first red, and removing either usage check turns the second red.
+
+THE TRIGGER IS A CONJUNCTION, AND EVERY TERM IS A REFUSAL WHEN IT FAILS OR
+CANNOT BE ESTABLISHED. `policyForRun` establishes that the trust base passed
+its own checks, that the exact file name is absent in the base tree (absent,
+never unreadable: a symlink, a submodule entry, an unparseable or empty file
+on the base are each a refusal of another kind and never reach here), and
+that the HEAD blob is a regular file that parses. Then
+`refuseAdoptionProposal` (src/adoption-proposal.ts#refuseAdoptionProposal)
+must find no reason, in this order:
+
+ 1. No `GIT_` variable outside an allowlist is in the environment
+    (src/adoption-proposal.ts#disallowedGitVariables). An allowlist, never
+    a deny list: `GIT_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, the
+    pathspec variables and whatever git adds next can each make a policy
+    that is there read as absent, and here that answer is a green check.
+    The allowed names are `GIT_NO_REPLACE_OBJECTS`, `GIT_GRAFT_FILE`,
+    `GIT_TERMINAL_PROMPT`, `GIT_CONFIG_COUNT` and its numbered key and value
+    pairs, and the six identity and date variables (`GIT_AUTHOR_NAME`,
+    `GIT_AUTHOR_EMAIL`, `GIT_AUTHOR_DATE` and the three `GIT_COMMITTER_`
+    ones), which git consults only when it writes a commit or a reflog
+    entry, each with its reason beside it
+    (src/adoption-proposal.ts#ALLOWED_GIT_VARIABLES). Checked only on this
+    path, so an ordinary run is not refused over its environment.
+    THE ALLOWLIST DOES NOT MAKE CONFIGURATION SAFE, and the first version of
+    this entry said it did. `GIT_CONFIG_COUNT`, the repository's own
+    configuration and a global one found through `HOME` can each set
+    `core.useReplaceRefs=true`, which turns replace refs back on OVER
+    `GIT_NO_REPLACE_OBJECTS` (seen on git 2.39.3; found in review). What
+    closes that is not this term: every git call conductor makes passes
+    `core.useReplaceRefs=false` and `core.commitGraph=false` on its command
+    line (src/git.ts#PINNED_GIT_CONFIG), which outranks all three, on a
+    proposal and on every other run.
+ 2. The base root holds no entry whose name is the policy file name in
+    another case or spelling (src/adoption-proposal.ts#policyNameVariants),
+    because a push run on a case-insensitive file system reads that file as
+    the policy.
+ 3. The repository is not shallow. A shallow boundary reads as a commit
+    with no parents, so the next two answers would be wrong in the
+    permissive direction.
+ 4. No merge base of the trust base and HEAD carries a policy file, read
+    with `git merge-base --all` and every one of them checked. When one
+    does, the pull request inherited the file and the base dropped it
+    later: a merge ref built before a deletion, or a branch cut before one.
+ 5. No commit on the first-parent history of the trust base added, changed
+    or removed a policy file, in any case. A base that had a policy and
+    lost it gets no proposal from a later pull request (ruled 2026-11-10);
+    the policy is landed on the base branch by someone allowed to merge
+    without the check.
+
+Every git call here goes through src/git.ts, which since this change points
+`GIT_GRAFT_FILE` at a path that cannot exist (src/git.ts#pinnedGitEnv), so
+a graft file cannot rewrite the parents terms 4 and 5 read, and puts
+`core.useReplaceRefs=false` and `core.commitGraph=false` on the command
+line of every call (src/git.ts#PINNED_GIT_CONFIG), so neither a replace ref
+nor a commit-graph file can answer for a commit, whatever any configuration
+says. The fetch step does the same for every git call it makes
+(action.yml#runs.steps.fetch-base).
+
+A gate conductor starts runs git itself, and conductor cannot put that
+command line on those calls. src/git.ts#gateChildEnv gives that child both
+channels git reads configuration from. It appends one numbered entry,
+core.useReplaceRefs=false, at the index the caller's GIT_CONFIG_COUNT ends
+on, and raises the count by one. Numbered entries are read after every
+configuration file, so of two entries for one key git takes the later, and
+this one wins over a caller's earlier core.useReplaceRefs=true in that
+channel and over the same key in a configuration file. It also sets
+GIT_CONFIG_PARAMETERS to the caller's value, one space, then
+core.useReplaceRefs=false and core.commitGraph=false. git reads that
+channel after the numbered entries, so those two pins win over a caller's
+true for either key in either channel, and over a file. When the caller's
+value is unset or the empty string, the two pins are the whole value and
+there is no leading space. The caller's value is not trimmed, parsed or
+repaired. Unset or empty counts as zero. A count git refuses is left
+exactly as it is and nothing is appended to the numbered entries; the
+parameters pins are still set on that branch. GIT_TEST_COMMIT_GRAPH is
+not copied into the returned environment, and src/git.ts#pinnedGitEnv
+drops it too, because that variable turns the commit-graph file on over
+core.commitGraph=false. With such a count every git
+call fails and the run is could-not-run rather than a pass. A parameters
+value git already refuses (unquoted, or with a leading space) stays
+refused: conductor's own git exits 128 during repository discovery, the
+run is exit 2 with the not-a-git-repository sentence, no gate is spawned,
+and it is not a pass. Every spawn of a gate binary in this process goes
+through src/gate-runner.ts#spawnLimits (the version probe, the scan, and
+both base runs of the vulnerabilities gate) or, for the intent gate's
+preparation, src/intent-prepare.ts#run. src/osv-baseline.ts does not spawn;
+those two base runs are the callbacks in src/gate-runner.ts. The review
+measured the numbered replace-refs entry with vault-guard 1.13.3 before
+it; dep-guard 0.20.0 was not measured the same way. Measured here on git
+2.39.3. gitleaks 8.30.1 was measured against a commit-graph record that
+names another tree, when the binary the real-gitleaks tests already look
+for is present. Pinned by
+tests/adoption-proposal.test.ts ("keeps an ordinary run blocked when a
+replace ref would hand the gate a quieter base", "keeps a proposal at
+proposal (1) when a replace ref would hand the gate a quieter base",
+"keeps an ordinary run blocked when GIT_CONFIG_PARAMETERS is a quoted
+useReplaceRefs=true", "keeps an ordinary run blocked when
+GIT_CONFIG_PARAMETERS quotes the useReplaceRefs key and the value
+separately", "keeps an ordinary run blocked when a commit-graph record
+names the base tree for the middle commit", "with GIT_CONFIG_PARAMETERS
+unset, the value is the two pins and git reads both keys false", "with
+GIT_CONFIG_PARAMETERS empty, the value is the two pins and git reads both
+keys false", "keeps a caller entry for user.name readable beside the
+pins", "reads %s as false when the caller set it true via %s", "appends
+the pins to %s GIT_CONFIG_PARAMETERS and git still refuses it", "is exit
+2, never a pass, when GIT_CONFIG_PARAMETERS is unquoted", "is exit 2,
+never a pass, when GIT_CONFIG_PARAMETERS starts with a space", "refuses a
+proposal when GIT_CONFIG_PARAMETERS is set", "leaves a count git refuses
+exactly as it was, still pins GIT_CONFIG_PARAMETERS, and never changes
+what it was given", "gitleaks still reports a secret added then removed
+when a commit-graph record names the base tree", "keeps an ordinary run
+blocked when GIT_TEST_COMMIT_GRAPH is set and a commit-graph record names
+the base tree", "drops GIT_TEST_COMMIT_GRAPH and never changes what it was
+given", "pinnedGitEnv drops GIT_TEST_COMMIT_GRAPH and never changes what
+it was given", "the fetch step unsets GIT_TEST_COMMIT_GRAPH before its git
+calls", "refuses a proposal when GIT_TEST_COMMIT_GRAPH is set", "gitleaks
+still reports a secret added then removed when GIT_TEST_COMMIT_GRAPH is
+set and a commit-graph record names the base tree", "appends its entry after
+the entries the caller already set, and keeps those", "gives a gate the
+entry at index 0 when the caller set none") and by
+tests/intent-prepare.test.ts ("hands the preparation child the
+replace-refs pin after the caller entries").
+
+NOT claimed for a gate's git, narrowed from the entry this change moved.
+A gate that passes the opposite setting on its own git command line: that
+-c is read after GIT_CONFIG_PARAMETERS and wins. None of the spawns here
+pass one. Any git other than 2.39.3. A git older than 2.31 ignores
+GIT_CONFIG_COUNT, so on that git only the GIT_CONFIG_PARAMETERS pin would
+reach the child; that case was not measured. Windows, where environment
+variable names are case-insensitive and a spread of the environment is
+not. A gate run without conductor: these pins are on the environment
+conductor builds for a child, and they are not applied when a gate is
+started on its own. A graft file: a gate's own git calls still read one.
+Conductor's own calls point GIT_GRAFT_FILE at a path that cannot exist.
+gitleaks under a commit-graph record that names
+another tree, on a run where the test is skipped because the binary is
+absent ("gitleaks still reports a secret added then removed when a
+commit-graph record names the base tree" in
+tests/adoption-proposal.test.ts).
+
+The replace pin is pinned by attack, in
+tests/adoption-proposal.test.ts ("reads the real base with the key in
+GIT_CONFIG_COUNT, which the allowlist lets through", "reads the real base
+with the key in the repository own configuration", "reads the real base
+with the key in a global configuration found through HOME", "reads the real
+base policy on an ordinary run, when a replace ref swaps it for a weaker
+one") and in tests/action.test.ts ("gives every git call in the step both
+pins on its command line"). Mutation-checked: without the replace pin the
+first three go from exit 1 `blocked (1)` to exit 0 `proposal (1)` and the
+fourth from `blocked (1)` to `pass`; without it in the fetch step the step
+publishes the planted parent. The commit-graph pin on conductor's own
+command line is pinned by its presence (tests/adoption-proposal.test.ts,
+"carries the replace and commit-graph pins on the command line, ahead of
+the subcommand"). The same pin in a gate's environment is pinned by a
+commit-graph record that names another tree
+(tests/adoption-proposal.test.ts, "keeps an ordinary run blocked when a
+commit-graph record names the base tree for the middle commit"). A READ
+GIT CANNOT ANSWER
+REFUSES: the same file fails the shallow test, the merge base, the history
+read and the root listing in turn, one case each, and breaks the
+repository configuration outright ("refuses when the repository
+configuration cannot be parsed at all").
+
+The five terms are pinned, one attack each, by
+tests/adoption-proposal.test.ts ("refuses for each one, naming it, though
+git answers exactly as before", "still proposes with the variables the
+Action and conductor set themselves", "still proposes with a bot identity
+and dates set for the whole job", "does not look at the environment on
+a run that is not a proposal", "refuses when the base root holds the policy
+name in another case", "refuses a base that holds a spelling the history
+rule cannot see, on a stale head", "refuses in a shallow repository, where the history
+that could carry a policy is cut off", "refuses with HEAD on the merge
+ref", "refuses with HEAD on the pull request tip", "refuses when the base
+and HEAD share no history", "refuses a pull request that adds a policy
+after one was deleted on the base", "refuses the all-disabled policy that
+would otherwise be a green nothing-checked", "ignores a graft file that
+hides the commit which carried the policy", "refuses when the base policy
+is a symbolic link, with the reason git gave", "refuses when the base
+policy is a submodule entry", "refuses, naming git reason, when the head
+policy is a symbolic link", "refuses, naming the parse error, when the head
+policy does not parse"). Each asserts exit 2, the could-not-run token, that
+no gate was spawned and no script from the pull request ran, and the reason
+by name. Mutation-checked, each guard removed once: terms 1 and 3 turn
+their own test red and no other; term 2 turns the stale-head spelling case
+into exit 0 `proposal (0)` (the plain case-variant test is then still
+refused, by term 5, and is red for the reason only); removing the identity
+entry from the allowlist refuses the bot-identity run; term 4 turns the two criss-cross cases
+into `proposal (0)` (the stale-merge-ref cases are then still refused, by
+term 5, and are red for the reason only); dropping `--all` turns one
+criss-cross order into `proposal (0)`; term 5 turns both deletion cases and
+the graft case into a proposal; removing the graft pin turns the graft case
+into `proposal (0)`.
+
+WHAT THE PROPOSAL RUNS. `enabled`, `stage` and `enforce` from the HEAD
+blob, never from the file on disk, through `previewPolicy`
+(src/policy-diff.ts#previewPolicy) over an empty base; every other key is
+the product default, and each key in which the head differs from the policy
+that ran is listed as proposed and not applied. The run is the primary
+`runAll` with the trust base set, so every pull-request protection that
+keys on the trust base still applies and every gate is handed it. The
+`kind: 'proposal'` variant of `PolicyForRun` has no preview field, so a
+preview, which withholds the trust base from two gates, cannot be attached
+to it; `--preview` is ignored. Pinned by tests/adoption-proposal.test.ts
+("reads the policy from the HEAD commit, never from the file on disk",
+"takes enabled, stage and enforce from the head policy and nothing else",
+"hands every gate the trust base, as on any pull-request run", "ignores
+--preview without error: the same gates, the same arguments, no preview
+section", "does not list a product default as a proposed change").
+Mutation-checked: reading the file from disk, and running the head policy
+whole, each turn their test red.
+
+THE EXIT CODE IS WRITTEN IN ONE PLACE (src/run.ts#asProposal), applied by
+the CLI to what `runAll` returned. 2 when any gate the proposed policy
+enforces could not run, or when the composed code is neither 0 nor 1; 0
+otherwise. RULED 2026-11-10: an enforced gate that could not run is exit 2
+and the could-not-run token, never a proposal, and there is no could-not-run
+count inside a proposal. So "A gate that could not run is a result, never a
+note" above stands unamended. A gate with `enforce: false` that could not
+run does not change the code, as everywhere, and the closing sentence names
+it. `asProposal` throws on a run that is not marked as a proposed policy or
+was refused, so it cannot turn any other run's code into 0, and `--advisory`
+does nothing on a proposal. Pinned by tests/proposal-output.test.ts ("is 0
+whatever the gates found, when every enforced gate ran", "is 2 when a gate
+the proposed policy enforces could not run, alone or beside findings",
+"keeps a composed code that is neither 0 nor 1 as could-not-run", "is 0 when
+the only gate that could not run has enforce: false", "throws on a run that
+is not a run of a proposed policy, so no other exit code can become 0") and
+tests/adoption-proposal.test.ts ("exits 2 with could-not-run, never a
+proposal", "stays exit 2 under --advisory", "--advisory changes nothing on
+a proposal"). Mutation-checked: making `asProposal` always answer 0 turns
+seven tests red, and removing its guard turns the throw test red.
+
+IT NEVER READS AS A PASS. `isProposal` (src/run.ts#isProposal) is true only
+for a run of a proposed policy that exits 0; `ranProposedPolicy`
+(src/run.ts#ranProposedPolicy) is the wider fact, true on the exit 2 run
+too. In `verdictToken` (src/output-text.ts#verdictToken) the proposal
+branch comes after the refusal and could-not-run and before every other
+token, so no proposal is `pass`, `nothing-checked`, `blocked`,
+`advisory-blocked` or `unenforced-findings`. N of `proposal (N)` is counted
+as `blocked (N)` is, over enforced gates, and never includes a gate that
+could not run. Line 3 is the fixed proposal line; the named findings are
+headed `would block once the policy is on the base`
+(src/output-text.ts#PROPOSAL_FINDINGS_HEADING); the closing sentence is
+written, not composed, and begins `verdict: exit 0, proposal, not a
+verdict`; the one-line clean summary is never used; the report says `no
+policy on <ref>` where an enforced run says `rules from <ref>`. The SARIF
+log carries `properties.trustBase.proposal`, one `conductor/proposal-run`
+notification at warning level (src/output-sarif.ts#proposalRunNotifications),
+which alone earns the umbrella's run, and `properties.proposal: true` on
+every result; `executionSuccessful` keeps its rule. Pinned by
+tests/proposal-output.test.ts ("comes after could-not-run and before every
+other token", "never counts an unenforced gate, or a gate that could not
+run, in N", "is never given to a refused run that carries the marker by
+mistake", "puts the proposal line third, above every other run-level line",
+"closes with a sentence that is not a verdict and claims nothing ran
+clean", "never says the rules came from the ref", "prints no proposal line
+and no proposal sentence when an enforced gate could not run", "writes the
+umbrella run with the marker and one warning, even when nothing else earns
+it", "marks every result of every run", "marks nothing on an enforced run")
+and tests/adoption-proposal.test.ts ("prints the full report without
+--verbose, never the one clean line"). Mutation-checked: removing the token
+branch turns seven tests red; letting the clean one-liner through turns the
+last one red.
+
+THE ACTION PASSES THE FLAG IN ONE BRANCH, UNDER FOUR CONDITIONS
+(action.yml#runs.steps.gates): inside the branch that uses the commit the
+fetch step published, never with a `trust-base` input; the event is
+`pull_request` or `pull_request_target`, so a merge queue run never gets
+it; the base branch is the repository's default branch, compared as text,
+both taken from the event context and not from an input; and the installed
+conductor's help lists the flag. The gates step publishes that it passed
+the flag as a step output, and the fallback render step
+(action.yml#runs.steps.pr-render) passes it to its own run exactly when
+that output is set: it decides nothing and probes nothing itself, so the
+comment cannot show a proposal the job's own run was not asked for.
+Pinned by tests/action-adoption-proposal.test.ts ("passes it on a pull
+request into the default branch, beside the fetched trust base", "does not
+pass it for a pull request into another branch (B2)", "does not pass it on
+a merge queue run, or any event that is not a pull request (R2)", "does not
+pass it with an explicit trust-base input", "does not pass it to a
+conductor whose help does not list it", "compares branch names as text,
+never as a pattern", "writes the flag in exactly one place in the gates
+step, inside the fetched-base branch", "publishes that it passed the flag,
+exactly when it did", "hands the render step that output and nothing it
+could decide the flag from itself") and tests/action-pr-comment.test.ts
+("passes the flag when the gates step published that it did", "does not
+pass it when the gates step did not, whatever else is true of the run").
+Mutation-checked: replacing the gates step's condition with `true` turns
+five of them red, adding the flag to the explicit branch turns two red, and
+replacing the render step's condition with `true` turns the last one red.
+
+A PROPOSAL TOKEN IS PUBLISHED ONLY AT EXIT 0 AND ONLY WITH ITS LINE. The
+gates step accepts `proposal (N)` and `proposal-nothing-checked` only
+beside status 0, and only when line 3 of the same report is the fixed
+proposal line carrying the same N; otherwise the token is `could-not-run`
+(non-zero status) or `unknown` (status 0) and the report is removed. The
+comment poster reads no head block from a proposal token without that line
+(scripts/lib/pr-comment.mjs#headBlock). The three new run-level lines and
+the second findings heading are in all three spellings of the closed
+shapes. Pinned by tests/action-adoption-proposal.test.ts ("publishes
+proposal (N) at exit 0, with the proposal line and the would-block
+heading", "never publishes a proposal token whose line 3 is missing, or
+carries another count", "copies the no-policy line and the policy-removed
+line, and nothing that only resembles them", "accepts the report the
+renderer writes for a proposal, a no-policy refusal and a policy removal")
+and tests/proposal-output.test.ts ("for every proposal shape, the no-policy
+refusal and a policy removal", "reads no head block from a proposal token
+without its line, or with another count"). Mutation-checked: pairing the
+token with any status and dropping the line check turns three action tests
+red; dropping the poster's check turns its test red.
+
+TWO MORE FIXED LINES, NEITHER A PROPOSAL. `no-policy:` on a refused
+pull-request run where neither side has a policy file, and appended to the
+Actions step summary by a push run that found no policy file on disk
+(`MissingPolicyError`, src/policy.ts#MissingPolicyError, raised for a file
+that is not there and for nothing else). `policy-removed:` on a pull
+request that deletes the file from a base that has one; that run is the
+ordinary one under the base's rules. Pinned by
+tests/adoption-proposal.test.ts ("says the workflow checks nothing when
+neither side has a policy, exit 2", "appends the no-policy line to the step
+summary on a push run with no policy file", "does not call an unparseable
+policy file a missing one", "names a pull request that deletes the policy,
+on the ordinary run under the base rules").
+
+A BASE POLICY THAT DOES NOT PARSE IS A REFUSAL WITH A REPORT, where it used
+to be one line on stderr and no report. Never a proposal: the base has a
+policy file. Pinned by tests/cli.test.ts ("refuses a policy key that would
+write the trust-base flag a second time").
+
+NOT claimed. That a base branch force-pushed back to a commit older than
+its first policy is refused: a pull request branched from the commit that
+added the policy inherits the file, its merge base with the rewound branch
+lacks it, and the rewound branch's first-parent history never held it.
+That takes a force-push to the default branch. That a policy which only
+ever existed on a side branch counts as the base having carried one, in
+either of two shapes, because no first-parent commit of the base ever held
+the file. G2: the side branch adds the policy and the merge commit that
+merges it drops the file. G3: the side branch adds the policy, deletes it
+again, and is merged by an ordinary merge. In both, a later pull request
+that adds a policy gets `proposal (0)`. Term 4 refuses G2 when the pull
+request descends from the side branch (the criss-cross tests) and not
+otherwise. Both take a merge into the default branch, and both are pinned
+AS THEY ARE, as accepted residue and not as intent
+(tests/adoption-proposal.test.ts, "G2: proposes after a side branch policy
+was dropped by the merge commit that merged it", "G3: proposes after a side
+branch added then deleted a policy and was merged as it stood"). A policy
+that arrived and left through merge commits on the base's own line is seen
+(tests/adoption-proposal.test.ts, "refuses when the policy arrived and left
+through merge commits"). That the name
+check knows every file system's folding: it folds case and compatibility
+forms and errs toward refusing.
+
+NOT claimed about configuration and the git directory, after the review's
+replace-ref finding. Two keys are pinned on the command line and nothing
+else is. What was looked at, and where each stands:
+
+ - A graft file, on conductor's own calls: `GIT_GRAFT_FILE` is set per
+   call, and git has no configuration key that names a graft file, so no
+   configuration brings one back. Closed for those calls, by test. A
+   gate's own git calls still read a graft file.
+ - `.git/shallow`: makes parents disappear, and makes the repository
+   shallow, which term 3 refuses. Closed, by test.
+ - A commit-graph file, on conductor's own calls: switched off on every
+   command line, and `GIT_TEST_COMMIT_GRAPH` is removed from the
+   environment of those calls and of the fetch step, because that variable
+   turns the file on over the command-line pin. The command-line pin is
+   pinned by presence, not by a forged file
+   (tests/adoption-proposal.test.ts, "carries the replace and commit-graph
+   pins on the command line, ahead of the subcommand"). The removal is
+   pinned by tests/adoption-proposal.test.ts ("pinnedGitEnv drops
+   GIT_TEST_COMMIT_GRAPH and never changes what it was given", "the fetch
+   step unsets GIT_TEST_COMMIT_GRAPH before its git calls"). A gate's git
+   is the separate claim above.
+ - Configuration that makes a read FAIL (`safe.directory` and a wrong
+   owner, an unknown `extensions.*` entry, `extensions.objectFormat` or
+   `extensions.refStorage` that does not match the store, a configuration
+   file that does not parse): every read of the trigger treats a failure as
+   a refusal. Closed, by test, for the failure itself; not enumerated key
+   by key.
+ - `extensions.partialClone` and a promisor remote: a missing object is
+   fetched or the read fails. An object fetched is checked against its
+   name, so it cannot be another object. NOT tested.
+ - `objects/info/alternates`: adds object stores. It can supply objects and
+   cannot hide one that is there. NOT closed against a planted object whose
+   bytes do not match its name, here or in the repository's own store: git
+   does not re-hash an object on every read. That takes write access to the
+   git directory, and is not specific to the proposal.
+ - `core.alternateRefsCommand`, `uploadpack.*`, `core.sshCommand`,
+   `credential.helper`, `url.*.insteadOf`: read when git talks to a remote.
+   No read of the trigger does. The fetch step does, and its own header
+   comment already says repository configuration is covered there only by
+   the precondition that no code from the pull request ran earlier in the
+   job. Unchanged, NOT closed.
+ - `core.fsmonitor`, `core.hooksPath`: run a program on index, work tree or
+   ref-update operations. The trigger reads commits and trees only
+   (`rev-parse`, `ls-tree`, `cat-file`, `merge-base`, `rev-list`). Other
+   git calls on a run were not audited for these. NOT closed.
+ - `log.*`, `diff.*`, `core.quotePath`, `core.abbrev`, `core.pager`,
+   `alias.*`: the trigger uses plumbing (`rev-list`, `ls-tree -z`), which
+   these do not reach, an alias cannot replace a built-in command, and any
+   output at all from the history read refuses. NOT tested key by key.
+ - `core.ignoreCase`, `core.precomposeUnicode`: could only make a name
+   match that would not otherwise, which is the refusing direction.
+   NOT tested.
+ - `conductor init` and the repository's own lint script start git without
+   src/git.ts. Neither is a run and neither reads a trust base.
+
+The common precondition of everything not closed above is write access to
+the git directory, to `HOME`, or to the job's environment before conductor
+runs: in an Action, code that ran earlier in the same job.
+
+Also NOT claimed. That the
+`-n` test on the default branch name in the gates step is pinned on its
+own: the branch it sits in already requires a non-empty base ref, so an
+empty default name fails the equality too. That a proposal's findings are
+complete: a gate's own control files in the pull request are not applied,
+so a gate may report more or fewer findings once those land. That anything
+here reaches a caller who does not pass the flag.

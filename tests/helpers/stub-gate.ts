@@ -100,6 +100,8 @@ export interface StubIntentGuardOptions {
   check?: { stdout?: string; stderr?: string; exit?: number };
   /** File to append each non-version invocation's arguments to. */
   argvLog?: string;
+  /** File to append the GIT_CONFIG_* pair the child actually received. */
+  envLog?: string;
   version?: string;
   /**
    * Arguments this stub refuses the way the real CLI refuses an unknown
@@ -127,6 +129,11 @@ export function stubIntentGuard(binDir: string, options: StubIntentGuardOptions 
   const lines = ['#!/bin/sh'];
   if (options.argvLog !== undefined) {
     lines.push(`if [ "$1" != "--version" ]; then printf '%s\\n' "$*" >> ${options.argvLog}; fi`);
+  }
+  if (options.envLog !== undefined) {
+    lines.push(
+      `if [ "$1" != "--version" ]; then printf 'COUNT=%s;KEY0=%s;VALUE0=%s;KEY1=%s;VALUE1=%s\\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" >> ${JSON.stringify(options.envLog)}; fi`
+    );
   }
   lines.push(`if [ "$1" = "--version" ]; then echo "${options.version ?? '1.2.1'}"; exit 0; fi`);
   for (const refused of options.unknownOptions ?? []) {

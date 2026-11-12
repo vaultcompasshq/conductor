@@ -98,8 +98,9 @@ needed when the policy enables the secrets-history and vulnerabilities gates,
 and it pins both by version and checksum. On a pull request every gate reads
 its rules from the base branch, so a change cannot turn off the check that
 exists to catch it. The first pull request under a new policy cannot be judged
-by that policy, so read the careful path below before you make the check
-required.
+by that policy: into the default branch it is reported as a proposal, exit 0
+with nothing enforced, so read the careful path below before you make the
+check required.
 
 What each trigger runs. A pull request runs every gate at stage `ci`, and the
 history scan reads only that pull request's own range, so a pull request is
@@ -349,15 +350,18 @@ required.
    and the workflow together, with `advisory: true` and `pr-comment: true`
    on the conductor step (the recipe under "Running the gates as an
    advisory check" below is a complete copy-paste job), and leave the check
-   out of branch protection for this one pull request. The step still exits
-   2 on this pull request even with `advisory: true`: the base branch has no
-   policy yet, so the run has no rules, and `advisory` never touches that
-   exit code, only a blocking finding's. Leaving the check out of branch
-   protection is what keeps that expected exit 2 from blocking the merge;
-   the step posts a comment saying so with the remedy on it, which is the
-   honest report of an unfinished adoption, not a broken tool. The same
-   refusal recurs once on every new base branch; see "Why the first pull
-   request still exits 2 under `advisory: true`" below.
+   out of branch protection for this one pull request. Into the default
+   branch, this pull request is reported as a **proposal**: the base branch
+   has no policy yet, so nothing can be enforced, and conductor runs the
+   policy the pull request adds and says what it would do. The step exits 0,
+   the verdict is `proposal (N)`, never `pass`, and the summary and the
+   comment say that nothing was enforced and how many findings would block
+   once the policy is merged. A green check on this one pull request means
+   the gates the new policy enforces could all run, and nothing more. The
+   step exits 2 when one of them could not run (a scanner that is not
+   installed, say), which is the fault to fix before merging, and it exits 2
+   when the pull request is not a first adoption; see "What the first pull
+   request reports" below.
 
 3. **Merge.** Every pull request after that is judged by the policy on the
    base branch, and a change to that policy shows up as a proposal line and
@@ -371,9 +375,10 @@ required.
    job into the one required check.
 
 There is deliberately no mode in which the pull request's own policy file
-decides the run, not even as a preview: step 1's preview gives you the same
-report without putting a file the pull request controls behind a verdict on
-the pull request page.
+decides a verdict. The proposal in step 2 is the one run that reads it, and
+it takes three keys from it (`enabled`, `stage`, `enforce`), enforces
+nothing, and is labelled a proposal on every surface; once the base branch
+has a policy, every rule comes from the base.
 
 ## Adoption ramp
 
@@ -788,8 +793,9 @@ credential helpers, `core.sshCommand`), git hooks such as
 `reference-transaction`, and replace refs or grafts. (The action's fetch, gates
 and fallback render steps set `GIT_NO_REPLACE_OBJECTS=1` for themselves and
 for the gates they run, which narrows replace refs. The fetch step alone also
-reads through a graft file, for its decision to move the trust base; the gates
-and the CLI still see one.)
+reads through a graft file, for its decision to move the trust base, and
+since issue 101 so does every git call the CLI makes itself; a gate's own
+git calls still read one.)
 Say it plainly: package.json lifecycle scripts (`preinstall`, `install`, `postinstall`,
 `prepare`) run by an install bypass "require review on `.github/workflows`",
 because the pull request supplies them, not the workflow file. Branch
@@ -1049,23 +1055,40 @@ See "Adopting conductor: the careful path" near the top of this README for the o
 walkthrough: init, a first pull request in advisory mode, merge, then go
 required. This subsection is the mechanism behind two of those steps.
 
-**Why the first pull request still exits 2 under `advisory: true`.**
-`advisory: true` maps a blocking **finding** to exit 0; it has no opinion
-about a run that never had a policy to be judged by. The pull request that
-first adds `.guardrails.yaml` is judged against the base branch, which has
-none yet, so the run is refused outright before any gate produces a finding
-for `advisory` to act on. Leaving the check out of branch protection for
-that one pull request is what keeps the expected exit 2 from blocking the
-merge; the step posts a comment naming the ref and the remedy.
+**What the first pull request reports.** The pull request that first adds
+`.guardrails.yaml` is judged against the base branch, which has no policy
+yet, so nothing in it can be enforced. On a pull request into the
+repository's default branch the Action passes `--adoption-proposal`, and
+the run is a proposal: conductor runs the policy the pull request adds,
+taking only `enabled`, `stage` and `enforce` from the committed file, and
+exits 0 with the verdict `proposal (N)` and the line `proposal: no
+.guardrails.yaml on the base branch, so nothing here was enforced; N would
+block once this policy is on the base branch`. It exits 2 when a gate that
+policy enforces could not run. `advisory` has no part in either outcome.
+The full rules are under [A proposal](docs/commands.md#a-proposal).
 
-The same refusal happens once on every new base branch, not only on the
-default branch, because rules are read from whatever branch the pull request
-targets. A release or release-candidate branch cut before the policy existed,
-or any long-lived branch that has never received `.guardrails.yaml`, refuses
-its first pull request the same way. There are two remedies. Carry the policy
-onto the branch before opening a pull request against it; a sync from the
-default branch does this. Or expect exactly one could-not-run run there, and
-leave the check out of that branch's protection for that one pull request.
+A proposal is only for a first adoption. The run is refused, exit 2, when
+the base branch has carried a policy before (one was deleted, and a later
+pull request adds one back), when the pull request inherited its policy
+from a base that has since dropped it, in a shallow checkout, or when the
+workflow has no policy on either side (the summary then says `no-policy:
+this workflow checks nothing until .guardrails.yaml is on the base branch`).
+After a deletion, the policy has to be landed on the base branch by someone
+allowed to merge without this check passing.
+
+A pull request into any other branch gets no proposal, because rules are
+read from whatever branch the pull request targets and a missing policy
+there may be a gap. A release or release-candidate branch cut before the
+policy existed, or any long-lived branch that has never received
+`.guardrails.yaml`, refuses its first pull request with exit 2, under
+`advisory: true` as well: `advisory` maps a blocking **finding** to exit 0
+and has no opinion about a run with no policy to be judged by. There are
+two remedies. Carry the policy onto the branch before opening a pull
+request against it; a sync from the default branch does this. Or expect
+exactly one could-not-run run there, and leave the check out of that
+branch's protection for that one pull request.
+
+A merge queue run (`merge_group`) never gets a proposal either.
 
 **Why "go required" means the job's own context, never the SARIF-upload
 row.** The recipes above upload conductor's SARIF log with
@@ -1154,7 +1177,7 @@ conductor that produced it and the second the verdict token (see
 [The verdict token](docs/commands.md#the-verdict-token)). When the trust
 base was refused and no gate ran at all, the report under the gate rows
 shrinks to the version, the verdict, and the refusal reason (with its
-remedy, when one applies) and starts open, so an adopter with no policy on the base ref yet
+remedy, when one applies) and starts open, so a refused run
 does not get a full sticky comment whose only content is "refused, nothing
 checked" on every push.
 

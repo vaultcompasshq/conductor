@@ -49,6 +49,7 @@ export const BASE_MOVED = 'conductor/base-moved';
 export const CONTROL_CHANGE_PROPOSED = 'conductor/control-change-proposed';
 export const PREVIEW_UNDER_PROPOSED_RULES = 'conductor/preview-under-proposed-rules';
 export const TRUST_BASE_REFUSED = 'conductor/trust-base-refused';
+export const PROPOSAL_RUN = 'conductor/proposal-run';
 export const TRUST_BASE_NOT_PASSED = 'conductor/trust-base-not-passed';
 export const GATE_PROGRAM_REFUSED = 'conductor/gate-program-refused';
 export const NODE_MODULES_SKIPPED = 'conductor/node-modules-skipped';
@@ -90,6 +91,7 @@ export const RULE_IDS: ReadonlyArray<{ id: string; class: RuleIdClass }> = [
   { id: CONTROL_CHANGE_PROPOSED, class: 'notification' },
   { id: PREVIEW_UNDER_PROPOSED_RULES, class: 'notification' },
   { id: TRUST_BASE_REFUSED, class: 'notification' },
+  { id: PROPOSAL_RUN, class: 'notification' },
   { id: TRUST_BASE_NOT_PASSED, class: 'notification' },
   { id: GATE_PROGRAM_REFUSED, class: 'notification' },
   { id: NODE_MODULES_SKIPPED, class: 'notification' },

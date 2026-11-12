@@ -99,6 +99,17 @@ proceeds normally without mentioning them.
   private `refs/conductor/trust-base` (issue #58); anyone invoking the
   CLI directly on a pull request, rather than through the Action, gets this
   as its own refusal, named in that section.
+- `--adoption-proposal`, with `--trust-base` only and never with `--staged`
+  (either is a usage error, exit 2). It decides one thing: what a run does
+  when the trust base has no `.guardrails.yaml` and the pull request adds
+  one. Without it that run is refused, exit 2. With it the run is a
+  **proposal**: the policy the pull request adds is run and reported, and
+  the exit code is 0 whatever the gates find, because a base with no policy
+  enforces nothing. See [A proposal](#a-proposal) below. On a base that has
+  a policy the flag changes nothing. The Action passes it on a pull request
+  into the repository's default branch and on no other run; pass it yourself
+  only on the same condition, since on any other base branch a missing
+  policy may be a gap rather than a first adoption.
 - `--spec <path>` names the spec the intent gate imports its contract from.
 - `--output <path>` writes the report to a file instead of to stdout, for a
   CI step that uploads it. One line still goes to stdout, because a job whose
@@ -162,6 +173,106 @@ proceeds normally without mentioning them.
   stdout, which is what a rejected config file looks like from two of the
   three family gates, or conductor stopped it at its time limit
   (`timed-out`, see `timeout-seconds` in [the policy file](policy-file.md)).
+
+A proposal run (below) is the one run whose exit 0 does not mean the first
+line: it exits 0 when the gates the proposed policy enforces all ran,
+whatever they found, and 2 when one of them could not run.
+
+### A proposal
+
+A pull request that adds the first `.guardrails.yaml` to a branch cannot be
+judged by that file: on a pull-request run every rule comes from the base,
+and the base has none. With `--adoption-proposal` conductor runs the policy
+the pull request adds anyway and reports the result as a proposal.
+
+What is taken from the proposed policy is `enabled`, `stage` and `enforce`,
+read from the committed file at `HEAD`, never from the working tree. Every
+other key (`command`, `args`, `options`, `timeout-seconds`,
+`present-on-base`, `report.format`) is the product default, and the report
+lists each one the file sets as proposed and not applied. Each gate is
+still handed the trust base, so a gate's own control files in the pull
+request are not applied either. `--preview` is ignored on a proposal.
+
+What it prints: the verdict token `proposal (N)`, or
+`proposal-nothing-checked` when no gate ran or none that ran checked
+anything; on line 3, `proposal: no .guardrails.yaml on the base branch, so
+nothing here was enforced; N would block once this policy is on the base
+branch`; the blocking findings by name under `would block once the policy
+is on the base`; and a closing sentence that begins `verdict: exit 0,
+proposal, not a verdict`. N counts blocking findings on the gates the
+proposed policy enforces, exactly as `blocked (N)` does. The full report is
+printed with or without `--verbose`. `--advisory` changes nothing on a
+proposal. In the SARIF log the umbrella's run carries
+`properties.trustBase.proposal` (`{ "reason": "no-policy-on-base" }`) and a
+`conductor/proposal-run` notification at level `warning`, and every result
+has `properties.proposal: true`.
+
+When a gate the proposed policy **enforces** could not run, the run is not
+a proposal: it exits 2 with `could-not-run`, like any other run, and prints
+no `proposal:` line. A gate with `enforce: false` that could not run does
+not change the exit code, as on every run: the run is still a proposal, the
+gate is not counted in N (so the token is `proposal (0)` when nothing else
+would block), and the closing sentence names the gate that could not run.
+
+A proposal is refused, and the run exits 2 as it does without the flag,
+unless all of the following hold. Each refusal says which one failed.
+
+- The policy file is absent from the trust base, and no file at the root of
+  the trust base has that name in another case or spelling.
+- The committed policy file at `HEAD` is a regular file and parses.
+- The repository is not shallow (`fetch-depth: 0`).
+- No merge base of the trust base and `HEAD` carries a policy file. When
+  one does, the pull request inherited the file and the base has dropped it
+  since.
+- No commit on the first-parent history of the trust base added, changed or
+  removed a policy file. A base branch that had a policy and lost it does
+  not get a proposal from a later pull request: the policy has to be landed
+  on the base branch by someone allowed to merge without this check.
+- No `GIT_` environment variable is set other than
+  `GIT_NO_REPLACE_OBJECTS`, `GIT_GRAFT_FILE`, `GIT_TERMINAL_PROMPT`,
+  `GIT_CONFIG_COUNT` and its `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n`,
+  and the identity and date variables `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
+  `GIT_AUTHOR_DATE`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` and
+  `GIT_COMMITTER_DATE`. Any other can change what git reads, and "the base
+  has no policy" is the answer the exit code rests on.
+
+On every run, with or without the flag, each git command conductor runs
+itself is given `core.useReplaceRefs=false` and `core.commitGraph=false` on
+its command line, so no configuration file, no `GIT_CONFIG_COUNT` entry and
+no `GIT_CONFIG_PARAMETERS` value can make it read a replace ref or a
+commit-graph file in place of a commit's own tree and parents. The command
+line is read after both environment channels. `GIT_NO_REPLACE_OBJECTS`
+alone does not do that: git lets configuration turn replacement back on
+over it. A gate conductor starts cannot be given that command line.
+src/git.ts#gateChildEnv appends `core.useReplaceRefs=false` as one more
+numbered entry after the caller's own, which outranks configuration files,
+and appends `core.useReplaceRefs=false` and `core.commitGraph=false` to
+`GIT_CONFIG_PARAMETERS`, which git reads after the numbered entries. A `-c`
+on a gate's own git command line still outranks both.
+`GIT_TEST_COMMIT_GRAPH` is removed from the environment of conductor's own
+git calls, from the fetch step, and from the environment of a gate
+conductor starts, because that variable turns the commit-graph file on over
+`core.commitGraph=false`. A gate started without conductor does not get
+these pins.
+
+Not covered: a base branch force-pushed back to a commit older than its
+first policy, and a policy that only ever existed on a side branch (added
+there and removed again before or by the merge into the default branch).
+Both take write access to the default branch; protect it against force
+pushes. Also not covered: a git directory, a home directory or a job
+environment that something earlier in the job could write to. A gate
+started on its own still makes its own git calls, and does not get the
+environment pins above.
+
+Two more fixed lines, on runs that are not proposals. `no-policy: this
+workflow checks nothing until .guardrails.yaml is on the base branch; run
+conductor init and merge it` is line 3 of a refused pull-request run where
+neither the base nor the pull request has a policy file (exit 2), and a
+push run in Actions with no policy file appends it to the step summary.
+`policy-removed: this pull request deletes .guardrails.yaml; once merged,
+nothing is enforced on the base branch and every pull-request run is
+refused until a policy is back on it` is printed on a pull request that
+deletes the file; that run is still judged by the base branch's rules.
 
 The external gates' exits are read per tool. gitleaks exits 1 for an error
 as well as for a leak, so the umbrella hands it `--exit-code 3`: 3 is a leak
@@ -269,8 +380,14 @@ with them. The `conductor run:` count line follows the head block.
   gates. Exit 0 here is not a pass, and the token says so.
 - `blocked (N)`: exit 1. N as for `advisory-blocked`.
 - `could-not-run`: exit 2, a refused trust base included.
+- `proposal (N)` and `proposal-nothing-checked`: exit 0 on a
+  [proposal](#a-proposal) run, where nothing was enforced. N is what would
+  block once the proposed policy is on the base branch. Neither is a pass,
+  and in the Action the `verdict` output carries the token so a workflow can
+  tell them apart from one.
 
-When several apply the order is `could-not-run`, then `blocked` or
+When several apply the order is `could-not-run`, then a proposal token on a
+proposal run (which has no other), then `blocked` or
 `advisory-blocked`, then `unenforced-findings`, then `nothing-checked` (no gate
 ran, or none that ran checked anything) or `pass`. A run with
 `--advisory` whose only blocking findings sit on an unenforced gate is
