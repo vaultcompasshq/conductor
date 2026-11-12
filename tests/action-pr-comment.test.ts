@@ -1069,6 +1069,49 @@ describe('README documents the advisory recipe without continue-on-error', () =>
   });
 });
 
+describe('action.yml: the fallback render run and --adoption-proposal (issue 101)', () => {
+  // The render step's second run follows the gates step: it passes the flag
+  // exactly when that step published that it did, and decides nothing itself.
+  const FALLBACK = { VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' };
+  // Everything the gates step's own rule reads, all of it saying yes.
+  const LOOKS_LIKE_AN_ADOPTION = {
+    GITHUB_BASE_REF: 'main',
+    DEFAULT_BRANCH: 'main',
+    GITHUB_EVENT_NAME: 'pull_request',
+    TRUST_BASE: '',
+  };
+
+  it('passes the flag when the gates step published that it did', () => {
+    const run = runPrCommentScript({ ...FALLBACK, ADOPTION_PROPOSAL: 'true' });
+    expect(run.conductorRan).toBe(true);
+    expect(run.conductorArgv).toContain('--adoption-proposal');
+  });
+
+  it('does not pass it when the gates step did not, whatever else is true of the run', () => {
+    const notPublished: Array<Record<string, string>> = [
+      {},
+      { ADOPTION_PROPOSAL: '' },
+      { ADOPTION_PROPOSAL: 'false' },
+      { ADOPTION_PROPOSAL: '1' },
+    ];
+    for (const published of notPublished) {
+      const run = runPrCommentScript({ ...FALLBACK, ...LOOKS_LIKE_AN_ADOPTION, ...published });
+      expect(run.conductorRan).toBe(true);
+      expect(run.conductorArgv).not.toContain('--adoption-proposal');
+      // And it never asks conductor for its help to decide for itself.
+      expect(run.conductorArgv).not.toContain('--help');
+    }
+  });
+
+  it('never runs conductor for the flag when the gates step wrote the report itself', () => {
+    const run = runPrCommentScript(
+      { VERIFICATION_OK: 'true', ADOPTION_PROPOSAL: 'true' },
+      { textReportBody: 'conductor 9.9.9\nverdict-token: pass\n' }
+    );
+    expect(run.conductorRan).toBe(false);
+  });
+});
+
 describe('action.yml: the fallback render run reads no replace ref', () => {
   it('on the fallback path conductor runs with replacement off, as in the gates step', () => {
     const run = runPrCommentScript({ VERIFICATION_OK: 'true', REPORT_FALLBACK: 'true' });

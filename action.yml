@@ -142,10 +142,13 @@ outputs:
       The verdict token of the run that decided this job's exit code: one of
       pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or
       every gate that ran had nothing to scan, no contract or an empty change set), advisory-blocked
-      (N), unenforced-findings (N), blocked (N) or
-      could-not-run, spelled exactly as the second line of the text report
-      carries it. It is a label for conductor's own exit decision and decides
-      nothing itself. The token is validated against the exit status before
+      (N), unenforced-findings (N), blocked (N),
+      could-not-run, or, on a pull request into the default branch that adds
+      the first .guardrails.yaml, proposal (N) or proposal-nothing-checked
+      (exit 0 and NOTHING WAS ENFORCED, because the base branch has no policy
+      yet; N would block once it does), spelled exactly as the second line of
+      the text report carries it. It is a label for conductor's own exit
+      decision and decides nothing itself. The token is validated against the exit status before
       it is published: a token that does not match it is replaced by
       could-not-run (non-zero exit) or unknown (exit 0, with no readable
       token or none consistent with the exit status). could-not-run also when
@@ -888,7 +891,20 @@ runs:
         # EVERY READ BELOW SEES THE COMMITS' OWN OBJECTS, the same as every git
         # call the CLI makes (src/git.ts). The repoint decision reads trees and parents, and a
         # replace ref or a graft would answer those for another commit. A shallow boundary is not a graft file.
+        # GIT_TEST_COMMIT_GRAPH turns the commit-graph file on over the -c pin
+        # below, so this step does not pass it to git.
+        unset GIT_TEST_COMMIT_GRAPH
         export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null/conductor-no-grafts
+        # THE VARIABLE ALONE IS NOT ENOUGH. core.useReplaceRefs=true in any
+        # configuration git reads (the repository's, a global one, an entry in
+        # GIT_CONFIG_COUNT) turns replacement back on over it. The same key on
+        # the command line outranks all of those, so EVERY git call in this
+        # step goes through this function, with a commit-graph file (which
+        # also holds parents and trees no commit records) switched off too.
+        # The same two pins as src/git.ts#PINNED_GIT_CONFIG.
+        git() {
+          command git -c core.useReplaceRefs=false -c core.commitGraph=false "$@"
+        }
         fail() {
           printf '::error::conductor: %s\n' "$1"
           exit 1
@@ -1070,6 +1086,13 @@ runs:
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_BASE_REF: ${{ github.base_ref }}
         GITHUB_HEAD_REF: ${{ github.head_ref }}
+        # The event and the repository's default branch, for one decision
+        # below: whether this run may report a first policy as a proposal
+        # (--adoption-proposal, issue 101). Both come from the event context,
+        # which the base repository and GitHub write; neither is an input, so
+        # nothing a workflow or a pull request sets can widen that decision.
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         BASE_REF: ${{ inputs.base-ref }}
         # Git never stalls on a credential prompt in this step (the gates
         # shell out to git); it fails fast instead.
@@ -1161,12 +1184,16 @@ runs:
         # existed.
         text_report_supported=0
         preview_supported=0
+        adoption_proposal_supported=0
         if conductor_help="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN "$CONDUCTOR_BIN" run --help 2>/dev/null)"; then
           case "$conductor_help" in
             *--text-report*) text_report_supported=1 ;;
           esac
           case "$conductor_help" in
             *--preview*) preview_supported=1 ;;
+          esac
+          case "$conductor_help" in
+            *--adoption-proposal*) adoption_proposal_supported=1 ;;
           esac
         fi
         if [ "$text_report_supported" -eq 1 ]; then
@@ -1230,6 +1257,43 @@ runs:
             exit 2
           fi
           ARGS+=(--trust-base "$TRUST_BASE_SHA")
+          # THE ADOPTION PROPOSAL (issue 101): on a base with no policy, a
+          # pull request that adds one is reported as a proposal, exit 0,
+          # instead of refused. That is a run which enforces nothing and
+          # still passes, so the flag is passed in THIS BRANCH ONLY, where
+          # the trust base is the commit the fetch step published, and only
+          # when all of these hold:
+          #
+          #  - the event is pull_request or pull_request_target. A merge
+          #    queue run (merge_group) never gets it: the queue is where a
+          #    required check is finally enforced, and a proposal there would
+          #    be a green check on the merge itself. Nor does any other event
+          #    whose workflow happens to set GITHUB_BASE_REF.
+          #  - the pull request targets the repository's DEFAULT BRANCH, and
+          #    that name is known. On any other branch a missing policy may
+          #    be a gap (a release branch cut before the policy existed, a
+          #    branch somebody made to have no policy), never a first
+          #    adoption. The names are compared as text, quoted, so neither
+          #    is a pattern.
+          #  - the installed conductor lists the flag in the same successful
+          #    help request as above. An older one exits 2 on an unknown
+          #    option, and without the flag it refuses such a pull request,
+          #    which is what it always did.
+          #
+          # Never with an explicit trust-base input (the branch above), which
+          # names a ref this step did not fetch. conductor makes the rest of
+          # the decision itself and refuses unless every one of its own
+          # conditions holds (src/adoption-proposal.ts); on a base that has a
+          # policy the flag changes nothing.
+          if [ "$adoption_proposal_supported" -eq 1 ] \
+            && { [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] || [ "${GITHUB_EVENT_NAME:-}" = "pull_request_target" ]; } \
+            && [ -n "${DEFAULT_BRANCH:-}" ] \
+            && [ "$GITHUB_BASE_REF" = "$DEFAULT_BRANCH" ]; then
+            ARGS+=(--adoption-proposal)
+            # Published so the render step's fallback run passes the flag
+            # exactly when this run did, and never decides it a second time.
+            printf 'adoption-proposal=true\n' >> "$GITHUB_OUTPUT"
+          fi
         fi
         if [ -n "$SPEC" ]; then
           ARGS+=(--spec "$SPEC")
@@ -1329,12 +1393,30 @@ runs:
           # to be replaced the report is deleted too, so the comment step
           # takes its "did not produce a report" branch rather than post a
           # report that contradicts the verdict published beside it.
-          token_shape='^(pass|nothing-checked|could-not-run|(advisory-blocked|unenforced-findings|blocked) \([0-9]+\))$'
+          #
+          # THE TWO PROPOSAL TOKENS (issue 101), proposal (N) and
+          # proposal-nothing-checked, pair with status 0 and with nothing
+          # else: a proposal token beside status 1 or 2 is replaced by
+          # could-not-run like any other mismatch. And a proposal token is
+          # accepted only when line 3 of the same report is the fixed proposal
+          # line, carrying the same N: the token says "exit 0 and nothing was
+          # enforced", and it is never published without the sentence that
+          # says so directly under it.
+          token_shape='^(pass|nothing-checked|could-not-run|proposal-nothing-checked|(advisory-blocked|unenforced-findings|blocked|proposal) \([0-9]+\))$'
+          proposal_line_shape='^proposal: no \.guardrails\.yaml on the base branch, so nothing here was enforced; ([0-9]+) would block once this policy is on the base branch$'
           token_valid=0
           if [[ "$verdict_token" =~ $token_shape ]]; then
             case "$status:${verdict_token%% (*}" in
               0:pass|0:nothing-checked|0:advisory-blocked|0:unenforced-findings|1:blocked|2:could-not-run)
                 token_valid=1
+                ;;
+              0:proposal|0:proposal-nothing-checked)
+                proposal_line="$(sed -n '3p' "$TEXT_REPORT")"
+                if [ "${#proposal_line}" -le 200 ] && [[ "$proposal_line" =~ $proposal_line_shape ]]; then
+                  if [ "$verdict_token" = "proposal-nothing-checked" ] || [ "$verdict_token" = "proposal (${BASH_REMATCH[1]})" ]; then
+                    token_valid=1
+                  fi
+                fi
                 ;;
             esac
           fi
@@ -1349,7 +1431,7 @@ runs:
           printf 'verdict=%s\n' "$verdict_token" >> "$GITHUB_OUTPUT"
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             printf 'conductor verdict: %s\n\n' "$verdict_token" >> "$GITHUB_STEP_SUMMARY"
-            if [ "$verdict_token" = "nothing-checked" ]; then
+            if [ "$verdict_token" = "nothing-checked" ] || [ "$verdict_token" = "proposal-nothing-checked" ]; then
               printf 'No gate checked anything (none ran, or every gate that ran had nothing to check), so this exit status 0 is not a clean result. Nothing was checked.\n\n' >> "$GITHUB_STEP_SUMMARY"
             fi
             # THE HEAD BLOCK of the report: from line 3 on, the run-level fixed
@@ -1363,8 +1445,9 @@ runs:
             # whole, never searched for.
             #
             # THE RUN-LEVEL SLOT, a closed set: the present-on-base line, the
-            # four intent-spec lines, the two trust-base lines and the "new in
-            # this pull request" count. They name no ref, branch, file or
+            # four intent-spec lines, the two trust-base lines, the "new in
+            # this pull request" count, and the proposal, no-policy and
+            # policy-removed lines (issue 101). They name no ref, branch, file or
             # token. A pass with known advisories
             # reported and not blocking must not read as spotless here, and
             # neither may a pass whose intent spec was chosen weakly, or
@@ -1386,7 +1469,7 @@ runs:
             # lists as clean or blocked (0, 1, 3); any other status is
             # could-not-run, and that line prints no exit code.
             if [ "$token_valid" -eq 1 ] && [ -f "$TEXT_REPORT" ]; then
-              run_level_shape='^(present-on-base: [0-9]+ reported, not blocking|intent-spec: (none chosen, two or more specs matched the branch equally|none chosen, this branch chose a spec before conductor 0\.11\.0|a different spec chosen than before conductor 0\.11\.0, see the report|weak match, see the intent gate in the report)|trust-base: (refused|not given on a pull-request job), no rules were read and no gate ran|new in this pull request: [0-9]+ \(vulnerabilities gate; [0-9]+ already on the base\))$'
+              run_level_shape='^(present-on-base: [0-9]+ reported, not blocking|intent-spec: (none chosen, two or more specs matched the branch equally|none chosen, this branch chose a spec before conductor 0\.11\.0|a different spec chosen than before conductor 0\.11\.0, see the report|weak match, see the intent gate in the report)|trust-base: (refused|not given on a pull-request job), no rules were read and no gate ran|new in this pull request: [0-9]+ \(vulnerabilities gate; [0-9]+ already on the base\)|proposal: no \.guardrails\.yaml on the base branch, so nothing here was enforced; [0-9]+ would block once this policy is on the base branch|no-policy: this workflow checks nothing until \.guardrails\.yaml is on the base branch; run conductor init and merge it|policy-removed: this pull request deletes \.guardrails\.yaml; once merged, nothing is enforced on the base branch and every pull-request run is refused until a policy is back on it)$'
               gate_version='[0-9A-Za-z.+-]{1,64}'
               gate_reason='binary-missing|configured-command-missing|spawn-failed|gate-error|unparseable-output|preparation-failed|trust-base-unverified|gate-program-refused|gate-version-unsupported|report-missing|history-shallow|timed-out|lockfile-emptied|version-skew|version-unverified|lockfile-emptied-unverified|trust base refused'
               gate_shape="^gate (dependencies|secrets|intent|secrets-history|vulnerabilities) \\((dep-guard|vault-guard|intent-guard|gitleaks|osv-scanner)( ($gate_version|version unknown))?\\): (ran, (exit [0-9]{1,3}|no exit code), [0-9]{1,6} blocking(, checked nothing)?(, not enforced)?|did not run \\(($gate_reason)\\)(, the action pinned $gate_version)?(, not enforced)?|skipped \\((deferred to stage (commit|push|ci)|no contract|spec waived|spec ambiguous|--gate did not name it|head tree equals the base tree)\\)|disabled \\(enabled: false\\))\$"
@@ -1405,8 +1488,10 @@ runs:
               # ASCII and holds no backtick, and is otherwise replaced by a
               # placeholder. At most 25 lines. The count line's heading is a
               # closed set too; a later heading is added to findings_shape.
-              findings_shape='^(findings): [0-9]{1,7} \([0-9]{1,7} blocking\)(, the first [0-9]{1,3})?:$'
-              none_blocking_shape='^(findings): [0-9]{1,7} \(0 blocking\)$'
+              # The second heading is a proposal's: what would block, never
+              # what did.
+              findings_shape='^(findings|would block once the policy is on the base): [0-9]{1,7} \([0-9]{1,7} blocking\)(, the first [0-9]{1,3})?:$'
+              none_blocking_shape='^(findings|would block once the policy is on the base): [0-9]{1,7} \(0 blocking\)$'
               finding_shape='^finding: BLOCKING [ -~]+$'
               more_shape='^and [0-9]{1,7} more blocking$'
               gate_lines=()
@@ -1478,7 +1563,9 @@ runs:
               # printable ASCII is replaced by a placeholder and never
               # copied, since the report can carry text from the scanned
               # repository and the block is a code fence. At most 50 lines.
-              count_shape='^  pull-request mode: rules from [ -_a-~]{1,200}\. [0-9]+ control change\(s\) [ -_a-~]*\.$'
+              # The count line has two leads: rules from the ref, or, on a run
+              # of the policy the pull request adds, no policy on the ref.
+              count_shape='^  pull-request mode: (rules from [ -_a-~]{1,200}\.|no policy on [ -_a-~]{1,200}; this run previews the policy this pull request adds\.) [0-9]+ control change\(s\) [ -_a-~]*\.$'
               proposed_shape='^  proposed  (conductor|dep-guard|vault-guard|intent-guard|gitleaks|osv-scanner) +(.*)$'
               printable_shape='^[ -~]*$'
               # The scan stops at the preview header: nothing after it is
@@ -1615,6 +1702,9 @@ runs:
         SPEC: ${{ inputs.spec }}
         STAGE: ${{ inputs.stage }}
         GITHUB_BASE_REF: ${{ github.base_ref }}
+        # Whether the gates step passed --adoption-proposal to its own run,
+        # for the fallback run below: "true" or empty.
+        ADOPTION_PROPOSAL: ${{ steps.gates.outputs.adoption-proposal }}
         # Mirrored from the gates step, so the rendered comment's own verdict
         # line matches the job's actual exit code: with advisory: true the
         # gates step exits 0 on a blocking finding, and a comment rendered
@@ -1737,6 +1827,15 @@ runs:
           rm -f "$REPORT_FILE"
           REPORT_FILE="$TEXT_REPORT"
         elif [ "${REPORT_FALLBACK:-}" = "true" ]; then
+          # THE ADOPTION PROPOSAL FLAG IS THE GATES STEP'S DECISION (issue
+          # 101), never this step's. This second run passes it exactly when
+          # the first did, read from that step's own output, and decides
+          # nothing and probes nothing itself: two decisions could disagree,
+          # and a comment that says `proposal (N)` beside a job the gates
+          # step refused would be the worse of the two to get wrong.
+          if [ "${ADOPTION_PROPOSAL:-}" = "true" ]; then
+            ARGS+=(--adoption-proposal)
+          fi
           # Run with the OIDC request variables removed: a caller whose job
           # grants id-token: write has the runner expose them to every step,
           # and conductor and its gates have no use for them.

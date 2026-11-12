@@ -51,6 +51,7 @@ import {
   proposalLogLines,
   renderText,
   verdictToken,
+  NO_POLICY_LINE,
   versionSkewAnnotations,
   versionSkewSummaryLines,
   versionSkewWarnings,
@@ -58,6 +59,7 @@ import {
 import {
   GATE_ROLES,
   GATE_STAGES,
+  MissingPolicyError,
   POLICY_FILE_NAME,
   PolicyError,
   applyCliOverrides,
@@ -65,9 +67,11 @@ import {
   parsePolicy,
 } from './policy.js';
 import type { CliOverrides, GateRole, GateStage, Policy } from './policy.js';
+import { refuseAdoptionProposal } from './adoption-proposal.js';
+import { summaryField } from './escape.js';
 import { diffPolicies, previewPolicy, previewRoles } from './policy-diff.js';
-import { refusedTrustBase, runAll } from './run.js';
-import type { RunTrustBase } from './run.js';
+import { asProposal, refusedTrustBase, runAll } from './run.js';
+import type { RunOptions, RunTrustBase } from './run.js';
 import {
   headTreeEqualsBase, withMovedBaseTip,
   policyDiffers,
@@ -260,6 +264,7 @@ interface RunCliOptions {
   advisory?: boolean;
   project?: string;
   preview?: boolean;
+  adoptionProposal?: boolean;
 }
 
 const PROJECT_OPTION_HELP =
@@ -312,8 +317,40 @@ type PolicyForRun =
        */
       previewPolicy: Policy | null;
     }
+  /**
+   * The policy this pull request ADDS, on a base that has none (issue 101):
+   * `enabled`, `stage` and `enforce` from the HEAD blob and nothing else.
+   *
+   * A SEPARATE VARIANT WITH NO `previewPolicy` FIELD, on purpose. The preview
+   * withholds --trust-base from dep-guard and vault-guard, so each reads its
+   * own config from the head; on a proposal that would let the pull
+   * request's own config hide what it adds. With no field to set, no later
+   * edit can attach a preview to a proposal, and --preview is ignored on one.
+   */
+  | { kind: 'proposal'; policy: Policy; trustBase: RunTrustBase }
   /** The trust base could not be judged against. `inventory` only names gates. */
-  | { kind: 'refused'; ref: string; detail: string; inventory: Policy; notGiven?: boolean };
+  | {
+      kind: 'refused';
+      ref: string;
+      detail: string;
+      inventory: Policy;
+      notGiven?: boolean;
+      /** Neither the base nor HEAD has a policy file. */
+      noPolicy?: boolean;
+    };
+
+/**
+ * A policy parse error as one line for a refusal: its text quotes keys and
+ * values from a file the pull request can write, so it is flattened, escaped
+ * and capped like any other head-chosen text, and ends in a full stop.
+ */
+function parseErrorLine(error: PolicyError): string {
+  const line = summaryField(error.message.replace(/\s+/g, ' '), 400);
+  return /[.!?]$/.test(line) ? line : `${line}.`;
+}
+
+/** No policy at all: what the base of an adoption proposal contributes. */
+const EMPTY_POLICY: Policy = { version: 1, gates: {}, report: { format: 'text' } };
 
 /**
  * Reads the policy for one run, from the base ref in pull-request mode.
@@ -367,7 +404,14 @@ export function policyForRun(
   githubBaseRef: string | undefined,
   githubActions: string | undefined,
   /** Whether this run asked for the preview under the proposed rules. */
-  preview = false
+  preview = false,
+  /**
+   * Whether --adoption-proposal was given. Without it a base with no policy
+   * is refused exactly as before the flag existed, whoever calls the CLI.
+   */
+  adoptionProposal = false,
+  /** The environment git will run in, for the proposal's own check of it. */
+  env: NodeJS.ProcessEnv = process.env
 ): PolicyForRun {
   if (trustBase === undefined) {
     // A PULL-REQUEST JOB WITH NO TRUST BASE would take its rules from the
@@ -475,18 +519,73 @@ export function policyForRun(
     // on the base branch on purpose, and mirrors the no-contract
     // (discovered, write one) vs contract-waived (imposed, a person already
     // decided) distinction the intent gate already makes for a missing spec.
-    const detail =
+    //
+    // THE ONE WAY OUT OF THE REFUSAL (issue 101) is at the bottom of this
+    // block: --adoption-proposal was given, the HEAD blob parses, and
+    // refuseAdoptionProposal found no reason to refuse. Every other path
+    // through here is the refusal above, exit 2.
+    const lead =
       `No ${POLICY_FILE_NAME} on "${trustBase}". On a pull-request run every rule comes from the ` +
-      'base ref, so this run has no policy at all and nothing was checked. ' +
-      (headText === null
-        ? `Run "conductor init" on the base branch.`
-        : `The ${POLICY_FILE_NAME} in this pull request is a proposal: it decides what runs ` +
-          'once it is on the base branch, and never on the pull request that adds it.');
-    return {
+      'base ref, so this run has no policy at all and nothing was checked. ';
+    const refused = (rest: string, noPolicy = false): PolicyForRun => ({
       kind: 'refused',
       ref: trustBase,
-      detail,
+      detail: `${lead}${rest}`,
       inventory: inventoryFromHead(root, overrides),
+      ...(noPolicy ? { noPolicy: true } : {}),
+    });
+    if (headRead.kind === 'error') {
+      // UNREADABLE IS NOT ABSENT, on the head as on the base. Not the "run
+      // conductor init" sentence: the pull request does carry something at
+      // that path, and it is not a file git will hand back.
+      return refused(`The ${POLICY_FILE_NAME} in this pull request cannot be read: ${headRead.detail}.`);
+    }
+    if (headRead.kind === 'absent') {
+      return refused(`Run "conductor init" on the base branch.`, true);
+    }
+    // THE HEAD BLOB, never the file on disk: the working tree can hold an
+    // uncommitted edit, and loadPolicy follows a symbolic link.
+    let head: Policy;
+    try {
+      head = parsePolicy(headRead.text, `HEAD:${POLICY_FILE_NAME}`);
+    } catch (error) {
+      if (!(error instanceof PolicyError)) throw error;
+      return refused(
+        `The ${POLICY_FILE_NAME} in this pull request is not a policy either: ${parseErrorLine(error)}`
+      );
+    }
+    if (!adoptionProposal) {
+      return refused(
+        `The ${POLICY_FILE_NAME} in this pull request is a proposal: it decides what runs ` +
+          'once it is on the base branch, and never on the pull request that adds it.'
+      );
+    }
+    const whyNot = refuseAdoptionProposal(root, trustBase, env);
+    if (whyNot !== null) {
+      return refused(`The ${POLICY_FILE_NAME} in this pull request was not run as a proposal: ${whyNot}`);
+    }
+    // A PROPOSAL. Only enabled, stage and enforce come from the head, over
+    // what the policy file gives for each product alone (previewPolicy, the
+    // one function that takes a subset of a head policy): never its command,
+    // args, options, timeout-seconds, present-on-base or report.format.
+    const declared = GATE_ROLES.filter((role) => head.gates[role] !== undefined);
+    const proposed = previewPolicy(EMPTY_POLICY, head, declared);
+    return {
+      kind: 'proposal',
+      // --gate as on any primary run (applyCliOverrides), a role the proposed
+      // policy does not declare being the same usage error it is there.
+      policy: applyCliOverrides(proposed, overrides),
+      trustBase: {
+        ref: trustBase,
+        policyChanged: true,
+        refusal: null,
+        proposal: { reason: 'no-policy-on-base' },
+        // What the head wrote and this run did NOT apply: every key in which
+        // the head policy differs from the policy that ran. Compared with
+        // that policy and not with an empty one, so a product default the
+        // head merely leaves alone is not listed as a change it proposes.
+        policyChanges: diffPolicies(proposed, head),
+      },
     };
   }
 
@@ -494,7 +593,28 @@ export function policyForRun(
   // as a policy change. The parsed head is never handed to a run: the
   // comparison reads it, and the preview policy below takes only enabled,
   // stage and enforce from it.
-  const baseParsed = parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`);
+  //
+  // A BASE POLICY THAT DOES NOT PARSE (an empty file included) IS A REFUSAL
+  // WITH A REPORT, like every other base this run cannot be judged against.
+  // It used to throw from here, which left one line on stderr and no report
+  // at all. Never a proposal: the base has a policy file.
+  let baseParsed: Policy;
+  try {
+    baseParsed = parsePolicy(baseText, `${trustBase}:${POLICY_FILE_NAME}`);
+  } catch (error) {
+    if (!(error instanceof PolicyError)) throw error;
+    return {
+      kind: 'refused',
+      ref: trustBase,
+      detail:
+        `The ${POLICY_FILE_NAME} on "${trustBase}" is not a policy this run can use: ` +
+        `${parseErrorLine(error)} On a pull-request run every rule comes from the base ` +
+        'ref, so nothing was checked. Fix the file on the base branch; the pull request that does ' +
+        'so is judged against this same base, so it has to be merged by someone allowed to merge ' +
+        'without this check passing.',
+      inventory: inventoryFromHead(root, overrides),
+    };
+  }
   const policyChanged = headRead.kind === 'error' ? true : policyDiffers(baseText, headText);
   let headPolicy: Policy | null = null;
   if (headText !== null) {
@@ -524,6 +644,10 @@ export function policyForRun(
       // fail-closed direction: it is never taken to match the base.
       policyChanged,
       refusal: null,
+      // The base has a policy and HEAD has no policy file at all: this pull
+      // request deletes it. Only for a file that is truly absent, never for
+      // one git could not read or one that does not parse.
+      ...(headRead.kind === 'absent' ? { policyRemoved: true } : {}),
       ...(policyChanged ? { policyChanges: diffPolicies(baseParsed, headPolicy) } : {}),
       // Computed AFTER refuseTrustBaseRef has already returned null, on the
       // one shape that check accepts despite an identical tree: a merge
@@ -808,7 +932,7 @@ export function buildProgram(): Command {
     )
     .option(
       '--text-report <path>',
-      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or every gate that ran had nothing to scan, read no packages, had no contract, or was handed an empty change set), advisory-blocked (N), unenforced-findings (N), blocked (N) or could-not-run. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
+      'with --format sarif, also write the text report to this file, from the same run: exactly what --format text would have rendered for this result, --verbose, --compact-on-refusal and --advisory respected, and no gate is run a second time. In a full report (any run that is not fully clean, or any run with --verbose) the second line is "verdict-token: <token>"; the one-line summary of a clean run without --verbose has none. The token is a label for this run\'s own exit decision: pass, nothing-checked (exit 0 but nothing was checked: no gate ran, or every gate that ran had nothing to scan, read no packages, had no contract, or was handed an empty change set), advisory-blocked (N), unenforced-findings (N), blocked (N), could-not-run, or on an --adoption-proposal run that enforced nothing, proposal (N) or proposal-nothing-checked. Only meaningful with --format sarif: with --format text the text report is already the output, so the combination is a usage error (exit 2).'
     )
     .option(
       '--spec <path>',
@@ -831,6 +955,10 @@ export function buildProgram(): Command {
       '--advisory',
       'maps exit 1 (every enabled gate ran and at least one blocked) to exit 0, so a blocking finding never fails this run. A gate that could not run is unaffected and still exits 2: advisory changes what a FINDING does, never what a broken gate does. The report is unchanged and a blocking finding still prints as BLOCKING; only the process exit code and the verdict line, which says findings were advisory, are different.'
     )
+    .option(
+      '--adoption-proposal',
+      'pull-request mode only, needs --trust-base, never with --staged: when the trust base has no .guardrails.yaml and this pull request adds one, run the policy it adds as a proposal instead of refusing. Only enabled, stage and enforce are taken from it, from the committed file; every other key is the product default. The run exits 0 whatever the gates find, with the verdict token proposal (N) or proposal-nothing-checked and a line saying nothing was enforced; it exits 2 when a gate the proposed policy enforces could not run. Refused, exit 2 as without the flag, unless all of this holds: the policy file is absent from the trust base, from every merge base of the trust base and HEAD, and from the first-parent history of the trust base; the repository is not shallow; no GIT_ variable outside a short allowlist is set. Pass it only for a pull request into the default branch: the Action does exactly that. On any other run it changes nothing.'
+    )
     .option('--project <dir>', PROJECT_OPTION_HELP)
     .exitOverride()
     .action((options: RunCliOptions) => {
@@ -841,6 +969,20 @@ export function buildProgram(): Command {
       let gitShim: string | null = null;
 
       try {
+        // USAGE ERRORS, before anything runs. A proposal is a statement about
+        // a pull request against a base: the index of a local commit has no
+        // base to lack a policy, and without a trust base there is nothing
+        // the policy could be absent from.
+        if (options.adoptionProposal === true && options.staged === true) {
+          throw new PolicyError(
+            '--adoption-proposal cannot be combined with --staged: a proposal is about a pull request, never about the index.'
+          );
+        }
+        if (options.adoptionProposal === true && options.trustBase === undefined) {
+          throw new PolicyError(
+            '--adoption-proposal needs --trust-base: it only decides what a run does when the trust base has no policy.'
+          );
+        }
         // BEFORE ANY GIT CALL, including the one that finds the repository.
         if (options.trustBase !== undefined) {
           gitShim = pinPathForTrustBase(
@@ -873,9 +1015,10 @@ export function buildProgram(): Command {
           overrides,
           process.env.GITHUB_BASE_REF,
           process.env.GITHUB_ACTIONS,
-          options.preview === true && options.staged !== true
+          options.preview === true && options.staged !== true,
+          options.adoptionProposal === true
         );
-        const policy = source.kind === 'policy' ? source.policy : source.inventory;
+        const policy = source.kind === 'refused' ? source.inventory : source.policy;
         const format = parseFormat(options.format ?? policy.report.format);
         // BEFORE ANY GATE RUNS. With --format text the text report already is
         // the run's output, so a second copy of it in a file is not something
@@ -888,31 +1031,42 @@ export function buildProgram(): Command {
           );
         }
 
+        // What every run of the gates is handed, a proposal's included.
+        const runOptions = (trustBase: RunTrustBase | undefined): RunOptions => ({
+          repoRoot: root,
+          staged: Boolean(options.staged),
+          pathValue: process.env.PATH ?? '',
+          env: process.env,
+          ...(stage === undefined ? {} : { stage }),
+          ...(options.base === undefined ? {} : { base: options.base }),
+          ...(options.spec === undefined ? {} : { spec: options.spec }),
+          ...(trustBase === undefined ? {} : { trustBase: withMovedBaseTip(root, trustBase, process.env.CONDUCTOR_BASE_TIP) }),
+        });
         const result =
           source.kind === 'refused'
             ? refusedTrustBase(source.inventory, source.ref, source.detail, {
                 ...(stage === undefined ? {} : { stage }),
                 ...(source.notGiven === true ? { notGiven: true } : {}),
+                ...(source.noPolicy === true ? { noPolicy: true } : {}),
               })
-            : runAll(source.policy, {
-                repoRoot: root,
-                staged: Boolean(options.staged),
-                pathValue: process.env.PATH ?? '',
-                env: process.env,
-                ...(stage === undefined ? {} : { stage }),
-                ...(options.base === undefined ? {} : { base: options.base }),
-                ...(options.spec === undefined ? {} : { spec: options.spec }),
-                ...(source.trustBase === undefined ? {} : { trustBase: withMovedBaseTip(root, source.trustBase, process.env.CONDUCTOR_BASE_TIP) }),
-                // Only on request, never on --staged, and only with a trust
-                // base and a preview policy: a head that parsed and changed
-                // at least one role's enabled or stage.
-                ...(options.preview === true &&
-                options.staged !== true &&
-                source.trustBase !== undefined &&
-                source.previewPolicy !== null
-                  ? { preview: { policy: source.previewPolicy } }
-                  : {}),
-              });
+            : source.kind === 'proposal'
+              ? // THE PRIMARY PATH, WITH THE TRUST BASE, AND NEVER A PREVIEW:
+                // every pull-request protection keys on the trust base being
+                // set, and a proposal has no preview to pass (see the type).
+                // asProposal then writes the exit code, and nothing else does.
+                asProposal(runAll(source.policy, runOptions(source.trustBase)))
+              : runAll(source.policy, {
+                  ...runOptions(source.trustBase),
+                  // Only on request, never on --staged, and only with a trust
+                  // base and a preview policy: a head that parsed and changed
+                  // at least one role's enabled or stage.
+                  ...(options.preview === true &&
+                  options.staged !== true &&
+                  source.trustBase !== undefined &&
+                  source.previewPolicy !== null
+                    ? { preview: { policy: source.previewPolicy } }
+                    : {}),
+                });
 
         const advisory = Boolean(options.advisory);
 
@@ -1047,6 +1201,26 @@ export function buildProgram(): Command {
             ? err.message
             : `conductor: ${err instanceof Error ? err.message : String(err)}`
         );
+        // NO POLICY FILE AT ALL, IN ACTIONS: the workflow is installed and
+        // checks nothing, and a red step with one stderr line was read as a
+        // broken tool (issue 101). The same fixed line the refused
+        // pull-request run prints goes on the run's page. Only a run with no
+        // trust base reaches here with this error (a trust-base run reads the
+        // policy from a ref and reports its absence itself). A summary that
+        // cannot be written is skipped: the exit code is already 2.
+        const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+        if (
+          err instanceof MissingPolicyError &&
+          process.env.GITHUB_ACTIONS === 'true' &&
+          summaryFile !== undefined &&
+          summaryFile !== ''
+        ) {
+          try {
+            appendFileSync(summaryFile, `${NO_POLICY_LINE}\n\n`);
+          } catch {
+            // The line on stderr above already says there is no policy.
+          }
+        }
       } finally {
         if (gitShim !== null) {
           removeGitShim(gitShim);

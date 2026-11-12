@@ -31,6 +31,7 @@
 // sentence in the report.
 
 import { spawnSync } from 'node:child_process';
+import { gateChildEnv } from './git.js';
 import {
   existsSync,
   lstatSync,
@@ -598,6 +599,9 @@ function run(
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    // The same pin as every other gate spawn. conductor cannot put it on
+    // the command line of a git call this binary makes itself.
+    env: gateChildEnv(process.env),
   });
   return {
     status: child.status,

@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { Diagnostic, Finding, RunSummary } from './envelope.js';
-import { realPathInside, runGit } from './git.js';
+import { gateChildEnv, realPathInside, runGit } from './git.js';
 import { NormalizeError } from './envelope.js';
 import {
   describeLockfiles,
@@ -1157,11 +1157,17 @@ function spawnLimits(
   limit: TimeLimit,
   preview: PreviewSpawn | undefined,
   env: NodeJS.ProcessEnv | undefined
-): { start: boolean; limit: TimeLimit; options: { timeout: number; killSignal?: 'SIGKILL'; env?: NodeJS.ProcessEnv } } {
+): { start: boolean; limit: TimeLimit; options: { timeout: number; killSignal?: 'SIGKILL'; env: NodeJS.ProcessEnv } } {
+  // Every spawn in this file goes through here: the version probe, the
+  // scan, and both base runs of the vulnerabilities gate. The environment
+  // is the caller's, with replace refs turned off for git the gate runs
+  // itself (gateChildEnv). The intent gate's preparation spawns apply the
+  // same function in src/intent-prepare.ts.
+  const childEnv = gateChildEnv(env ?? process.env);
   if (preview === undefined) {
-    return { start: true, limit, options: { timeout: limit.ms, ...(env === undefined ? {} : { env }) } };
+    return { start: true, limit, options: { timeout: limit.ms, env: childEnv } };
   }
-  const options = previewSpawnOptions(limit.ms, preview, env ?? process.env);
+  const options = previewSpawnOptions(limit.ms, preview, childEnv);
   return {
     start: options.timeout > 0,
     limit: options.timeout < limit.ms ? { ms: options.timeout, source: 'preview-budget' } : limit,

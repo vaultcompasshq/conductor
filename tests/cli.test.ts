@@ -2099,9 +2099,14 @@ describe('pull-request mode through the CLI', () => {
 
     const result = runCli(repo, ['run', '--staged', '--trust-base', 'base'], bin);
 
+    // A base policy that does not parse is a refused trust base with a
+    // report (issue 101), where it used to be one line on stderr and no
+    // report at all. Exit 2 either way, and the same reason is named.
     expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/"trust-base" under gates\.intent\.options is reserved/);
-    expect(result.stderr).toMatch(/where a gate reads its rules from/);
+    expect(result.stdout).toMatch(/^verdict-token: could-not-run$/m);
+    expect(result.stdout).toMatch(/The \.guardrails\.yaml on "base" is not a policy this run can use/);
+    expect(result.stdout).toMatch(/"trust-base" under gates\.intent\.options is reserved/);
+    expect(result.stdout).toMatch(/where a gate reads its rules from/);
   });
 
   describe('the preview under the proposed rules', () => {

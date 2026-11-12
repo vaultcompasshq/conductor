@@ -9,8 +9,15 @@
 //    other. Outside pull-request mode this is plain `git`, found the way a
 //    shell finds it.
 //
-//  - REPLACE OBJECTS ARE IGNORED. GIT_NO_REPLACE_OBJECTS is set on every
-//    call, so every read here sees the commit's own objects.
+//  - REPLACE OBJECTS, GRAFTS AND A COMMIT-GRAPH FILE ARE IGNORED. Every call
+//    passes core.useReplaceRefs=false and core.commitGraph=false on the
+//    command line (`PINNED_GIT_CONFIG`), where no configuration file and no
+//    GIT_CONFIG_COUNT entry can outrank them, and sets GIT_NO_REPLACE_OBJECTS
+//    as well, so every read here sees the commit's own objects. The variable
+//    alone is not enough: configuration can turn replacement back on over
+//    it. GIT_GRAFT_FILE names a path that cannot exist, so every read of a
+//    commit's parents sees the parents the commit itself records
+//    (`pinnedGitEnv`); git has no configuration key for a graft file.
 //
 //  - NOTHING HERE DECIDES WHAT A FAILURE MEANS. The result carries the exit
 //    status and the error, and each caller keeps "git said there is nothing
@@ -54,17 +61,151 @@ export function useGitProgram(program: string): void {
   gitProgram = program;
 }
 
+/**
+ * A graft file path that cannot exist: /dev/null is not a directory, so
+ * nothing can be created under it. The same value the Action's fetch step
+ * exports (action.yml, "Fetch the trust base"). git reads a missing graft
+ * file as no grafts, without a warning.
+ */
+export const NO_GRAFT_FILE = '/dev/null/conductor-no-grafts';
+
+/**
+ * git loads a commit-graph file when GIT_TEST_COMMIT_GRAPH is true, over
+ * core.commitGraph=false on the command line and in GIT_CONFIG_PARAMETERS.
+ * The environments conductor builds do not pass the variable on. A value
+ * that is absent stays absent. The caller's object is never changed.
+ */
+function withoutCommitGraphTestVariable(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!Object.prototype.hasOwnProperty.call(env, 'GIT_TEST_COMMIT_GRAPH')) {
+    return env;
+  }
+  const copy: NodeJS.ProcessEnv = { ...env };
+  delete copy.GIT_TEST_COMMIT_GRAPH;
+  return copy;
+}
+
+/**
+ * The environment of every git call conductor makes itself: the caller's
+ * own, with replace objects off and the graft file pointed at nothing.
+ *
+ * A replace ref swaps one object for another and a graft gives a commit
+ * other parents, both from files in the git directory that no commit
+ * records. The trees were always read without the first. The second matters
+ * since the adoption proposal (issue 101), which asks what the merge bases
+ * of two commits are and what the base branch's own first-parent history
+ * touched: both answers are read from parents, and a graft would rewrite
+ * them. Set last, so a value already in the environment never wins.
+ */
+export function pinnedGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...withoutCommitGraphTestVariable(env), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: NO_GRAFT_FILE };
+}
+
+/**
+ * Configuration set on the command line of every git call conductor makes
+ * itself, ahead of the subcommand. The command line outranks every other
+ * place git reads configuration from: the system, global and repository
+ * files, anything they include, and GIT_CONFIG_COUNT in the environment.
+ *
+ *  - core.useReplaceRefs=false. GIT_NO_REPLACE_OBJECTS is NOT enough on its
+ *    own: the same key set to true in any configuration git reads turns
+ *    replacement back on over the variable (seen on git 2.39.3), and a
+ *    replace ref can then swap the base commit for one with another tree and
+ *    other parents. The variable stays as well, for a git where it is the
+ *    one that counts.
+ *  - core.commitGraph=false. A commit-graph file in the git directory holds
+ *    each commit's parents and root tree, and no commit records it, so every
+ *    read takes both from the commit object itself.
+ */
+export const PINNED_GIT_CONFIG: readonly string[] = [
+  '-c',
+  'core.useReplaceRefs=false',
+  '-c',
+  'core.commitGraph=false',
+];
+
+/**
+ * GIT_CONFIG_COUNT as git reads it (strtoul, base 10): leading white space,
+ * an optional sign, then digits and nothing after them. The number of
+ * entries, or null when git itself refuses the value: something after the
+ * digits, a negative number other than zero, or more than a 32-bit int
+ * holds. Unset and empty are both zero entries.
+ */
+function configCountAsGitReadsIt(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') {
+    return 0;
+  }
+  const read = raw.match(/^[ \t\n\v\f\r]*([+-]?)([0-9]+)$/);
+  if (read === null) {
+    return null;
+  }
+  const count = Number(read[2]);
+  if (!Number.isSafeInteger(count) || count > 2147483646 || (read[1] === '-' && count !== 0)) {
+    return null;
+  }
+  return count;
+}
+
+/**
+ * The environment of a gate conductor starts: `env`, plus the pins below.
+ * GIT_TEST_COMMIT_GRAPH is not passed on. A `-c` the gate itself adds is
+ * not something this function can outrank.
+ *
+ * conductor cannot put anything on the command line of a git call a gate
+ * makes itself. What it can give the gate is the two environment channels
+ * git reads configuration from. Numbered GIT_CONFIG_COUNT pairs are read
+ * after every configuration file, so an entry there outranks
+ * core.useReplaceRefs=true in the repository's configuration or a global
+ * one. GIT_CONFIG_PARAMETERS is read after those numbered entries, so it
+ * outranks them and the files. GIT_NO_REPLACE_OBJECTS does not: such a
+ * setting turns replacement back on over it. A -c the gate passes on its
+ * own git command line is read after GIT_CONFIG_PARAMETERS and still wins;
+ * none of the spawns here pass one.
+ *
+ * The numbered entry is APPENDED, at the index the caller's own count ends
+ * on, never written at index 0: the caller's entries are kept (an Action's
+ * authentication header is one), and of two entries for one key git takes
+ * the later. It is core.useReplaceRefs=false only. The same value, and
+ * core.commitGraph=false, are appended to GIT_CONFIG_PARAMETERS after
+ * exactly one space. When the caller's value is unset or the empty string
+ * the two pins are the whole value, with no leading space. The caller's
+ * value is not trimmed, parsed or repaired.
+ *
+ * A count git refuses is left exactly as it is and nothing is appended to
+ * the numbered entries. The parameters pins are still set on that branch,
+ * so there is no branch where they are absent. With a count git refuses,
+ * every git call fails, and a failed read is a refusal everywhere here;
+ * rewriting the count to make git work again would be conductor deciding
+ * what the caller meant. Returns a new object and never changes `env`.
+ */
+export function gateChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const source = withoutCommitGraphTestVariable(env);
+  const pins = "'core.useReplaceRefs=false' 'core.commitGraph=false'";
+  const caller = source.GIT_CONFIG_PARAMETERS;
+  const parameters = caller === undefined || caller === '' ? pins : `${caller} ${pins}`;
+  const count = configCountAsGitReadsIt(source.GIT_CONFIG_COUNT);
+  if (count === null) {
+    return { ...source, GIT_CONFIG_PARAMETERS: parameters };
+  }
+  return {
+    ...source,
+    GIT_CONFIG_COUNT: String(count + 1),
+    [`GIT_CONFIG_KEY_${count}`]: 'core.useReplaceRefs',
+    [`GIT_CONFIG_VALUE_${count}`]: 'false',
+    GIT_CONFIG_PARAMETERS: parameters,
+  };
+}
+
 /** Runs one git command in `cwd`, reading stdout as UTF-8. Never throws. */
 export function runGit(
   cwd: string,
   args: readonly string[],
   options: { maxBuffer?: number; input?: string } = {}
 ): GitResult {
-  const child = spawnSync(gitProgram, [...args], {
+  const child = spawnSync(gitProgram, [...PINNED_GIT_CONFIG, ...args], {
     cwd,
     encoding: 'utf8',
     maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024,
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    env: pinnedGitEnv(),
     ...(options.input === undefined ? {} : { input: options.input }),
   });
   return {
@@ -86,10 +227,10 @@ export function runGitBytes(
   args: readonly string[],
   options: { maxBuffer?: number } = {}
 ): { status: number | null; stdout: Buffer; stderr: string; error: Error | undefined } {
-  const child = spawnSync(gitProgram, [...args], {
+  const child = spawnSync(gitProgram, [...PINNED_GIT_CONFIG, ...args], {
     cwd,
     maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    env: pinnedGitEnv(),
   });
   return {
     status: child.status,

@@ -1538,7 +1538,7 @@ describe('a gate that reads history, in a shallow checkout (C2)', () => {
     expect(detail).toContain('fetch-depth: 0');
   });
 
-  it('spawns gitleaks with GIT_NO_REPLACE_OBJECTS=1, so replace refs and grafts cannot cut the history it reads', () => {
+  it('spawns gitleaks with GIT_NO_REPLACE_OBJECTS=1', () => {
     const bin = tempDir();
     const envLog = path.join(tempDir(), 'env.txt');
     stubGate(bin, 'gitleaks', { versionSubcommand: true, versionLine: '8.30.1', reportFlag: '--report-path', reportBody: '[]', exit: 0, stdout: '', envLog });
@@ -1569,7 +1569,8 @@ describe('the git floor for a history gate on a pull-request run', () => {
     const file = path.join(bin, 'git');
     writeFileSync(
       file,
-      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo probed >> ${JSON.stringify(probeLog)}; echo "git version ${version}"; exit 0; fi\nexec ${REAL_GIT} "$@"\n`
+      // The last argument: every git call carries configuration ahead of it.
+      `#!/bin/sh\nfor last in "$@"; do :; done\nif [ "$last" = "--version" ]; then echo probed >> ${JSON.stringify(probeLog)}; echo "git version ${version}"; exit 0; fi\nexec ${REAL_GIT} "$@"\n`
     );
     chmodSync(file, 0o755);
     return file;

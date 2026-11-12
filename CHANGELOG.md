@@ -53,6 +53,39 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   run, and nothing here scans the base a second time. A report with no
   per-gate line, which is what a conductor older than this one writes, is
   posted as it always was.
+- **The pull request that adds the first `.guardrails.yaml` is reported as a
+  proposal, exit 0, instead of failing (issue 101).** With the new
+  `run --adoption-proposal` flag, which the Action passes on a pull request
+  into the repository's default branch, a base with no policy and a pull
+  request that adds one runs the policy the pull request adds and reports
+  what it would do: the verdict token is `proposal (N)` or
+  `proposal-nothing-checked`, line 3 says `proposal: no .guardrails.yaml on
+  the base branch, so nothing here was enforced; N would block once this
+  policy is on the base branch`, the findings are headed `would block once
+  the policy is on the base`, and the SARIF log carries
+  `properties.trustBase.proposal`, a `conductor/proposal-run` warning and
+  `proposal: true` on every result. Only `enabled`, `stage` and `enforce`
+  are taken from the proposed policy, from the committed file; `command`,
+  `args`, `options`, `timeout-seconds`, `present-on-base` and
+  `report.format` are listed as proposed and not applied. **It exits 2, as
+  an ordinary could-not-run, when a gate the proposed policy enforces could
+  not run**, so a setup fault is still a red check on the pull request that
+  can fix it. It is refused, exit 2 as before, unless the policy file is
+  absent from the base, from every merge base of the base and the pull
+  request, and from the base branch's own first-parent history; the
+  repository is not shallow; and no `GIT_` variable outside a short
+  allowlist is set. So a base whose policy was deleted does not get a green
+  proposal from a later pull request: that policy has to be landed on the
+  base branch by someone allowed to merge without the check. Without the
+  flag nothing changes for any caller of the CLI.
+- **`no-policy:` and `policy-removed:` lines.** A pull-request run where
+  neither the base nor the pull request has a policy file now says, on line
+  3, the step summary and the comment, that the workflow checks nothing
+  until a policy is on the base branch (still exit 2). A push run in Actions
+  with no policy file at all appends the same line to the step summary. A
+  pull request that deletes the policy file is still judged by the base
+  branch's rules, and now carries a `policy-removed:` line saying what
+  merging it does.
 
 ### Changed
 
@@ -75,7 +108,39 @@ likely to be a version bump someone forgot to commit than a deliberate one.
   speaks of a range from the base or of a pull request. Enforcement is
   unchanged.
 - The verdict, the verdict token, the exit code and the SARIF log are
-  unchanged by all of the above.
+  unchanged by the three entries above.
+- **A base policy file that does not parse is a refusal with a report.** On
+  a pull-request run it used to end the run with one line on stderr and no
+  report, so the step summary and the comment had nothing. It is now a
+  refused trust base like any other: exit 2 as before, with the parse error
+  in the report. An empty policy file on the base is the same refusal, never
+  a base without a policy.
+- **Every git call conductor makes ignores graft files** (`GIT_GRAFT_FILE`
+  is pointed at a path that cannot exist). The Action's fetch step already
+  did this for its own calls.
+- **Replace refs can no longer be turned back on by git configuration.**
+  conductor set `GIT_NO_REPLACE_OBJECTS` on its git calls, but
+  `core.useReplaceRefs=true` in the repository's configuration, a global
+  one, or a `GIT_CONFIG_COUNT` entry overrides that variable, and a replace
+  ref could then stand in for the base commit: on a pull-request run the
+  base policy could be read from another commit. Every git call conductor
+  makes, and every git call in the Action's fetch step, now also passes
+  `core.useReplaceRefs=false` and `core.commitGraph=false` on its command
+  line, which no configuration outranks. This needed write access to the
+  git directory, the home directory or the job environment before conductor
+  ran.
+- A gate conductor starts receives `core.useReplaceRefs=false` as one more
+  numbered `GIT_CONFIG` entry, appended after the caller's own entries, and
+  receives `core.useReplaceRefs=false` and `core.commitGraph=false` appended
+  to `GIT_CONFIG_PARAMETERS`. A count git refuses is left unchanged, and the
+  caller's parameters value is not trimmed. `GIT_TEST_COMMIT_GRAPH` is
+  removed from that environment, from the environment of conductor's own
+  git calls, and from the fetch step.
+- **The wording of a refusal on a base with no policy** now says which case
+  it is: the pull request's own policy file cannot be read (with git's
+  reason), does not parse (with the error), or there is none on either side.
+  The sentence for a pull request that adds a readable policy, without the
+  new flag, is unchanged.
 
 ### Fixed
 

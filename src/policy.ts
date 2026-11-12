@@ -252,6 +252,19 @@ export class PolicyError extends Error {
   }
 }
 
+/**
+ * There is no policy file on disk at all (ENOENT, and nothing else). A
+ * PolicyError, so every caller treats it as before; the run command reads
+ * the subclass to say, in the Actions step summary, that the workflow is
+ * present and checks nothing.
+ */
+export class MissingPolicyError extends PolicyError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MissingPolicyError';
+  }
+}
+
 const SCHEMA_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -532,12 +545,17 @@ export function loadPolicy(repoRoot: string): Policy {
   let text: string;
   try {
     text = readFileSync(filePath, 'utf8');
-  } catch {
-    throw new PolicyError(
+  } catch (error) {
+    const message =
       `No ${POLICY_FILE_NAME} in ${repoRoot}. Run "conductor init" to write one. ` +
-        'The umbrella deliberately has no implicit default policy: a run that gates a commit ' +
-        'should be explainable from a file in the repository, not from a built-in.'
-    );
+      'The umbrella deliberately has no implicit default policy: a run that gates a commit ' +
+      'should be explainable from a file in the repository, not from a built-in.';
+    // Only a file that is not there is "missing". One that is there and
+    // cannot be read (permissions, a directory at that name) keeps the same
+    // sentence and is not told to run init.
+    throw (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+      ? new MissingPolicyError(message)
+      : new PolicyError(message);
   }
   return parsePolicy(text, POLICY_FILE_NAME);
 }
