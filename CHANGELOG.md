@@ -14,6 +14,23 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-16
+
+**A minor release about the first hour with conductor.** Every full report
+now leads with one line per gate that says whether it ran, and names the
+findings that block. The pull request that adds the first `.guardrails.yaml`
+is reported as a proposal, exit 0, where it used to fail with exit 2. A
+blocked first run with no base says how many findings predate the policy and
+what to do about them. One thing to check before upgrading: the text report
+gained a head block, so a script that reads the `conductor run:` count line
+by position needs to find it by its prefix. The Action's default gates move
+to dep-guard 0.20.1 (from 0.20.0) and vault-guard 1.13.4 (from 1.13.3);
+intent-guard stays at 1.10.6. Neither gate release changes which findings
+are raised or what blocks: dep-guard 0.20.1 rewords a version-hygiene finding
+whose spec did not move, and vault-guard 1.13.4 counts the values it declines
+as placeholders. `@vaultcompass/conductor` moves to 0.19.0 on npm and the
+`conductor-version` default moves in lockstep.
+
 ### Added
 
 - An "existing findings" section in the text report. On a run with no trust
