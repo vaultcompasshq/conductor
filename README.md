@@ -83,7 +83,7 @@ jobs:
           echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  $bin/osv-scanner" | sha256sum -c -
           chmod +x "$bin/osv-scanner"
           echo "$bin" >> "$GITHUB_PATH"
-      - uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+      - uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           stage: ${{ github.event_name == 'push' && 'push' || 'ci' }}
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
@@ -280,7 +280,7 @@ required.
 
    Your terminal also shows one status line per gate, written to stderr so a
    CI job log has a per-gate record even when the report goes to a file,
-   such as `conductor: gate dependencies (dep-guard 0.20.0): ok, exit 0` or
+   such as `conductor: gate dependencies (dep-guard 0.20.1): ok, exit 0` or
    a `skipped (deferred to stage ci)` line for a deferred gate. They carry
    nothing the summary does not; to see only the summary, redirect stderr
    (`conductor run --staged --stage commit 2>/dev/null` in the hook).
@@ -288,20 +288,20 @@ required.
    A commit with a staged credential in it prints the full report and exits 1:
 
    ```
-   conductor 0.18.1
+   conductor 0.19.0
    verdict-token: blocked (1)
-   gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking
-   gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking
+   gate dependencies (dep-guard 0.20.1): ran, exit 0, 0 blocking
+   gate secrets (vault-guard 1.13.4): ran, exit 1, 1 blocking
    gate intent (intent-guard): skipped (deferred to stage ci)
    findings: 1 (1 blocking):
    finding: BLOCKING vault-guard vault-guard/anthropic jest.config.mjs:14: Possible secret of type 'anthropic'
    conductor run: 2 gate(s), 1 finding(s)
 
-   dependencies  dep-guard 0.20.0  exit 0  153ms  via dep-guard on path
+   dependencies  dep-guard 0.20.1  exit 0  153ms  via dep-guard on path
      threshold medium   suppressed 0   ignored 0
      mode staged   corpusBuiltAt 2026-09-20T06:16:40.340Z   lockfileFormat npm   online false   lookups 0   skipped-by-deadline 0
 
-   secrets  vault-guard 1.13.3  exit 1  105ms  via vault-guard on path
+   secrets  vault-guard 1.13.4  exit 1  105ms  via vault-guard on path
      BLOCKING  critical  vault-guard/anthropic  jest.config.mjs:14:12
          Possible secret of type 'anthropic'
      threshold medium   suppressed 0   ignored not reported
@@ -615,8 +615,8 @@ request being judged, and the version-pin protection described above
 "protects nothing" against a tree that controls its own judge (the
 validate step's own comment in `action.yml` says so in those words). A tag
 moves when someone pushes it. Name this action by owner and the full commit
-SHA instead. The recipes in this README name v0.18.1 that way, as
-`vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1`.
+SHA instead. The recipes in this README name v0.19.0 that way, as
+`vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0`.
 
 ```yaml
 name: guardrails
@@ -638,7 +638,7 @@ jobs:
         with:
           node-version: '22.23.4'
       - id: conductor
-        uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           output: conductor.sarif
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
@@ -737,7 +737,7 @@ jobs:
       # installs those itself, globally. Leave conductor-version unset so the
       # umbrella is the default in the pinned action.yml.
       - id: conductor
-        uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           output: conductor.sarif
           # The gate versions are left out on purpose: the defaults travel
@@ -965,7 +965,7 @@ jobs:
         # seconds) plus 300 seconds for the preview, rounded up. A step
         # timeout below that can kill a full gitleaks scan and leave no verdict.
         timeout-minutes: 30
-        uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           pr-comment: true
           advisory: true
@@ -1118,7 +1118,7 @@ step and add `pull-requests: write` to the job's `permissions`:
       # the pull request runs before the action in this job: no install, build
       # or test step here; those belong in a separate job. ...
       - id: conductor
-        uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           output: conductor.sarif
           pr-comment: true
@@ -1147,8 +1147,8 @@ them, one click away:
 ```text
 conductor verdict: blocked (1)
 
-gate dependencies (dep-guard 0.20.0): ran, exit 0, 0 blocking
-gate secrets (vault-guard 1.13.3): ran, exit 1, 1 blocking
+gate dependencies (dep-guard 0.20.1): ran, exit 0, 0 blocking
+gate secrets (vault-guard 1.13.4): ran, exit 1, 1 blocking
 gate vulnerabilities (osv-scanner version unknown): did not run (binary-missing)
 
 findings: 14 (12 blocking), the first 10:
@@ -1245,12 +1245,12 @@ per pull request.
 
 ```yaml
       - id: conductor-package-a
-        uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-a'
       - id: conductor-package-b
-        uses: vaultcompasshq/conductor@1b1920983f0e2231c2eabc23fc8c258ca52f9613 # v0.18.1
+        uses: vaultcompasshq/conductor@ad18bd2210be256d1043a0152cfbd8b59ff6c454 # v0.19.0
         with:
           pr-comment: true
           pr-comment-marker: 'package-b'
