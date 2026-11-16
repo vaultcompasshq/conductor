@@ -14,6 +14,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Changed
+
+- The README recipes pin conductor v0.19.0 by commit, and its sample reports show conductor 0.19.0 with dep-guard 0.20.1 and vault-guard 1.13.4.
+
 ## [0.19.0] - 2026-11-16
 
 **A minor release about the first hour with conductor.** Every full report
