@@ -3359,22 +3359,26 @@ describe('action.yml: the verdict token from the gates step', () => {
     }
   });
 
-  // THE LOCALE. A bracket range is what the locale says it is: under a UTF-8
-  // locale the bash that macOS ships (3.2) counts an accented Latin letter as
-  // a member of [ -~] and of [A-Za-z], so "printable ASCII" and "a version
-  // character" each let one through until the step set the C locale for its
-  // own checks. PINNED TO THE SHELL AND THE LOCALE THAT SHOWED IT: /bin/bash,
-  // never the first bash on PATH (a newer one from a package manager compares
-  // ranges by code point and would pass with or without the fix), with LANG
-  // and LC_ALL set to a UTF-8 locale in the step's own environment. The
-  // probe below is the same range test with no locale line; where it lets the
-  // letter through, the step is being tested in the conditions that matter.
+  // THE LOCALE. What a bracket range holds, and what ${#var} counts, is the
+  // locale's decision. Measured with the bash that macOS 15 ships (3.2.57,
+  // x86_64) under a UTF-8 locale: a glob range ([[ "$c" == [A-Za-z] ]])
+  // takes an accented Latin letter, and ${#var} counts characters, not bytes,
+  // so a length cap of 200 lets through more than 200 bytes. A [[ =~ ]] range
+  // in that same shell rejected the letter in every locale tried, so the
+  // regex checks alone do not show the difference there; other builds and
+  // versions may differ. The step sets the C locale for its own checks so
+  // that every range is its bytes and every length a count of bytes,
+  // whatever the shell. PINNED TO THE SYSTEM SHELL: /bin/bash, never the
+  // first bash on PATH, with LANG and LC_ALL set to a UTF-8 locale in the
+  // step's own environment. The probe below shows, with no locale line, that
+  // the locale is live in that shell; where it is, the step is being tested
+  // in the conditions that matter.
   describe('under a UTF-8 locale, in the system shell', () => {
     const SYSTEM_BASH = '/bin/bash';
     const UTF8 = 'en_US.UTF-8';
     const E_ACUTE = 'é';
-    const rangeTakesAccent = (): boolean =>
-      spawnSync(SYSTEM_BASH, ['-c', `shape='^[ -~]+$'; [[ "caf${E_ACUTE}" =~ $shape ]]`], {
+    const localeIsLive = (): boolean =>
+      spawnSync(SYSTEM_BASH, ['-c', `x="caf${E_ACUTE}"; [ "\${#x}" -eq 4 ] && [[ "${E_ACUTE}" == [A-Za-z] ]]`], {
         encoding: 'utf8',
         env: { PATH: process.env.PATH ?? '', LANG: UTF8, LC_ALL: UTF8 },
       }).status === 0;
@@ -3383,10 +3387,10 @@ describe('action.yml: the verdict token from the gates step', () => {
     const forgedFinding = `finding: BLOCKING vault-guard rule src/caf${E_ACUTE}.ts:3: señor`;
 
     it('is run where an unset locale would let an accented letter through (the macOS system bash)', () => {
-      // On macOS this must hold, or the tests below prove nothing there. On
-      // another system the range may already be bytes; they still run.
+      // On macOS this must hold, or the tests below prove less there. On
+      // another system the shell may already work in bytes; they still run.
       if (process.platform === 'darwin') {
-        expect(rangeTakesAccent()).toBe(true);
+        expect(localeIsLive()).toBe(true);
       }
     });
 

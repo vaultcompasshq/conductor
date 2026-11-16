@@ -1354,12 +1354,13 @@ runs:
         # THE C LOCALE FOR EVERYTHING BELOW, set after conductor and the gates
         # have run so that they keep the runner's own. The checks below say
         # "a digit", "a version character" and "printable ASCII" with bracket
-        # ranges ([0-9], [0-9A-Za-z.+-], [ -~]), and what a range holds is the
-        # locale's decision: under a UTF-8 locale the bash that macOS ships
-        # (3.2) takes an accented Latin letter for a member of [ -~] and of
-        # [A-Za-z], so a report line carrying one would be copied to the
-        # summary as if it were plain ASCII. In the C locale a range is its
-        # bytes and nothing else, and a length is a count of bytes.
+        # ranges ([0-9], [0-9A-Za-z.+-], [ -~]) and cap lengths with ${#var},
+        # and what a range holds and what a length counts are the locale's
+        # decision: under a UTF-8 locale the bash that macOS ships (3.2)
+        # takes an accented Latin letter into a glob range such as [A-Za-z]
+        # and counts ${#var} in characters, not bytes, and how a regex range
+        # treats such a letter varies by build. In the C locale a range is
+        # its bytes and nothing else, and a length is a count of bytes.
         LC_ALL=C
         if [ "$text_report_supported" -eq 1 ]; then
           # The token line is the SECOND line of the report conductor wrote,
