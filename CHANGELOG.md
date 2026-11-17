@@ -14,6 +14,10 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+### Changed
+
+- The README recipes pin conductor v0.19.1 by commit, and its sample reports show conductor 0.19.1 with vault-guard 1.13.5.
+
 ## [0.19.1] - 2026-11-16
 
 **A patch release that moves the default secrets gate to vault-guard 1.13.5
