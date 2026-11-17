@@ -2099,9 +2099,9 @@ describe('action.yml installs the gates without trusting them first', () => {
     // the install; they are not what makes the check cover the right thing.
     // Naming a package that is not installed is the quiet case: the audit
     // skips it and still exits 0.
-    expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.13.4');
+    expect(manifest.dependencies['@vaultcompass/vault-guard']).toBe('1.13.5');
     expect(manifest.dependencies['@vaultcompass/intent-guard']).toBe('1.10.6');
-    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.19.0');
+    expect(manifest.dependencies['@vaultcompass/conductor']).toBe('0.19.1');
     expect(manifest.dependencies['@vaultcompass/dep-guard']).toBe('0.20.1');
   });
 
@@ -2134,9 +2134,9 @@ describe('action.yml installs the gates outside the tree', () => {
     for (const input of VERSION_INPUTS) {
       expect(String(action.inputs?.[input]?.default ?? '')).toMatch(/^\d+\.\d+\.\d+$/);
     }
-    expect(action.inputs?.['conductor-version']?.default).toBe('0.19.0');
+    expect(action.inputs?.['conductor-version']?.default).toBe('0.19.1');
     expect(action.inputs?.['dep-guard-version']?.default).toBe('0.20.1');
-    expect(action.inputs?.['vault-guard-version']?.default).toBe('1.13.4');
+    expect(action.inputs?.['vault-guard-version']?.default).toBe('1.13.5');
     expect(action.inputs?.['intent-guard-version']?.default).toBe('1.10.6');
   });
 
@@ -2181,9 +2181,9 @@ describe('action.yml installs the gates outside the tree', () => {
       'install',
       '-g',
       '--ignore-scripts',
-      '@vaultcompass/conductor@0.19.0',
+      '@vaultcompass/conductor@0.19.1',
       '@vaultcompass/dep-guard@0.20.1',
-      '@vaultcompass/vault-guard@1.13.4',
+      '@vaultcompass/vault-guard@1.13.5',
       '@vaultcompass/intent-guard@1.10.6',
       'audit',
       'signatures',
@@ -2599,11 +2599,10 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
     // pin_not_backward's third arm: pin_major == tag_major, pin_minor ==
     // tag_minor, and pin_patch below tag_patch. Every case above this one
     // drives the major or minor comparison. As of this tag the TAG constants
-    // are 0.19.0 (conductor), 0.20.1 (dep-guard), 1.13.4 (vault-guard) and
+    // are 0.19.1 (conductor), 0.20.1 (dep-guard), 1.13.5 (vault-guard) and
     // 1.10.6 (intent-guard). Only an input whose shipped patch is above 0 has a
-    // lower patch to refuse on the UNMODIFIED step, and as of this tag
-    // dep-guard, vault-guard and intent-guard do while conductor ships
-    // patch 0. The arm is also driven on the same step with
+    // lower patch to refuse on the UNMODIFIED step, and as of this tag all
+    // four do. The arm is also driven on the same step with
     // one constant's patch advanced by one (the shipped version itself is the
     // lower patch), the way the minor arm is driven in the cases above, and any
     // input that does ship a patch above 0 is also driven on the unmodified
@@ -2673,9 +2672,9 @@ describe('action.yml refuses a pull request that pins a gate backward', () => {
       ['INTENT_GUARD_VERSION', '10.0.0'],
       ['DEP_GUARD_VERSION', '0.20.1'],
       ['DEP_GUARD_VERSION', '0.21.0'],
-      ['VAULT_GUARD_VERSION', '1.13.4'],
+      ['VAULT_GUARD_VERSION', '1.13.5'],
       ['VAULT_GUARD_VERSION', '1.14.0'],
-      ['CONDUCTOR_VERSION', '0.19.0'],
+      ['CONDUCTOR_VERSION', '0.19.1'],
       ['CONDUCTOR_VERSION', '0.20.0'],
     ];
     for (const [variable, value] of forward) {

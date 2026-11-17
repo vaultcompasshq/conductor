@@ -14,7 +14,22 @@ likely to be a version bump someone forgot to commit than a deliberate one.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-16
+
+**A patch release that moves the default secrets gate to vault-guard 1.13.5
+(from 1.13.4), a security fix.** vault-guard 1.13.4 and earlier treated a
+tracked file whose path starts with two dots, such as `..env` or
+`..cfg/creds.txt`, as outside the repository and skipped it without a word,
+so a secret in such a file was missed; 1.13.5 scans those files. A run on
+this release can therefore report a finding the previous one missed.
+dep-guard stays at 0.20.1 and intent-guard at 1.10.6. Nothing in conductor's
+own behaviour changes. `@vaultcompass/conductor` moves to 0.19.1 on npm and
+the `conductor-version` default moves in lockstep.
+
 ### Changed
+
+- The Action's `vault-guard-version` default and the tag constant move to 1.13.5, and `conductor-version` to 0.19.1.
+- The macOS-only probe in the action tests checks what a UTF-8 locale really changes in the system bash (a glob range and the `${#var}` length count), and the comments in the test and in `action.yml` say what was measured. The step's behaviour is unchanged.
 
 - The README recipes pin conductor v0.19.0 by commit, and its sample reports show conductor 0.19.0 with dep-guard 0.20.1 and vault-guard 1.13.4.
 
